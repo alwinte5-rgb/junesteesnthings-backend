@@ -43,6 +43,17 @@ function price(v) {
   return Number.isFinite(n) && n > 0 && n < 10000 ? Math.round(n * 100) / 100 : null;
 }
 
+/** A product's colours as swatch dots: a name and a plain hex colour each.
+ *  The hex goes into a style property, so anything else is dropped. */
+const MAX_COLORS = 80;
+function colors(v) {
+  if (!Array.isArray(v)) return [];
+  return v.slice(0, MAX_COLORS).map((c) => ({
+    name: text(c && c.name, 40),
+    hex: typeof (c && c.hex) === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(c.hex) ? c.hex : '',
+  })).filter((c) => c.name && c.hex);
+}
+
 /** The designer's answer, reduced to cards that are safe to show.
  *  Returns null when the answer is not a feed at all. */
 function cleanShopFeed(d) {
@@ -61,6 +72,7 @@ function cleanShopFeed(d) {
     link: designerLink(p && p.link),
     blurb: text(p && p.blurb, 120),
     from_price: price(p && p.from_price),
+    colors: colors(p && p.colors),
   })).filter((p) => p.name && p.image && p.link).slice(0, MAX_BEST);
 
   /* Every active product's live price and photo, matched to the page cards by
@@ -70,6 +82,7 @@ function cleanShopFeed(d) {
     link: designerLink(p && p.link),
     image: imageUrl(p && p.image),
     from_price: price(p && p.from_price),
+    colors: colors(p && p.colors),
   })).filter((p) => /^https:\/\/design\.jtees\.net\/product\.php\?product_id=\d+$/.test(p.link));
 
   /* Complete only when the designer says so and nothing was cut here: the

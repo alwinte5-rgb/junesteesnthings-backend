@@ -45,7 +45,7 @@ const REVIEWS = path.join(PUBLIC, 'assets', 'data', 'reviews.json');
 // Hash-stamped (tools/lib/css-tag.js), like site-nav.css.
 const BLOCKS_CSS = require('./lib/css-tag').cssTag('/assets/css/page-blocks.css');
 const { assetStamp } = require('./lib/css-tag');
-const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261017d" defer></script>';
+const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261018a" defer></script>';
 // Any older shop-feed tag is swapped for FEED_TAG, so a script change reaches every page.
 const FEED_ANY = /<script src="\/assets\/js\/shop-feed\.js(?:\?v=[\w.-]+)?" defer><\/script>/;
 const PHONE = { tel: '+17739004592', display: '(773) 900-4592' };

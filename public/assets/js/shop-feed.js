@@ -33,13 +33,44 @@
       if (img && it.image) img.src = it.image;
       var pr = a.querySelector('.pb-pr');
       if (pr) pr.textContent = typeof it.from_price === 'number' ? 'From $' + it.from_price.toFixed(2) + ' + printing' : 'Priced as you design';
+      if (pr) dots(pr, it.colors);
     });
+  }
+
+  /* Up to 8 colour dots under the price, then "+N more" (the designer's own
+     cards do the same). The hex was checked by the server; it is checked again
+     here because it is written into a style. */
+  var HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+  function dots(after, list) {
+    if (!after.parentNode) return;
+    var old = after.parentNode.querySelector('.pb-dots');
+    if (old) old.parentNode.removeChild(old);
+    var cs = (list || []).filter(function (c) { return c && HEX.test(c.hex) && typeof c.name === 'string'; });
+    if (cs.length < 2) return;
+    var row = document.createElement('div');
+    row.className = 'pb-dots';
+    row.setAttribute('role', 'img');
+    row.setAttribute('aria-label', cs.length + ' colors');
+    cs.slice(0, 8).forEach(function (c) {
+      var d = document.createElement('span');
+      d.className = 'pb-dot';
+      d.style.background = c.hex;
+      d.title = c.name;
+      row.appendChild(d);
+    });
+    if (cs.length > 8) {
+      var more = document.createElement('span');
+      more.className = 'pb-dots-more';
+      more.textContent = '+' + (cs.length - 8) + ' more';
+      row.appendChild(more);
+    }
+    after.parentNode.insertBefore(row, after.nextSibling);
   }
 
   /* The landing pages share /api/shop-feed's per-visitor limit with the quote
      form's token and photo uploads, so one answer is kept per tab for 10
      minutes: browsing twenty service pages asks once, not twenty times. */
-  var KEY = 'jt_shop_feed3', TTL = 10 * 60 * 1000;
+  var KEY = 'jt_shop_feed4', TTL = 10 * 60 * 1000;
   function cached() {
     try {
       var c = JSON.parse(sessionStorage.getItem(KEY) || 'null');

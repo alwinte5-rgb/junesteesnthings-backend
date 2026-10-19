@@ -30,7 +30,7 @@ test('a good feed passes through, with http photos upgraded to https', () => {
   const d = cleanShopFeed(good);
   assert.strictEqual(d.categories.length, 2);
   assert.strictEqual(d.categories[1].image, 'https://www.ssactivewear.com/b.jpg');
-  assert.deepStrictEqual(d.best[0], good.best[0]);
+  assert.deepStrictEqual(d.best[0], { ...good.best[0], colors: [] });
 });
 
 test('a card linking anywhere but the designer is dropped', () => {
@@ -95,8 +95,8 @@ test('every product price passes through for the page cards; only designer produ
     { link: D + 'products.php?category_id=52', from_price: 5 },
   ] });
   assert.deepStrictEqual(d.products, [
-    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18 },
-    { link: D + 'product.php?product_id=22', image: '', from_price: null },
+    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18, colors: [] },
+    { link: D + 'product.php?product_id=22', image: '', from_price: null, colors: [] },
   ]);
   assert.deepStrictEqual(cleanShopFeed(good).products, [], 'an older designer sends none');
 });
@@ -106,16 +106,24 @@ function runPageScript(feed) {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
   const card = (href, price) => {
     const img = { src: 'built-in.jpg' }, pr = { textContent: price };
-    return { href, hidden: false, img, pr, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) };
+    /* The card body the dots row is inserted into, after the price. */
+    const body = { kids: [pr],
+      querySelector: (q) => body.kids.find((k) => '.' + k.className === q) || null,
+      insertBefore: (n, ref) => { if (ref) body.kids.splice(body.kids.indexOf(ref), 0, n); else body.kids.push(n); n.parentNode = body; },
+      removeChild: (n) => { body.kids.splice(body.kids.indexOf(n), 1); } };
+    pr.parentNode = body; pr.nextSibling = null;
+    return { href, hidden: false, img, pr, body, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) };
   };
   const cards = [card(D + 'product.php?product_id=21', 'From $1.00 + printing'),
     card(D + 'product.php?product_id=22', 'From $2.00 + printing'),
     card(D + 'product.php?product_id=99', 'From $3.00 + printing'),
     card(D + 'products.php?category_id=52', 'From $4.00 + printing')];
-  const store = { jt_shop_feed3: JSON.stringify({ at: Date.now(), d: feed }) };
+  const store = { jt_shop_feed4: JSON.stringify({ at: Date.now(), d: feed }) };
   vm.runInNewContext(src, {
     window: { fetch: () => { throw new Error('should use the cached feed'); } },
-    document: { querySelectorAll: () => cards },
+    document: { querySelectorAll: () => cards,
+      createElement: () => ({ className: '', style: {}, kids: [], textContent: '', title: '',
+        setAttribute(k, v) { this[k] = v; }, appendChild(c) { this.kids.push(c); } }) },
     sessionStorage: { getItem: (k) => store[k] || null, setItem() {} },
     JSON, Date,
   });
@@ -151,3 +159,30 @@ test('the list counts as complete only when the designer says so and nothing was
   assert.strictEqual(cleanShopFeed({ ...good, products }).products_complete, false);
   assert.strictEqual(cleanShopFeed({ ...good, products: [], products_complete: true }).products_complete, false);
 });
+
+test('colours: the server keeps a name and a plain hex, nothing else', () => {
+  const d = cleanShopFeed({ ...good,
+    best: [{ ...good.best[0], colors: [{ name: 'Black', hex: '#25282A' }, { name: 'Bad', hex: 'red;background:url(x)' }, { name: '', hex: '#fff' }, 'x'] }],
+    products: [{ link: D + 'product.php?product_id=21', from_price: 5, colors: [{ name: 'Navy', hex: '#041e42' }] }] });
+  assert.deepStrictEqual(d.best[0].colors, [{ name: 'Black', hex: '#25282A' }]);
+  assert.deepStrictEqual(d.products[0].colors, [{ name: 'Navy', hex: '#041e42' }]);
+  assert.deepStrictEqual(cleanShopFeed(good).best[0].colors, [], 'an older designer sends none');
+});
+
+test('colours: the page draws up to 8 dots after the price, then "+N more"', () => {
+  const ten = ['#000', '#111', '#222', '#333', '#444', '#555', '#666', '#777', '#888', '#999'].map((hex, i) => ({ name: 'C' + i, hex }));
+  const c = runPageScript({ categories: [], best: [], products: [
+    { link: D + 'product.php?product_id=21', from_price: 5, colors: ten },
+    { link: D + 'product.php?product_id=22', from_price: 5, colors: [{ name: 'Only', hex: '#000' }] },
+    { link: D + 'product.php?product_id=99', from_price: 5, colors: [{ name: 'A', hex: 'url(x)' }, { name: 'B', hex: '#fff' }] },
+  ], products_complete: false });
+  const row = c[0].body.kids[1];
+  assert.strictEqual(row.className, 'pb-dots');
+  assert.strictEqual(row.kids.filter((k) => k.className === 'pb-dot').length, 8);
+  assert.strictEqual(row.kids[0].style.background, '#000');
+  assert.strictEqual(row.kids[0].title, 'C0');
+  assert.strictEqual(row.kids[8].textContent, '+2 more');
+  assert.strictEqual(c[1].body.kids.length, 1, 'one colour: no dots');
+  assert.strictEqual(c[2].body.kids.length, 1, 'a bad hex is dropped here too, leaving one: no dots');
+});
+
