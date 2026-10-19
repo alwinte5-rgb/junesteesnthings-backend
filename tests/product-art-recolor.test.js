@@ -85,3 +85,23 @@ test('the side farther from the swatch is matched to the other, even with a zero
   /* Already matched: nothing changes. */
   assert.strictEqual(py(MATCH, [front, back, '#003A40', String(SIDE_GAP)]), '0');
 });
+
+test('a colour photographed from the front only gets a back made from the nearest colour shot from behind', () => {
+  const dir = productDir(
+    [{ name: 'Lavender', c1: '#B9A6D3' }, { name: 'Orchid', c1: '#C5A2D0' }, { name: 'Purple', c1: '#4B2A6B' }, { name: 'Tie Dye', c1: '#B9A6D3' }],
+    ['lavender-front', 'orchid-front', 'purple-front', 'purple-back', 'tie-dye-front', 'tie-dye-back'],
+  );
+  const p = plan(dir);
+  /* Orchid has no back either, so Purple — the only plain colour shot from behind — is the source. */
+  assert.deepStrictEqual(p.map((x) => [x.c.name, x.src.name, x.sides, !!x.backOnly]),
+    [['Lavender', 'Purple', ['back'], true], ['Orchid', 'Purple', ['back'], true]]);
+});
+
+test('a made back is matched to the real front, which is never changed', { skip: !hasNumpy && 'needs numpy + Pillow' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recolor-keep-'));
+  /* The back is nearer the swatch, but the front is the real photo. */
+  const front = swatchPng(dir, 'f.png', [150, 120, 190]), back = swatchPng(dir, 'b.png', [185, 166, 211]);
+  py(MATCH, [front, back, '#B9A6D3', String(SIDE_GAP), 'keep-first']);
+  assert.deepStrictEqual(pixel(front), [150, 120, 190]);
+  assert.deepStrictEqual(pixel(back), [150, 120, 190]);
+});
