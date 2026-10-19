@@ -50,7 +50,7 @@ const MULTIPLE_CHOICE = [
     answer: 2, why: 'Daily edits restart learning and make results worse. Check for real problems, then give it enough data before judging.' },
   { id: 'claims', q: 'Someone suggests the ad headline "Cheapest Custom Shirts in Chicago, Free Shipping". We are not the cheapest and shipping is not free. What do you do?',
     choices: ['Use it: everyone exaggerates', 'Use it but add small print',
-      'Write only claims we can back up (fast turnaround, no-minimum DTF, local pickup, real reviews), and check with the owner',
+      'Write only claims we can back up (no-minimum DTF, proof before we print, local pickup, real reviews; never speed or rush), and check with the owner',
       'Remove all text from the ad'],
     answer: 2, why: 'False claims break ad policies, can get the account suspended, and annoy the customers who click. True specifics win anyway.' },
   { id: 'profit', q: 'A campaign spent $300 and brought 2 orders worth $400 each. Our profit on an order is about 40%. Is it working?',

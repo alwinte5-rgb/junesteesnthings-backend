@@ -91,9 +91,10 @@ test('a failed send never carries the access token in its error', async () => {
 
 test('the quote form sends Meta one Lead, under the server\'s id', () => {
   const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
-  assert.strictEqual(html.includes("fbq('track', 'Lead')"), false, 'a direct fbq Lead doubles the jtTrack one');
+  const js = fs.readFileSync(path.join(ROOT, 'public', 'assets', 'js', 'quote-form.js'), 'utf8');
+  assert.strictEqual(html.includes("fbq('track', 'Lead')") || js.includes("fbq('track', 'Lead')"), false, 'a direct fbq Lead doubles the jtTrack one');
   // No id (resubmit, no human check) = the server sent nothing, so nor does the page.
-  assert.match(html, /if \(window\.jtTrack && saved\.lead_event_id\) jtTrack\('quote_submitted', \{ meta_event_id: saved\.lead_event_id \}\)/);
+  assert.match(js, /if \(window\.jtTrack && saved\.lead_event_id\) window\.jtTrack\('quote_submitted', \{ meta_event_id: saved\.lead_event_id \}\)/);
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   assert.match(server, /const leadEventId = 'quote-' \+ submissionId;/);
   assert.match(server, /lead_event_id: unverified \? undefined : leadEventId/);

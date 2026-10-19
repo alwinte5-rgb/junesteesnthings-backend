@@ -1,63 +1,64 @@
 /*
- * Homepage Shop cards: swap the cards built into the page for the designer's
- * live ones (/api/shop-feed), so a product switched off in the Design Studio
- * disappears here too. Anything short of a good answer leaves the built-in
- * cards alone — the shop is never shown empty.
+ * Product cards on the homepage and the service, area and blog pages (all
+ * written by tools/page-blocks.js): every card the designer's live feed
+ * (/api/shop-feed) lists, by the same link, takes the feed's photo and price,
+ * and a product switched off there is hidden. Anything short of a good answer
+ * leaves the built-in cards alone.
  *
  * Cards are built with DOM calls and textContent, never innerHTML: the names
  * and links come from another service.
  */
 (function () {
   'use strict';
-  if (!window.fetch || !document.getElementById('shop-categories')) return;
+  var pageCards = document.querySelectorAll('a.pb-card');
+  if (!window.fetch || !pageCards.length) return;
 
-  function el(tag, cls, text) {
-    var n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (text) n.textContent = text;
-    return n;
+  /* Page cards keep their place and name. A card the feed lists, by the same
+     link, takes the feed's photo and price ("Priced as you design" when the
+     product has no set price). A product card missing from the list is hidden
+     (switched off in the Design Studio), but only when the feed says the list
+     is the whole catalogue, so an outage or partial answer never empties a
+     shelf. */
+  function refresh(d) {
+    var byLink = {};
+    var products = d.products || [];
+    (d.categories || []).concat(d.best || [], products).forEach(function (it) { byLink[it.link] = it; });
+    Array.prototype.forEach.call(pageCards, function (a) {
+      var it = byLink[a.href];
+      if (!it) {
+        if (d.products_complete === true && /\/product\.php\?product_id=\d+$/.test(a.href)) a.hidden = true;
+        return;
+      }
+      var img = a.querySelector('.pb-im img');
+      if (img && it.image) img.src = it.image;
+      var pr = a.querySelector('.pb-pr');
+      if (pr) pr.textContent = typeof it.from_price === 'number' ? 'From $' + it.from_price.toFixed(2) + ' + printing' : 'Priced as you design';
+    });
   }
 
-  function card(item, from, kind, showBlurb) {
-    var a = el('a', 'jt-card');
-    a.href = item.link;
-    a.setAttribute('data-from', from);
-    a.setAttribute('data-card', kind);
-    var im = el('div', 'im');
-    var img = el('img');
-    img.src = item.image;
-    img.alt = 'Custom ' + item.name + " by June's Tees";
-    img.loading = 'lazy';
-    im.appendChild(img);
-    var bd = el('div', 'bd');
-    bd.appendChild(el('div', 'nm', item.name));
-    /* Every card carries a price line, so the two grids read the same. */
-    if (showBlurb && item.blurb) bd.appendChild(el('div', 'bl', item.blurb));
-    bd.appendChild(el('div', 'pr', typeof item.from_price === 'number'
-      ? 'From $' + item.from_price.toFixed(2) + ' + printing' : 'Priced as you design'));
-    bd.appendChild(el('span', 'go', 'Design This →'));
-    a.appendChild(im);
-    a.appendChild(bd);
-    return a;
+  /* The landing pages share /api/shop-feed's per-visitor limit with the quote
+     form's token and photo uploads, so one answer is kept per tab for 10
+     minutes: browsing twenty service pages asks once, not twenty times. */
+  var KEY = 'jt_shop_feed3', TTL = 10 * 60 * 1000;
+  function cached() {
+    try {
+      var c = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+      return c && Date.now() - c.at < TTL ? c.d : null;
+    } catch (e) { return null; }
+  }
+  function remember(d) {
+    try { sessionStorage.setItem(KEY, JSON.stringify({ at: Date.now(), d: d })); } catch (e) { /* private mode */ }
   }
 
-  function fill(id, items, from, kind, showBlurb) {
-    var box = document.getElementById(id);
-    if (!box || !items || !items.length) return;
-    var frag = document.createDocumentFragment();
-    items.forEach(function (it) { frag.appendChild(card(it, from, kind, showBlurb)); });
-    while (box.firstChild) box.removeChild(box.firstChild);
-    box.appendChild(frag);
-  }
+  var hit = cached();
+  if (hit) { refresh(hit); return; }
 
   fetch('/api/shop-feed', { headers: { Accept: 'application/json' } })
     .then(function (r) { return r.status === 200 ? r.json() : null; })
     .then(function (d) {
       if (!d) return;
-      /* Every category, signs included (the feed caps it at 16). Showing the
-         first 8 left the banner and sign categories off the homepage. */
-      fill('shop-categories', (d.categories || []).slice(0, 16), 'home_shop', 'category', false);
-      fill('shop-best', (d.best || []).slice(0, 4), 'home_best', 'product', true);
+      remember(d);
+      refresh(d);
     })
     .catch(function () { /* keep the built-in cards */ });
 })();

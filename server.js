@@ -38,6 +38,9 @@ const SIGN_FAMILIES = require('./tools/lib/sign-families');
 const SINALITE = require('./tools/lib/sinalite');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
+const PARTNERS = require('./tools/lib/partners');
+const PARTNERS_INVITE = require('./tools/lib/partners-invite');
+const MKT_CAL = require('./tools/lib/marketing-calendar');
 const FUNNEL = require('./tools/lib/funnel-health');
 const METACAPI = require('./tools/lib/meta-capi');
 let metaCapiReportedAt = 0;
@@ -97,6 +100,7 @@ const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
+const MB = require('./tools/lib/mailbox');
 const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
 const CHATFILES = require('./tools/lib/team-chat-files');
 const JOBNOTES = require('./tools/lib/job-notes');
@@ -252,6 +256,14 @@ app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.j
 app.get(LEGACY_PATHS, (req, res, next) => {
   const to = legacyRedirect(req.path);
   return to ? res.redirect(301, to) : next();
+});
+
+/* Business Partners Program pages. Until JT_PARTNERS=on they do not exist at
+   either address — express.static below would otherwise serve the .html. */
+app.get(['/partners', '/partners.html', '/mail15', '/mail15.html'], (req, res) => {
+  const file = /mail15/i.test(req.path) ? 'mail15.html' : 'partners.html';
+  if (!PARTNERS.on()) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+  res.sendFile(path.join(__dirname, 'public', file));
 });
 
 // Serve frontend
@@ -549,6 +561,18 @@ async function initDB() {
     'photos_notified_at TIMESTAMPTZ',
     /* When the quote link was last emailed to the customer (emailQuote). */
     'emailed_at TIMESTAMPTZ',
+    /* Business Partners Program (tools/lib/partners.js). promo_code is a code
+       the CUSTOMER entered on the quote page (MAIL15, REORDER5): the discount
+       itself is the ordinary discount_* fields above, so every total reads it
+       the same way; this says where it came from. The use is recorded on the
+       designer once the quote is paid — promo_recorded_at, retried hourly with
+       promo_attempts as the cap. promo_business_id is the business the code
+       was checked against. reorder_of is the paid job a portal reorder copied. */
+    'promo_code TEXT',
+    'promo_business_id INT',
+    'promo_recorded_at TIMESTAMPTZ',
+    'promo_attempts INT NOT NULL DEFAULT 0',
+    'reorder_of TEXT',
   ]) {
     await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
@@ -1367,6 +1391,52 @@ async function initStaffTables() {
       reader        TEXT PRIMARY KEY,
       email_alerts  BOOLEAN NOT NULL DEFAULT TRUE
     )`);
+  /* The Mailbox (tools/lib/mailbox.js): conversations about one order or one
+     task, beside Team chat. Readers are 'owner' or 'staff:<id>', as in chat.
+     Nothing here is ever deleted; Done is a status, and a reply reopens it. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_threads (
+      id               SERIAL PRIMARY KEY,
+      subject          TEXT NOT NULL,
+      quote_code       TEXT,
+      task_id          INTEGER,
+      created_by       TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done')),
+      done_at          TIMESTAMPTZ,
+      done_by          TEXT,
+      last_message_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_threads_status_idx ON mail_threads (status, last_message_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_threads_quote_idx ON mail_threads (quote_code) WHERE quote_code IS NOT NULL');
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_threads_task_idx ON mail_threads (task_id) WHERE task_id IS NOT NULL');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_participants (
+      thread_id  INTEGER NOT NULL,
+      reader     TEXT NOT NULL,
+      PRIMARY KEY (thread_id, reader)
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_participants_reader_idx ON mail_participants (reader)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_messages (
+      id             BIGSERIAL PRIMARY KEY,
+      thread_id      INTEGER NOT NULL,
+      author         TEXT NOT NULL,
+      body           TEXT NOT NULL,
+      file_url       TEXT,
+      file_name      TEXT,
+      edited_at      TIMESTAMPTZ,
+      original_body  TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS mail_messages_thread_idx ON mail_messages (thread_id, id)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mail_seen (
+      message_id  BIGINT NOT NULL,
+      reader      TEXT NOT NULL,
+      seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (message_id, reader)
+    )`);
   /* The two channels the team starts with, made once. */
   await pool.query(`INSERT INTO team_channels (name, audience)
                     SELECT x.name, x.audience FROM (VALUES ('Everyone', 'all'), ('Sales', 'sales')) AS x(name, audience)
@@ -2003,6 +2073,10 @@ async function syncPaidAmount(code) {
     console.error(`schedule from deposit for ${code} failed:`, e.message);
     reportError('schedule-from-deposit', e, `quote ${code}`).catch(() => {});
   });
+  /* A code entered on the quote is spent now that money is in (every payment,
+     card or hand-recorded, comes through here). In the background: the
+     payment never waits on the designer, and the hourly sweep retries. */
+  if (paid > 0) recordQuotePromo(code).catch(() => {});
   return paid;
 }
 
@@ -2951,54 +3025,6 @@ async function syncTawkContactToBrevo({ name, email }) {
   });
 }
 
-// ─── Grad order pricing ───────────────────────────────────────────────────────
-
-const GRAD_PRICES = {
-  tee_1to4:      { name: 'Custom Grad Tee (1–4)',            price: 25  },
-  tee_5to9:      { name: 'Custom Grad Tee (5–9)',            price: 20  },
-  family_1to4:   { name: 'Family Matching Tee (1–4)',        price: 25  },
-  family_5to9:   { name: 'Family Matching Tee (5–9)',        price: 20  },
-  hoodie:        { name: 'Custom Hoodie',                    price: 45  },
-  stole:         { name: 'Graduation Stole',                 price: 45  },
-  yard_sign:     { name: 'Yard Sign (18"×12")',              price: 25  },
-  banner_4x2:    { name: "Banner (4'×2')",                   price: 45  },
-  banner_6x3:    { name: "Banner (6'×3')",                   price: 80  },
-  bighead_single:{ name: 'Big Head Cutout — Single',         price: 25  },
-  bighead_5pk:   { name: 'Big Head 5-Pack',                  price: 100 },
-  mini_standee:  { name: 'Mini Standee (24")',               price: 35  },
-  standee:       { name: 'Life-Size Standee (up to 6ft)',    price: 125 },
-  arch:          { name: 'Corroplast Arch',                  price: 250 },
-  backdrop:      { name: "Vinyl Backdrop Banner (6'×6')",    price: 150 },
-  button_4pk:    { name: 'Photo Buttons (set of 4)',         price: 28  },
-  button_10pk:   { name: 'Photo Buttons (set of 10)',        price: 60  },
-  magnet:        { name: 'Custom Photo Magnets (set of 6)',  price: 25  },
-  sticker:       { name: 'Custom Sticker Sheet (10-pack)',   price: 20  },
-  chipbag_6:     { name: 'Custom Chip Bags (set of 6)',      price: 18  },
-  chipbag_12:    { name: 'Custom Chip Bags (set of 12)',     price: 35  },
-  gable_box:     { name: 'Custom Gable Boxes (set of 6)',    price: 22  },
-  tumbler:       { name: 'Custom Photo Tumbler',             price: 28  },
-  cup_4pk:       { name: 'Custom Cup (set of 4)',            price: 36  },
-  can_cooler:    { name: 'Custom Can Coolers (6-Pack)',       price: 60  },
-  koozie:        { name: 'Koozies (set of 6)',               price: 35  },
-  step_repeat:   { name: "Step-and-Repeat Banner (8'×8')",  price: 200 },
-  prom_arch:     { name: 'Prom Arch',                        price: 250 },
-  photo_props:   { name: 'Photo Props',                      price: 89  },
-  prom_decal:    { name: 'Prom Decal',                       price: 80  },
-};
-
-function buildGradLineItems(order) {
-  const items = [];
-  for (const [key, { name, price }] of Object.entries(GRAD_PRICES)) {
-    const qty = order.products[key] || 0;
-    if (qty > 0) items.push({ name, price, quantity: qty });
-  }
-  const shirtQty = order.apparel?.shirt_qty || 0;
-  if (shirtQty > 0) {
-    const shirtPrice = shirtQty >= 100 ? 9.75 : shirtQty >= 50 ? 14.00 : 18.50;
-    items.push({ name: `Custom Shirts (qty: ${shirtQty})`, price: shirtPrice, quantity: shirtQty });
-  }
-  return items;
-}
 
 // ─── HubSpot ──────────────────────────────────────────────────────────────────
 
@@ -3170,136 +3196,6 @@ async function getCloverPayment(paymentId) {
   return res.data;
 }
 
-async function syncGradToBrevo(order) {
-  const [first, ...rest] = (order.parent_name || '').trim().split(' ');
-
-  // 1. Create / update contact
-  await brevo.post('/contacts', {
-    email:          order.email,
-    attributes:     { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '', SMS: order.phone || '' },
-    listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
-    updateEnabled:  true,
-  });
-
-  // 2. Get the contact's numeric ID for deal linking
-  const contactRes = await brevo.get(`/contacts/${encodeURIComponent(order.email)}`);
-  const contactId  = contactRes.data.id;
-
-  // 3. Build order summary
-  const lineItems      = buildGradLineItems(order);
-  const estimatedTotal = lineItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  const itemSummary    = lineItems.map(i =>
-    `• ${i.name} × ${i.quantity} @ $${i.price.toFixed(2)} = $${(i.price * i.quantity).toFixed(2)}`
-  ).join('\n');
-
-  // 4. Design selections
-  const eventTypes  = (order.event_type || '').split(',').map(s => s.trim()).filter(Boolean);
-  const designMap   = { 'senior-night': 'senior_night', graduation: 'graduation', prom: 'prom' };
-  const designLines = eventTypes.map(evt => {
-    const key  = designMap[evt] || evt;
-    const name = order.designs?.[`${key}_name`] || order.designs?.[key] || '—';
-    const img  = order.designs?.[`${key}_img`]  || '';
-    return `  ${evt.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${name}${img ? `\n  Image: ${img}` : ''}`;
-  }).join('\n');
-
-  // 5. Build full note
-  const photoLines = (order.photos || []).length
-    ? `\nUPLOADED PHOTOS (${order.photos.length}):\n${order.photos.map((u, i) => `  Photo ${i + 1}: ${u}`).join('\n')}`
-    : '\n  No photos uploaded.';
-
-  const noteText = [
-    `============================`,
-    `GRAD ORDER — ${order.order_ref}`,
-    `============================`,
-    ``,
-    `CUSTOMER`,
-    `  Name:    ${order.parent_name}`,
-    `  Student: ${order.student_name || '—'}`,
-    `  Email:   ${order.email}`,
-    `  Phone:   ${order.phone || '—'}`,
-    `  Address: ${order.address || '—'}`,
-    ``,
-    `EVENT`,
-    `  Type:      ${order.event_type}`,
-    `  Date:      ${order.event_date || '—'}`,
-    `  Needed By: ${order.needed_by || '—'}`,
-    `  School:    ${order.school || '—'}`,
-    `  Colors:    ${order.school_colors || '—'}`,
-    ``,
-    `DESIGN SELECTED`,
-    designLines || '  —',
-    ``,
-    `ORDER ITEMS`,
-    `  ${itemSummary.replace(/\n/g, '\n  ') || 'None'}`,
-    ``,
-    `  ESTIMATED TOTAL: $${estimatedTotal.toFixed(2)}`,
-    `  * Final price confirmed after design review`,
-    ``,
-    `PAYMENT METHOD: ${order.payment_method || '—'}`,
-    ``,
-    `PROOF AGREEMENT`,
-    `  Signed By: ${order.signature || '—'}`,
-    `  Date:      ${order.sign_date || '—'}`,
-    order.apparel?.design_notes ? `\nDESIGN NOTES:\n  ${order.apparel.design_notes}` : null,
-    order.notes ? `\nSPECIAL INSTRUCTIONS:\n  ${order.notes}` : null,
-    photoLines,
-  ].filter(l => l !== null).join('\n');
-
-  // 6. Create deal
-  const dealRes = await brevo.post('/crm/deals', {
-    name:       `Grad Order — ${order.parent_name} (${order.order_ref})`,
-    attributes: {
-      amount:     parseFloat(estimatedTotal.toFixed(2)),
-      close_date: order.needed_by ? new Date(order.needed_by).toISOString() : new Date().toISOString(),
-    },
-  });
-  const dealId = dealRes.data.id;
-  console.log('Brevo deal created:', dealId);
-
-  // 7. Link contact to deal
-  await brevo.patch(`/crm/deals/${dealId}`, { linkedContactsIds: [contactId] })
-    .catch(err => console.error('Brevo contact→deal link failed:', JSON.stringify(err.response?.data || err.message)));
-
-  // 8. Create note linked to contact + deal
-  await brevo.post('/crm/notes', {
-    text:       noteText,
-    contactIds: [contactId],
-    dealIds:    [dealId],
-  }).then(() => console.log('Brevo note created OK'))
-    .catch(err => console.error('Brevo note failed:', JSON.stringify(err.response?.data || err.message)));
-
-  return { contactId, dealId };
-}
-
-async function createGradCloverCustomerAndOrder(order) {
-  console.log('Clover MID:', MID(), 'Token set:', !!process.env.CLOVER_API_TOKEN);
-  try {
-    const customerRes = await clover.post(`/v3/merchants/${MID()}/customers`, {
-      firstName:      (order.parent_name || '').split(' ')[0],
-      lastName:       (order.parent_name || '').split(' ').slice(1).join(' ') || '',
-      emailAddresses: [{ emailAddress: order.email }],
-      phoneNumbers:   [{ phoneNumber: order.phone }],
-    });
-    const cloverCustomerId = customerRes.data.id;
-    const orderRes = await clover.post(`/v3/merchants/${MID()}/orders`, {
-      title:     `Grad Order ${order.order_ref}`,
-      customers: [{ id: cloverCustomerId }],
-    });
-    const cloverOrderId = orderRes.data.id;
-    const lineItems = buildGradLineItems(order);
-    await Promise.all(lineItems.map(item =>
-      clover.post(`/v3/merchants/${MID()}/orders/${cloverOrderId}/line_items`, {
-        name:    `${item.name}${item.quantity > 1 ? ` (×${item.quantity})` : ''}`,
-        price:   Math.round(item.price * item.quantity * 100), // total in cents
-        unitQty: 1000, // 1 unit in Clover milliUnits
-      })
-    ));
-    return { cloverCustomerId, cloverOrderId };
-  } catch (err) {
-    console.error('Clover error:', err.response?.status, JSON.stringify(err.response?.data || err.message));
-    throw err;
-  }
-}
 
 // ─── Auth (admin routes) ──────────────────────────────────────────────────────
 
@@ -5576,13 +5472,6 @@ function requireGradAdmin(req, res, next) {
   next();
 }
 
-function generateGradRef() {
-  const d = new Date();
-  const yy = String(d.getFullYear()).slice(-2);
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const rand = crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `ORD-${yy}${mm}-${rand}`;
-}
 
 function escHtml(str) {
   if (str == null) return '';
@@ -5594,172 +5483,6 @@ function escHtml(str) {
     .replace(/'/g, '&#x27;');
 }
 
-function validateGradOrder(body) {
-  const errors = [];
-  if (!body.parent_name || !String(body.parent_name).trim()) errors.push('parent_name is required');
-  if (String(body.parent_name || '').length > 100) errors.push('parent_name too long');
-  if (!isValidEmail(body.email)) errors.push('valid email is required');
-  if (!body.event_type || !String(body.event_type).trim()) errors.push('event_type is required');
-  if (String(body.student_name || '').length > 100) errors.push('student_name too long');
-  if (String(body.phone || '').length > 30) errors.push('phone too long');
-  if (String(body.school || '').length > 200) errors.push('school too long');
-  if (String(body.address || '').length > 300) errors.push('address too long');
-  if (String(body.notes || '').length > 2000) errors.push('notes too long');
-  if (String(body.upload_link || '').length > 500) errors.push('upload_link too long');
-  return errors;
-}
-
-function buildOrderEmailTable(order) {
-  const lineItems = buildGradLineItems(order);
-  if (!lineItems.length) return '<p>No items selected.</p>';
-  let total = 0;
-  const rows = lineItems.map(({ name, price, quantity }) => {
-    const subtotal = price * quantity;
-    total += subtotal;
-    return `<tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;">${escHtml(name)}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;">${quantity}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;">$${price.toFixed(2)}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;">$${subtotal.toFixed(2)}</td>
-    </tr>`;
-  }).join('');
-  return `<table style="width:100%;border-collapse:collapse;font-size:14px;">
-    <thead>
-      <tr style="background:#0B1F4B;color:#fff;">
-        <th style="padding:8px 12px;text-align:left;">Item</th>
-        <th style="padding:8px 12px;text-align:center;">Qty</th>
-        <th style="padding:8px 12px;text-align:right;">Unit Price</th>
-        <th style="padding:8px 12px;text-align:right;">Subtotal</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-    <tfoot>
-      <tr style="background:#f9f9f9;font-weight:bold;">
-        <td colspan="3" style="padding:10px 12px;text-align:right;">Estimated Total</td>
-        <td style="padding:10px 12px;text-align:right;color:#0B1F4B;">$${total.toFixed(2)}</td>
-      </tr>
-    </tfoot>
-  </table>
-  <!-- This line used to name a surcharge for faster turnaround as something
-       the total excluded. The shop sells no such thing, so the note was quietly
-       telling customers one existed to be asked for. -->
-  <p style="font-size:12px;color:#999;margin-top:6px;">* Final price confirmed after design review. Does not include applicable taxes.</p>`;
-}
-
-async function sendGradOrderEmail(order) {
-  if (!process.env.BREVO_API_KEY && !process.env.RESEND_API_KEY) return;
-
-  const sec = (title, content) =>
-    `<div style="margin-bottom:28px;">
-      <div style="background:#0B1F4B;color:#fff;padding:8px 16px;border-radius:6px 6px 0 0;font-weight:800;font-size:.9rem;letter-spacing:.04em;text-transform:uppercase;">${title}</div>
-      <div style="border:1px solid #E5E7EB;border-top:none;border-radius:0 0 6px 6px;padding:16px;">${content}</div>
-    </div>`;
-
-  const row = (label, value) =>
-    `<tr><td style="padding:5px 8px 5px 0;font-weight:700;white-space:nowrap;vertical-align:top;width:160px;color:#374151;">${label}</td><td style="padding:5px 0;">${value || '—'}</td></tr>`;
-
-  // Design selections
-  const eventTypes = (order.event_type || '').split(',').map(s => s.trim()).filter(Boolean);
-  const designMap = { 'senior-night': 'senior_night', 'graduation': 'graduation', 'prom': 'prom' };
-  const designSection = eventTypes.map(evt => {
-    const key = designMap[evt] || evt.replace('-', '_');
-    const name = order.designs?.[`${key}_name`];
-    const img  = order.designs?.[`${key}_img`];
-    const label = evt.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    return `<div style="margin-bottom:12px;">
-      <strong>${label}:</strong> ${escHtml(name || order.designs?.[key] || '—')}
-      ${img ? `<br/><img src="${escHtml(img)}" alt="${escHtml(name || '')}" style="max-width:220px;margin-top:8px;border-radius:6px;border:1px solid #E5E7EB;" />` : ''}
-    </div>`;
-  }).join('');
-
-  // Uploaded photos
-  const photoHtml = (order.photos || []).length
-    ? (order.photos.map((url, i) =>
-        `<div style="margin-bottom:10px;">
-          <div style="font-size:.82rem;color:#6B7280;margin-bottom:4px;">Photo ${i + 1}: <a href="${escHtml(url)}">${escHtml(url)}</a></div>
-          <img src="${escHtml(url)}" alt="Uploaded photo ${i + 1}" style="max-width:300px;border-radius:6px;border:1px solid #E5E7EB;display:block;" />
-        </div>`
-      ).join(''))
-    : '<p style="color:#6B7280;">No photos uploaded.</p>';
-
-  await sendEmail({
-    to:      NOTIFY_EMAIL,
-    replyTo: order.email || NOTIFY_EMAIL,
-    subject: `New Grad Order ${order.order_ref} — ${order.parent_name}`,
-    html: `<div style="font-family:sans-serif;max-width:700px;margin:0 auto;color:#1C1C2E;">
-      <div style="background:#0B1F4B;padding:20px 24px;border-radius:10px 10px 0 0;margin-bottom:24px;">
-        <div style="color:#F4A623;font-size:.8rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;">New Grad Order</div>
-        <h1 style="color:#fff;font-size:1.4rem;margin:4px 0 0;">${escHtml(order.order_ref)} &mdash; ${escHtml(order.parent_name)}</h1>
-      </div>
-
-      ${sec('Customer Info', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Parent / Guardian', escHtml(order.parent_name))}
-        ${row('Student', escHtml(order.student_name))}
-        ${row('Email', `<a href="mailto:${escHtml(order.email)}">${escHtml(order.email)}</a>`)}
-        ${row('Phone', `<a href="tel:${escHtml(order.phone)}">${escHtml(order.phone)}</a>`)}
-        ${row('Delivery Address', escHtml(order.address))}
-      </table>`)}
-
-      ${sec('Event Info', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Event Type', escHtml(order.event_type))}
-        ${row('Event Date', escHtml(order.event_date))}
-        ${row('Order Needed By', escHtml(order.needed_by))}
-        ${row('School', escHtml(order.school))}
-        ${row('School Colors', escHtml(order.school_colors))}
-      </table>`)}
-
-      ${sec('Design Selected', designSection || '<p style="color:#6B7280;">No design selected.</p>')}
-
-      ${sec('Design Notes & Personalization', order.apparel?.design_notes
-        ? `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.apparel.design_notes)}</p>`
-        : '<p style="color:#6B7280;">None provided.</p>')}
-
-      ${sec('Items Ordered', buildOrderEmailTable(order))}
-
-      ${order.apparel?.shirt_qty > 0 ? sec('Apparel', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Total Shirt Qty', String(order.apparel.shirt_qty))}
-      </table>`) : ''}
-
-      ${sec('Payment & Proof Agreement', `<table style="width:100%;border-collapse:collapse;">
-        ${row('Payment Method', escHtml(order.payment_method))}
-        ${row('Signed By', escHtml(order.signature))}
-        ${row('Date Signed', escHtml(order.sign_date))}
-      </table>
-      <p style="margin-top:12px;font-size:.85rem;color:#6B7280;">Customer agreed to: digital proof within 2 business days, 24-hour approval window, 50% deposit invoice via Clover, 7–14 business day production after deposit.</p>`)}
-
-      ${order.notes ? sec('Special Instructions', `<p style="white-space:pre-wrap;margin:0;">${escHtml(order.notes)}</p>`) : ''}
-
-      ${sec(`Uploaded Photos (${(order.photos || []).length})`, photoHtml)}
-
-    </div>`,
-  });
-}
-
-async function sendGradOrderConfirmationEmail(order) {
-  if ((!process.env.BREVO_API_KEY && !process.env.RESEND_API_KEY) || !order.email) return;
-  await sendEmail({
-    to:      order.email,
-    subject: `Your Grad Order is Confirmed — ${order.order_ref}`,
-    html: `<div style="font-family:sans-serif;max-width:680px;margin:0 auto;">
-      <h2 style="color:#0B1F4B;">Thanks, ${escHtml(order.parent_name.split(' ')[0])}! 🎓</h2>
-      <p>We've received your grad order and will be in touch soon to confirm your design and next steps.</p>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-        <tr><td style="padding:6px 0;font-weight:bold;width:140px;">Order Ref</td><td>${escHtml(order.order_ref)}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Student</td><td>${escHtml(order.student_name) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Event</td><td>${escHtml(order.event_type)} — ${escHtml(order.event_date) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Needed By</td><td>${escHtml(order.needed_by) || '—'}</td></tr>
-        <tr><td style="padding:6px 0;font-weight:bold;">Payment</td><td>${escHtml(order.payment_method) || '—'}</td></tr>
-      </table>
-      <h3 style="color:#0B1F4B;">Your Order Summary</h3>
-      ${buildOrderEmailTable(order)}
-      ${order.apparel?.design_notes ? `<h3 style="color:#0B1F4B;">Your Design Notes</h3><p style="background:#f9f9f9;padding:12px;border-radius:6px;">${escHtml(order.apparel.design_notes)}</p>` : ''}
-      ${order.notes ? `<p><strong>Special Instructions:</strong> ${escHtml(order.notes)}</p>` : ''}
-      <p style="margin-top:24px;">Questions? Reply to this email or call/text us at <a href="tel:+17739004592">(773) 900-4592</a></p>
-      ${designerPromoBlock()}
-      <p style="color:#999;font-size:12px;">June's Tees &amp; Things · 3047 N Lincoln Ave #435, Chicago, IL 60657</p>
-    </div>`,
-  });
-}
 
 // Cloudinary public config
 app.get('/api/config', signatureRateLimit, (req, res) => {
@@ -5810,9 +5533,13 @@ app.post('/api/cloudinary-signature', signatureRateLimit, (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
 
   // The folder is chosen by the server from a fixed list — never echoed back.
-  const ALLOWED_FOLDERS = ['grad_orders', 'quote_requests', 'embroidery_quotes', 'review_photos', QPHOTOS.FOLDER];
+  /* grad_orders went with grad ordering (2026-10-17). Every caller names its
+     folder, so a request that names none, or an unknown one, is refused rather
+     than signed into a default nobody reads. */
+  const ALLOWED_FOLDERS = ['quote_requests', 'embroidery_quotes', 'review_photos', QPHOTOS.FOLDER];
   const requestedFolder = typeof body.folder === 'string' ? body.folder : '';
-  const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'grad_orders';
+  if (!ALLOWED_FOLDERS.includes(requestedFolder)) return res.status(400).json({ error: 'Unknown upload folder' });
+  const folder = requestedFolder;
 
   /* Use the widget's timestamp — overwriting it causes a mismatch, since the
      widget sends its own with the actual upload. But bound it: a signature
@@ -6312,26 +6039,33 @@ body{margin:0;background:#f7f6f3;font-family:Inter,system-ui,-apple-system,Segoe
 function textsPage({ email = '', first = '', phone = '', error = '', code = '', done = false, again = false, src = 'site' } = {}) {
   const v = (x) => escEmail(String(x || '').slice(0, 254));
   const D = 'https://design.jtees.net';
+  // "Design Lab" and "Start designing" open the designer itself, not the
+  // studio's home page (owner, 2026-10-18), like every other Design Lab link.
+  const LAB = `${STUDIO_BASE}/editor.php?product_base=14`;
   const garments = [['ssa-33929_f_fm', 'T-shirts', 52], ['ssa-107784_f_fm', 'Hoodies', 53], ['ssa-18365_f_fm', 'Tanks', 54],
     ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
       alt="Custom ${label}" loading="lazy">${label}</a>`).join('');
-  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo.png" alt="June's Tees &amp; Things"></a></div>`;
+  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo-2026-900.png" alt="June's Tees &amp; Things"></a></div>`;
   const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 900-4592<br>
-    <a href="/">jtees.net</a> &middot; <a href="${D}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
+    <a href="/">jtees.net</a> &middot; <a href="${LAB}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
     <a href="${D}/privacy.php">Privacy</a></div>`;
   const body = done ? `${top}
     <div class="tx-hero"><h1>${again ? "You're already <span>on the list!</span>" : "You're in. <span>Thank you!</span>"}</h1>
-      <p>${code ? "Here's your code. We've texted it to you too." : "Your code is on its way."}</p></div>
+      <p>${again ? (code ? 'Here is your code from when you signed up.' : 'Thanks for being with us.')
+        : code ? "Here's your code. We've texted it to you too." : 'Your code is on its way.'}</p></div>
     <div class="tx-wrap"><div class="tx-card" style="text-align:center">
       ${code ? `<div style="font-weight:700;color:#0B1F4B">Your ${REINTRO.PCT}% off code</div>
         <div class="tx-code">${escEmail(code)}</div>
         <p class="tx-small">Use it at checkout in the Design Lab, or mention it when you get a quote.
-          Good once, for ${REINTRO.CODE_DAYS} days.</p>`
+          Good once, for ${REINTRO.CODE_DAYS} days${again ? ' from when you signed up. Used or run out? Call or text us at (773) 900-4592' : ''}.</p>`
+      : again ? `<p>Can't find your ${REINTRO.PCT}% off code? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a> and we'll sort it out.</p>`
       : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
-      <a class="tx-btn" href="${D}">Start designing</a>
+      <a class="tx-btn" href="${LAB}">Start designing</a>
       <div class="tx-garments">${garments}</div>
-    </div></div>${foot}` : `${top}
+    </div></div>${foot}
+    <script>/* Signed up: jtees.net's texts popup (assets/js/texts-popup.js) stops asking. */
+      try { localStorage.setItem('jt_tx_joined', String(Date.now())); } catch (e) {}</script>` : `${top}
     <div class="tx-hero"><h1>Get <span>${REINTRO.PCT}% off</span><br>your next order</h1>
       <p>Join June's Tees texts for new products, seasonal deals and first dibs on specials. Your code is yours right away.</p></div>
     <div class="tx-wrap"><div class="tx-card">
@@ -6382,8 +6116,14 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
   try {
     await recordSmsConsent(consent, { source: 'signup:' + src, ip: clientIp(req), userAgent: req.get('user-agent') });
     const { rows: had } = await pool.query(
-      `SELECT code FROM text_signups WHERE phone = $1 OR email = $2 ORDER BY created_at LIMIT 1`, [consent.phone, email]);
-    if (had.length) return res.send(textsPage({ done: true, again: true, code: had[0].code }));
+      `SELECT code, phone, email FROM text_signups WHERE phone = $1 OR email = $2 ORDER BY created_at LIMIT 1`, [consent.phone, email]);
+    /* Already signed up. Their code is shown again only when BOTH the phone
+       and the email are the ones they signed up with: typing someone else's
+       email alone must not reveal that person's code. */
+    if (had.length) {
+      const mine = had[0].phone === consent.phone && String(had[0].email || '').toLowerCase() === email;
+      return res.send(textsPage({ done: true, again: true, code: mine ? had[0].code : '' }));
+    }
     if (!signupAllowed()) return again('Lots of sign-ups right now! Please try again in a few minutes.');
     let code = null;
     try { code = await mintSignupCode(email); }
@@ -6398,8 +6138,8 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
       sendEmail({ to: email, subject: `Your ${REINTRO.PCT}% off code: ${code}`, promo: false,
         html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
           `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
-           <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout on
-             <a href="https://www.jtees.net">jtees.net</a>, or mention it when you get a quote. It's good for
+           <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout in the
+             <a href="${STUDIO_BASE}/editor.php?product_base=14">Design Lab</a>, or mention it when you get a quote. It's good for
              ${REINTRO.CODE_DAYS} days, once.</p>`, null) })
         .catch((e) => console.error('sign-up code email failed:', e.message));
     } else {
@@ -6441,32 +6181,65 @@ async function joinByText(phone) {
 
 /** The email half: once started, up to the daily cap each hour-sweep, so the
  *  Brevo plan's daily allowance is never used up by the campaign alone. */
+/* Every email campaign the owner can start from /admin/campaign. Each has an
+   id (its campaign_emails / campaign_runs key), who it goes to, and the email.
+   One sender for all of them, so the once-per-address guarantee, the owner's
+   Start switch, the daily cap and the unsubscribe handling are written once. */
+const EMAIL_CAMPAIGNS = [
+  { id: REINTRO.CAMPAIGN,
+    audience: async () => REINTRO.emailAudience(...await Promise.all([brevoAllContacts(), campaignTextPhones()])),
+    email: (c) => REINTRO.helloEmail(c) },
+  /* Business Partners invite: everyone, minus anyone already on a business.
+     If the designer cannot say who that is, nobody is sent to this run —
+     inviting a partner to join would read as a mistake. */
+  { id: PARTNERS_INVITE.CAMPAIGN, when: () => PARTNERS.on(),
+    audience: async () => {
+      const { businesses, error } = await fetchPartners();
+      if (error) throw new Error(`partner list unavailable: ${error}`);
+      const members = new Set(businesses.flatMap((b) => (b.members || []).map((m) => String(m.email).toLowerCase())));
+      return PARTNERS_INVITE.audience(await brevoAllContacts(), members);
+    },
+    email: (c) => PARTNERS_INVITE.inviteEmail(c) },
+];
+
+/** Send the next batch of every started email campaign, within ONE daily cap
+ *  shared by all of them (it protects the sending account, which does not
+ *  care which campaign a message belongs to). */
 async function sendCampaignEmails() {
+  const out = [];
+  for (const camp of EMAIL_CAMPAIGNS) {
+    if (camp.when && !camp.when()) continue;
+    const said = await sendCampaignEmailsFor(camp);
+    if (said) out.push(`${camp.id}: ${said}`);
+  }
+  return out.join('; ');
+}
+
+async function sendCampaignEmailsFor(camp) {
   const { rows: run } = await pool.query(
-    `SELECT 1 FROM campaign_runs WHERE campaign = $1 AND channel = 'email'`, [REINTRO.CAMPAIGN]);
+    `SELECT 1 FROM campaign_runs WHERE campaign = $1 AND channel = 'email'`, [camp.id]);
   if (!run.length) return '';
   const cap = Math.max(0, parseInt(process.env.JT_CAMPAIGN_EMAILS_PER_DAY || '200', 10));
   const { rows: today } = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM campaign_emails WHERE campaign = $1
-        AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'`,
-    [REINTRO.CAMPAIGN]);
+    `SELECT COUNT(*)::int AS n FROM campaign_emails
+      WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'`);
   let room = cap - today[0].n;
   if (room <= 0) return '';
-  const [contacts, phones, { rows: done }] = await Promise.all([
-    brevoAllContacts(), campaignTextPhones(),
-    pool.query(`SELECT email FROM campaign_emails WHERE campaign = $1`, [REINTRO.CAMPAIGN])]);
+  const [people, { rows: done }] = await Promise.all([
+    camp.audience(),
+    pool.query(`SELECT email FROM campaign_emails WHERE campaign = $1`, [camp.id])]);
   const sent = new Set(done.map((r) => r.email));
   let n = 0;
-  for (const c of REINTRO.emailAudience(contacts, phones)) {
+  for (const c of people) {
     if (room <= 0) break;
     if (sent.has(c.email)) continue;
     const { rows } = await pool.query(
       `INSERT INTO campaign_emails (campaign, email, status) VALUES ($1, $2, 'sending')
-       ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [REINTRO.CAMPAIGN, c.email]);
+       ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [camp.id, c.email]);
     if (!rows.length) continue;
     room--;
     try {
-      const m = REINTRO.helloEmail(c);
+      const m = camp.email(c);
       await sendEmail({ to: c.email, subject: m.subject, html: m.html, marketing: true, promo: false });
       await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [rows[0].id]);
       n++;
@@ -6505,6 +6278,77 @@ async function sendCampaignTexts() {
   } finally {
     campaignTextRunning = false;
   }
+}
+
+/* Marketing calendar (owner, 2026-10-17): every occasion's next date, and when
+   to start getting ready, turn ads and email on, and stop taking orders.
+   Dates come from tools/lib/marketing-calendar.js, the same list the holiday
+   pages read. "Today" is the shop's day in Chicago, not the server's UTC one. */
+app.get('/admin/marketing-calendar', requireAdmin, (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const [y, m, d] = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }).split('-').map(Number);
+  const now = new Date(Date.UTC(y, m - 1, d));
+  const rows = MKT_CAL.upcoming(now).map((r) => ({ ...r, status: MKT_CAL.status(r, now) }));
+  const lead = MKT_CAL.DEFAULT_LEAD;
+  const tone = { 'prep now': '#fef3c7;color:#78350f', 'ads now': '#dcfce7;color:#14532d', 'in season': '#dbeafe;color:#1e3a8a', 'orders closed': '#fee2e2;color:#7f1d1d', upcoming: '#f3f4f6;color:#374151', past: '#f3f4f6;color:#6b7280' };
+  const pill = (st) => `<span style="display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:700;background:${tone[st] || tone.upcoming}">${escHtml(st)}</span>`;
+  const date = (t) => `<span style="white-space:nowrap">${escHtml(MKT_CAL.shortDate(t))}</span>`;
+  const link = (r) => !r.page ? '<span style="color:#9ca3af">no page yet</span>'
+    : `<a href="${escHtml(r.page.startsWith('/') ? PUBLIC_BASE_URL + r.page : r.page)}" target="_blank" rel="noopener">page</a>`;
+  const due = rows.filter((r) => r.status === 'prep now' || r.status === 'ads now');
+  const dueBox = due.length
+    ? `<div class="card" style="border:1px solid #fde68a;background:#fffbeb"><h2 style="margin-top:0">Needs you now</h2><ul style="margin:0;padding-left:18px">${due.map((r) =>
+        `<li><b>${escHtml(r.name)}</b>: ${r.status === 'ads now' ? 'turn on the Google Ads campaign and send the Brevo email' : 'pick designs and photos and update the page'}. Push: ${escHtml(r.push)}.</li>`).join('')}</ul></div>`
+    : '<div class="card"><b>Nothing needs starting today.</b> The next prep date is below.</div>';
+  const body = `
+<div class="card">
+  <p style="margin:0 0 6px">Each occasion counts back from its <b>season start</b>, the day customers begin ordering:
+  <b>prep</b> ${lead.prepWeeks} weeks before (designs, photos, page), <b>ads and email</b> ${lead.adsWeeks} weeks before. <b>Last day to order</b> is
+  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since standard turnaround is 7 to 14 business days
+  after proof approval. An occasion can set its own lead times; the table always shows its real dates. Nothing here is sent automatically.</p>
+</div>
+${dueBox}
+<div class="card" style="overflow-x:auto">
+<table class="tbl" style="width:100%;border-collapse:collapse;font-size:14px">
+  <thead><tr style="text-align:left"><th>Occasion</th><th>Status</th><th>Prep</th><th>Ads + email</th><th>Season starts</th><th>Last day to order</th><th>Event</th><th>Push</th><th></th></tr></thead>
+  <tbody>${rows.map((r) => `<tr style="border-top:1px solid #e5e7eb">
+    <td style="padding:8px 6px"><b>${escHtml(r.name)}</b></td><td>${pill(r.status)}</td>
+    <td>${date(r.prep)}</td><td>${date(r.ads)}</td><td>${date(r.season)}</td><td>${date(r.orderBy)}</td><td>${date(r.event)}${r.end > r.event ? ` to ${date(r.end)}` : ''}</td>
+    <td style="min-width:200px">${escHtml(r.push)}</td><td>${link(r)}</td></tr>`).join('')}</tbody>
+</table>
+</div>`;
+  res.send(adminPage('Marketing calendar', body, 'calendar'));
+});
+
+/** The Business Partners invite, as a card on /admin/campaign. Only while
+ *  the program is on. Counts come from campaign_emails like the hello email's. */
+async function partnersInviteCard(contacts, brevoErr, cap) {
+  if (!PARTNERS.on()) return '';
+  const [{ rows: em }, { rows: runs }, { businesses, error: bizErr }] = await Promise.all([
+    pool.query(`SELECT status, COUNT(*)::int AS n FROM campaign_emails WHERE campaign = $1 GROUP BY status`, [PARTNERS_INVITE.CAMPAIGN]),
+    pool.query(`SELECT started_at FROM campaign_runs WHERE campaign = $1 AND channel = 'email'`, [PARTNERS_INVITE.CAMPAIGN]),
+    fetchPartners(),
+  ]);
+  const members = new Set(businesses.flatMap((b) => (b.members || []).map((m) => String(m.email).toLowerCase())));
+  const people = PARTNERS_INVITE.audience(contacts, members);
+  const n = (st) => em.filter((r) => st.includes(r.status)).reduce((a, r) => a + r.n, 0);
+  const mail = PARTNERS_INVITE.inviteEmail({ first: 'Tom', email: 'tom@example.com' });
+  return `<div class="card" style="margin-top:14px" id="partners">
+    <h2 class="card-title">Business Partners invite</h2>
+    <p class="muted">Past customers are not added to the program; this asks them to join if they order for a business.
+      ${brevoErr ? '' : `<b>${people.length}</b> people on the Brevo list who have not joined. Shares the ${cap}-a-day limit with the hello email.`}</p>
+    ${bizErr ? `<div class="warn">Could not read who has already joined (${escEmail(bizErr)}), so it cannot be started right now.</div>` : ''}
+    <form method="POST" action="/admin/campaign/partners/test" style="margin:0 0 10px" onsubmit="this.querySelector('button').disabled=true">
+      <button type="submit" class="btn btn-ghost">Send me a test</button>
+      <a href="/partners?src=invite" target="_blank" style="color:#1848B8;margin-left:10px">See the /partners page</a></form>
+    <p><b>Subject:</b> ${escEmail(mail.subject)}</p>
+    <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">${mail.html}</div>
+    <p>Emailed: <b>${n(['sent'])}</b>${n(['failed']) ? ` · failed: ${n(['failed'])}` : ''}</p>
+    ${runs.length ? `<p class="muted">Started ${fmtDate(runs[0].started_at)}. It carries on by itself each day until everyone has it.</p>`
+      : brevoErr || bizErr || !people.length ? '' : `
+    <form method="POST" action="/admin/campaign/partners/email" onsubmit="this.querySelector('button').disabled=true">
+      <button type="submit" class="btn">Start the invite to ${people.length} people</button></form>`}
+  </div>`;
 }
 
 app.get('/admin/campaign', requireAdmin, async (req, res) => {
@@ -6576,10 +6420,11 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
           <li>The sign-up page: <a href="${REINTRO.SIGNUP_PATH}?src=site" target="_blank" style="color:#1848B8">${escEmail(PUBLIC_BASE_URL + REINTRO.SIGNUP_PATH)}</a>, linked from the website's footer</li>
           <li>Already asking: the website quote form, accepting a quote, and checkout and "save your design" in the Design Lab</li>
         </ul>
-      </div>`, 'discounts'));
+      </div>
+      ${await partnersInviteCard(contacts, brevoErr, cap)}`, 'campaign'));
   } catch (e) {
     console.error('campaign page failed:', e.message);
-    res.status(500).send(adminPage('Campaign', '<div class="card"><div class="warn">Could not load the campaign.</div></div>', 'discounts'));
+    res.status(500).send(adminPage('Campaign', '<div class="card"><div class="warn">Could not load the campaign.</div></div>', 'campaign'));
   }
 });
 
@@ -6603,7 +6448,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
       .k{font-size:30px;font-weight:800;margin:18px 0}.k b{background:#12203c;color:#fff;padding:2px 12px;border-radius:8px}
       img.qr{width:300px;height:300px}.f{font-size:13px;color:#4b5563;line-height:1.5;margin-top:22px}
       @media print{.np{display:none}}</style></head><body><div class="s">
-    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo.png" alt="June's Tees" style="width:220px">
+    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo-2026-900.png" alt="June's Tees" style="width:220px">
     <h1>Get ${REINTRO.PCT}% off</h1>
     <p style="font-size:22px;margin:0">your next order when you join our texts</p>
     <img class="qr" src="${escEmail(qr)}" alt="QR code to sign up">
@@ -6651,8 +6496,36 @@ app.post('/admin/campaign/email', requireAdmin, async (req, res) => {
   res.redirect('/admin/campaign?msg=' + encodeURIComponent(`Started. The first batch is going out now, then up to the daily limit each day.`));
 });
 
+/* The Business Partners invite: a test to the owner, and Start. Nothing is
+   sent until Start; the hourly sweep then sends within the shared daily cap. */
+app.post('/admin/campaign/partners/test', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const to = String(process.env.OWNER_EMAILS || '').split(',').map((e) => e.trim()).find(isValidEmail) || NOTIFY_EMAIL;
+  try {
+    const m = PARTNERS_INVITE.inviteEmail({ first: 'June', email: to });
+    await sendEmail({ to, subject: '[TEST] ' + m.subject, html: m.html, marketing: true, promo: false });
+    res.redirect('/admin/campaign?msg=' + encodeURIComponent(`Test sent to ${to}.`) + '#partners');
+  } catch (e) {
+    res.redirect('/admin/campaign?err=' + encodeURIComponent(`The test could not be sent (${e.message}).`) + '#partners');
+  }
+});
+
+app.post('/admin/campaign/partners/email', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  if (!PARTNERS.on()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Switch the Business Partners Program on first (JT_PARTNERS=on).'));
+  await pool.query(`INSERT INTO campaign_runs (campaign, channel) VALUES ($1, 'email') ON CONFLICT DO NOTHING`, [PARTNERS_INVITE.CAMPAIGN]);
+  sendCampaignEmails().catch((e) => { console.error('campaign emails failed:', e.message); reportError('partners:invite', e).catch(() => {}); });
+  res.redirect('/admin/campaign?msg=' + encodeURIComponent('Started. The first batch is going out now, then up to the daily limit each day.') + '#partners');
+});
+
 app.get('/sms-terms', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sms-terms.html'));
+});
+/* The quote form on a page of its own. Every "Get a Quote" and "Contact" link
+   on both sites points here: /#contact landed on the heading above the
+   homepage form, or in the middle of the long homepage (owner, 2026-10-17). */
+app.get('/contact', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'contact.html'));
 });
 // The opt-in as a customer sees it, with a screenshot: what A2P 10DLC campaign
 // vetting asks for, and what a carrier reviewer reads against the description.
@@ -6683,6 +6556,340 @@ app.post('/api/send-login-code', requireInternalKey, capPerRecipient('send-login
   } catch (err) {
     console.error('send-login-code error:', err.message);
     res.status(500).json({ error: 'send failed' });
+  }
+});
+
+/* ── Business Partners Program: codes on quotes, past jobs, reorders ─────────
+ *
+ * Businesses, logins and codes live on the designer (jt-partners.php,
+ * jt-auth.php): that is where customers already sign in and where checkout
+ * checks codes. A quote is this side's, so a code typed on a quote is checked
+ * by the designer's own rules (jt-promo-check.php) and then written into the
+ * quote's ORDINARY discount fields, so every total, deposit and Stripe charge
+ * reads it exactly as it reads a discount the shop typed. tools/lib/partners.js
+ * holds the pure parts. All of it is off until JT_PARTNERS=on.
+ */
+function studioPost(file, fields, timeoutMs) {
+  return studioFetch(`${STUDIO_BASE}/${file}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(fields).toString(),
+    timeoutMs,
+  });
+}
+
+/** Up to 20 distinct, valid, lower-cased emails from a request body. */
+function partnerEmails(list) {
+  return [...new Set([].concat(list || []).map((e) => String(e || '').trim().toLowerCase()))]
+    .filter((e) => e.length <= 190 && isValidEmail(e)).slice(0, 20);
+}
+
+/** Has any of these emails paid for a quote? (REORDER5's "returning" rule.) */
+async function quotePaidBefore(emails) {
+  const list = partnerEmails(emails);
+  if (!list.length) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM quotes WHERE lower(trim(email)) = ANY($1::text[])
+        AND COALESCE(paid_amount, 0) > 0 AND cancelled_at IS NULL LIMIT 1`, [list]);
+  return rows.length > 0;
+}
+
+/** Ask the designer whether `code` may go on quote `q`. Throws when it cannot
+ *  be asked; the caller tells the customer to try again rather than guessing. */
+async function studioPromoCheck(q, code) {
+  const paidBefore = await quotePaidBefore([q.email]);
+  const r = await studioPost('jt-promo-check.php', {
+    action: 'check', code, email: String(q.email || ''),
+    subtotal: String(quoteTotals(q).subtotal), paid_before: paidBefore ? '1' : '0',
+  });
+  if (!r.ok) throw new Error(`designer jt-promo-check.php answered ${r.status}`);
+  return r.json();
+}
+
+/** The quote's figures with discount fields `d` applied, tax worked out again
+ *  on the discounted amount (totalsForItems), as one UPDATE's parameters. */
+function quoteWithDiscount(q, d) {
+  const next = { ...q, discount_kind: d.kind, discount_value: d.value };
+  return totalsForItems(next, q.items);
+}
+
+/** Forget the quote's card page, THEN close it (AGENTS.md: the processor
+ *  reports our own expiry like a customer walking away). */
+async function dropQuoteCheckout(code, session) {
+  if (!session) return;
+  await pool.query('UPDATE quotes SET stripe_session = NULL WHERE code = $1 AND stripe_session = $2', [code, session]).catch(() => {});
+  await expireCheckoutSession(session).catch(() => {});
+}
+
+app.post('/q/:code/promo', orderRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!PARTNERS.on() || !QUOTE_CODE_RE.test(code)) return res.status(404).send('Not found');
+  const back = (k) => res.redirect(303, `/q/${code}?promo=${k}#promo`);
+  const given = String((req.body && req.body.promo) || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 32);
+  try {
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code = $1 AND status NOT IN ('held', 'draft')`, [code]);
+    const q = rows[0];
+    if (!q) return res.status(404).send('Not found');
+    if (req.body && req.body.remove) {
+      if (!PARTNERS.canEnterCode(q) || !q.promo_code) return back('notnow');
+      const tt = quoteWithDiscount(q, { kind: 'amt', value: 0 });
+      const { rows: up } = await pool.query(
+        `UPDATE quotes SET discount_kind = 'amt', discount_value = 0, discount_note = NULL,
+                promo_code = NULL, promo_business_id = NULL,
+                subtotal = $2, tax = $3, total = $4, deposit = $5
+          WHERE code = $1 AND promo_code IS NOT NULL AND COALESCE(paid_amount, 0) = 0
+          RETURNING stripe_session`,
+        [code, tt.subtotal, tt.tax, tt.total, tt.deposit]);
+      if (up.length) await dropQuoteCheckout(code, up[0].stripe_session);
+      return back('removed');
+    }
+    if (given.length < 3) return back('invalid');
+    if (!PARTNERS.canEnterCode(q)) return back('notnow');
+    if (Number(q.discount_value) > 0 && !q.promo_code) return back('stack');
+    let check;
+    try { check = await studioPromoCheck(q, given); }
+    catch (e) {
+      console.error(`promo check for ${code} failed:`, e.message);
+      reportError('partner-code-check', e, `quote ${code}`).catch(() => {});
+      return back('generic');
+    }
+    if (!check || !check.ok) return back(PARTNERS.promoReasonKey(check && check.reason));
+    /* A one-time code is spent when a quote is paid, so until then it could sit
+       on two quotes at once. Kept off a second OPEN quote of the same person or
+       business; a quote cancelled or older than two weeks stops counting. */
+    if (check.one_time) {
+      const { rows: other } = await pool.query(
+        `SELECT 1 FROM quotes WHERE code <> $1 AND promo_code = $2 AND COALESCE(paid_amount, 0) = 0
+            AND cancelled_at IS NULL AND created_at > NOW() - INTERVAL '14 days'
+            AND (lower(trim(email)) = lower(trim($3::text)) OR ($4::int IS NOT NULL AND promo_business_id = $4::int))
+          LIMIT 1`,
+        [code, String(check.code).toUpperCase(), String(q.email || ''),
+         Number.isInteger(check.business_id) ? check.business_id : null]);
+      if (other.length) return back('held');
+    }
+    const base = quoteTotals({ ...q, discount_value: 0 });
+    const d = PARTNERS.discountForCode(check, base.gross);
+    const tt = quoteWithDiscount(q, d);
+    /* Guarded on the same conditions the page checked: no money in, and either
+       no discount or one that is itself a code (a code replaces a code). */
+    const { rows: up } = await pool.query(
+      `UPDATE quotes SET discount_kind = $2, discount_value = $3, discount_note = $4,
+              promo_code = $5, promo_business_id = $6,
+              subtotal = $7, tax = $8, total = $9, deposit = $10
+        WHERE code = $1 AND COALESCE(paid_amount, 0) = 0 AND cancelled_at IS NULL
+          AND (promo_code IS NOT NULL OR COALESCE(discount_value, 0) = 0)
+        RETURNING stripe_session`,
+      [code, d.kind, d.value, d.note, String(check.code).toUpperCase(),
+       Number.isInteger(check.business_id) ? check.business_id : null,
+       tt.subtotal, tt.tax, tt.total, tt.deposit]);
+    if (!up.length) return back('notnow');
+    await dropQuoteCheckout(code, up[0].stripe_session);
+    console.log(`quote ${code}: code ${check.code} applied (${d.kind} ${d.value})`);
+    return back('ok');
+  } catch (err) {
+    console.error('quote promo failed:', err.message);
+    reportError('partner-code', err, `quote ${code}`).catch(() => {});
+    return back('generic');
+  }
+});
+
+/** Record on the designer that a paid quote spent its code: the once-per-
+ *  business ledger, the once-per-email cap, the use count. Called from
+ *  syncPaidAmount on every payment and retried hourly; gives up (and reports)
+ *  after 24 tries so one quote the designer keeps refusing cannot report
+ *  itself every hour forever. */
+const PROMO_RECORD_TRIES = 24;
+async function recordQuotePromo(code) {
+  if (!PARTNERS.on()) return false;
+  const { rows } = await pool.query(
+    `UPDATE quotes SET promo_attempts = promo_attempts + 1
+      WHERE code = $1 AND promo_code IS NOT NULL AND promo_recorded_at IS NULL
+        AND COALESCE(paid_amount, 0) > 0 AND promo_attempts < $2
+      RETURNING code, email, promo_code, promo_business_id, promo_attempts`, [code, PROMO_RECORD_TRIES]);
+  const q = rows[0];
+  if (!q) return false;
+  try {
+    const r = await studioPost('jt-promo-check.php', {
+      action: 'record', code: q.promo_code, email: String(q.email || ''),
+      business_id: q.promo_business_id ? String(q.promo_business_id) : '', ref: 'quote:' + q.code,
+    });
+    if (!r.ok) throw new Error(`designer jt-promo-check.php answered ${r.status}`);
+    const d = await r.json();
+    if (!d || !d.ok) throw new Error(`designer refused the record: ${(d && (d.error || d.reason)) || 'no reason given'}`);
+    await pool.query('UPDATE quotes SET promo_recorded_at = NOW() WHERE code = $1', [q.code]);
+    if (d.result === 'twice') {
+      reportError('partner-code-twice',
+        new Error(`${q.promo_code} was used a second time by business #${q.promo_business_id}; quote ${q.code} was paid with it and honoured`),
+        `quote ${q.code}`).catch(() => {});
+    }
+    return true;
+  } catch (e) {
+    console.error(`recording code ${q.promo_code} for ${q.code} failed (try ${q.promo_attempts}):`, e.message);
+    if (q.promo_attempts >= PROMO_RECORD_TRIES) {
+      reportError('partner-code-record', e, `quote ${q.code}: gave up after ${PROMO_RECORD_TRIES} tries`).catch(() => {});
+    }
+    return false;
+  }
+}
+
+/** The hourly retry for recordQuotePromo. Throws when any failed, so the sweep
+ *  reports it (AGENTS.md: a partly failed job must not read as fine). */
+async function recordQuotePromos() {
+  if (!PARTNERS.on()) return '';
+  const { rows } = await pool.query(
+    `SELECT code FROM quotes WHERE promo_code IS NOT NULL AND promo_recorded_at IS NULL
+        AND COALESCE(paid_amount, 0) > 0 AND promo_attempts < $1 ORDER BY id LIMIT 50`, [PROMO_RECORD_TRIES]);
+  let ok = 0;
+  for (const r of rows) if (await recordQuotePromo(r.code)) ok++;
+  if (ok < rows.length) throw new Error(`${rows.length - ok} of ${rows.length} code uses not recorded yet`);
+  return rows.length ? `${ok} recorded` : '';
+}
+
+/* Server to server: the designer's account page asks these on behalf of a
+   signed-in customer, sending the emails of everyone on their business (it
+   owns the membership). The internal key is the authority; every query is
+   limited to those emails. */
+app.post('/api/paid-history', requireInternalKey, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json({ paid: await quotePaidBefore(req.body && req.body.emails) });
+  } catch (err) {
+    console.error('paid-history failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+/** Paid jobs for these emails, newest first, with the 60-day price state. */
+async function partnerJobs(emails) {
+  const list = partnerEmails(emails);
+  if (!list.length) return [];
+  const { rows } = await pool.query(
+    `SELECT q.code, q.items, q.total, q.created_at, q.reorder_of, q.delivered_at,
+            (SELECT MIN(p.created_at) FROM quote_payments p
+              WHERE p.quote_code = q.code AND p.amount > 0) AS first_paid_at
+       FROM quotes q
+      WHERE lower(trim(q.email)) = ANY($1::text[]) AND COALESCE(q.paid_amount, 0) > 0
+        AND q.cancelled_at IS NULL
+      ORDER BY first_paid_at DESC NULLS LAST LIMIT 30`, [list]);
+  const now = new Date();
+  return rows.map((q) => ({
+    code: q.code,
+    summary: quoteSummary(q.items) || 'Custom order',
+    total: Number(q.total || 0),
+    paid_at: q.first_paid_at,
+    delivered: !!q.delivered_at,
+    reorder_of: q.reorder_of || null,
+    price_held: PARTNERS.lockOpen(q.first_paid_at, now),
+    price_days_left: PARTNERS.lockDaysLeft(q.first_paid_at, now),
+    url: quoteLink(q.code),
+  }));
+}
+
+app.post('/api/customer-jobs', requireInternalKey, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    if (!PARTNERS.on()) return res.json({ jobs: [] });
+    res.json({ jobs: await partnerJobs(req.body && req.body.emails) });
+  } catch (err) {
+    console.error('customer-jobs failed:', err.message);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+/* Reorder a paid job. Within 60 days of its first payment the copy keeps the
+   original's prices and is sent straight to the customer to accept and pay
+   (the ordinary 50% deposit); after that it is held for the shop to re-price,
+   because pricing a garment job is the quote form's work, not this route's.
+   Either way REORDER5's 5% goes on, checked by the designer's own rules. */
+app.post('/api/reorder', requireInternalKey, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!PARTNERS.on()) return res.status(404).json({ error: 'off' });
+  const b = req.body || {};
+  const emails = partnerEmails(b.emails);
+  const email = String(b.email || '').trim().toLowerCase();
+  const src = String(b.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(src) || !emails.includes(email)) return res.status(400).json({ error: 'bad input' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT q.*, (SELECT MIN(p.created_at) FROM quote_payments p
+                     WHERE p.quote_code = q.code AND p.amount > 0) AS first_paid_at
+         FROM quotes q WHERE q.code = $1`, [src]);
+    const o = rows[0];
+    /* Object-level check: the job must belong to someone on this business. */
+    if (!o || !emails.includes(String(o.email || '').trim().toLowerCase())
+        || !(Number(o.paid_amount || 0) > 0) || o.cancelled_at) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const items = PARTNERS.reorderItems(o.items);
+    if (!items.length) return res.status(422).json({ error: 'nothing to reorder' });
+    /* One open reorder per job: a second press returns the first. */
+    const { rows: open } = await pool.query(
+      `SELECT code, status FROM quotes WHERE reorder_of = $1 AND lower(trim(email)) = $2 AND accepted_at IS NULL
+          AND cancelled_at IS NULL AND COALESCE(paid_amount, 0) = 0 ORDER BY id DESC LIMIT 1`, [src, email]);
+    if (open.length) {
+      return res.json({ ok: true, code: open[0].code, held: open[0].status === 'held', url: quoteLink(open[0].code), existing: true });
+    }
+    const locked = PARTNERS.lockOpen(o.first_paid_at);
+    /* A tax exemption is the certificate holder's, so it carries over only
+       when the same person reorders; anyone else on the business is quoted
+       with tax, and the shop can apply their certificate if they have one. */
+    const sameBuyer = String(o.email || '').trim().toLowerCase() === email;
+    const draft = {
+      ...o, items, rush_pct: 0, delivery_fee: 0, discount_kind: 'amt', discount_value: 0, email,
+      ...(sameBuyer ? {} : { taxable: true, tax: 0 }),
+    };
+    /* REORDER5, as the designer checked it for this customer and sent with
+       the request (jt_biz_reorder_promo). Not asked for again from here: the
+       designer is waiting on this answer, and calling back into it would be a
+       loop between the two. */
+    let disc = { kind: 'amt', value: 0, note: null }, promo = null;
+    const check = PARTNERS.reorderPromo(b.promo);
+    const pieces = items.reduce((a, i) => a + (Number(i.qty) || 0), 0);
+    /* The code's own minimums, which only this side can measure. */
+    if (check && quoteTotals(draft).subtotal >= check.min_order && pieces >= check.min_items) {
+      disc = PARTNERS.discountForCode(check, quoteTotals(draft).gross);
+      promo = check.code;
+    }
+    const tt = quoteWithDiscount(draft, disc);
+    let code = newQuoteCode();
+    for (let i = 0; i < 5; i++) {
+      const { rows: dup } = await pool.query('SELECT 1 FROM quotes WHERE code = $1', [code]);
+      if (!dup.length) break;
+      code = newQuoteCode();
+    }
+    const validUntil = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const note = locked
+      ? `Reorder of ${src} at the same price (held for 60 days from your first payment). Same artwork, approved on the original.`
+      : `Reorder of ${src}. We are checking today's prices and will send your updated quote shortly.`;
+    await pool.query(
+      `INSERT INTO quotes (code, name, phone, email, items, subtotal, tax, total, deposit, notes, status, valid_until,
+                           discount_kind, discount_value, discount_note, rush_pct, taxable, tax_exempt_ref, tax_exempt_reason,
+                           tax_certificate_id, ship_method, ship_to, promo_code, reorder_of, held_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,0,$16,$17,$18,$19,$20,$21,$22,$23,
+               CASE WHEN $11 = 'held' THEN NOW() END)`,
+      /* Someone else on the business: their email, not the original buyer's
+         name and phone, so texts and the quote reach the person who asked. */
+      [code, sameBuyer ? o.name : null, sameBuyer ? o.phone : null, email, JSON.stringify(items), tt.subtotal, tt.tax, tt.total, tt.deposit, note,
+       locked ? 'sent' : 'held', validUntil, disc.kind, disc.value, disc.note, sameBuyer ? quoteTaxable(o) : true,
+       sameBuyer ? o.tax_exempt_ref || null : null, sameBuyer ? o.tax_exempt_reason || null : null,
+       sameBuyer ? o.tax_certificate_id || null : null,
+       o.ship_method || null, o.ship_to ? JSON.stringify(o.ship_to) : null, promo, src]);
+    if (NOTIFY_EMAIL) {
+      sendEmail({
+        to: NOTIFY_EMAIL, promo: false,
+        subject: `${locked ? 'Reorder' : 'Reorder to re-price'}: ${(sameBuyer && o.name) || email} (${code})`,
+        html: `<p><b>${escEmail((sameBuyer && o.name) || email)}</b> reordered <b>${escEmail(src)}</b> from their Business Partners account.</p>
+          <p>${locked
+            ? `Within the 60-day price, so the new quote <b>${escEmail(code)}</b> went to them at the original prices${promo ? ` with ${escEmail(promo)}` : ''}.`
+            : `The 60-day price has run out, so <b>${escEmail(code)}</b> is <b>held</b>: check the prices on the quote form and approve it to send.`}</p>
+          <p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(code)}">Open the job</a></p>`,
+      }).catch((e) => console.error('reorder notice failed:', e.message));
+    }
+    res.json({ ok: true, code, held: !locked, url: quoteLink(code) });
+  } catch (err) {
+    console.error('reorder failed:', err.message);
+    reportError('partner-reorder', err, `reorder of ${src}`).catch(() => {});
+    res.status(500).json({ error: 'failed' });
   }
 });
 
@@ -8688,13 +8895,30 @@ function quotePricingSource() {
            the first table), and reading "back" as "second" under-quoted every
            back-only and sleeve-only DTF job. A single-table method such as
            screen printing charges its one table at every place either way. */
+        /* The DTF methods are ONE family for this: standard and Oversized
+           (2026-10-17) are the same Anchorfish transfer, so a 12x18 Oversized
+           back with a standard 4x4 chest is one main print plus one additional
+           location — not two main prints. The Oversized print takes the main
+           table wherever it sits, so the chest on the front still reads the
+           additional-location rate. Every other method is its own family. */
+        function familyOf(m) {
+          var t = String(m.title || '').toLowerCase();
+          return t.indexOf('dtf') === 0 ? 'dtf' : 'm' + String(m.id);
+        }
+        var familyMain = {};
+        for (var fi = 0; fi < prints.length; fi++) {
+          var fam = familyOf(prints[fi].method);
+          var big = String(prints[fi].method.title || '').toLowerCase().indexOf('oversized') !== -1;
+          if (!(fam in familyMain) || (big && !familyMain[fam].big)) familyMain[fam] = { i: fi, big: big };
+        }
         var seenMethod = {};
         function keyOf(p) {
           if (p.key !== undefined) return p.key;
           var pk = Object.keys(p.method.positions || {});
-          var mid = String(p.method.id);
-          var later = !!seenMethod[mid];
-          seenMethod[mid] = true;
+          var fam = familyOf(p.method);
+          if (fam === 'dtf') return prints[familyMain.dtf.i] === p ? '' : (pk[1] || pk[0]);
+          var later = !!seenMethod[fam];
+          seenMethod[fam] = true;
           return later ? (pk[1] || pk[0]) : '';
         }
 
@@ -9099,7 +9323,6 @@ function totalsForItems(q, items) {
 }
 
 
-
 /* What is still owed, everywhere. One definition so the board, the customer
    page, the payment routes and the books cannot disagree — a balance shown in
    one place and not another is how a customer gets chased for money the shop has
@@ -9389,7 +9612,7 @@ function toE164(phone) {
 }
 
 /** Mirror a quote into Brevo: contact -> deal -> note, same shape as
- *  syncGradToBrevo(). Every call is guarded; the Postgres row already holds the
+ *  the old grad-order sync. Every call is guarded; the Postgres row already holds the
  *  truth, so a Brevo outage must never surface as a failed quote.
  *
  *  A quote has ONE deal. Once it has one (q.brevo_deal_id), a later call updates
@@ -9821,6 +10044,7 @@ const ADMIN_NAV = [
   { key: 'earnings',   href: '/admin/my-earnings',   label: 'My earnings', icon: 'dollar', staffOnly: true },
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
+  { key: 'myschedule', href: '/admin/work-schedule', label: 'My schedule', icon: 'clock', staffOnly: true },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
   { key: 'tasks',      href: '/admin/tasks',         label: 'Tasks',      icon: 'check' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
@@ -9829,18 +10053,49 @@ const ADMIN_NAV = [
   { key: 'orders',     href: '/admin/orders',        label: 'Orders',     icon: 'box' },
   { key: 'shipping',   href: '/admin/shipping',      label: 'Shipping',   icon: 'truck',  badge: 'shipping' },
   { key: 'delivery',   href: '/admin/delivery',      label: 'Delivery',   icon: 'clock' },
+  { key: 'deliveryset', href: '/admin/delivery/settings', label: 'Delivery settings', icon: 'edit' },
   { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
   { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
   { key: 'certificates', href: '/admin/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
+  { key: 'exports',    href: '/admin/exports',       label: 'Exports',    icon: 'file' },
+  { key: 'pay',        href: '/admin/commission',    label: 'Staff pay',  icon: 'card' },
   { key: 'discounts',  href: '/admin/discounts',     label: 'Discounts',  icon: 'tag' },
+  { key: 'partners',   href: '/admin/partners',      label: 'Partners',   icon: 'users', when: () => PARTNERS.on() },
+  { key: 'calendar',   href: '/admin/marketing-calendar', label: 'Marketing calendar', icon: 'clock' },
+  { key: 'campaign',   href: '/admin/campaign',      label: 'Reintro campaign', icon: 'mail' },
+  { key: 'mailbox',    href: '/admin/mailbox',       label: 'Mailbox',    icon: 'mail',   badge: 'mail' },
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'resources',  href: '/admin/resources',     label: 'Resources',  icon: 'key' },
   { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
+  { key: 'paths',      href: '/admin/training/paths', label: 'Training paths', icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
-  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team',   badge: 'approvals' },
+  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team' },
+  { key: 'approvals',  href: '/admin/approvals',     label: 'Approvals',  icon: 'check',  badge: 'approvals' },
+  { key: 'activity',   href: '/admin/activity',      label: 'Activity',   icon: 'clock' },
+  { key: 'staff',      href: '/admin/staff',         label: 'Staff and permissions', icon: 'key' },
   { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
+  { key: 'workschedule', href: '/admin/work-schedule', label: 'Work schedule', icon: 'clock', ownerOnly: true },
+];
+/* The menu's sections (owner, 2026-10-18: "too many tabs ... most of these can
+   become one. I just don't wanna lose them"). Twenty-eight entries became eight
+   sections, and the nine pages that had no entry at all (Approvals, Activity,
+   Staff, Pay, Exports, the campaign, Delivery settings, Work schedule and
+   Training paths) each got one, so nothing is reachable only by a link.
+   A section opens in the menu without loading a page, and every page shows its
+   section's other pages as tabs (sectionTabs), in the order listed here, so a
+   page folded into a section is never out of sight.
+   tests/admin-nav-sections.test.js fails when a page or an entry has no home. */
+const ADMIN_SECTIONS = [
+  { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
+  { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'tasks', 'mailbox', 'chat'] },
+  { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers'] },
+  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
+  { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
+  { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
+  { key: 'team',      label: 'Team',      icon: 'team',   items: ['team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'hiring'] },
+  { key: 'learn',     label: 'Knowledge', icon: 'book',   items: ['playbook', 'resources', 'training', 'paths'] },
 ];
 /* Ordered the way a shop is actually worked, not the way the routes grew: what
    needs you today, the enquiries that might become work, the work in hand, the
@@ -9943,6 +10198,35 @@ details.md-sec:not([open])>summary::before{transform:rotate(-90deg)}
 .adm-badge{margin-left:auto;background:#F4A623;color:#0B1F4B;border-radius:100px;font-size:11px;font-weight:800;
   padding:0 7px;min-width:21px;text-align:center;line-height:19px}
 .adm-badge[hidden]{display:none}
+.adm-sec{margin:0}
+.adm-sec > summary{list-style:none;cursor:pointer;user-select:none}
+.adm-sec > summary::-webkit-details-marker{display:none}
+.adm-sec > summary > span:first-of-type{flex:1 1 auto}
+.adm-sec > summary::after{content:'';width:7px;height:7px;flex:0 0 7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+  transform:rotate(45deg);opacity:.55;margin:0 4px 3px 8px;transition:transform .15s}
+.adm-sec[open] > summary::after{transform:rotate(-135deg);margin-bottom:-3px}
+.adm-sec > summary.is-here{color:#fff}
+.adm-sec[open] > summary .adm-badge-sec{display:none}
+.adm-subs{display:flex;flex-direction:column;gap:1px;margin:2px 0 6px 21px;padding-left:10px;border-left:1px solid rgba(199,210,232,.18)}
+.adm-sub{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;color:#aebbd6;text-decoration:none;font-size:13.5px;font-weight:600}
+.adm-sub:hover{background:rgba(255,255,255,.07);color:#fff}
+.adm-sub.is-active{background:#1848B8;color:#fff;box-shadow:inset 3px 0 0 #F4A623}
+.adm-go{margin:0 2px 14px}
+.adm-go input{width:100%;box-sizing:border-box;background:rgba(255,255,255,.08);border:1px solid rgba(199,210,232,.22);color:#fff;
+  border-radius:10px;padding:9px 11px;font-size:13.5px}
+.adm-go input::placeholder{color:#8e9fc5}
+.sec-tabs{display:flex;gap:6px;margin:0 0 18px;padding:0 0 2px;overflow-x:auto;scrollbar-width:thin;border-bottom:1px solid #e3e8f2}
+.sec-tab{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 14px 10px;font-size:14px;font-weight:700;
+  color:#46505f;text-decoration:none;border-bottom:3px solid transparent;margin-bottom:-1px}
+.sec-tab:hover{color:#0B1F4B;border-bottom-color:#c6d3ee}
+.sec-tab.is-active{color:#1848B8;border-bottom-color:#1848B8}
+.sec-tab .adm-badge{margin-left:0}
+@media (max-width:900px){
+  /* Tabs that run off a phone screen fade at the edge, so it is plain there are more. */
+  .sec-tabs{-webkit-mask-image:linear-gradient(90deg,#000 85%,transparent);mask-image:linear-gradient(90deg,#000 85%,transparent);
+    margin:-4px -14px 14px;padding:0 40px 2px 14px}
+  .sec-tab{padding:9px 12px 10px;font-size:13.5px}
+}
 .adm-foot{margin-top:auto;padding-top:16px;display:flex;flex-direction:column;gap:4px}
 .adm-new{display:flex;align-items:center;justify-content:center;gap:8px;background:#F4A623;color:#0B1F4B;
   border-radius:10px;padding:10px 12px;font-weight:800;font-size:14px;text-decoration:none;margin-bottom:6px}
@@ -10102,32 +10386,68 @@ details.fold[open] > summary::after{transform:rotate(-135deg)}
 
 /* The menu's counts arrive after the page has loaded, from /admin/nav-counts,
    so a slow count never holds a page up and a failed one shows no badge rather
-   than a wrong one. */
+   than a wrong one. A section's badge is the sum of its pages' badges, so a
+   count is never hidden inside a closed section. */
 const ADMIN_BADGE_JS = `(function(){try{fetch('/admin/nav-counts',{credentials:'same-origin',cache:'no-store'})
 .then(function(r){return r.ok?r.json():null}).then(function(c){if(!c)return;
 document.querySelectorAll('[data-badge]').forEach(function(el){var n=Number(c[el.getAttribute('data-badge')])||0;
-if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});}).catch(function(){});}catch(e){}})();`;
+if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});
+document.querySelectorAll('[data-badge-group]').forEach(function(el){var n=0;
+el.getAttribute('data-badge-group').split(',').forEach(function(k){n+=Number(c[k])||0;});
+if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});}).catch(function(){});}catch(e){}})();
+(function(){try{var t=document.querySelector('.sec-tabs .is-active');if(t&&t.parentNode.scrollWidth>t.parentNode.clientWidth)
+t.parentNode.scrollLeft=t.offsetLeft-t.parentNode.offsetLeft-24;}catch(e){}})();`;
+
+/** The menu entries this person may open, in menu order. A helper sees only
+ *  what their permissions open; the owner sees everything but the helper-only
+ *  entries. Worked out from the same route table the server enforces, so the
+ *  menu cannot offer a page that would refuse them. */
+function navItemsFor(actor) {
+  const staff = actor && actor.kind === 'staff' ? actor : null;
+  return ADMIN_NAV.filter((n) => (!n.when || n.when()) && (staff
+    /* Schedule is the no-prices view; whoever has the Production board uses that. */
+    ? !n.ownerOnly && STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
+    : !n.staffOnly));
+}
+
+/** The sections with something in them for this person: [{ ...section, items }]. */
+function navSectionsFor(actor) {
+  const items = navItemsFor(actor);
+  return ADMIN_SECTIONS.map((s) => ({ ...s, items: s.items.map((k) => items.find((n) => n.key === k)).filter(Boolean) }))
+    .filter((s) => s.items.length);
+}
 
 /** The side menu. `active` is an ADMIN_NAV key. */
 function adminNav(active) {
-  /* A helper sees only what their permissions open; the owner sees everything
-     but the helper-only entries. Worked out from the same route table the
-     server enforces, so the menu cannot offer a page that would refuse them. */
   const actor = typeof currentActor === 'function' ? currentActor() : null;
   const staff = actor && actor.kind === 'staff' ? actor : null;
-  const items = ADMIN_NAV.filter((n) => staff
-    /* Schedule is the no-prices view; whoever has the Production board uses that. */
-    ? STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
-    : !n.staffOnly);
   const home = staff ? '/admin/my-day' : '/admin/dashboard';
+  const sections = navSectionsFor(actor);
+  const offered = sections.flatMap((x) => x.items);
+  const link = (n, cls) => `<a class="${cls}${n.key === active ? ' is-active' : ''}" href="${n.href}"${
+    n.key === active ? ' aria-current="page"' : ''}>${cls === 'adm-link' ? icon(n.icon) : ''}<span>${n.label}</span>${
+    n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`;
+  /* A section of one page is just that page. Otherwise it is a fold that opens
+     in place, no page load, and the section holding this page starts open. */
+  const section = (s) => {
+    if (s.items.length === 1) return link(s.items[0], 'adm-link');
+    const open = s.items.some((n) => n.key === active);
+    const badges = s.items.map((n) => n.badge).filter(Boolean);
+    return `<details class="adm-sec"${open ? ' open' : ''}><summary class="adm-link${open ? ' is-here' : ''}">${
+      icon(s.icon)}<span>${s.label}</span>${badges.length
+        ? `<span class="adm-badge adm-badge-sec" data-badge-group="${badges.join(',')}" hidden></span>` : ''}</summary>
+      <div class="adm-subs">${s.items.map((n) => link(n, 'adm-sub')).join('')}</div></details>`;
+  };
   return `<aside class="adm-side" aria-label="Admin menu">
     <a class="adm-brand" href="${home}"><span class="adm-mark">JT</span>
       <span>June's Tees<small>${staff ? escEmail(staff.name) : 'Back office'}</small></span></a>
     ${staff ? `<div class="adm-side-clock">${clockChip()}</div>` : ''}
-    <nav class="adm-nav">${items.map((n) => `
-      <a class="adm-link${n.key === active ? ' is-active' : ''}" href="${n.href}"${
-        n.key === active ? ' aria-current="page"' : ''}>${icon(n.icon)}<span>${n.label}</span>${
-        n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`).join('')}
+    <form class="adm-go" method="get" action="/admin/go" role="search">
+      <input type="search" name="q" list="adm-pages" maxlength="120" autocomplete="off"
+        placeholder="${!staff || STAFF.mayUseRoute(staff, 'GET', '/admin/find') ? 'Find a page or order' : 'Find a page'}" aria-label="Go to">
+      <datalist id="adm-pages">${offered.map((n) => `<option value="${escEmail(n.label)}">`).join('')}</datalist>
+    </form>
+    <nav class="adm-nav">${sections.map(section).join('')}
     </nav>
     <div class="adm-foot">
       ${!staff || STAFF.mayUseRoute(staff, 'GET', '/admin/quote/new|/admin/quote/:code/edit')
@@ -10137,6 +10457,18 @@ function adminNav(active) {
         icon('out')}<span>Sign out</span></button></form>
     </div>
   </aside>`;
+}
+
+/** The tabs across the top of a page: every page in its section, by name, so
+ *  a page folded into a section is one tap away and never only a URL. Nothing
+ *  for a page outside the menu or a section of one. */
+function sectionTabs(active) {
+  const actor = typeof currentActor === 'function' ? currentActor() : null;
+  const s = navSectionsFor(actor).find((x) => x.items.some((n) => n.key === active));
+  if (!s || s.items.length < 2) return '';
+  return `<nav class="sec-tabs" aria-label="${escEmail(s.label)}">${s.items.map((n) => `<a class="sec-tab${
+    n.key === active ? ' is-active' : ''}" href="${n.href}"${n.key === active ? ' aria-current="page"' : ''}>${n.label}${
+    n.badge ? `<span class="adm-badge" data-badge="${n.badge}" hidden></span>` : ''}</a>`).join('')}</nav>`;
 }
 
 /* One document for every page this app renders by hand, so the customer shell
@@ -10188,7 +10520,7 @@ function adminPage(title, body, active) {
         return !a || a.kind !== 'staff' || STAFF.mayUseRoute(a, 'GET', '/admin/quote/new|/admin/quote/:code/edit')
           ? `<a class="adm-top-new" href="/admin/quote/new" title="New quote">${icon('plus')}</a>` : ''; })()}
     </header>
-    <main class="adm-page"><div class="wrap">${pageTip(key)}${body}</div></main>
+    <main class="adm-page"><div class="wrap">${sectionTabs(key)}${pageTip(key)}${body}</div></main>
   </div>
 </div>
 <script>${ADMIN_BADGE_JS}</script>${clockScript()}`, { css: ADMIN_CSS, bodyClass: 'adm-body' });
@@ -11083,21 +11415,28 @@ function productGroupOf(name) {
             var packs = CAT.methods.filter(function(m){
               return m.active !== false && m.use_for_quoting !== false &&
                 m.title.indexOf('Big Head Cutout') === 0 && upNum(m.title, 'in,') === size &&
-                upNum(m.title, '-pack') > x.qty;
+                upNum(m.title, '-pack') > 0;
             }).sort(function(a, b){ return upNum(a.title, '-pack') - upNum(b.title, '-pack'); });
             if (!packs.length) return;
-            var pk = packs[0], heads = upNum(pk.title, '-pack');
-            var pr = priceLine(Object.assign({}, x.args, { method: pk, qty: 1, unitOverride: '' }));
+            /* The smallest pack that holds them all; at or past a pack's size
+               (eight 24in singles, 2026-10-17), as many packs as it takes,
+               offered only when that is cheaper than the singles. */
+            var fits = packs.filter(function(m){ return upNum(m.title, '-pack') > x.qty; });
+            var pk = fits[0] || packs[packs.length - 1], heads = upNum(pk.title, '-pack');
+            var nPk = fits.length ? 1 : Math.ceil(x.qty / heads);
+            var pr = priceLine(Object.assign({}, x.args, { method: pk, qty: nPk, unitOverride: '' }));
             var more = Math.round((pr.lineTotal - x.lt) * 100) / 100;
+            if (!fits.length && more >= 0) return;
+            var got = heads * nPk;
             ideas.push({ key: 'pack' + n, label: 'Item ' + n + ': ' + size + 'in singles to the ' + heads + '-pack',
-              text: tag + 'the ' + size + 'in ' + heads + '-pack is ' + m2(pr.lineTotal) + ' against ' + m2(x.lt) +
-                ' for these ' + x.qty + ' singles: ' + (heads - x.qty) + ' more heads for ' +
-                (more >= 0 ? m2(more) + ' more' : m2(-more) + ' less') + ' (' + m2(pr.lineTotal / heads) + ' a head).',
+              text: tag + (nPk > 1 ? nPk + ' x ' : '') + 'the ' + size + 'in ' + heads + '-pack is ' + m2(pr.lineTotal) + ' against ' + m2(x.lt) +
+                ' for these ' + x.qty + ' singles: ' + (got > x.qty ? (got - x.qty) + ' more heads for ' : 'the same heads for ') +
+                (more >= 0 ? m2(more) + ' more' : m2(-more) + ' less') + ' (' + m2(pr.lineTotal / got) + ' a head).',
               apply: function(){
                 var sel = x.L.querySelector('.p');
                 sel.value = 'cut:' + pk.id;
                 if (sel.value !== 'cut:' + pk.id) return false;
-                x.L.querySelector('.q').value = '1';
+                x.L.querySelector('.q').value = String(nPk);
                 x.L.querySelector('.u').value = '';
               } });
             return;
@@ -13275,8 +13614,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          Uploads from this form go to `quote_requests`; the art lives under
          `jtees/product-art`. Anything from that folder is a previous
          fallback, not something a person chose, so it is re-derived rather
-         than kept. */
-      images = images.filter((u) => !/\/jtees\/product-art\//.test(u));
+         than kept. So is `jtees/listing` (tools/set-listing-photos.js): the
+         catalogue thumbnail moved onto Cloudinary there, and a saved line
+         would otherwise keep a "your design here" mockup for good. */
+      images = images.filter((u) => !/\/jtees\/(product-art|listing)\//.test(u));
 
       /* Everything attached, with the name the customer gave it. Same origin
          rule as the images — these are linked from the customer's page, so an
@@ -13291,7 +13632,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           files = parsed
             .filter((f) => f && typeof f.url === 'string' &&
               /^https:\/\/res\.cloudinary\.com\//.test(f.url) &&
-              !/\/jtees\/product-art\//.test(f.url))
+              !/\/jtees\/(product-art|listing)\//.test(f.url))
             .slice(0, 12)
             .map((f) => ({
               url: f.url,
@@ -14327,6 +14668,33 @@ app.get('/q/:code', async (req, res) => {
             <button type="button" data-qp-remove="${escEmail(d.url)}" aria-label="Remove ${escEmail(d.name)}"
                     style="position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:12px;border:0;background:#0B1F4B;color:#fff;font-size:14px;line-height:24px;padding:0;cursor:pointer">&times;</button>
           </div>`;
+    /* Business Partners: a code box (MAIL15, REORDER5) while nothing is paid.
+       POST /q/:code/promo checks it with the designer and writes it into the
+       ordinary discount fields; ?promo= carries back only a known key, never
+       text (PARTNERS.promoMessage). Not offered on a quote the shop already
+       discounted: codes never stack. */
+    const promoKey = String(req.query.promo || '').replace(/[^a-z]/g, '').slice(0, 20);
+    const promoNote = promoKey === 'ok' ? '<p style="margin:8px 0 0;color:#166534;font-weight:600">Code added. Your total is updated above.</p>'
+      : promoKey === 'removed' ? '<p style="margin:8px 0 0" class="muted">Code removed.</p>'
+      : promoKey ? `<p style="margin:8px 0 0;color:#b91c1c">${escEmail(PARTNERS.promoMessage(promoKey))}</p>` : '';
+    const promoCard = (!PARTNERS.on() || stopAsking || !PARTNERS.canEnterCode(q)
+                       || (Number(q.discount_value) > 0 && !q.promo_code)) ? '' : `
+      <div class="card" id="promo">
+        ${q.promo_code ? `
+        <form method="POST" action="/q/${q.code}/promo" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0">
+          <span><b>Code ${escEmail(q.promo_code)}</b> is on this quote.</span>
+          <input type="hidden" name="remove" value="1">
+          <button type="submit" class="btn-ghost" style="padding:6px 12px">Remove</button>
+        </form>` : `
+        <form method="POST" action="/q/${q.code}/promo" style="display:flex;gap:10px;flex-wrap:wrap;margin:0"
+              onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Checking…'">
+          <label for="promo-in" style="flex-basis:100%;font-weight:700">Have a code?</label>
+          <input id="promo-in" name="promo" maxlength="32" autocomplete="off" autocapitalize="characters"
+                 placeholder="MAIL15" style="flex:1;min-width:140px;text-transform:uppercase">
+          <button type="submit" class="btn" style="width:auto;padding:10px 18px">Apply</button>
+        </form>`}
+        ${promoNote}
+      </div>`;
     const photosCard = (q.cancelled_at || !qpCloud) ? '' : `
       <div class="card" id="photos">
         <h1 style="font-size:18px">Upload artwork</h1>
@@ -14744,6 +15112,8 @@ app.get('/q/:code', async (req, res) => {
           ${q.valid_until ? `<p class="muted">Quote good through ${fmtDate(q.valid_until)}.</p>` : ''}
         </div>
       </div>
+
+      ${promoCard}
 
       ${/* Right under the items, above the contact and payment boxes (the
            owner, 2026-10-02): artwork is the next thing a job needs. */ photosCard}
@@ -17991,6 +18361,25 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         <span>${years.map(y => y.y === year
         ? `<b>${y.y}</b>` : `<a href="${FINANCES_PATH}?year=${y.y}&amp;month=all" style="color:#1848B8">${y.y}</a>`).join(' &middot; ')}
         &middot; <a href="/admin/quotes" style="color:#1848B8">back to jobs</a></span></div>
+      <nav class="chips" data-jump aria-label="Jump to" style="display:none;margin:12px 0 0"><span class="muted" style="align-self:center;font-size:13px">Jump to:</span></nav>
+      <script>
+      /* The page's own headings as a Jump to row (owner, 2026-10-18: nine
+         sections on one page and no way between them but scrolling). Built from
+         what this view actually shows, so a section that is hidden this month
+         never gets a dead link. */
+      document.addEventListener('DOMContentLoaded', function(){
+        var nav = document.querySelector('[data-jump]'); if (!nav) return;
+        var n = 0;
+        document.querySelectorAll('.adm-page h2').forEach(function(h, i){
+          var t = h.textContent.trim(); if (!t || !h.getClientRects().length) return;
+          if (!h.id) h.id = 'fin-' + i;
+          h.style.scrollMarginTop = '70px';
+          var a = document.createElement('a'); a.className = 'chip-f'; a.href = '#' + h.id; a.textContent = t;
+          nav.appendChild(a); n++;
+        });
+        if (n > 1) nav.style.display = 'flex';
+      });
+      </script>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
         ${tile('Sales (ex tax)', money(S.sales), '#111827', `${S.jobs} accepted job${S.jobs === 1 ? '' : 's'}${
@@ -18742,8 +19131,8 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
       </tr>`;
     }).join('');
 
-    res.send(adminPage('Records', `<h1>Records</h1>
-      <div class="sub">Download a month, keep it somewhere that is not this app</div>
+    res.send(adminPage('Exports', `<h1>Exports</h1>
+      <div class="sub">Your records as spreadsheets: download a month, keep it somewhere that is not this app</div>
 
       <div class="card" style="margin-bottom:14px">
         <b style="color:#0B1F4B">Why bother downloading</b>
@@ -18758,6 +19147,7 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
       </div>
 
       <div class="card">
+        <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <thead><tr style="text-align:left;border-bottom:1px solid #e3e8f2">
             <th style="padding:6px 4px">Month</th>
@@ -18769,6 +19159,7 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="6" class="muted" style="padding:10px 4px">Nothing recorded yet.</td></tr>'}</tbody>
         </table>
+        </div>
         <p class="muted" style="margin-top:12px;font-size:13px">Everything, all months:
           <a href="/admin/exports/quotes.csv">quotes</a> &middot;
           <a href="/admin/exports/payments.csv">payments</a> &middot;
@@ -18779,7 +19170,7 @@ app.get('/admin/exports', requireAdmin, async (_req, res) => {
           that no quote claimed — mostly design studio orders, which keep their own ledger on
           design.jtees.net. A <b>*</b> means the sales tax inside some of it has not been worked out
           yet, so that month's tax figure is a floor rather than a total.</p>
-      </div>`, 'money'));
+      </div>`, 'exports'));
   } catch (err) {
     console.error('exports page failed:', err.message);
     res.status(500).send('Could not load records.');
@@ -19560,6 +19951,9 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
             c.min_items > 0 ? c.min_items + '+ items' : '',
             c.once_per_customer ? 'one per customer' : '',
             c.locked_to_customer ? 'that customer only' : '',
+            c.partner_only ? 'Business Partners only' : '',
+            c.once_per_business ? 'one per business' : '',
+            c.returning_only ? 'returning customers only' : '',
             c.starts_at ? 'from ' + fmtDate(c.starts_at) : '',
           ].filter(Boolean);
           return r.length ? `<div class="muted" style="font-size:11.5px">${r.join(' &middot; ')}</div>` : '';
@@ -19582,6 +19976,8 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
             once_per_customer: !!c.once_per_customer, assigned_to: c.assigned_to || '',
             starts_at: c.starts_at || '', min_items: c.min_items || '',
             max_discount: c.max_discount || '', locked_to_customer: !!c.locked_to_customer,
+            partner_only: !!c.partner_only, once_per_business: !!c.once_per_business,
+            returning_only: !!c.returning_only,
           })).replace(/"/g, '&quot;')})">Edit</button>
         ${live(c) ? `
         <button type="button" class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px"
@@ -19718,6 +20114,18 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
             <input type="checkbox" name="locked_to_customer" value="1" style="width:auto">
             Only the person it is sent to can use it
           </label>
+          <label style="flex:0 1 220px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="partner_only" value="1" style="width:auto">
+            Business Partners only
+          </label>
+          <label style="flex:0 1 190px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="once_per_business" value="1" style="width:auto">
+            One per business
+          </label>
+          <label style="flex:0 1 250px;font-size:13px;display:flex;align-items:center;gap:6px;padding-bottom:8px">
+            <input type="checkbox" name="returning_only" value="1" style="width:auto">
+            Only customers who have paid before
+          </label>
         </div>
         <div style="margin-top:10px">
           <label style="font-size:12px">Who it is for / what it is for <span class="muted">(only you see this)</span></label>
@@ -19745,6 +20153,9 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
           f.max_uses.value = c.max_uses || '';
           f.once_per_customer.checked = !!c.once_per_customer;
           f.locked_to_customer.checked = !!c.locked_to_customer;
+          if (f.partner_only) f.partner_only.checked = !!c.partner_only;
+          if (f.once_per_business) f.once_per_business.checked = !!c.once_per_business;
+          if (f.returning_only) f.returning_only.checked = !!c.returning_only;
           f.starts_at.value = c.starts_at ? String(c.starts_at).slice(0,10) : '';
           f.min_items.value = c.min_items || '';
           f.max_discount.value = c.max_discount || '';
@@ -19847,6 +20258,9 @@ app.post('/admin/discounts', requireAdmin, async (req, res) => {
   form.set('min_items', String(b.min_items || ''));
   form.set('max_discount', String(b.max_discount || ''));
   if (b.locked_to_customer) form.set('locked_to_customer', '1');
+  if (b.partner_only) form.set('partner_only', '1');
+  if (b.once_per_business) form.set('once_per_business', '1');
+  if (b.returning_only) form.set('returning_only', '1');
   try {
     const r = await studioFetch(PROMO_ADMIN(), { method: 'POST', body: form });
     const d = await r.json().catch(() => ({}));
@@ -19931,7 +20345,7 @@ async function sendDiscountEmail(code, email, extra) {
           border-radius:10px;padding:14px 26px;font-size:26px;font-weight:800;
           letter-spacing:2px;color:#0B1F4B;font-family:ui-monospace,Menlo,monospace">${escEmail(c.code)}</span></p>
         <p style="color:#374151">Enter it at checkout${rules ? ' — ' + escEmail(rules) : ''}.</p>
-        <p style="margin-top:18px"><a href="${STUDIO_BASE}"
+        <p style="margin-top:18px"><a href="${STUDIO_BASE}/products.php"
            style="background:#1848B8;color:#fff;padding:12px 24px;border-radius:100px;
            text-decoration:none;font-weight:700">Start designing &rarr;</a></p>
         <p style="color:#6b7280;font-size:13px;margin-top:18px">${escEmail(SHOP_SIGNER)} &middot;
@@ -20058,6 +20472,100 @@ async function allCustomers() {
     Number(b.spent) - Number(a.spent) || Number(b.quoted) - Number(a.quoted)), studio };
 }
 
+/* ── Business Partners: the owner's list ─────────────────────────────────────
+   Businesses live on the designer (jt-partners.php); this page reads and
+   manages them through jt-business-admin.php, the same shared-key client
+   pattern as the discount codes above. Joining is instant, so this is where
+   the owner looks AFTER: who joined, from where, whether they have used
+   MAIL15, and any sign-up that looks like a business already on file. A
+   failed fetch says so; it never renders as "no partners yet". */
+const BIZ_ADMIN = () => `${STUDIO_BASE}/jt-business-admin.php`;
+
+async function fetchPartners() {
+  try {
+    const r = await studioFetch(BIZ_ADMIN());
+    if (!r.ok) throw new Error(`designer jt-business-admin.php answered ${r.status}`);
+    const d = await r.json();
+    return { businesses: Array.isArray(d.businesses) ? d.businesses : [], error: null };
+  } catch (e) {
+    console.error('partners fetch failed:', e.message);
+    return { businesses: [], error: e.message };
+  }
+}
+
+app.get('/admin/partners', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  if (!PARTNERS.on()) return res.redirect('/admin/discounts');
+  const { businesses, error } = await fetchPartners();
+  const byId = new Map(businesses.map((b) => [b.id, b]));
+  const msg = String(req.query.msg || ''), err = String(req.query.err || '');
+  const site = (u) => /^https?:\/\//i.test(String(u || ''))
+    ? `<a href="${escEmail(u)}" target="_blank" rel="noopener noreferrer nofollow">${escEmail(String(u).replace(/^https?:\/\/(www\.)?/i, '').slice(0, 40))}</a>` : '';
+  const SOURCE = { mail15: 'Mailer (MAIL15)', partners: '/partners page', invite: 'Invite email', account: 'Account page' };
+  const rows = businesses.map((b) => {
+    const dup = b.dup_of && byId.get(b.dup_of);
+    const mail15 = (b.uses || []).find((u) => u.code === 'MAIL15');
+    return `<tr style="border-top:1px solid #eef1f8${b.status === 'removed' ? ';opacity:.6' : ''}">
+      <td style="padding:9px 6px"><b>${escEmail(b.name)}</b>
+        <div class="muted" style="font-size:12.5px">${[escEmail(b.type || ''), escEmail(b.phone || ''), site(b.website)].filter(Boolean).join(' &middot; ')}</div>
+        ${dup ? `<div style="font-size:12.5px;color:#b45309">Looks like <b>${escEmail(dup.name)}</b> (#${dup.id}).
+          <form method="POST" action="/admin/partners/action" style="display:inline" onsubmit="return confirm('Merge into ${escEmail(dup.name)}? Its people move across.')">
+            <input type="hidden" name="action" value="merge"><input type="hidden" name="id" value="${b.id}">
+            <input type="hidden" name="into" value="${dup.id}"><button class="btn btn-ghost" style="padding:2px 8px;font-size:12px">Merge</button></form></div>` : ''}
+        ${b.status === 'removed' && b.note ? `<div class="muted" style="font-size:12.5px">Switched off: ${escEmail(b.note)}</div>` : ''}</td>
+      <td style="padding:9px 6px;font-size:13px">${(b.members || []).map((m) =>
+        `${escEmail(m.email)}${m.role === 'owner' ? ' <span class="muted">(owner)</span>' : ''}${m.signed_in ? '' : ' <span class="muted">(not signed in yet)</span>'}`).join('<br>')}</td>
+      <td style="padding:9px 6px;font-size:13px;white-space:nowrap">${b.created ? fmtDate(b.created) : ''}
+        <div class="muted" style="font-size:12px">${escEmail(SOURCE[b.source] || b.source || '')}</div></td>
+      <td style="padding:9px 6px;font-size:13px">${mail15 ? `used ${fmtDate(mail15.created)}<div class="muted" style="font-size:12px">${escEmail(mail15.ref)}</div>` : '<span class="muted">not yet</span>'}</td>
+      <td style="padding:9px 6px;text-align:right;white-space:nowrap">${b.status === 'removed' ? `
+        <form method="POST" action="/admin/partners/action"><input type="hidden" name="action" value="restore">
+          <input type="hidden" name="id" value="${b.id}"><button class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Switch back on</button></form>` : `
+        <form method="POST" action="/admin/partners/action" onsubmit="var n=prompt('Why? (only you see this)');if(n===null)return false;this.note.value=n;return true;">
+          <input type="hidden" name="action" value="remove"><input type="hidden" name="id" value="${b.id}"><input type="hidden" name="note" value="">
+          <button class="btn btn-ghost" style="padding:5px 10px;font-size:12.5px">Switch off</button></form>`}</td>
+    </tr>`;
+  }).join('');
+  const active = businesses.filter((b) => b.status === 'active').length;
+  res.send(adminPage('Partners', `<h1>Business Partners</h1>
+    <div class="sub">${error ? '<b style="color:#b91c1c">Could not reach the designer, so this list is unavailable right now. Nothing has been lost; reload in a minute.</b>'
+      : `${active} active &middot; joining is instant; switch off any that are not real. Codes are on <a href="/admin/discounts" style="color:#1848B8">Discounts</a>.`}</div>
+    ${msg ? `<div class="card" style="color:#166534">${escEmail(msg)}</div>` : ''}
+    ${err ? `<div class="card"><div class="warn">${escEmail(err)}</div></div>` : ''}
+    ${error ? '' : businesses.length ? `<div class="card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="text-align:left"><th style="padding:6px">Business</th><th style="padding:6px">People</th>
+        <th style="padding:6px">Joined</th><th style="padding:6px">MAIL15</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : `<div class="card"><p class="muted">No businesses have joined yet. The sign-up link is <b>${escEmail(PUBLIC_BASE_URL)}/partners</b>; the mailer's QR goes to /mail15.</p></div>`}`, 'partners'));
+});
+
+app.post('/admin/partners/action', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  const b = req.body || {};
+  const action = ['remove', 'restore', 'merge'].includes(b.action) ? b.action : '';
+  const id = parseInt(b.id, 10), into = parseInt(b.into, 10);
+  if (!action || !Number.isInteger(id) || id <= 0) return res.redirect('/admin/partners?err=' + encodeURIComponent('That did not work. Please try again.'));
+  const form = new URLSearchParams({ action, id: String(id), note: String(b.note || '').trim().slice(0, 255) });
+  if (action === 'merge' && Number.isInteger(into) && into > 0) form.set('into', String(into));
+  try {
+    const r = await studioFetch(BIZ_ADMIN(), { method: 'POST', body: form });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `designer answered ${r.status}`);
+    /* Codes on unpaid quotes follow the merge, so they are recorded against
+       the business that remains (the studio moves its own holds). */
+    if (action === 'merge' && Number.isInteger(into) && into > 0) {
+      await pool.query('UPDATE quotes SET promo_business_id = $2 WHERE promo_business_id = $1 AND promo_recorded_at IS NULL',
+        [id, into]).catch((e) => reportError('partner-merge-quotes', e, `#${id} -> #${into}`).catch(() => {}));
+    }
+    logActivity(currentActor() || OWNER_ACTOR, `partner ${action}`, { type: 'business', id: String(id) }, action === 'merge' ? { into } : null);
+    const said = { remove: 'Switched off.', restore: 'Switched back on.', merge: 'Merged.' }[action];
+    res.redirect('/admin/partners?msg=' + encodeURIComponent(said));
+  } catch (e) {
+    console.error('partner action failed:', e.message);
+    res.redirect('/admin/partners?err=' + encodeURIComponent('That did not save: the designer could not be reached. Please try again.'));
+  }
+});
+
 app.get('/admin/customers', requireAdmin, async (_req, res) => {
   try {
     const { people, studio } = await allCustomers();
@@ -20107,6 +20615,27 @@ app.get('/admin/customers', requireAdmin, async (_req, res) => {
 /* The dashboard's Find an order box (2026-10-06). A quote code goes straight
    to its job page; anything else is a customer search, whose page lists every
    job for that person with a link to each. */
+/* The menu's Go to box (2026-10-18). A page name the person may open goes
+   straight there, matched against the same menu they see; anything else is
+   handed to Find (an order code or a customer) when they may search, and
+   otherwise back to their home page with a note. */
+app.get('/admin/go', requireAdmin, (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 120);
+  const actor = currentActor();
+  const staff = actor && actor.kind === 'staff';
+  const home = staff ? '/admin/my-day' : '/admin/dashboard';
+  if (!q) return res.redirect(home);
+  /* Whole page names only: a partial match would send a customer called Mark
+     to the Marketing calendar. The box's suggestions offer the exact names. */
+  const want = q.toLowerCase();
+  const page = navItemsFor(actor).find((n) => n.label.toLowerCase() === want);
+  if (page) return res.redirect(page.href);
+  if (!staff || STAFF.mayUseRoute(actor, 'GET', '/admin/find')) {
+    return res.redirect(`/admin/find?q=${encodeURIComponent(q)}`);
+  }
+  res.redirect(`${home}?err=${encodeURIComponent(`No page called "${q}".`)}`);
+});
+
 app.get('/admin/find', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 120);
   if (!q) return res.redirect('/admin/dashboard');
@@ -21697,6 +22226,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const artCard = await jobArtCard(q, req.query).catch((e) => { console.error('art card failed:', e.message); return ''; });
     const teamNotesCard = await teamJobNotesCard(q, `/admin/production/${q.code}#team-notes`)
       .catch((e) => { console.error('team notes card failed:', e.message); return ''; });
+    const mailCard = await mailOrderCard(q.code, currentActor() || OWNER_ACTOR)
+      .catch((e) => { console.error('mailbox card failed:', e.message); return ''; });
     const certificateCard = boards ? await jobCertificateCard(q, req.query) : '';
     const photosCard = jobPhotosCard(q);
     const notesCard = await jobNotesCard(q.code);
@@ -21815,6 +22346,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       ${certificateCard}
       ${artCard}
       ${teamNotesCard}
+      ${mailCard}
       ${proofsCard}
       ${messagesCard}
       ${creditCard}
@@ -22534,6 +23066,11 @@ async function ownerTaggedCodes(codes, actor) {
   const { rows: dms } = await pool.query(
     'SELECT DISTINCT quote_code FROM team_messages WHERE staff_id = $1 AND from_owner AND quote_code = ANY($2)', [actor.id, live]);
   for (const r of dms) out.add(r.quote_code);
+  /* A mailbox conversation the owner started about the order, with this helper in it. */
+  const { rows: mails } = await pool.query(
+    `SELECT DISTINCT t.quote_code FROM mail_threads t JOIN mail_participants p ON p.thread_id = t.id
+      WHERE p.reader = $1 AND t.created_by = 'owner' AND t.quote_code = ANY($2)`, [`staff:${actor.id}`, live]);
+  for (const r of mails) out.add(r.quote_code);
   const rest = live.filter((c) => !out.has(c));
   if (!rest.length) return out;
   const { rows: chans } = await pool.query(
@@ -24545,10 +25082,11 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
    costs a badge rather than the lot. */
 app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, design: 0, jobnotes: 0, pinned: 0 };
+  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, mail: 0, design: 0, jobnotes: 0, pinned: 0 };
   const me = currentActor() || OWNER_ACTOR;
   await Promise.all([
     teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
+    mailUnreadCount(me).then((n) => { out.mail = n; }).catch(() => {}),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
@@ -24862,6 +25400,8 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
     .catch((e) => { console.error('dashboard: task form failed:', e.message); return ''; });
   const notesPin = await jobNotesPinCard(currentActor() || OWNER_ACTOR, '/admin/dashboard')
     .catch((e) => { console.error('dashboard: job notes failed:', e.message); return ''; });
+  const mail = await mailDashboard(currentActor() || OWNER_ACTOR)
+    .catch((e) => { console.error('dashboard mailbox failed:', e.message); return null; });
   res.send(adminPage('Dashboard', `
     ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
       '<a class="btn" href="/admin/quote/new">New quote</a><a class="btn btn-ghost" href="/admin/production">Production</a>')}
@@ -24919,6 +25459,10 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
         <details style="margin-top:10px"><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
           ${addTaskForm}</details>
       </div>${TASK_CSS}${TASK_UPLOAD_JS}
+      ${mail ? `<div class="card" id="mailbox">
+        <h2 class="card-title">Mailbox <span class="muted">${mail.unread ? `${mail.unread} with something new` : mail.open ? `${mail.open} open` : ''}</span> <a href="/admin/mailbox">all conversations &rarr;</a></h2>
+        ${mail.rows ? `<div class="rows">${mail.rows}</div>` : emptyState('No open conversations. Mark one Done and it leaves here.', '<a class="btn btn-ghost" href="/admin/mailbox/new">New conversation</a>')}
+      </div>` : ''}
       <div class="card">
         <h2 class="card-title">Latest leads <a href="/admin/leads?status=all">all leads &rarr;</a></h2>
         ${leads.length ? `<div class="rows">${leads.slice(0, 5).map((l) => {
@@ -28851,6 +29395,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
       await step('reintro emails', sendCampaignEmails);
     }
     await step('reorder nudges', sendReorderNudges);
+    await step('partner code uses', recordQuotePromos);
     await step('expire quotes', expireOldQuotes);
     await step('monthly costs', rollRecurringExpenses);
     await step('job costs', async () => {
@@ -28894,161 +29439,11 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     Math.max(5000, Number(process.env.JT_CHAT_ALERT_EVERY_MS) || 5 * 60 * 1000));
 }
 
-// Submit grad order
-app.post('/api/submit-order', orderRateLimit, rejectBots, async (req, res) => {
-  // Grad ordering is retired — delete this early return to reactivate the
-  // handler below, which is kept intact in case the program returns.
-  if (!process.env.GRAD_ORDERS_ENABLED) {
-    return res.status(410).json({ success: false, error: 'Grad ordering has ended. Visit https://www.jtees.net/ to place a custom order.' });
-  }
-  try {
-    const body = req.body;
-    const errors = validateGradOrder(body);
-    if (errors.length) return res.status(400).json({ success: false, error: errors.join('; ') });
-
-    let photos = [];
-    try {
-      const raw = Array.isArray(body.photos) ? body.photos : (body.photos_json ? JSON.parse(body.photos_json) : []);
-      photos = Array.isArray(raw) ? raw.filter(u => typeof u === 'string' && u.startsWith('https://res.cloudinary.com/')).slice(0, 20) : [];
-    } catch { photos = []; }
-
-    const orderRef = generateGradRef();
-    // Clamp quantities to a sane range so junk input can't produce
-    // negative or absurd totals in emails and CRM records.
-    const gradQty = (v) => {
-      const n = parseInt(v, 10);
-      return Number.isInteger(n) && n > 0 ? Math.min(n, 10000) : 0;
-    };
-    const products = {
-      // Apparel
-      tee_1to4: gradQty(body.qty_tee_1to4),
-      tee_5to9: gradQty(body.qty_tee_5to9),
-      family_1to4: gradQty(body.qty_family_1to4),
-      family_5to9: gradQty(body.qty_family_5to9),
-      hoodie: gradQty(body.qty_hoodie),
-      stole: gradQty(body.qty_stole),
-      // Signs & Banners
-      yard_sign: gradQty(body.qty_yard_sign),
-      banner_4x2: gradQty(body.qty_banner_4x2),
-      banner_6x3: gradQty(body.qty_banner_6x3),
-      // Cutouts & Standees
-      bighead_single: gradQty(body.qty_bighead_single),
-      bighead_5pk: gradQty(body.qty_bighead_5pk),
-      mini_standee: gradQty(body.qty_mini_standee),
-      standee: gradQty(body.qty_standee),
-      // Arches & Backdrops
-      arch: gradQty(body.qty_arch),
-      backdrop: gradQty(body.qty_backdrop),
-      // Party Favors
-      button_4pk: gradQty(body.qty_button_4pk),
-      button_10pk: gradQty(body.qty_button_10pk),
-      magnet: gradQty(body.qty_magnet),
-      sticker: gradQty(body.qty_sticker),
-      chipbag_6: gradQty(body.qty_chipbag_6),
-      chipbag_12: gradQty(body.qty_chipbag_12),
-      gable_box: gradQty(body.qty_gable_box),
-      // Drinkware
-      tumbler: gradQty(body.qty_tumbler),
-      cup_4pk: gradQty(body.qty_cup_4pk),
-      can_cooler: gradQty(body.qty_can_cooler),
-      koozie: gradQty(body.qty_koozie),
-      // Prom Night
-      step_repeat: gradQty(body.qty_step_repeat),
-      prom_arch: gradQty(body.qty_prom_arch),
-      photo_props: gradQty(body.qty_photo_props),
-      prom_decal: gradQty(body.qty_prom_decal),
-    };
-    const apparel = {
-      shirt_qty: gradQty(body.shirt_qty), print_method: body.print_method || '',
-      sizes: {
-        youth_s: parseInt(body.size_ys) || 0, youth_m: parseInt(body.size_ym) || 0,
-        youth_l: parseInt(body.size_yl) || 0, youth_xl: parseInt(body.size_yxl) || 0,
-        adult_s: parseInt(body.size_as) || 0, adult_m: parseInt(body.size_am) || 0,
-        adult_l: parseInt(body.size_al) || 0, adult_xl: parseInt(body.size_axl) || 0,
-        '2xl': parseInt(body.size_2xl) || 0, '3xl': parseInt(body.size_3xl) || 0,
-        '4xl': parseInt(body.size_4xl) || 0, '5xl': parseInt(body.size_5xl) || 0,
-      },
-      design_notes: body.design_notes || '',
-    };
-    const designs = {
-      senior_night: body['design_senior-night'] || '',
-      graduation:   body.design_graduation || '',
-      prom:         body.design_prom || '',
-      senior_night_name: body['design_name_senior-night'] || '',
-      graduation_name:   body.design_name_graduation || '',
-      prom_name:         body.design_name_prom || '',
-      senior_night_img:  body['design_img_senior-night'] || '',
-      graduation_img:    body.design_img_graduation || '',
-      prom_img:          body.design_img_prom || '',
-    };
-    const order = {
-      order_ref: orderRef, parent_name: String(body.parent_name).trim(),
-      student_name: (body.student_name || '').trim(), email: String(body.email).trim().toLowerCase(),
-      phone: (body.phone || '').trim(), school: (body.school || '').trim(),
-      event_date: body.event_date || '', needed_by: body.needed_by || '',
-      address: (body.address || '').trim(), event_type: String(body.event_type).trim(),
-      products, apparel, designs,
-      upload_method: body.upload_method || '', upload_link: body.upload_link || '',
-      payment_method: body.payment_method || '', notes: (body.notes || '').trim(),
-      signature: (body.signature || '').trim(), sign_date: (body.sign_date || '').trim(),
-      school_colors: (body.school_colors || '').trim(), photos,
-    };
-
-    const rawData = {
-      school_colors: order.school_colors,
-      sign_date: order.sign_date,
-      design_selection: designs,
-    };
-
-    await pool.query(
-      `INSERT INTO grad_orders
-        (order_ref, parent_name, student_name, email, phone, school,
-         event_date, needed_by, address, event_type, products, apparel,
-         designs, upload_method, upload_link, payment_method, notes, signature, photos, raw_data)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
-      [order.order_ref, order.parent_name, order.student_name, order.email,
-       order.phone, order.school, order.event_date, order.needed_by,
-       order.address, order.event_type,
-       JSON.stringify(order.products), JSON.stringify(order.apparel), JSON.stringify(order.designs),
-       order.upload_method, order.upload_link, order.payment_method,
-       order.notes, order.signature, JSON.stringify(order.photos), JSON.stringify(rawData)]
-    );
-
-    const [emailResult, confirmResult, hubspotResult, cloverResult] = await Promise.allSettled([
-      sendGradOrderEmail(order),
-      sendGradOrderConfirmationEmail(order),
-      syncGradToBrevo(order),
-      createGradCloverCustomerAndOrder(order),
-    ]);
-    if (emailResult.status   === 'rejected') console.error('Grad notification email failed:', emailResult.reason?.message);
-    if (confirmResult.status === 'rejected') console.error('Grad confirmation email failed:',  confirmResult.reason?.message);
-    if (hubspotResult.status === 'rejected') console.error('Grad Brevo sync failed:',          hubspotResult.reason?.message, JSON.stringify(hubspotResult.reason?.response?.data));
-    if (cloverResult.status  === 'rejected') console.error('Grad Clover sync failed:',         cloverResult.reason?.message, JSON.stringify(cloverResult.reason?.response?.data));
-
-    const idUpdates = [];
-    const idValues  = [];
-    let   idx       = 1;
-    if (hubspotResult.status === 'fulfilled') {
-      idUpdates.push(`hubspot_contact_id=$${idx++}`, `hubspot_deal_id=$${idx++}`);
-      idValues.push(hubspotResult.value.contactId, hubspotResult.value.dealId);
-    }
-    if (cloverResult.status === 'fulfilled') {
-      idUpdates.push(`clover_customer_id=$${idx++}`, `clover_order_id=$${idx++}`);
-      idValues.push(cloverResult.value.cloverCustomerId, cloverResult.value.cloverOrderId);
-    }
-    if (idUpdates.length) {
-      idValues.push(orderRef);
-      pool.query(
-        `UPDATE grad_orders SET ${idUpdates.join(', ')} WHERE order_ref=$${idx}`,
-        idValues
-      ).catch(err => console.error('Grad ID update failed:', err.message));
-    }
-
-    res.json({ success: true, orderRef });
-  } catch (err) {
-    console.error('Grad order error:', err);
-    res.status(500).json({ success: false, error: 'Failed to save order. Please try again.' });
-  }
+/* Grad ordering ended, and its old price list (a $25 big head single among
+   it) was removed on 2026-10-17 at the owner's request. Old links still get a
+   clear answer. Past grad orders stay readable below. */
+app.post('/api/submit-order', (_req, res) => {
+  res.status(410).json({ success: false, error: 'Grad ordering has ended. Visit https://www.jtees.net/ to place a custom order.' });
 });
 
 // Grad orders admin
@@ -29137,10 +29532,13 @@ async function staffRoster({ activeOnly = false } = {}) {
   return rows;
 }
 /** A roster for a list on screen: archived helpers left out (owner,
- *  2026-10-15: "keep the info in the backend but not visible"), except the
- *  one person the page is already about (`keep`). */
-function listedStaff(roster, keep = null) {
-  return roster.filter((r) => !r.archived_at || (keep != null && r.id === keep));
+ *  2026-10-15: "keep the info in the backend but not visible"), and disabled
+ *  ones too (owner, 2026-10-18: "remove disabled employees"), except the one
+ *  person the page is already about (`keep`). `withDisabled` keeps disabled
+ *  helpers who are not archived yet, for the pages where they are settled up:
+ *  Staff, and Pay while money is still owed to them. */
+function listedStaff(roster, keep = null, { withDisabled = false } = {}) {
+  return roster.filter((r) => (!r.archived_at && (r.active || withDisabled)) || (keep != null && r.id === keep));
 }
 function nameOf(roster, id) {
   if (id == null) return 'Owner';
@@ -29247,21 +29645,86 @@ function cloudflareStepCard(name, email) {
   </div>`;
 }
 
+/** What still ties a disabled helper to the shop: hours, pay, bonuses or
+ *  commission owed, a shift running, open tasks or design jobs. Archiving must
+ *  never hide any of these, so nothing is archived while the list is not empty. */
+async function helperOutstanding(id) {
+  const [{ rows: [hrs] }, { rows: [clock] }, { rows: [bonus] }, { rows: [tasks] }, { rows: [art] }, lines] = await Promise.all([
+    pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+    /* Clocked weeks not yet approved (no staff_hours row), or a shift still running. */
+    pool.query(`SELECT COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
+                       COUNT(DISTINCT date_trunc('week', started_at AT TIME ZONE 'America/Chicago'))
+                         FILTER (WHERE ended_at IS NOT NULL AND NOT EXISTS (
+                           SELECT 1 FROM staff_hours h WHERE h.staff_id = sh.staff_id
+                             AND h.week_of = (date_trunc('week', sh.started_at AT TIME ZONE 'America/Chicago'))::date))::int AS unapproved
+                  FROM staff_shifts sh WHERE staff_id = $1`, [id]),
+    pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
+    pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
+    pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
+    (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
+      return commissionLines(id, rates); })(),
+  ]);
+  const owedCommission = lines.filter((l) => !['paid', 'wage only'].includes(l.state) && l.amount > 0);
+  return [
+    hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
+    clock.running ? 'a shift still running (end it on Hours)' : '',
+    clock.unapproved ? `${clock.unapproved} clocked week${clock.unapproved === 1 ? '' : 's'} not yet approved (approve or adjust on Hours)` : '',
+    bonus.a > 0 ? `${money(bonus.a)} in bonuses not yet paid` : '',
+    owedCommission.length ? `commission on ${owedCommission.length} sale${owedCommission.length === 1 ? '' : 's'} not yet paid (see their Pay page)` : '',
+    tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
+    art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : '',
+  ].filter(Boolean);
+}
+
+/** Archive a disabled helper, with the checks repeated in the write so work
+ *  added in between stops it. Returns the number of rows archived (0 or 1). */
+async function archiveHelper(id) {
+  const { rowCount } = await pool.query(
+    `UPDATE staff SET archived_at = NOW(), active = FALSE
+      WHERE id = $1 AND archived_at IS NULL AND NOT active
+        AND NOT EXISTS (SELECT 1 FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)`, [id]);
+  return rowCount;
+}
+
+/* Disabled helpers off every list (owner, 2026-10-18: "remove disabled
+   employees"). Disabling now archives at once when nothing is owed or open;
+   this catches the ones disabled before that, and those whose last debt has
+   since been paid. A helper the owner restored by hand is left alone. */
+async function archiveSettledHelpers() {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM staff s WHERE NOT active AND archived_at IS NULL
+        /* A Restore by hand holds until the helper is disabled again. */
+        AND NOT EXISTS (SELECT 1 FROM staff_activity a WHERE a.action = 'helper restored'
+                          AND a.subject_type = 'staff' AND a.subject_id = s.id::text
+                          AND a.created_at > COALESCE((SELECT MAX(d.created_at) FROM staff_activity d
+                            WHERE d.action = 'helper disabled' AND d.subject_type = 'staff' AND d.subject_id = s.id::text), '-infinity'))`);
+  for (const h of rows) {
+    try {
+      if ((await helperOutstanding(h.id)).length) continue;
+      if (await archiveHelper(h.id)) {
+        logActivity(null, 'helper archived', { type: 'staff', id: h.id }, { name: h.name, auto: true });
+      }
+    } catch (e) { console.error(`archiving settled helper ${h.id}:`, e.message); }
+  }
+  return rows.length;
+}
+
 async function renderStaffPage(req, res, extra = '') {
   const everyone = await staffRoster();
-  const roster = listedStaff(everyone);
+  const roster = listedStaff(everyone, null, { withDisabled: true });
   const archived = everyone.filter((s) => s.archived_at);
   const showArchived = String((req.query || {}).archived || '') === '1';
   const tabs = filterChips([
-    { label: 'Team', href: '/admin/staff', on: !showArchived, count: roster.length || null },
+    { label: 'Team', href: '/admin/staff', on: !showArchived, count: roster.filter((s) => s.active).length || null },
     { label: 'Archived', href: '/admin/staff?archived=1', on: showArchived, count: archived.length || null },
   ]);
   if (showArchived) {
     /* Archived helpers: their record stays (hours, pay, messages, work), off
        every list and unable to sign in. Restore brings them back, disabled. */
     return res.send(adminPage('Staff', `
-      ${pageHeader('Staff', 'Archived helpers: kept for the records, hidden everywhere else. They cannot sign in.',
-        '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
+      ${pageHeader('Staff', 'Archived helpers: kept for the records, hidden everywhere else. They cannot sign in.')}
       ${tabs}
       ${flash(req.query)}
       <div class="card">${archived.length ? archived.map((s) => `<div class="row-i" id="staff-${s.id}"><span class="row-main"><b>${escEmail(s.name)}</b>
@@ -29271,7 +29734,7 @@ async function renderStaffPage(req, res, extra = '') {
           <div class="row-sub"><a href="/admin/timeclock?staff=${s.id}">Their clocked hours</a> &middot; <a href="/admin/commission?staff=${s.id}">Their pay</a></div></span>
         <span class="row-end"><form method="post" action="/admin/staff/${s.id}" style="margin:0" data-once>
           <input type="hidden" name="action" value="unarchive"><button type="submit" class="btn btn-ghost">Restore</button></form></span></div>`).join('')
-        : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'team'));
+        : emptyState('Nobody is archived. Disable a helper on the Team tab, then Archive them.')}</div>${SHIP_ONCE_JS}`, 'staff'));
   }
   /* Signed the current staff agreement, and when (/admin/agreement). */
   const signed = new Map((await pool.query('SELECT staff_id, signed_at FROM staff_agreements WHERE version = $1', [AGREEMENT.VERSION])
@@ -29282,7 +29745,7 @@ async function renderStaffPage(req, res, extra = '') {
   /* A hire arriving from Hiring (?add_track=) starts on their path's preset. */
   const addPreset = STAFF.presetForTrack(TRAINING.trackOf((req.query || {}).add_track));
   const presetOptions = Object.entries(STAFF.PRESETS).map(([k, p]) => `<option value="${k}"${k === addPreset ? ' selected' : ''}>${escEmail(p.label)}</option>`).join('');
-  const cards = roster.map((s) => {
+  const card = (s) => {
     const preset = STAFF.presetMatching(s.perms);
     return `<div class="card" id="staff-${s.id}">
       <div class="row-i"><span class="row-main"><b>${escEmail(s.name)}</b>
@@ -29345,15 +29808,22 @@ async function renderStaffPage(req, res, extra = '') {
         </form>
       </details>` : ''}
     </div>`;
-  }).join('');
+  };
+  /* Working helpers on the page; disabled ones still being settled fold away
+     below with what is holding them, so they are out of the way but nothing
+     owed to them is hidden. */
+  const settling = roster.filter((s) => !s.active);
+  const left = new Map(await Promise.all(settling.map((s) => helperOutstanding(s.id)
+    .then((l) => [s.id, l]).catch((e) => { console.error('helper outstanding failed:', e.message); return [s.id, []]; }))));
+  const cards = roster.filter((s) => s.active).map(card).join('');
   res.send(adminPage('Staff', `
-    ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.',
-      '<a class="btn btn-ghost" href="/admin/team">Team</a> <a class="btn btn-ghost" href="/admin/approvals">Approvals</a>')}
+    ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.')}
     ${tabs}
     ${flash(req.query)}${extra}
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
       are set on the backend service in Railway.</div>`}
-    <div class="card" id="add"><b>Add a helper</b>
+    <details class="fold" id="add"${(req.query || {}).add_track || (req.query || {}).add_name || (req.query || {}).err || !roster.some((s) => s.active) ? ' open' : ''}>
+      <summary>Add a helper <span class="muted fold-hint">name, email, starting permissions and pay</span></summary><div class="fold-body">
       <form method="post" action="/admin/staff" class="row" data-once style="gap:8px;flex-wrap:wrap;margin-top:8px">
         <input name="name" placeholder="Name" required maxlength="80" value="${escEmail(text((req.query || {}).add_name, 80))}">
         <input name="email" type="email" placeholder="Their email (what they sign in with)" required maxlength="254">
@@ -29369,15 +29839,22 @@ async function renderStaffPage(req, res, extra = '') {
       <p class="muted" style="margin-top:8px">${Object.values(STAFF.PRESETS).map((p) =>
         `<b>${escEmail(p.label)}</b>: ${escEmail(p.note)}`).join('<br>')}<br>Training paths: ${Object.values(TRAINING.TRACKS).map((t) =>
         `<b>${escEmail(t.label)}</b> (${escEmail(t.note)})`).join(', ')}</p>
-    </div>
-    ${cards || emptyState('No helpers yet.')}${SHIP_ONCE_JS}`, 'team'));
+    </div></details>
+    <script>if(location.hash==='#add'){var d=document.getElementById('add');if(d)d.open=true;}</script>
+    ${cards || emptyState('No helpers yet.')}${settling.length ? `
+    <details class="fold"><summary>Disabled, still settling up <span class="n">${settling.length}</span>
+      <span class="muted fold-hint">They cannot sign in and are off every other list. Each is archived once nothing is owed or open, unless you restored them by hand.</span></summary>
+      <div class="fold-body">${settling.map((s) => `${(left.get(s.id) || []).length
+        ? `<div class="warn" style="margin:0 0 6px">${escEmail(s.name)} still has ${escEmail(left.get(s.id).join('; '))}.
+          <a href="/admin/timeclock?staff=${s.id}">Their hours</a> &middot; <a href="/admin/commission?staff=${s.id}">Their pay</a> &middot; <a href="/admin/tasks">Tasks</a></div>` : ''}${card(s)}`).join('')}</div>
+    </details>` : ''}${SHIP_ONCE_JS}`, 'staff'));
 }
 
 app.get('/admin/staff', requireAdmin, async (req, res) => {
   try { await renderStaffPage(req, res); }
   catch (err) {
     console.error('staff page failed:', err.message);
-    res.status(500).send(adminPage('Staff', '<div class="card"><div class="warn">Could not load staff.</div></div>', 'team'));
+    res.status(500).send(adminPage('Staff', '<div class="card"><div class="warn">Could not load staff.</div></div>', 'staff'));
   }
 });
 
@@ -29441,7 +29918,17 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         /* Every request looks the helper up, so this locks them out on their next click.
            Remove them from the Cloudflare policy too. */
         await pool.query('UPDATE staff SET active = FALSE WHERE id = $1', [id]);
-        return back(res, '/admin/staff', 'ok', `${s.name} is disabled. Also remove ${s.email} from the Cloudflare policy.`);
+        logActivity(currentActor(), 'helper disabled', { type: 'staff', id }, { name: s.name });
+        {
+          /* Off every list straight away when nothing is owed or open; otherwise
+             they stay on Staff and Pay until it is settled. */
+          const left = await helperOutstanding(id).catch((e) => { console.error('helper outstanding failed:', e.message); return ['an unchecked balance']; });
+          if (!left.length && await archiveHelper(id)) {
+            logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name, onDisable: true });
+            return back(res, '/admin/staff', 'ok', `${s.name} is disabled and archived: off every list, records kept. Also remove ${s.email} from the Cloudflare policy.`);
+          }
+          return back(res, '/admin/staff', 'ok', `${s.name} is disabled and off every list except Staff and Pay, because they still have ${left.join('; ')}. They are archived once that is settled. Also remove ${s.email} from the Cloudflare policy.`);
+        }
       case 'welcome': {
         if (!s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} is disabled. Enable them before sending a welcome.`);
         const w = WELCOME.detailsFromForm(b, Number(s.hourly_rate || 0));
@@ -29454,39 +29941,9 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            hide wages or commission to pay, or work in hand. */
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is already archived.`);
         if (s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `Disable ${s.name} before archiving them.`);
-        const [{ rows: [hrs] }, { rows: [clock] }, { rows: [bonus] }, { rows: [tasks] }, { rows: [art] }, lines] = await Promise.all([
-          pool.query('SELECT COALESCE(SUM(hours), 0)::float AS h FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL', [id]),
-          /* Clocked weeks not yet approved (no staff_hours row), or a shift still running. */
-          pool.query(`SELECT COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
-                             COUNT(DISTINCT date_trunc('week', started_at AT TIME ZONE 'America/Chicago'))
-                               FILTER (WHERE ended_at IS NOT NULL AND NOT EXISTS (
-                                 SELECT 1 FROM staff_hours h WHERE h.staff_id = sh.staff_id
-                                   AND h.week_of = (date_trunc('week', sh.started_at AT TIME ZONE 'America/Chicago'))::date))::int AS unapproved
-                        FROM staff_shifts sh WHERE staff_id = $1`, [id]),
-          pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
-          pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
-          pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
-          (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
-            return commissionLines(id, rates); })(),
-        ]);
-        const owedCommission = lines.filter((l) => !['paid', 'wage only'].includes(l.state) && l.amount > 0);
-        const left = [
-          hrs.h > 0 ? `${hrs.h} approved hours not yet paid (pay them on Team)` : '',
-          clock.running ? 'a shift still running (end it on Hours)' : '',
-          clock.unapproved ? `${clock.unapproved} clocked week${clock.unapproved === 1 ? '' : 's'} not yet approved (approve or adjust on Hours)` : '',
-          bonus.a > 0 ? `${money(bonus.a)} in bonuses not yet paid` : '',
-          owedCommission.length ? `commission on ${owedCommission.length} sale${owedCommission.length === 1 ? '' : 's'} not yet paid (see their Pay page)` : '',
-          tasks.n ? `${tasks.n} open task${tasks.n === 1 ? '' : 's'} (reassign or close them on Tasks)` : '',
-          art.n ? `${art.n} design job${art.n === 1 ? '' : 's'} assigned to them` : '',
-        ].filter(Boolean);
+        const left = await helperOutstanding(id);
         if (left.length) return back(res, `/admin/staff#staff-${id}`, 'err', `Not archived: ${s.name} still has ${left.join('; ')}.`);
-        /* The checks repeated in the write, so work added in between stops it. */
-        const { rowCount } = await pool.query(
-          `UPDATE staff SET archived_at = NOW(), active = FALSE
-            WHERE id = $1 AND archived_at IS NULL AND NOT active
-              AND NOT EXISTS (SELECT 1 FROM staff_hours WHERE staff_id = $1 AND paid_at IS NULL)
-              AND NOT EXISTS (SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL)
-              AND NOT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1 AND ended_at IS NULL)`, [id]);
+        const rowCount = await archiveHelper(id);
         if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} changed while archiving; nothing was archived. Try again.`);
         logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name });
         return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is archived: off every list, records kept.`);
@@ -29495,7 +29952,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         const { rowCount } = await pool.query('UPDATE staff SET archived_at = NULL WHERE id = $1 AND archived_at IS NOT NULL', [id]);
         if (!rowCount) return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is not archived.`);
         logActivity(currentActor(), 'helper restored', { type: 'staff', id }, { name: s.name });
-        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on the Team tab, still disabled. Enable them if they are coming back.`);
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is back on Staff under Disabled, kept there until you enable them or archive them again.`);
       }
       case 'enable':
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'err', `Restore ${s.name} from Archived first.`);
@@ -29754,8 +30211,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
       </form></div>`;
     res.send(adminPage('Approvals', `
-      ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.',
-        '<a class="btn btn-ghost" href="/admin/team">Team</a>')}
+      ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.')}
       ${flash(req.query)}
       ${await (async () => { const { approve } = await artQueues(OWNER_ACTOR);
         return approve.length ? `<div class="card"><b>Final art to approve (${approve.length})</b>${artQueueRows(approve)}</div>` : ''; })()}
@@ -29769,10 +30225,10 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         <div class="row-i"><span class="row-main">${escEmail(a.kind)} ${escEmail(a.subject_id)} &middot; ${
           escEmail(nameOf(roster, a.requested_by))}${a.decision_note ? ` <span class="muted">— ${escEmail(a.decision_note)}</span>` : ''}</span>
           <span class="row-end">${pill(a.status, a.status === 'approved' ? 'green' : a.status === 'rejected' ? 'amber' : 'neutral')}
-          <span class="muted">${escEmail(whenShort(a.decided_at))}</span></span></div>`).join('')}</div>` : ''}`, 'team'));
+          <span class="muted">${escEmail(whenShort(a.decided_at))}</span></span></div>`).join('')}</div>` : ''}`, 'approvals'));
   } catch (err) {
     console.error('approvals page failed:', err.message);
-    res.status(500).send(adminPage('Approvals', '<div class="card"><div class="warn">Could not load approvals.</div></div>', 'team'));
+    res.status(500).send(adminPage('Approvals', '<div class="card"><div class="warn">Could not load approvals.</div></div>', 'approvals'));
   }
 });
 
@@ -29956,7 +30412,7 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
       ${pageHeader('Activity', 'Every change made in the back office, and who made it. Page views are not recorded.')}
       ${filterChips([{ label: 'Everyone', href: link({ who: 'all' }), on: who === 'all' },
                      { label: 'Owner', href: link({ who: 'owner' }), on: who === 'owner' },
-                     ...listedStaff(roster, Number(who)).map((s) => ({ label: s.name, href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
+                     ...listedStaff(roster, Number(who), { withDisabled: true }).map((s) => ({ label: s.name + (s.active ? '' : ' (disabled)'), href: link({ who: String(s.id) }), on: who === String(s.id) }))])}
       ${filterChips([1, 7, 30, 90].map((d) => ({ label: d === 1 ? 'Today' : `${d} days`, href: link({ days: String(d) }), on: days === d })))}
       <div class="card">${rows.length ? `<table class="dt" style="width:100%"><tbody>${rows.map((r) => `
         <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
@@ -29964,10 +30420,10 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
           <td>${escEmail(r.action)}${r.subject_id ? ` <b>${r.subject_type === 'quote'
             ? `<a href="/admin/production/${escEmail(r.subject_id)}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
           <td class="muted">${escEmail(describe(r))}</td></tr>`).join('')}</tbody></table>`
-        : emptyState('Nothing in this period.')}</div>`, 'team'));
+        : emptyState('Nothing in this period.')}</div>`, 'activity'));
   } catch (err) {
     console.error('activity page failed:', err.message);
-    res.status(500).send(adminPage('Activity', '<div class="card"><div class="warn">Could not load activity.</div></div>', 'team'));
+    res.status(500).send(adminPage('Activity', '<div class="card"><div class="warn">Could not load activity.</div></div>', 'activity'));
   }
 });
 
@@ -30057,9 +30513,9 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
             trainings[i] && trainings[i].complete && nextPresetFor(s)
               ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[nextPresetFor(s)].label} →`, 'green')}</a>` : ''}</div></span>
-          <span class="row-end"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
+          <span class="row-end" style="display:flex;flex-wrap:wrap;gap:6px;white-space:normal"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
             <a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
-            <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Commission</a></span></div>
+            <a class="btn btn-ghost" href="/admin/commission?staff=${s.id}">Pay</a></span></div>
         ${statTiles([
           { label: 'Leads answered', value: String(x.answered), tone: 'blue' },
           { label: 'Median first reply', value: fmtMins(x.medianReply), tone: x.medianReply == null ? 'gray' : x.medianReply <= 60 ? 'green' : 'amber',
@@ -30085,10 +30541,7 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
       </div>`;
     }).join('');
     res.send(adminPage('Team', `
-      ${pageHeader('Team', 'How each helper is doing, from the work itself.',
-        `<a class="btn" href="/admin/approvals">Approvals${counts.approvals ? ` (${counts.approvals})` : ''}</a>
-         <a class="btn btn-ghost" href="/admin/activity">Activity</a>
-         <a class="btn btn-ghost" href="/admin/staff">Staff and permissions</a>`)}
+      ${pageHeader('Team', 'How each helper is doing, from the work itself.')}
       ${flash(req.query)}
       ${filterChips([{ label: 'This week', href: '/admin/team', on: period === 'week' },
                      { label: 'Last week', href: '/admin/team?period=last', on: period === 'last' },
@@ -30362,15 +30815,9 @@ function shiftsByDayHtml(w, rowOf) {
 }
 
 /* Clocked hours and the work schedule are one place (owner, 2026-10-14:
-   "merge work hours with my hours"): two tabs, one menu entry. */
-function hoursTabs(on) {
-  const staff = (currentActor() || OWNER_ACTOR).kind === 'staff';
-  return filterChips([
-    staff ? { label: 'My hours', href: '/admin/clock', on: on === 'clock' }
-      : { label: 'Clocked hours', href: '/admin/timeclock', on: on === 'clock' },
-    { label: staff ? 'My schedule' : 'Work schedule (CT + PH)', href: '/admin/work-schedule', on: on === 'schedule' },
-  ]);
-}
+   "merge work hours with my hours"): since 2026-10-18 the menu's section tabs
+   carry the pair — My hours + My schedule for a helper, Hours + Work schedule
+   for the owner — so the pages no longer draw their own strip. */
 
 app.get('/admin/clock', requireAdmin, async (req, res) => {
   const actor = currentActor();
@@ -30383,7 +30830,6 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('My hours', `
       ${pageHeader('My hours', 'Clock in when you start and out when you stop. June pays the hours she approves each week. Time with nothing happening on the site for 30 minutes is shown to her; if you were working away from the screen, say what in your clock-out note.')}
-      ${hoursTabs('clock')}
       ${flash(req.query)}
       ${await myShiftsCard(actor.id, actor.timeZone || SHIFTS.DEFAULT_STAFF_ZONE).catch((e) => { console.error('my hours shifts failed:', e.message); return ''; })}
       <div class="card">${open ? `<b>On the clock since ${escEmail(clockTime(open.started_at))}</b> (${TRAINING.hm(TIMECLOCK.shiftMinutes(open))})
@@ -30449,8 +30895,9 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const staffId = intIn(req.query.staff);
     /* Active helpers, plus the one asked for: someone disabled before their
        last week was approved can still be reviewed. */
-    const roster = everyone.filter((r) => (r.active && !r.archived_at) || r.id === staffId);
-    const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}</a>`).join(' ');
+    /* Disabled helpers stay here until archived: their last weeks still need approving. */
+    const roster = listedStaff(everyone, staffId, { withDisabled: true });
+    const chips = (id) => roster.map((r) => `<a class="btn ${r.id === id ? '' : 'btn-ghost'}" href="/admin/timeclock?staff=${r.id}&amp;week=${week}">${escEmail(r.name)}${r.active ? '' : ' (disabled)'}</a>`).join(' ');
     const weekNav = (id) => `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, -7)}">&larr; Earlier</a>
       ${week < TEAM.weekOf(new Date()) ? `<a class="btn btn-ghost" href="/admin/timeclock?${id ? `staff=${id}&amp;` : ''}week=${weekShift(week, 7)}">Later &rarr;</a>` : ''}`;
     res.set('Cache-Control', 'no-store');
@@ -30459,7 +30906,6 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
       const weeks = await Promise.all(roster.map((r) => clockWeek(r.id, week).catch(() => null)));
       return res.send(adminPage('Timeclock', `
         ${pageHeader(`Hours — week of ${weekLabel(week)}`, 'Clocked hours, what needs a look, and what you have approved. Approving a week writes its hours to Team, where wages are paid.', weekNav(null))}
-        ${hoursTabs('clock')}
         ${flash(req.query)}
         <div class="card">${roster.length ? roster.map((r, i) => {
           const w = weeks[i];
@@ -30486,7 +30932,6 @@ app.get('/admin/timeclock', requireAdmin, async (req, res) => {
     const tone = { red: '#b91c1c', amber: '#b45309', neutral: '#46505f' };
     res.send(adminPage('Timeclock', `
       ${pageHeader(`Hours — ${who.name}, week of ${weekLabel(week)}`, 'Cut time you do not pay for on each shift, then approve the week.', weekNav(who.id))}
-      ${hoursTabs('clock')}
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:12px">${chips(who.id)}</div>
       ${flash(req.query)}
       <div class="card"><b>${TRAINING.hm(w.minutes)} on the clock this week</b> (${TIMECLOCK.hoursOf(w.minutes)} hours)${w.open ? ' &middot; a shift is still running' : ''}
@@ -30751,7 +31196,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     const roster = await staffRoster();
     /* An archived helper opens by id (their pay history, from Archived); the
        default is the first listed one. */
-    const s = roster.find((r) => r.id === intIn(req.query.staff)) || listedStaff(roster)[0];
+    const s = roster.find((r) => r.id === intIn(req.query.staff)) || listedStaff(roster, null, { withDisabled: true })[0];
     if (!s) return res.redirect('/admin/staff');
     const [e, incentives] = await Promise.all([earningsFor(s), incentivesFor(s.id, { includeEnded: true })]);
     const { pct, lines } = e;
@@ -30764,7 +31209,7 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
     res.send(adminPage('Commission', `
       ${pageHeader(`Pay — ${s.name}`, `${money(e.wages.rate)} an hour for the hours on the Team page. On their own leads, ${pct}% of the price as well: the job's total before sales tax, less any refund. Shop leads pay the wage only. Commission is payable ${TEAM.HOLD_DAYS} days after the job is paid in full.`)}
       ${flash(req.query)}
-      ${filterChips(listedStaff(roster, s.id).map((r) => ({ label: r.name, href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
+      ${filterChips(listedStaff(roster, s.id, { withDisabled: true }).map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'), href: `/admin/commission?staff=${r.id}`, on: r.id === s.id })))}
       ${commissionStartNote(e, true)}
       ${earningsTiles(e)}
       ${payNow > 0 ? `<form method="post" action="/admin/commission/pay" class="card">
@@ -30812,10 +31257,10 @@ app.get('/admin/commission', requireAdmin, async (req, res) => {
           <td>${escEmail(l.name || '')}</td><td>${saleTypePill(l.sale_type)} <span class="muted">${l.pct}%</span></td><td>${money(l.collected)}</td>
           <td>${money(l.base)}</td>
           <td>${money(l.state === 'paid' ? l.paid_amount_c : l.amount)}</td><td>${pill(l.state, tone[l.state])}</td></tr>`).join('')}
-        </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'team'));
+        </tbody></table>` : emptyState('No money has come in on their quotes yet.')}</div>`, 'pay'));
   } catch (err) {
     console.error('commission page failed:', err.message);
-    res.status(500).send(adminPage('Commission', '<div class="card"><div class="warn">Could not load commission.</div></div>', 'team'));
+    res.status(500).send(adminPage('Commission', '<div class="card"><div class="warn">Could not load commission.</div></div>', 'pay'));
   }
 });
 
@@ -32029,6 +32474,7 @@ function taskDetailsHtml(t, actor, roster) {
     ${t.how_to ? `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer">How to do it</summary>
       <div style="white-space:pre-wrap;margin-top:4px;padding:8px 10px;background:#f7f8fb;border-radius:8px">${escEmail(t.how_to)}</div></details>` : ''}
     ${t.quote_code ? `<div class="row-sub">Order: <a href="${escEmail(jobLinkFor(actor, t.quote_code))}"><b>${escEmail(t.quote_code)}</b></a></div>` : ''}
+    <div class="row-sub"><a href="/admin/mailbox/new?task=${Number(t.id)}">Message about this task →</a></div>
     ${files.length ? `<div class="row-sub">${files.map((f) => `<a href="/admin/tasks/${Number(t.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a>${
       f.by != null && f.by === t.assigned_to && t.done_at ? ' <span class="muted">(with the work)</span>' : ''}`).join(' &nbsp; ')}</div>` : ''}
     ${t.done_at && t.done_note ? `<div style="margin-top:4px;padding:6px 10px;background:#ecfdf5;border-radius:8px;white-space:pre-wrap"><b>What was done:</b> ${escEmail(t.done_note)}</div>` : ''}`;
@@ -32131,7 +32577,7 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
     const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
     const row = (t) => {
       const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
-      return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
+      return `<div class="row-i" id="task-${Number(t.id)}" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
         ${t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : t.assigned_to != null ? pill('not started', 'amber') : ''}
         <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${due ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
           t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
@@ -32581,7 +33027,6 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
         view === 'month'
           ? `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -28) })}">&larr; Earlier</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 28) })}">Later &rarr;</a>`
           : `<a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, -7) })}">&larr; Week before</a><a class="btn btn-ghost" href="${q({ week: SHIFTS.addDays(week, 7) })}">Week after &rarr;</a>`)}
-      ${hoursTabs('schedule')}
       ${flash(req.query)}
       <div class="card"><b>${owner ? 'Hours this week' : 'Your scheduled hours this week'}</b> ${[...hours.entries()].map(([id, h]) => `<span class="muted" style="margin-left:10px">${owner ? escEmail(nameOf(roster, id)) + ' ' : ''}${Math.round(h * 10) / 10} h</span>`).join('') || '<span class="muted">none scheduled</span>'}</div>
       ${filterChips([
@@ -32602,10 +33047,10 @@ app.get('/admin/work-schedule', requireAdmin, async (req, res) => {
              start in this one: a Sunday-night shift runs into this Monday. */
           [-7, 0, 7].flatMap((n) => SHIFTS.occurrences(rows, SHIFTS.addDays(week, n))), days, zone, colorOf, { names: owner })}`
         : `<div class="ws-grid">${days.map(dayCard).join('')}</div>`}
-      ${manage}`, owner ? 'timeclock' : 'clock'));
+      ${manage}`, owner ? 'workschedule' : 'myschedule'));
   } catch (err) {
     console.error('work schedule failed:', err.message);
-    res.status(500).send(adminPage('Work schedule', '<div class="card"><div class="warn">Could not load the work schedule.</div></div>', 'clock'));
+    res.status(500).send(adminPage('Work schedule', '<div class="card"><div class="warn">Could not load the work schedule.</div></div>', (currentActor() || OWNER_ACTOR).kind === 'staff' ? 'myschedule' : 'workschedule'));
   }
 });
 
@@ -32866,7 +33311,7 @@ async function sharedLoginsCard(actor, owner, roster) {
   const { rows } = await pool.query(
     `SELECT id, staff_id, site, note, created_at, expires_at, viewed_at, cancelled_at FROM shared_logins
       ORDER BY created_at DESC LIMIT 30`);
-  const helpers = listedStaff(roster).filter((r) => r.active);
+  const helpers = listedStaff(roster);
   const tone = { waiting: 'blue', opened: 'green', expired: 'neutral', cancelled: 'neutral' };
   const label = (r, st) => st === 'opened' ? `opened ${when(r.viewed_at)}` : st === 'waiting' ? `waiting, until ${when(r.expires_at)}` : st;
   return `<div class="card" id="shared-logins"><b>Shared logins</b> <span class="muted">shown once, then erased</span>
@@ -33383,8 +33828,9 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
                 MAX(created_at) AS last_at
            FROM team_messages GROUP BY staff_id`);
       const by = new Map(counts.map((c) => [c.staff_id, c]));
-      // Disabled helpers stay listed only while there is a conversation to read.
-      people = roster.filter((r) => !r.archived_at && (r.active || by.has(r.id))).sort((x, y) => {
+      /* Disabled helpers are off the list (owner, 2026-10-18), unless a message
+         from them is still unread; their history stays at ?staff=<id>. */
+      people = roster.filter((r) => !r.archived_at && (r.active || ((by.get(r.id) || {}).unread || 0) > 0)).sort((x, y) => {
         const a = by.get(x.id) || {}, b = by.get(y.id) || {};
         return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
       });
@@ -33486,52 +33932,13 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
             var ta = f.querySelector('textarea'), send = f.querySelector('[data-tcsend]');
             var fin = f.querySelector('[data-tcfile]'), fst = document.querySelector('[data-tcfilestat]');
             var fu = f.querySelector('[name="file_url"]'), fn = f.querySelector('[name="file_name"]');
-            var uploading = false, seq = 0;
-            var EXTS = ${JSON.stringify(CHATFILES.EXTS)};
-            /* The status line, with a Remove button while a file is attached. */
-            function stat(t, removable){
-              fst.textContent = t; fst.hidden = !t;
-              if (removable) {
-                var x = document.createElement('button'); x.type = 'button'; x.className = 'btn btn-ghost'; x.textContent = 'Remove';
-                x.style.marginLeft = '8px';
-                x.addEventListener('click', function(){ seq++; fu.value = ''; fn.value = ''; fin.value = ''; uploading = false; send.disabled = false; stat(''); });
-                fst.appendChild(x);
-              }
-            }
             ta.addEventListener('keydown', function(e){
               if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim() || fu.value) f.requestSubmit(); }
             });
-            /* A file goes up to storage as soon as it is picked; Send then sends
-               it, with or without words. Send waits while it is uploading. */
-            fin.addEventListener('change', function(){
-              var file = fin.files && fin.files[0]; if (!file) return;
-              fu.value = ''; fn.value = '';
-              var mine = ++seq;
-              if (EXTS.indexOf(String(file.name.split('.').pop()).toLowerCase()) < 0 || file.name.indexOf('.') < 0) {
-                stat(file.name + ' is not a file type the chat takes. Send a PDF, a picture, a design file, an Office file or a ZIP.'); fin.value = ''; return; }
-              if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { stat(file.name + ' is over 10 MB, the most our file storage takes. Send a smaller copy.'); fin.value = ''; return; }
-              uploading = true; send.disabled = true; stat('Uploading ' + file.name + '…', true);
-              fetch('/admin/api/chat-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-                .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
-                .then(function(sig){
-                  var fd = new FormData();
-                  fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
-                  fd.append('folder', sig.folder); fd.append('signature', sig.signature);
-                  ${CLD_UPLOAD_FN}
-                  return jtCldUpload(sig.cloud, fd, file.name);
-                })
-                .then(function(r){ return r.json(); })
-                .then(function(d){
-                  if (mine !== seq) return;   /* replaced or removed meanwhile */
-                  if (!d || !d.secure_url) throw new Error(d && d.error && d.error.message ? d.error.message : 'upload');
-                  fu.value = d.secure_url; fn.value = file.name;
-                  stat('Ready to send: ' + file.name + '. Add a message if you like, then press Send.', true);
-                })
-                .catch(function(e){ if (mine !== seq) return; fin.value = ''; stat('The file did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'); })
-                .then(function(){ if (mine === seq) { uploading = false; send.disabled = false; } });
-            });
+            ${CHAT_FILE_PICKER_FN}
+            var pick = jtFilePicker({ fin: fin, fu: fu, fn: fn, fst: fst, send: send, where: 'the chat' });
             f.addEventListener('submit', function(e){
-              if (uploading || (!ta.value.trim() && !fu.value)) { e.preventDefault(); if (!uploading) ta.focus(); return; }
+              if (pick.uploading || (!ta.value.trim() && !fu.value)) { e.preventDefault(); if (!pick.uploading) ta.focus(); return; }
               setTimeout(function(){ send.disabled = true; send.textContent = 'Sending…'; }, 0);
             });
           }
@@ -33777,6 +34184,72 @@ app.post('/admin/team-chat/channels', requireAdmin, async (req, res) => {
   }
 });
 
+/* The file picker Team chat and the Mailbox share. A file goes up to storage
+   as soon as it is picked; Send then sends it, with or without words, and
+   waits while it is uploading. Returns { uploading } for the form's submit
+   check. `o.ready` names a file already attached (a form shown again after an
+   error). No backticks or dollar-brace in the client code: it is pasted into
+   template literals. */
+const CHAT_FILE_PICKER_FN = `function jtFilePicker(o){
+              var fin = o.fin, fu = o.fu, fn = o.fn, fst = o.fst, send = o.send;
+              var st = { uploading: false }, seq = 0;
+              var EXTS = ${JSON.stringify(CHATFILES.EXTS)};
+              /* The status line, with a Remove button while a file is attached. */
+              function stat(t, removable){
+                fst.textContent = t; fst.hidden = !t;
+                if (removable) {
+                  var x = document.createElement('button'); x.type = 'button'; x.className = 'btn btn-ghost'; x.textContent = 'Remove';
+                  x.style.marginLeft = '8px';
+                  x.addEventListener('click', function(){ seq++; fu.value = ''; fn.value = ''; fin.value = ''; st.uploading = false; send.disabled = false; stat(''); });
+                  fst.appendChild(x);
+                }
+              }
+              if (o.ready && fu.value) stat('Ready to send: ' + o.ready + '.', true);
+              fin.addEventListener('change', function(){
+                var file = fin.files && fin.files[0]; if (!file) return;
+                fu.value = ''; fn.value = '';
+                var mine = ++seq;
+                if (EXTS.indexOf(String(file.name.split('.').pop()).toLowerCase()) < 0 || file.name.indexOf('.') < 0) {
+                  stat(file.name + ' is not a file type ' + o.where + ' takes. Send a PDF, a picture, a design file, an Office file or a ZIP.'); fin.value = ''; return; }
+                if (file.size > ${CLOUDINARY_UPLOAD_MAX}) { stat(file.name + ' is over 10 MB, the most our file storage takes. Send a smaller copy.'); fin.value = ''; return; }
+                st.uploading = true; send.disabled = true; stat('Uploading ' + file.name + '…', true);
+                fetch('/admin/api/chat-file-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+                  .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
+                  .then(function(sig){
+                    var fd = new FormData();
+                    fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+                    fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+                    ${CLD_UPLOAD_FN}
+                    return jtCldUpload(sig.cloud, fd, file.name);
+                  })
+                  .then(function(r){ return r.json(); })
+                  .then(function(d){
+                    if (mine !== seq) return;   /* replaced or removed meanwhile */
+                    if (!d || !d.secure_url) throw new Error(d && d.error && d.error.message ? d.error.message : 'upload');
+                    fu.value = d.secure_url; fn.value = file.name;
+                    stat('Ready to send: ' + file.name + '. Add a message if you like, then press Send.', true);
+                  })
+                  .catch(function(e){ if (mine !== seq) return; fin.value = ''; stat('The file did not upload' + (e && e.message && e.message !== 'upload' && e.message !== 'signature' ? ' (' + e.message + ')' : '') + '. Try again.'); })
+                  .then(function(){ if (mine === seq) { st.uploading = false; send.disabled = false; } });
+              });
+              return st;
+            }`;
+
+/* Hand over a file from Team chat or the Mailbox as a download, through
+   Cloudinary's signed download, which works for PDFs and ZIPs where the plain
+   address is refused. The caller has already checked the reader may see it;
+   `src` is CHATFILES.downloadSource of the stored address. */
+async function sendChatFile(res, src, fileName, label) {
+  const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
+  if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+  const name = MSGFILES.cleanName(fileName, src.ext);
+  res.set('Content-Type', 'application/octet-stream');
+  res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Cache-Control', 'private, no-store');
+  pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error(`${label} file stream cut off:`, e.message); });
+}
+
 /* A signed upload into the chat folder for anyone signed in to the workspace.
    The signature fixes the folder, so it cannot be used to write anywhere else. */
 app.post('/admin/api/chat-file-signature', requireAdmin, (req, res) => {
@@ -33810,14 +34283,7 @@ app.get('/admin/team-chat/file/:kind/:id', requireAdmin, async (req, res) => {
     }
     const src = m && m.file_url ? CHATFILES.downloadSource(m.file_url, QPHOTOS.cloudName()) : null;
     if (!src) return res.status(404).send('That file is not in your chat.');
-    const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
-    if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
-    const name = MSGFILES.cleanName(m.file_name, src.ext);
-    res.set('Content-Type', 'application/octet-stream');
-    res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
-    res.set('X-Content-Type-Options', 'nosniff');
-    res.set('Cache-Control', 'private, no-store');
-    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('chat file stream cut off:', e.message); });
+    await sendChatFile(res, src, m.file_name, 'chat');
   } catch (err) {
     console.error(`chat file ${kind}/${req.params.id} failed:`, err.message);
     if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again.');
@@ -33869,6 +34335,550 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
   }
 });
 
+/* ── Mailbox ────────────────────────────────────────────────────────────────
+   Conversations about one order or one task (tools/lib/mailbox.js), beside
+   Team chat (owner, 2026-10-18: "we need the mailbox for jobs and tasks").
+   Every conversation is loaded through mailThreadFor(), which lets the owner
+   read them all and a helper only the ones they are in. Nothing is deleted:
+   Done is a status, and any new message reopens it. */
+
+/** A reader key's name on screen: June for the owner, else the helper's. */
+function mailNameOf(roster, key) {
+  return key === 'owner' ? 'June' : nameOf(roster, Number(String(key).slice(6)));
+}
+
+/** The conversation `id` if this person may read it: { t, parts, reader }, else null. */
+async function mailThreadFor(id, actor) {
+  const n = intIn(id);
+  if (!n) return null;
+  const reader = CHAN.readerKey(actor);
+  const { rows: [t] } = await pool.query('SELECT * FROM mail_threads WHERE id = $1', [n]);
+  if (!t) return null;
+  const { rows } = await pool.query('SELECT reader FROM mail_participants WHERE thread_id = $1 ORDER BY reader', [n]);
+  const parts = rows.map((r) => r.reader);
+  return MB.mayRead(reader, parts) ? { t, parts, reader } : null;
+}
+
+/* SQL pieces, with the reader as $1: the conversation is theirs (the owner's
+   are all of them), and a message is one they have not seen. Unread counts
+   do not look at Done: Done is one person finishing, and someone else in the
+   conversation may not have read it yet (code review, 2026-10-18). */
+const MAIL_MINE_SQL = `($1 = 'owner' OR EXISTS (SELECT 1 FROM mail_participants p WHERE p.thread_id = t.id AND p.reader = $1))`;
+const MAIL_UNSEEN_SQL = `m.author <> $1 AND NOT EXISTS (SELECT 1 FROM mail_seen s WHERE s.message_id = m.id AND s.reader = $1)`;
+
+/** The people in each of a set of conversations: Map id → [reader]. */
+async function mailParts(ids) {
+  const parts = new Map(ids.map((id) => [id, []]));
+  if (!ids.length) return parts;
+  const { rows } = await pool.query('SELECT thread_id, reader FROM mail_participants WHERE thread_id = ANY($1) ORDER BY reader', [ids]);
+  for (const r of rows) parts.get(r.thread_id).push(r.reader);
+  return parts;
+}
+
+/** For a set of conversations: their people, their messages oldest first, and
+ *  who has seen which message ({ [message id]: { [reader]: seen_at } }). */
+async function mailDetails(ids) {
+  const msgs = new Map(ids.map((id) => [id, []]));
+  const seen = {};
+  if (!ids.length) return { parts: new Map(), msgs, seen };
+  const [parts, { rows: m }] = await Promise.all([
+    mailParts(ids),
+    pool.query(`SELECT id, thread_id, author, body, file_url, file_name, edited_at, original_body, created_at
+                  FROM mail_messages WHERE thread_id = ANY($1) ORDER BY id`, [ids]),
+  ]);
+  for (const r of m) msgs.get(r.thread_id).push(r);
+  if (m.length) {
+    const { rows: s } = await pool.query('SELECT message_id, reader, seen_at FROM mail_seen WHERE message_id = ANY($1)', [m.map((r) => r.id)]);
+    for (const r of s) (seen[r.message_id] = seen[r.message_id] || {})[r.reader] = r.seen_at;
+  }
+  return { parts, msgs, seen };
+}
+
+/** Conversations with something this person has not seen, Open or Done: the
+ *  menu badge. */
+async function mailUnreadCount(actor) {
+  const reader = CHAN.readerKey(actor);
+  const { rows: [r] } = await pool.query(
+    `SELECT COUNT(DISTINCT m.thread_id)::int AS n FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id
+      WHERE ${MAIL_MINE_SQL} AND ${MAIL_UNSEEN_SQL}`, [reader]);
+  return r ? r.n : 0;
+}
+
+/** Add one message. The same words from the same person in the same
+ *  conversation within 10 seconds is a double-click and is dropped. A file must
+ *  be one this shop's chat storage holds, or the message is refused rather
+ *  than sent without it. Returns { error } or { id }. */
+async function addMailMessage(db, { threadId, author, body, fileUrl, fileName }) {
+  if (fileUrl && !CHATFILES.fileUrlOk(fileUrl, QPHOTOS.cloudName())) return { error: 'That file could not be sent. Pick it again.' };
+  if (!body && !fileUrl) return { error: 'Write something or pick a file first.' };
+  if (body.length > TEAM_CHAT_MAX) return { error: `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.` };
+  const { rows } = await db.query(
+    `INSERT INTO mail_messages (thread_id, author, body, file_url, file_name)
+     SELECT $1, $2, $3, $4::text, $5::text WHERE NOT EXISTS (
+       SELECT 1 FROM mail_messages WHERE thread_id = $1 AND author = $2 AND body = $3
+          AND file_url IS NOT DISTINCT FROM $4::text AND created_at > NOW() - interval '10 seconds')
+     RETURNING id`,
+    [threadId, author, body, fileUrl || null, fileUrl ? fileName : null]);
+  return { id: rows[0] ? rows[0].id : null };
+}
+
+/* The mailbox forms: the file picker Team chat uses (same signed upload into
+   the chat folder, so the server's file check is the same one), a recipient
+   check on the owner's new-conversation form, and Sending… while it posts. */
+const MAIL_UPLOAD_JS = `<script>(function(){
+  ${CHAT_FILE_PICKER_FN}
+  document.querySelectorAll('form[data-mailform]').forEach(function(f){
+    var fin = f.querySelector('[data-file]'), fu = f.querySelector('[name=file_url]'), fn = f.querySelector('[name=file_name]'),
+        fst = f.querySelector('[data-fstat]'), send = f.querySelector('button[type=submit]'), ta = f.querySelector('textarea'),
+        tostat = f.querySelector('[data-tostat]');
+    var pick = fin ? jtFilePicker({ fin: fin, fu: fu, fn: fn, fst: fst, send: send, where: 'the mailbox', ready: fn.value }) : { uploading: false };
+    f.addEventListener('submit', function(e){
+      if (pick.uploading || (ta && !ta.value.trim() && !fu.value)) { e.preventDefault(); if (ta && !pick.uploading) ta.focus(); return; }
+      if (f.hasAttribute('data-needto') && !f.querySelector('input[name=to]:checked')) {
+        e.preventDefault(); if (tostat) { tostat.hidden = false; tostat.scrollIntoView({ block: 'center' }); } return; }
+      setTimeout(function(){ send.disabled = true; send.textContent = 'Sending…'; }, 0);
+    });
+  });
+})();</script>`;
+
+const MAIL_CSS = `<style>
+.mb-row{align-items:flex-start}
+.mb-row.is-unread .row-main b{color:#0B1F4B}
+.mb-row.is-unread::before{content:'';width:8px;height:8px;border-radius:50%;background:#1848B8;flex:0 0 8px;margin-top:7px}
+.mb-states{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.mb-msg{border-top:1px solid #eef1f8;padding:12px 2px}
+.mb-msg:first-child{border-top:0}
+.mb-msg.is-mine{background:#f7f9ff;border-radius:10px;padding:12px}
+.mb-who{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.mb-body{white-space:pre-wrap;line-height:1.5;margin:6px 0 0;overflow-wrap:anywhere}
+.mb-seen{font-size:12px;margin-top:6px}
+@media (max-width:640px){.mb-row{flex-wrap:wrap}.mb-row .row-end{flex:1 0 100%;padding-left:20px}.mb-states{justify-content:flex-start}}
+</style>`;
+
+/** The reply/read pills for a conversation, from `reader`'s side. */
+function mailStatePills(roster, reader, parts, msgs, seen) {
+  return MB.replyState(reader, parts, msgs, seen).map((s) => s.state === 'replied'
+    ? pill(`${mailNameOf(roster, s.reader)} replied`, 'green')
+    : s.state === 'read' ? pill(`${mailNameOf(roster, s.reader)} read ${whenShort(s.at)}`, 'blue')
+      : pill(`${mailNameOf(roster, s.reader)}: not read yet`, 'amber')).join('');
+}
+
+/** What a conversation is about, as plain words: the list's rows. */
+function mailAboutText(t, tasksById) {
+  if (t.quote_code) return `order ${t.quote_code}`;
+  if (t.task_id) { const task = tasksById.get(t.task_id); return `task ${task ? task.title : `#${t.task_id}`}`; }
+  return '';
+}
+
+/** What a conversation is about, as a link the reader can open. An order is
+ *  linked only while they can open it: a share ends when the job is delivered
+ *  or cancelled, and a teammate added to a helper's conversation about their
+ *  own design job cannot open that job at all (code review, 2026-10-18). */
+async function mailAboutHtml(t, actor, tasksById) {
+  if (t.quote_code) {
+    if (!await canOpenJob(t.quote_code, actor).catch(() => false)) return `order ${escEmail(t.quote_code)}`;
+    const tagged = actor.kind === 'staff' ? await ownerTaggedFor(t.quote_code, actor).catch(() => false) : false;
+    return `order <a href="${jobLinkFor(actor, t.quote_code, tagged)}">${escEmail(t.quote_code)}</a>`;
+  }
+  if (t.task_id) {
+    const task = tasksById.get(t.task_id);
+    /* A helper's tasks are on My Day; the owner's list is Tasks. */
+    return `task <a href="${actor.kind === 'staff' ? '/admin/my-day' : `/admin/tasks#task-${t.task_id}`}">${escEmail(task ? task.title : `#${t.task_id}`)}</a>`;
+  }
+  return '';
+}
+
+/** The conversations about one order, for its job page: every one, Open and Done. */
+async function mailForOrder(code, actor) {
+  const reader = CHAN.readerKey(actor);
+  const { rows } = await pool.query(
+    `SELECT t.* FROM mail_threads t WHERE t.quote_code = $2 AND ${MAIL_MINE_SQL}
+      ORDER BY t.status, t.last_message_at DESC LIMIT 50`, [reader, code]);
+  return rows;
+}
+
+/** The job page's mailbox card: its conversations and a button to start one. */
+async function mailOrderCard(code, actor) {
+  const [threads, roster] = await Promise.all([mailForOrder(code, actor), staffRoster()]);
+  const parts = await mailParts(threads.map((t) => t.id));
+  const reader = CHAN.readerKey(actor);
+  return `<div class="card" id="mailbox"><div class="card-title">Mailbox <span class="muted">conversations about this order</span>
+      <a href="/admin/mailbox/new?code=${encodeURIComponent(code)}">${actor.kind === 'staff' ? 'Message June about this order' : 'Message a helper about this order'} →</a></div>
+    ${threads.length ? `<div class="rows">${threads.map((t) => `<a class="row-i" href="/admin/mailbox/${t.id}"><span class="row-main"><b>${escEmail(t.subject)}</b>
+      <div class="row-sub">with ${escEmail(MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')} &middot; ${escEmail(whenShort(t.last_message_at))}</div></span>
+      <span class="row-end">${t.status === 'done' ? pill('Done', 'neutral') : pill('Open', 'blue')}</span></a>`).join('')}</div>`
+      : '<p class="muted" style="margin:0">No conversations about this order yet.</p>'}</div>`;
+}
+
+/** The dashboards' mailbox: open conversations, and Done ones with something
+ *  this person has not seen (someone else marked it Done before they read
+ *  it), ones with something new first. Unread counts come from one query; only
+ *  the rows shown load their messages, for the read/replied pills.
+ *  { rows: html, unread: conversations with something new, open }. */
+async function mailDashboard(actor, limit = 8) {
+  const reader = CHAN.readerKey(actor);
+  const { rows: threads } = await pool.query(
+    `WITH mine AS (
+       SELECT t.*, (SELECT COUNT(*)::int FROM mail_messages m WHERE m.thread_id = t.id AND ${MAIL_UNSEEN_SQL}) AS unread
+         FROM mail_threads t WHERE ${MAIL_MINE_SQL})
+     SELECT * FROM mine WHERE status = 'open' OR unread > 0
+      ORDER BY (unread > 0) DESC, last_message_at DESC LIMIT 100`, [reader]);
+  const shown = threads.slice(0, limit);
+  const [{ parts, msgs, seen }, roster] = await Promise.all([mailDetails(shown.map((t) => t.id)), staffRoster()]);
+  const rows = shown.map((t) => `<a class="row-i" href="/admin/mailbox/${t.id}"><span class="row-main"><b>${escEmail(t.subject)}</b>
+      <div class="row-sub">with ${escEmail(MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')}${
+        t.quote_code ? ` &middot; order ${escEmail(t.quote_code)}` : ''} &middot; ${escEmail(whenShort(t.last_message_at))}</div></span>
+      <span class="row-end">${t.status === 'done' ? pill('Done', 'neutral') : ''}${t.unread ? pill(`${t.unread} new`, 'red') : mailStatePills(roster, reader, parts.get(t.id), msgs.get(t.id), seen)}</span></a>`).join('');
+  return { rows, unread: threads.filter((t) => t.unread).length, open: threads.filter((t) => t.status === 'open').length };
+}
+
+app.get('/admin/mailbox', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  const reader = CHAN.readerKey(actor);
+  const folder = MB.folderOf(req.query.folder);
+  const q = text(req.query.q, 80);
+  const like = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+  try {
+    const [{ rows: threads }, { rows: counts }, roster] = await Promise.all([
+      pool.query(
+        `SELECT t.* FROM mail_threads t WHERE t.status = $2 AND ${MAIL_MINE_SQL}
+            AND ($3 = '' OR t.subject ILIKE $4 OR t.quote_code = UPPER($3))
+          ORDER BY t.last_message_at DESC LIMIT 200`, [reader, folder, q, like]),
+      pool.query(`SELECT t.status, COUNT(*)::int AS n FROM mail_threads t WHERE ${MAIL_MINE_SQL} GROUP BY t.status`, [reader]),
+      staffRoster(),
+    ]);
+    const n = Object.fromEntries(counts.map((c) => [c.status, c.n]));
+    const { parts, msgs, seen } = await mailDetails(threads.map((t) => t.id));
+    const taskIds = threads.map((t) => t.task_id).filter(Boolean);
+    const tasksById = new Map(taskIds.length
+      ? (await pool.query('SELECT id, title FROM staff_tasks WHERE id = ANY($1)', [taskIds])).rows.map((r) => [r.id, r]) : []);
+    const rows = threads.map((t) => {
+      const m = msgs.get(t.id);
+      const last = m[m.length - 1];
+      const unread = MB.unreadFor(reader, m, seen);
+      const about = mailAboutText(t, tasksById);
+      return `<a class="row-i mb-row${unread ? ' is-unread' : ''}" href="/admin/mailbox/${t.id}"><span class="row-main"><b>${escEmail(t.subject)}</b>
+        <div class="row-sub">with ${escEmail(MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')}${
+          about ? ` &middot; ${escEmail(about)}` : ''} &middot; ${escEmail(whenShort(t.last_message_at))}</div>
+        ${last ? `<div class="row-sub">${escEmail(mailNameOf(roster, last.author))}: ${escEmail((last.body || (last.file_name ? `sent ${last.file_name}` : '')).slice(0, 140))}</div>` : ''}</span>
+        <span class="row-end"><span class="mb-states">${unread ? pill(`${unread} new`, 'red') : ''}${mailStatePills(roster, reader, parts.get(t.id), m, seen)}</span></span></a>`;
+    });
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Mailbox', `${MAIL_CSS}
+      ${pageHeader('Mailbox', 'One conversation per order or task. Mark one Done when it is finished: it leaves this list and your dashboard, and a reply brings it back. Nothing is ever deleted. Quick check-ins go in Team chat.',
+        '<a class="btn" href="/admin/mailbox/new">New conversation</a>')}
+      ${flash(req.query)}
+      ${filterChips([
+        { label: 'Open', href: '/admin/mailbox', on: folder === 'open', count: n.open || 0 },
+        { label: 'Done', href: '/admin/mailbox?folder=done', on: folder === 'done', count: n.done || 0 },
+      ])}
+      <form class="search" method="get" action="/admin/mailbox" role="search">
+        ${folder === 'done' ? '<input type="hidden" name="folder" value="done">' : ''}
+        <input type="search" name="q" value="${escEmail(q)}" maxlength="80" placeholder="Search subjects or an order code" aria-label="Search the mailbox">
+        <button type="submit" class="btn btn-ghost">Search</button></form>
+      <div class="card">${rows.length ? `<div class="rows">${rows.join('')}</div>`
+        : emptyState(q ? `Nothing in ${folder === 'done' ? 'Done' : 'Open'} matches "${escEmail(q)}".`
+          : folder === 'done' ? 'Nothing is Done yet.' : 'No open conversations.',
+          folder === 'open' && !q ? '<a class="btn" href="/admin/mailbox/new">Start one</a>' : '')}</div>`, 'mailbox'));
+  } catch (err) {
+    console.error('mailbox failed:', err.message);
+    res.status(500).send(adminPage('Mailbox', '<div class="card"><div class="warn">Could not load the mailbox. Refresh to try again.</div></div>', 'mailbox'));
+  }
+});
+
+/** The new-conversation form. `v` is what to fill it with: from the link
+ *  (?code=, ?task=, ?to=) or, after a refused send, everything that was typed
+ *  and attached, so nothing has to be done twice (code review, 2026-10-18). */
+async function mailNewPage(res, actor, v, status = 200) {
+  const staff = actor.kind === 'staff';
+  const roster = await staffRoster();
+  const helpers = listedStaff(roster).filter((r) => !staff || r.id !== actor.id);
+  const codeRaw = String(v.code || '').trim().toUpperCase().replace(/^#/, '').slice(0, 20);
+  const code = QUOTE_CODE_RE.test(codeRaw) && await canOpenJob(codeRaw, actor).catch(() => false) ? codeRaw : '';
+  const { rows: [q] } = code ? await pool.query('SELECT name FROM quotes WHERE code = $1', [code]) : { rows: [] };
+  const taskId = intIn(v.task);
+  const { rows: [task] } = taskId ? await pool.query(
+    'SELECT id, title, assigned_to FROM staff_tasks WHERE id = $1 AND ($2::int IS NULL OR assigned_to = $2 OR assigned_to IS NULL)',
+    [taskId, staff ? actor.id : null]) : { rows: [] };
+  const subject = v.subject != null ? v.subject : code ? `Order ${code}${q && q.name ? ` — ${q.name}` : ''}` : task ? `Task: ${task.title}` : '';
+  const picked = new Set(v.to && v.to.length ? v.to : task && task.assigned_to ? [task.assigned_to] : []);
+  const fileUrl = v.fileUrl && CHATFILES.fileUrlOk(v.fileUrl, QPHOTOS.cloudName()) ? v.fileUrl : '';
+  res.status(status).set('Cache-Control', 'no-store');
+  res.send(adminPage('New conversation', `${MAIL_CSS}
+    ${pageHeader('New conversation', staff ? 'It goes to June. Add a teammate if they should see it too.' : 'Pick who it is for. Each one you start is its own conversation.')}
+    ${v.err ? `<div class="warn">${escEmail(v.err)}</div>` : ''}
+    ${codeRaw && !code && !v.err ? `<div class="warn">There is no order ${escEmail(codeRaw)} you can open, so it is not attached.</div>` : ''}
+    <form method="post" action="/admin/mailbox" class="card" data-mailform${staff ? '' : ' data-needto'}>
+      <label>To</label>
+      ${staff ? '<p style="margin:4px 0 8px"><b>June</b></p>' : ''}
+      ${helpers.length ? `<div class="row" style="gap:6px 14px;flex-wrap:wrap;margin:4px 0 12px">${helpers.map((r) => `
+        <label style="text-transform:none;letter-spacing:0;font-weight:600;margin:0"><input type="checkbox" name="to" value="${r.id}"${picked.has(r.id) ? ' checked' : ''} style="width:auto;margin:0 6px 0 0">${escEmail(r.name)}</label>`).join('')}</div>`
+        : staff ? '' : '<p class="muted">No helpers yet. Add one on Staff and permissions.</p>'}
+      ${staff ? '' : '<div class="warn" data-tostat hidden>Tick who it is for.</div>'}
+      <label for="mb-subject">Subject</label>
+      <input id="mb-subject" name="subject" required maxlength="${MB.SUBJECT_MAX}" value="${escEmail(subject)}">
+      <label for="mb-code">Order code <span class="muted">(optional)</span></label>
+      <input id="mb-code" name="quote_code" maxlength="20" value="${escEmail(code || (v.err ? codeRaw : ''))}" placeholder="e.g. AB12CD" style="max-width:220px">
+      ${task ? `<input type="hidden" name="task_id" value="${task.id}"><p class="muted" style="margin:8px 0 0">About the task <b>${escEmail(task.title)}</b></p>` : ''}
+      <label for="mb-body">Message</label>
+      <textarea id="mb-body" name="body" rows="6" maxlength="${TEAM_CHAT_MAX}" placeholder="What do you need?">${escEmail(v.body || '')}</textarea>
+      <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <input type="file" data-file accept="${CHATFILES.ACCEPT}" style="width:auto;max-width:100%;box-sizing:border-box" aria-label="Attach a file">
+        <input type="hidden" name="file_url" value="${escEmail(fileUrl)}"><input type="hidden" name="file_name" value="${escEmail(fileUrl ? v.fileName || 'File' : '')}">
+        <span class="muted" data-fstat hidden></span></div>
+      <button type="submit" style="margin-top:12px">Send</button>
+      <a class="btn btn-ghost" href="/admin/mailbox" style="margin-top:12px">Cancel</a>
+    </form>${MAIL_UPLOAD_JS}`, 'mailbox'));
+}
+
+app.get('/admin/mailbox/new', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const to = intIn(req.query.to);
+    await mailNewPage(res, actor, { code: req.query.code, task: req.query.task, to: to ? [to] : [], err: text(req.query.err, 200) });
+  } catch (err) {
+    console.error('mailbox new failed:', err.message);
+    res.status(500).send(adminPage('New conversation', '<div class="card"><div class="warn">Could not open the form. Refresh to try again.</div></div>', 'mailbox'));
+  }
+});
+
+app.post('/admin/mailbox', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  const staff = actor.kind === 'staff';
+  const author = CHAN.readerKey(actor);
+  const subject = MB.cleanSubject(b.subject);
+  const body = text(b.body, TEAM_CHAT_MAX + 1);
+  const fileUrl = String(b.file_url || '').trim().slice(0, 400);
+  const fileName = CHATFILES.cleanName(b.file_name) || 'File';
+  const ids = MB.pickRecipients(b.to);
+  const code = String(b.quote_code || '').trim().toUpperCase().replace(/^#/, '').slice(0, 20);
+  const taskId = intIn(b.task_id);
+  /* A refused send shows the form again with everything as it was. */
+  const again = (err) => mailNewPage(res, actor, { code, task: taskId, to: ids || [], subject: String(b.subject || '').slice(0, MB.SUBJECT_MAX), body, fileUrl, fileName, err }, 400)
+    .catch((e) => { console.error('mailbox form failed:', e.message); return back(res, '/admin/mailbox/new', 'err', err); });
+  try {
+    if (!subject) return await again('Give it a subject.');
+    if (ids === null) return await again(`Pick at most ${MB.MAX_RECIPIENTS} people.`);
+    const roster = await staffRoster();
+    /* Only working helpers can be written to, and never yourself. */
+    const to = ids.filter((id) => roster.some((r) => r.id === id && r.active && !r.archived_at) && !(staff && id === actor.id));
+    if (!staff && !to.length) return await again('Pick who it is for.');
+    if (code && !(QUOTE_CODE_RE.test(code) && await canOpenJob(code, actor))) {
+      return await again(`There is no order ${code} you can open. Codes are 6 or 10 letters and numbers.`);
+    }
+    if (taskId) {
+      const { rows } = await pool.query(
+        'SELECT 1 FROM staff_tasks WHERE id = $1 AND ($2::int IS NULL OR assigned_to = $2 OR assigned_to IS NULL)', [taskId, staff ? actor.id : null]);
+      if (!rows.length) return await again('That task is not one of yours.');
+    }
+    const readers = [...new Set(['owner', author, ...to.map((id) => `staff:${id}`)])];
+    const client = await pool.connect();
+    let threadId = null;
+    let refused = null;
+    let repeat = false;
+    try {
+      await client.query('BEGIN');
+      /* A double submit (no script yet, a retried request) is the same start
+         twice: one person's starts take turns, and the same subject and words
+         within 10 seconds open the first one instead of making another. */
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`mail-start:${author}`]);
+      const { rows: [dup] } = await client.query(
+        `SELECT t.id FROM mail_threads t JOIN mail_messages m ON m.thread_id = t.id
+          WHERE t.created_by = $1 AND t.subject = $2 AND t.created_at > NOW() - interval '10 seconds'
+            AND m.author = $1 AND m.body = $3 AND m.file_url IS NOT DISTINCT FROM $4::text
+          ORDER BY t.id LIMIT 1`, [author, subject, body, fileUrl || null]);
+      if (dup) {
+        threadId = dup.id;
+        repeat = true;
+        await client.query('ROLLBACK');
+      } else {
+        /* Every start is its own conversation, even about the same order. */
+        const { rows: [t] } = await client.query(
+          `INSERT INTO mail_threads (subject, quote_code, task_id, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+          [subject, code || null, taskId, author]);
+        threadId = t.id;
+        for (const r of readers) {
+          await client.query('INSERT INTO mail_participants (thread_id, reader) VALUES ($1, $2) ON CONFLICT DO NOTHING', [threadId, r]);
+        }
+        const added = await addMailMessage(client, { threadId, author, body, fileUrl, fileName });
+        if (added.error) { refused = added.error; await client.query('ROLLBACK'); } else await client.query('COMMIT');
+      }
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { client.release(); }
+    if (refused) return await again(refused);
+    if (!repeat) logActivity(actor, 'mailbox started', { type: 'mail', id: threadId }, { subject, quote_code: code || null, task_id: taskId });
+    return res.redirect(303, `/admin/mailbox/${threadId}`);
+  } catch (err) {
+    console.error('mailbox start failed:', err.message);
+    return again('It did not send. Try again.');
+  }
+});
+
+app.get('/admin/mailbox/:id', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) {
+      return res.status(404).send(adminPage('Mailbox', `<div class="card">${emptyState('That conversation is not one of yours.',
+        '<a class="btn" href="/admin/mailbox">Mailbox</a>')}</div>`, 'mailbox'));
+    }
+    const { t, parts, reader } = found;
+    /* Seen as soon as it is on screen; the writer sees when. */
+    await pool.query(
+      `INSERT INTO mail_seen (message_id, reader) SELECT id, $2 FROM mail_messages WHERE thread_id = $1 AND author <> $2
+       ON CONFLICT DO NOTHING`, [t.id, reader]);
+    const [roster, { msgs, seen }] = await Promise.all([staffRoster(), mailDetails([t.id])]);
+    const m = msgs.get(t.id);
+    const tasksById = new Map(t.task_id ? (await pool.query('SELECT id, title FROM staff_tasks WHERE id = $1', [t.task_id])).rows.map((r) => [r.id, r]) : []);
+    const about = await mailAboutHtml(t, actor, tasksById);
+    const owner = reader === 'owner';
+    const msgHtml = m.map((x) => {
+      const mine = x.author === reader;
+      const seenBy = MB.others(x.author, parts).map((p) => {
+        const at = seen[x.id] && seen[x.id][p];
+        return at ? `seen by ${escEmail(mailNameOf(roster, p))} ${escEmail(whenShort(at))}` : `not yet seen by ${escEmail(mailNameOf(roster, p))}`;
+      });
+      return `<div class="mb-msg${mine ? ' is-mine' : ''}" id="m-${x.id}">
+        <div class="mb-who"><b>${escEmail(mine ? 'You' : mailNameOf(roster, x.author))}</b>
+          <span class="muted" style="font-size:12.5px">${escEmail(whenShort(x.created_at))}${x.edited_at ? ' &middot; edited' : ''}</span></div>
+        ${x.body ? `<div class="mb-body">${escEmail(x.body)}</div>` : ''}
+        ${x.file_url ? `<div style="margin-top:6px"><a href="/admin/mailbox/file/${x.id}">${escEmail(x.file_name || 'File')}</a></div>` : ''}
+        ${owner && x.original_body && x.original_body !== x.body ? `<details class="muted" style="margin-top:6px;font-size:12.5px"><summary>First wording</summary>
+          <div class="mb-body">${escEmail(x.original_body)}</div></details>` : ''}
+        ${mine ? `<div class="mb-seen muted">${seenBy.join(' &middot; ')}</div>
+          <details style="margin-top:6px;font-size:13px"><summary>Edit</summary>
+            <form method="post" action="/admin/mailbox/${t.id}/edit" data-once style="margin-top:6px">
+              <input type="hidden" name="message_id" value="${x.id}">
+              <textarea name="body" rows="3" maxlength="${TEAM_CHAT_MAX}" required>${escEmail(x.body)}</textarea>
+              <button type="submit" class="btn btn-ghost" style="margin-top:6px">Save</button></form></details>` : ''}
+      </div>`;
+    }).join('');
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage(t.subject, `${MAIL_CSS}
+      ${pageHeader(t.subject, `With ${escEmail(MB.others(reader, parts).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')}${
+        about ? ` &middot; about ${about}` : ''} &middot; started by ${escEmail(t.created_by === reader ? 'you' : mailNameOf(roster, t.created_by))} ${escEmail(whenShort(t.created_at))}`,
+        `<form method="post" action="/admin/mailbox/${t.id}/status" data-once style="margin:0">
+          <input type="hidden" name="status" value="${t.status === 'done' ? 'open' : 'done'}">
+          <button type="submit" class="btn${t.status === 'done' ? ' btn-ghost' : ''}">${t.status === 'done' ? 'Reopen' : 'Mark Done'}</button></form>
+         <a class="btn btn-ghost" href="/admin/mailbox${t.status === 'done' ? '?folder=done' : ''}">Mailbox</a>`)}
+      ${flash(req.query)}
+      ${t.status === 'done' ? `<div class="ok">Done ${escEmail(whenShort(t.done_at))}${t.done_by ? ` by ${escEmail(t.done_by === reader ? 'you' : mailNameOf(roster, t.done_by))}` : ''}. A reply reopens it.</div>` : ''}
+      <div class="card">${msgHtml || emptyState('No messages yet.')}</div>
+      <form method="post" action="/admin/mailbox/${t.id}/reply" class="card" data-mailform id="reply">
+        <label for="mb-reply">Reply</label>
+        <textarea id="mb-reply" name="body" rows="4" maxlength="${TEAM_CHAT_MAX}"></textarea>
+        <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+          <input type="file" data-file accept="${CHATFILES.ACCEPT}" style="width:auto;max-width:100%;box-sizing:border-box" aria-label="Attach a file">
+          <input type="hidden" name="file_url"><input type="hidden" name="file_name">
+          <span class="muted" data-fstat hidden></span></div>
+        <button type="submit" style="margin-top:10px">Send reply</button>
+      </form>${MAIL_UPLOAD_JS}${SHIP_ONCE_JS}`, 'mailbox'));
+  } catch (err) {
+    console.error('mailbox thread failed:', err.message);
+    res.status(500).send(adminPage('Mailbox', '<div class="card"><div class="warn">Could not load the conversation. Refresh to try again.</div></div>', 'mailbox'));
+  }
+});
+
+app.post('/admin/mailbox/:id/reply', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) return back(res, '/admin/mailbox', 'err', 'That conversation is not one of yours.');
+    const { t, reader } = found;
+    /* The message and the reopen are one step: a reply is never saved while
+       the conversation stays Done, and never reported unsent once saved. The
+       row lock makes a Mark Done at the same moment wait its turn. */
+    const client = await pool.connect();
+    let added;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT 1 FROM mail_threads WHERE id = $1 FOR UPDATE', [t.id]);
+      added = await addMailMessage(client, { threadId: t.id, author: reader, body: text(b.body, TEAM_CHAT_MAX + 1),
+        fileUrl: String(b.file_url || '').trim().slice(0, 400), fileName: CHATFILES.cleanName(b.file_name) || 'File' });
+      /* A new message reopens a Done conversation (owner: "when it's over
+         possibly remove it from my dashboard"; it comes back if anyone writes). */
+      if (added.id) {
+        await client.query(`UPDATE mail_threads SET status = 'open', done_at = NULL, done_by = NULL, last_message_at = NOW() WHERE id = $1`, [t.id]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { client.release(); }
+    if (added.error) return back(res, `/admin/mailbox/${t.id}#reply`, 'err', added.error);
+    return res.redirect(`/admin/mailbox/${t.id}${added.id ? `#m-${added.id}` : ''}`);
+  } catch (err) {
+    console.error('mailbox reply failed:', err.message);
+    return back(res, `/admin/mailbox/${intIn(req.params.id) || ''}`, 'err', 'It did not send. Try again.');
+  }
+});
+
+app.post('/admin/mailbox/:id/status', requireAdmin, async (req, res) => {
+  const actor = currentActor() || OWNER_ACTOR;
+  const want = String((req.body || {}).status || '') === 'open' ? 'open' : 'done';
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) return back(res, '/admin/mailbox', 'err', 'That conversation is not one of yours.');
+    const { t, reader } = found;
+    if (want === 'done') {
+      await pool.query(`UPDATE mail_threads SET status = 'done', done_at = NOW(), done_by = $2 WHERE id = $1 AND status = 'open'`, [t.id, reader]);
+      return back(res, '/admin/mailbox', 'ok', `"${t.subject}" is Done. It is in the Done folder, and a reply brings it back.`);
+    }
+    await pool.query(`UPDATE mail_threads SET status = 'open', done_at = NULL, done_by = NULL WHERE id = $1`, [t.id]);
+    return back(res, `/admin/mailbox/${t.id}`, 'ok', 'Reopened.');
+  } catch (err) {
+    console.error('mailbox status failed:', err.message);
+    return back(res, `/admin/mailbox/${intIn(req.params.id) || ''}`, 'err', 'That did not save. Try again.');
+  }
+});
+
+/* The author rewords their own message, as in Team chat: the first wording is
+   kept and shown to the owner; everyone sees "edited". */
+app.post('/admin/mailbox/:id/edit', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  try {
+    const found = await mailThreadFor(req.params.id, actor);
+    if (!found) return back(res, '/admin/mailbox', 'err', 'That conversation is not one of yours.');
+    const { t, reader } = found;
+    const id = /^\d{1,15}$/.test(String(b.message_id || '')) ? String(b.message_id) : null;
+    const body = text(b.body, TEAM_CHAT_MAX + 1);
+    if (!id || !body) return back(res, `/admin/mailbox/${t.id}`, 'err', 'Write something first.');
+    if (body.length > TEAM_CHAT_MAX) return back(res, `/admin/mailbox/${t.id}`, 'err', `Keep it under ${TEAM_CHAT_MAX} characters.`);
+    const { rowCount } = await pool.query(
+      `UPDATE mail_messages SET original_body = COALESCE(original_body, body), body = $3, edited_at = NOW()
+        WHERE id = $1 AND thread_id = $2 AND author = $4 AND body IS DISTINCT FROM $3`, [id, t.id, body, reader]);
+    return res.redirect(`/admin/mailbox/${t.id}${rowCount ? `#m-${id}` : ''}`);
+  } catch (err) {
+    console.error('mailbox edit failed:', err.message);
+    return back(res, `/admin/mailbox/${intIn(req.params.id) || ''}`, 'err', 'That did not save. Try again.');
+  }
+});
+
+/* A file sent in the mailbox, to someone in that conversation only. */
+app.get('/admin/mailbox/file/:id', requireAdmin, async (req, res) => {
+  const id = /^\d{1,15}$/.test(String(req.params.id)) ? req.params.id : null;
+  if (!id) return res.status(404).send('Not found.');
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const { rows: [m] } = await pool.query('SELECT thread_id, file_url, file_name FROM mail_messages WHERE id = $1', [id]);
+    const ok = m && await mailThreadFor(m.thread_id, actor);
+    const src = ok && m.file_url ? CHATFILES.downloadSource(m.file_url, QPHOTOS.cloudName()) : null;
+    if (!src) return res.status(404).send('That file is not in your mailbox.');
+    await sendChatFile(res, src, m.file_name, 'mailbox');
+  } catch (err) {
+    console.error(`mailbox file ${req.params.id} failed:`, err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch that file just now. Try again.');
+    else res.destroy(err);
+  }
+});
+
+/* ── end Mailbox ─────────────────────────────────────────────────────────── */
+
 /* ── Team chat email alerts ──────────────────────────────────────────────
    Every 5 minutes (with the sweeps). For each person with alerts on, each
    conversation whose oldest unread message from someone else is at least
@@ -33914,6 +34924,17 @@ async function sendChatAlerts() {
         [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, CHAN.ALERT_AFTER_MIN]);
       if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n, where: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
     }
+    /* Mailbox conversations with something this reader has not seen, Done or
+       not: someone else marking it Done does not mean this reader read it. */
+    const { rows: mbs } = await pool.query(
+      `SELECT m.thread_id, MIN(m.id) AS first, MAX(m.id) AS last, COUNT(*)::int AS n, MAX(t.subject) AS subject
+         FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id
+        WHERE ${MAIL_MINE_SQL} AND ${MAIL_UNSEEN_SQL} AND m.created_at < NOW() - make_interval(mins => $2)
+        GROUP BY m.thread_id`, [reader, CHAN.ALERT_AFTER_MIN]).catch((e) => { console.error('mailbox alerts query failed:', e.message); return { rows: [] }; });
+    for (const d of mbs) {
+      due.push({ convo: `mb:${d.thread_id}`, first: d.first, last: d.last, n: d.n, mail: true,
+        where: `"${d.subject}"`, href: `/admin/mailbox/${d.thread_id}` });
+    }
     for (const d of due) {
       const st = state.get(`${reader}|${d.convo}`);
       if (!CHAN.alertDue(d.first, st && st.alerted_id)) continue;
@@ -33927,10 +34948,10 @@ async function sendChatAlerts() {
       const link = `${PUBLIC_BASE_URL}${d.href}`;
       await sendEmail({
         to: rd.to,
-        subject: `Team chat: ${d.n === 1 ? 'a new message' : `${d.n} new messages`} in ${d.where}`,
+        subject: `${d.mail ? 'Mailbox' : 'Team chat'}: ${d.n === 1 ? 'a new message' : `${d.n} new messages`} in ${d.where}`,
         html: `<p>Hi ${escEmail(rd.name)},</p>
-          <p>You have ${d.n === 1 ? 'a message' : `${d.n} messages`} waiting in ${escEmail(d.where)} on June's Tees Team chat.</p>
-          <p><a href="${escEmail(link)}">Open Team chat</a></p>
+          <p>You have ${d.n === 1 ? 'a message' : `${d.n} messages`} waiting in ${escEmail(d.where)} on June's Tees ${d.mail ? 'Mailbox' : 'Team chat'}.</p>
+          <p><a href="${escEmail(link)}">Open ${d.mail ? 'the conversation' : 'Team chat'}</a></p>
           <p style="color:#6b7280;font-size:12px">You get one email per conversation until you read it.
             Turn these emails off on the Team chat page, under Email alerts.</p>`,
       }).then(() => { sent++; }).catch((e) => console.error('chat alert email failed:', e.message));
@@ -33994,9 +35015,10 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       .then(([p, n]) => ({ p, note: n[0] && Date.now() - new Date(n[0].created_at).getTime() < 14 * 864e5 ? n[0] : null }))
       .catch((err) => { console.error('my day training failed:', err.message); return null; }) : null;
 
+    const mail = await mailDashboard(actor, 6).catch((e) => { console.error('my day mailbox failed:', e.message); return null; });
     /* Every section folds away; the browser remembers which, per section. */
     const secKey = (title) => String(title).replace(/<[^>]*>|\([^)]*\)|[^a-z ]/gi, '').trim().toLowerCase().replace(/ +/g, '-').slice(0, 40);
-    const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}">
+    const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}" id="sec-${escEmail(secKey(title))}">
       <summary><b>${title}</b></summary>${inner || `<p class="muted">${empty}</p>`}</details>`;
     const startedBy = (t) => nameOf(roster, t.started_by);
     const taskStatus = (t) => (t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : pill('not started', 'neutral'));
@@ -34022,44 +35044,73 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${flash(req.query)}
       ${pins}
       ${shiftsCard}
-      ${training && !training.p.complete ? section(`Your training: ${training.p.done} of ${training.p.total}`,
-        `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
-        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}`) : ''}
-      ${training && training.note ? section('Latest note from the owner', coachingRow(training.note)) : ''}
-      ${art.todo.length || STAFF.levelOf(actor, 'art.work') === 'on' && me != null ? section(`Artwork to do (${art.todo.length})`, artQueueRows(art.todo), 'No artwork waiting for you.') : ''}
-      ${art.customer.length ? section(`Waiting on the customer (${art.customer.length})`, artQueueRows(art.customer)) : ''}
-      ${art.questions.length ? section(`The designer has a question (${art.questions.length})`, artQueueRows(art.questions)) : ''}
-      ${art.approve.length ? section(`Final art to approve (${art.approve.length})`, artQueueRows(art.approve)) : ''}
-      ${released.rows.length ? section('Approved, but not emailed: send these yourself', released.rows.map((q) => `
+      ${(() => {
+        /* Ordered by what needs doing first (owner, 2026-10-18: "make sure
+           employee dashboards are optimized"): people waiting on you, then
+           work to hand back, then your own list, then the information. An
+           empty section is one word in the "Nothing waiting" line rather than
+           a card, and the counts across the top jump to each section. */
+        const blocks = [
+          { title: 'Latest note from the owner', show: !!(training && training.note), inner: () => coachingRow(training.note) },
+          { title: `Mailbox (${mail ? mail.unread : 0})`, short: 'Mailbox', n: mail ? mail.unread : 0, show: !!mail,
+            inner: () => `<a class="muted" href="/admin/mailbox" style="display:block;text-align:right;margin:0 0 6px">All conversations →</a><div class="rows">${mail.rows}</div>` },
+          { title: `Leads waiting for a reply (${waiting.length})`, short: 'Leads', n: waiting.length, show: can('leads.view'),
+            inner: () => waiting.slice(0, 25).map(leadRow).join('') },
+          { title: `Follow-ups due (${followUps.length})`, short: 'Follow-ups', n: followUps.length, show: can('leads.view'),
+            inner: () => followUps.map((l) => `
+        <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
+          <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join('') },
+          { title: `The designer has a question (${art.questions.length})`, short: 'Designer questions', n: art.questions.length,
+            show: STAFF.levelOf(actor, 'art.request') === 'on',
+            inner: () => artQueueRows(art.questions) },
+          { title: `Final art to approve (${art.approve.length})`, short: 'Art to approve', n: art.approve.length, show: me == null,
+            inner: () => artQueueRows(art.approve) },
+          { title: `Artwork to do (${art.todo.length})`, short: 'Artwork', n: art.todo.length,
+            show: art.todo.length > 0 || (STAFF.levelOf(actor, 'art.work') === 'on' && me != null), inner: () => artQueueRows(art.todo) },
+          { title: 'Approved, but not emailed: send these yourself', short: 'To send', n: released.rows.length, show: me != null,
+            inner: () => released.rows.map((q) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
-          <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('')) : ''}
-      ${earn ? section('My earnings', `<a class="muted" href="/admin/my-earnings" style="float:right">See every sale →</a>
-        <a class="muted" href="${earn.guide}" style="float:right;margin-right:14px">How pay works</a>
-        ${earningsTiles(earn.e)}
-        ${earn.incentives.map((i) => incentiveRow(i)).join('')}`) : ''}
-      ${mine.rows.length ? section('Waiting on the owner', mine.rows.map((a) => `
+          <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('') },
+          { title: `Tasks (${tasks.rows.length})`, short: 'Tasks', n: tasks.rows.length, show: true, inner: () => tasks.rows.map(taskRow).join('') },
+          { title: 'Jobs with a next step', short: 'Jobs', n: nextSteps.length, show: can('quotes.view'), inner: () => nextSteps.map(({ q, cl }) => `
+        <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
+          <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
+          <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('') },
+          { title: `Waiting on the customer (${art.customer.length})`, n: art.customer.length, show: true, inner: () => artQueueRows(art.customer) },
+          { title: 'Waiting on the owner', n: mine.rows.length, show: true, inner: () => mine.rows.map((a) => `
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal">${escEmail(a.kind)} ${escEmail(a.subject_id)}${a.decision_note
           ? `<div class="row-sub">Sent back: ${escEmail(a.decision_note)}</div>` : ''}${
           ['message', 'lead_email'].includes(a.kind) && a.payload && a.payload.text ? `<div class="pin-body" style="white-space:pre-wrap">${escEmail(a.payload.text)}</div>` : ''}${
           heldMessageEditForm(a, '/admin/my-day')}</span>
-          <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('')) : ''}
-      ${can('leads.view') ? section(`Leads waiting for a reply (${waiting.length})`, waiting.slice(0, 25).map(leadRow).join(''), 'Nobody is waiting.') : ''}
-      ${can('leads.view') ? section(`Follow-ups due (${followUps.length})`, followUps.map((l) => `
-        <div class="row-i"><span class="row-main"><a href="/admin/leads?status=all#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
-          <div class="row-sub">due ${escEmail(fmtDate(l.next_follow_up_on))}${l.assigned_to ? ` &middot; ${escEmail(nameOf(roster, l.assigned_to))}` : ''}</div></span></div>`).join(''),
-        'No follow-ups due.') : ''}
-      ${section(`Tasks (${tasks.rows.length})`, tasks.rows.map(taskRow).join(''), 'Nothing on your list.')}
-      ${me == null && doneLately.length ? section(`Completed this week (${doneLately.length})`, doneLately.map(taskRow).join('')) : ''}
+          <span class="row-end">${pill(a.status === 'rejected' ? 'sent back' : 'waiting', a.status === 'rejected' ? 'amber' : 'blue')}</span></div>`).join('') },
+          { title: `Completed this week (${doneLately.length})`, n: doneLately.length, show: me == null, inner: () => doneLately.map(taskRow).join('') },
+          { title: 'My earnings', show: !!earn, inner: () => `<div style="display:flex;gap:14px;justify-content:flex-end;flex-wrap:wrap;margin:0 0 8px">
+          <a class="muted" href="${earn.guide}">How pay works</a><a class="muted" href="/admin/my-earnings">See every sale →</a></div>
+        ${earningsTiles(earn.e)}
+        ${earn.incentives.map((i) => incentiveRow(i)).join('')}` },
+          { title: training ? `Your training: ${training.p.done} of ${training.p.total}` : '', show: !!(training && !training.p.complete),
+            inner: () => `<a class="muted" href="/admin/training" style="float:right">See it all →</a>${progressBar(training.p.done, training.p.total)}
+        ${training.p.next.map((st) => `<div class="row-sub">Next: ${escEmail(st.title)}</div>`).join('')}` },
+        ].filter((x) => x.show);
+        /* A block with a count shows only when it has something in it; one with
+           a `short` name is also listed in "Nothing waiting" and the counts. */
+        const full = blocks.filter((x) => x.n == null || x.n > 0);
+        const nothing = blocks.filter((x) => x.n === 0 && x.short);
+        const needs = full.filter((x) => x.short && x.n > 0);
+        return `${needs.length ? `<div class="chips md-needs" aria-label="Needs you now"><span class="muted" style="align-self:center;font-weight:700">Needs you now:</span>${
+          needs.map((x) => `<a class="chip-f" href="#sec-${escEmail(secKey(x.title))}">${escEmail(x.short)}<span class="n">${x.n}</span></a>`).join('')}</div>` : ''}
+      ${nothing.length ? `<div class="card muted md-quiet" style="padding:12px 16px">Nothing waiting: ${escEmail(nothing.map((x) => x.short).join(', '))}.</div>` : ''}
+      ${full.map((x) => section(x.title, x.inner(), '')).join('')}`;
+      })()}
       <details class="card"><summary><b>Add a task</b></summary>${addTaskForm}</details>${TASK_CSS}${TASK_UPLOAD_JS}
-      ${nextSteps.length ? section('Jobs with a next step', nextSteps.map(({ q, cl }) => `
-        <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
-          <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>
-          <span class="row-end muted">${cl.done}/${cl.of}</span></div>`).join('')) : ''}
       ${copyJs}
       <script>(function(){try{document.querySelectorAll('details.md-sec').forEach(function(d){
         var k='md:'+d.getAttribute('data-sec');if(localStorage.getItem(k)==='0')d.open=false;
-        d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});}catch(e){}})();</script>`, 'myday'));
+        d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});
+        /* A count at the top opens its section even if it was folded away. */
+        document.querySelectorAll('.md-needs a').forEach(function(a){a.addEventListener('click',function(){
+          var d=document.getElementById(a.getAttribute('href').slice(1));if(d)d.open=true;});});}catch(e){}})();</script>`, 'myday'));
   } catch (err) {
     console.error('my day failed:', err.message);
     res.status(500).send(adminPage('My Day', '<div class="card"><div class="warn">Could not load your day.</div></div>', 'myday'));
@@ -34486,10 +35537,10 @@ app.get('/admin/training/paths', requireAdmin, async (req, res) => {
           : '<span class="muted">nobody yet. Set a helper\'s path and sales role on <a href="/admin/staff">Staff</a>.</span>'}</p></div>
       ${groups.map((g) => g.key ? `<div class="card"><b>${g.title === 'Final exam and sign-off' ? 'Final' : `Module ${g.index + 1}`}: ${escEmail(g.title)}</b>
         <span class="muted"> &middot; ${mins(g.steps.reduce((n, st) => n + (Number(st.minutes) || 0), 0))}</span>${g.steps.map(row).join('')}</div>`
-        : `<div class="card">${g.steps.map(row).join('')}</div>`).join('')}`, 'training'));
+        : `<div class="card">${g.steps.map(row).join('')}</div>`).join('')}`, 'paths'));
   } catch (err) {
     console.error('training paths failed:', err.message);
-    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the training paths.</div></div>', 'training'));
+    res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the training paths.</div></div>', 'paths'));
   }
 });
 
@@ -38216,10 +39267,10 @@ app.get('/admin/delivery/settings', requireAdmin, async (req, res) => {
             ${cfg.zones.map((z) => `<div class="row"><div style="padding-top:10px">${escEmail(z.name)} <span class="muted">(you charge ${money(DELIV.zoneFee(z))})</span></div>
               <div><input name="cost_${z.id}" inputmode="decimal" value="${p.costs && p.costs[z.id] != null ? Number(p.costs[z.id]).toFixed(2) : ''}" placeholder="e.g. 12.00"></div></div>`).join('')}` : '<p class="muted">Add zones first, then their price per zone.</p>'}
           <button type="submit" class="btn" style="margin-top:10px">Save courier partner</button></form></div>`;
-    res.send(adminPage('Delivery settings', body, 'delivery'));
+    res.send(adminPage('Delivery settings', body, 'deliveryset'));
   } catch (e) {
     console.error('delivery settings failed:', e.message);
-    res.status(500).send(adminPage('Delivery settings', `${pageHeader('Delivery settings')}<div class="card"><div class="warn">Settings could not be loaded. Refresh to try again.</div></div>`, 'delivery'));
+    res.status(500).send(adminPage('Delivery settings', `${pageHeader('Delivery settings')}<div class="card"><div class="warn">Settings could not be loaded. Refresh to try again.</div></div>`, 'deliveryset'));
   }
 });
 
@@ -38416,6 +39467,7 @@ initDB()
     console.log(`Listening on port ${PORT}`);
     /* After listening, so it never holds up a deploy. */
     anchorUndatedPaidJobs().catch((e) => console.error('working dates from deposits:', e.message));
+    archiveSettledHelpers().catch((e) => console.error('archiving settled helpers:', e.message));
   }))
   .catch(err => {
     console.error('DB init failed, exiting:', err.message);

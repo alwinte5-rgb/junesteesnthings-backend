@@ -89,8 +89,9 @@ function familyAttributes(key) {
     const inches = (max, pick) => ({ options: Array.from({ length: max - L.min + 1 }, (_, i) => {
       const n = L.min + i; return { value: String(n), title: `${n} in`, price: '', default: n === pick };
     }) });
-    a.SW = { id: 'SW', name: 'Width (inches)', type: 'select', required: true, values: inches(L.max_w, Math.min(36, L.max_w)) };
-    a.SH = { id: 'SH', name: 'Height (inches)', type: 'select', required: true, values: inches(L.max_h, Math.min(24, L.max_h)) };
+    const open = fam.open_at || [36, 24];
+    a.SW = { id: 'SW', name: 'Width (inches)', type: 'select', required: true, values: inches(L.max_w, Math.min(open[0], L.max_w)) };
+    a.SH = { id: 'SH', name: 'Height (inches)', type: 'select', required: true, values: inches(L.max_h, Math.min(open[1], L.max_h)) };
   } else {
     const def = fam.sizes.find(([w, h]) => w === 24 && h === 18) || fam.sizes[0];
     a.SSIZE = { id: 'SSIZE', name: 'Size', type: 'select', required: true,

@@ -42,7 +42,7 @@ const CLASSIFY = [
   ['qzip',    /\b(quarter.?zip|1\/4.?zip|half.?zip)\b/i],
   ['hoodie',  /\b(hoodie|hooded|sweatshirt|crewneck|fleece|pullover)\b/i],
   ['polo',    /\bpolo\b/i],
-  ['woven',   /\b(twill|oxford|broadcloth|flannel|button|dress shirt|work shirt|scrub|utility)\b/i],
+  ['woven',   /\b(twill|oxford|broadcloth|flannel|button|dress shirt|work shirt|scrub|utility|shoreline)\b/i],
   ['onesie',  /\b(bodysuit|onesie|infant)\b/i],
   ['kids',    /\b(youth|toddler|baby)\b/i],
   ['tank',    /\btank\b/i],
@@ -137,6 +137,9 @@ const ROLES = {
      decoration ids it was created with. If this method is ever retitled again,
      change it here in the same commit. */
   dtf:                 { title: 'DTF Printing',                          exact: true },
+  /* Created by tools/add-dtf-oversized.js (2026-10-17). OPTIONAL: until that
+     tool has run there is no such method, and nothing else should stop for it. */
+  'dtf:oversized':     { title: 'DTF Printing — Oversized (up to 252 sq in)', exact: true },
   screen:              { title: 'Screen Printing',                       exact: true },
   'emb:name-chest':    { title: 'Embroidery — Name/Text (chest)',        exact: true },
   'emb:name-upperback':{ title: 'Embroidery — Name/Text (upper back)',   exact: true },
@@ -169,17 +172,19 @@ const EMB_PANEL = ['emb:name-chest', 'emb:small', 'emb:medium', 'emb:large', 'em
  * neither. An infant bodysuit is not hooped — the garment is smaller than the
  * hoop and the stitching sits against a baby's skin.
  */
+/* 'dtf:oversized' (a print up to 252 sq in, a 12" x 18" full back) only on
+   adult garments with a back that size: not bags, kids' sizes or caps. */
 const DECORATIONS = {
-  tee:     ['dtf', 'screen', ...EMB_FULL],
-  longslv: ['dtf', 'screen', ...EMB_FULL],
-  tank:    ['dtf', 'screen', ...EMB_FULL],
-  hoodie:  ['dtf', 'screen', ...EMB_FULL],
-  qzip:    ['dtf', 'screen', ...EMB_FULL],
+  tee:     ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
+  longslv: ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
+  tank:    ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
+  hoodie:  ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
+  qzip:    ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
   bag:     ['dtf', 'screen', ...EMB_PANEL],
-  woven:   ['dtf', ...EMB_FULL],
-  polo:    ['dtf', ...EMB_FULL],
+  woven:   ['dtf', 'dtf:oversized', ...EMB_FULL],
+  polo:    ['dtf', 'dtf:oversized', ...EMB_FULL],
   vest:    [...EMB_FULL],
-  jacket:  ['dtf', ...EMB_FULL],
+  jacket:  ['dtf', 'dtf:oversized', ...EMB_FULL],
   cap:     [...EMB_FRONT_ONLY],
   kids:    ['dtf', 'screen'],
   onesie:  ['dtf', 'screen'],
@@ -211,4 +216,21 @@ function resolveRoles(methods) {
   return { ids, missing };
 }
 
-module.exports = { CORE_SIZES, CLASSIFY, classify, SUBTYPE, subtype, STANDIN, standin, ROLES, DECORATIONS, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL, resolveRoles };
+/* Roles whose method may not exist yet. A caller drops them when missing
+   rather than refusing to run. */
+const OPTIONAL_ROLES = ['dtf:oversized'];
+
+/* A youth hoodie is a 'hoodie' (the class is about the cut), but its back is
+   nowhere near 12" x 18", so it never gets the oversized print. */
+const KIDS_SIZE_RE = /\b(youth|toddler|infant|baby|kids?)\b/i;
+
+/** The decoration roles one product can take — DECORATIONS for its class, less
+ *  the oversized print on kids' sizes. Every tool that sets a product's
+ *  decorations reads this, so they cannot disagree. Null when unclassified. */
+function decorationsFor(name) {
+  const roles = DECORATIONS[classify(name)];
+  if (!roles) return null;
+  return KIDS_SIZE_RE.test(String(name || '')) ? roles.filter((r) => r !== 'dtf:oversized') : roles;
+}
+
+module.exports = { CORE_SIZES, CLASSIFY, classify, SUBTYPE, subtype, STANDIN, standin, ROLES, DECORATIONS, OPTIONAL_ROLES, decorationsFor, EMB_FULL, EMB_FRONT_ONLY, EMB_PANEL, resolveRoles };

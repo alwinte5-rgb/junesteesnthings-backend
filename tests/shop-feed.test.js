@@ -86,3 +86,68 @@ test('server.js keeps the last good copy and reports a failure', () => {
   assert.match(fn, /reportError\('shop-feed'/, 'failures reach the error digest');
   assert.match(fn, /return _shopCache\.data;\s*\}\s*$/, 'a failure answers with the last good copy');
 });
+
+test('every product price passes through for the page cards; only designer product links survive', () => {
+  const d = cleanShopFeed({ ...good, products: [
+    { link: D + 'product.php?product_id=21', image: 'http://cdn.example/h.jpg', from_price: 20.184 },
+    { link: D + 'product.php?product_id=22', image: null, from_price: 0 },
+    { link: 'https://evil.example/product.php?product_id=1', image: 'https://cdn.example/x.jpg', from_price: 1 },
+    { link: D + 'products.php?category_id=52', from_price: 5 },
+  ] });
+  assert.deepStrictEqual(d.products, [
+    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18 },
+    { link: D + 'product.php?product_id=22', image: '', from_price: null },
+  ]);
+  assert.deepStrictEqual(cleanShopFeed(good).products, [], 'an older designer sends none');
+});
+
+function runPageScript(feed) {
+  const vm = require('node:vm');
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
+  const card = (href, price) => {
+    const img = { src: 'built-in.jpg' }, pr = { textContent: price };
+    return { href, hidden: false, img, pr, querySelector: (q) => (q === '.pb-im img' ? img : q === '.pb-pr' ? pr : null) };
+  };
+  const cards = [card(D + 'product.php?product_id=21', 'From $1.00 + printing'),
+    card(D + 'product.php?product_id=22', 'From $2.00 + printing'),
+    card(D + 'product.php?product_id=99', 'From $3.00 + printing'),
+    card(D + 'products.php?category_id=52', 'From $4.00 + printing')];
+  const store = { jt_shop_feed3: JSON.stringify({ at: Date.now(), d: feed }) };
+  vm.runInNewContext(src, {
+    window: { fetch: () => { throw new Error('should use the cached feed'); } },
+    document: { querySelectorAll: () => cards },
+    sessionStorage: { getItem: (k) => store[k] || null, setItem() {} },
+    JSON, Date,
+  });
+  return cards;
+}
+
+test('the page script reprices every listed card and hides a switched-off product only with a complete list', () => {
+  const products = [
+    { link: D + 'product.php?product_id=21', image: 'https://cdn.example/h.jpg', from_price: 20.18 },
+    { link: D + 'product.php?product_id=22', image: '', from_price: null },
+  ];
+  let c = runPageScript({ categories: [], best: [], products, products_complete: true });
+  assert.strictEqual(c[0].pr.textContent, 'From $20.18 + printing');
+  assert.strictEqual(c[0].img.src, 'https://cdn.example/h.jpg');
+  assert.strictEqual(c[1].pr.textContent, 'Priced as you design', 'a product with no set price drops its old price');
+  assert.strictEqual(c[1].img.src, 'built-in.jpg', 'no photo in the feed keeps the built-in one');
+  assert.strictEqual(c[2].hidden, true, 'a product missing from a complete list is switched off');
+  assert.strictEqual(c[3].hidden, false, 'a category card is never hidden');
+
+  c = runPageScript({ categories: [], best: [], products, products_complete: false });
+  assert.strictEqual(c[2].hidden, false, 'a list not marked complete hides nothing');
+  assert.strictEqual(c[0].pr.textContent, 'From $20.18 + printing');
+});
+
+test('a hidden card is really hidden: the card style cannot override it', () => {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'css', 'page-blocks.css'), 'utf8');
+  assert.match(css, /\.pb-card\[hidden\]\{display:none!important\}/);
+});
+
+test('the list counts as complete only when the designer says so and nothing was cut', () => {
+  const products = [{ link: D + 'product.php?product_id=21', from_price: 5 }];
+  assert.strictEqual(cleanShopFeed({ ...good, products, products_complete: true }).products_complete, true);
+  assert.strictEqual(cleanShopFeed({ ...good, products }).products_complete, false);
+  assert.strictEqual(cleanShopFeed({ ...good, products: [], products_complete: true }).products_complete, false);
+});

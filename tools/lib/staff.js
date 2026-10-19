@@ -212,6 +212,7 @@ const ROUTES = {
   'GET /admin': 'any',
   'GET /admin/data': 'owner',
   'GET /admin/nav-counts': 'any',
+  'GET /admin/go': 'any',
   'GET /admin/api/test-email': 'owner',
 
   'GET /admin/leads': 'leads.view',
@@ -324,10 +325,18 @@ const ROUTES = {
   'POST /admin/discounts': 'discounts.manage',
   // The reintroduction campaign texts and emails the whole list: the owner's call.
   'GET /admin/campaign': 'owner',
+  // When to prep, advertise and stop orders for each occasion: the owner's plan.
+  'GET /admin/marketing-calendar': 'owner',
   'GET /admin/campaign/sign': 'owner',
   'POST /admin/campaign/test': 'owner',
   'POST /admin/campaign/text': 'owner',
   'POST /admin/campaign/email': 'owner',
+  // Business Partners: the invite emails the whole list, and switching a
+  // business off or merging one changes what discounts it gets.
+  'POST /admin/campaign/partners/test': 'owner',
+  'POST /admin/campaign/partners/email': 'owner',
+  'GET /admin/partners': 'owner',
+  'POST /admin/partners/action': 'owner',
   'POST /admin/discounts/send': 'discounts.manage',
   'POST /admin/discounts/off': 'discounts.manage',
   'POST /admin/discounts/on': 'discounts.manage',
@@ -448,6 +457,15 @@ const ROUTES = {
   'GET /admin/team-chat/file/:kind/:id': 'any',
   'POST /admin/team-chat/alerts': 'any',
   'POST /admin/team-chat/channels': 'owner',
+  /* The Mailbox: every route checks the conversation itself (mailThreadFor). */
+  'GET /admin/mailbox': 'any',
+  'GET /admin/mailbox/new': 'any',
+  'POST /admin/mailbox': 'any',
+  'GET /admin/mailbox/:id': 'any',
+  'POST /admin/mailbox/:id/reply': 'any',
+  'POST /admin/mailbox/:id/status': 'any',
+  'POST /admin/mailbox/:id/edit': 'any',
+  'GET /admin/mailbox/file/:id': 'any',
   'GET /admin/staff': 'owner',
   'POST /admin/staff': 'owner',
   'POST /admin/staff/:id': 'owner',
