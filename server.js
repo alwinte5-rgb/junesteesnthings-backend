@@ -266,6 +266,20 @@ app.get(['/partners', '/partners.html', '/mail15', '/mail15.html'], (req, res) =
   res.sendFile(path.join(__dirname, 'public', file));
 });
 
+/* sitemap.xml: the static file, plus /partners while the program is on. Both
+   only change on a deploy, so it is built once here; Last-Modified is kept so
+   crawlers still get a 304. A missing file is logged and left to the 404. */
+try {
+  const sitemapFile = path.join(__dirname, 'public', 'sitemap.xml');
+  const sitemap = PARTNERS.sitemapXml(require('node:fs').readFileSync(sitemapFile, 'utf8'));
+  const sitemapModified = require('node:fs').statSync(sitemapFile).mtime.toUTCString();
+  app.get('/sitemap.xml', (_req, res) => {
+    res.set('Last-Modified', sitemapModified).type('application/xml').send(sitemap);
+  });
+} catch (err) {
+  console.error('sitemap.xml could not be read:', err.message);
+}
+
 // Serve frontend
 /* Browser caching for static files. Images and fonts rarely change: 30 days.
    Scripts and styles are NOT versioned by filename (/assets/js/jt-chat.js is

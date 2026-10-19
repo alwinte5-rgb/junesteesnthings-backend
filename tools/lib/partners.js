@@ -130,7 +130,23 @@ function discountForCode(check, gross) {
   return { kind: 'pct', value: pct, note: `Code ${code}` };
 }
 
+/* The sitemap lists /partners only while the program is on; listed while
+   off, search engines would be sent to a 404. Added once, before </urlset>. */
+const SITEMAP_ENTRY = `  <!-- Business Partners Program -->
+  <url>
+    <loc>https://www.jtees.net/partners</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+`;
+
+function sitemapXml(xml, env = process.env) {
+  if (!on(env) || xml.includes('<loc>https://www.jtees.net/partners</loc>')) return xml;
+  const end = xml.lastIndexOf('</urlset>');
+  return end < 0 ? xml : xml.slice(0, end) + SITEMAP_ENTRY + xml.slice(end);
+}
+
 module.exports = {
-  on, LOCK_DAYS, lockUntil, lockOpen, lockDaysLeft, reorderPromo, reorderItems,
+  on, sitemapXml, LOCK_DAYS, lockUntil, lockOpen, lockDaysLeft, reorderPromo, reorderItems,
   canEnterCode, PROMO_MESSAGES, promoReasonKey, promoMessage, discountForCode,
 };
