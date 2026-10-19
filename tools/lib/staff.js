@@ -230,6 +230,8 @@ const ROUTES = {
      A designer reaches the same files from their design page. */
   'GET /admin/production/:code/artwork/:n': 'quotes.view',
   'GET /admin/production/:code/artwork.zip': 'quotes.view',
+  'POST /admin/production/:code/sizes/start': 'quotes.view',
+  'POST /admin/production/:code/sizes/close': 'quotes.view',
   'GET /admin/quote/new|/admin/quote/:code/edit': 'quotes.draft',
   'GET /admin/api/quotes/prior': 'quotes.draft',
   'POST /admin/api/sign-price': 'quotes.draft',

@@ -23093,7 +23093,7 @@ async function jobTeamSizesCard(q, catalog, { canEdit = true } = {}) {
 /* The shop's side of the size link: make it (once per quote) and close or
    reopen it, from the job page. Same table and token as the customer's own
    button on their quote page. */
-app.post(['/admin/production/:code/sizes/start', '/admin/production/:code/sizes/close'], requireAdmin, async (req, res) => {
+async function jobSizeLinkAction(req, res) {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
   const actor = currentActor() || OWNER_ACTOR;
@@ -23115,7 +23115,9 @@ app.post(['/admin/production/:code/sizes/start', '/admin/production/:code/sizes/
     reportError('size-link', err, `job ${code}`).catch(() => {});
   }
   res.redirect(303, `/admin/production/${code}#team-sizes`);
-});
+}
+app.post('/admin/production/:code/sizes/start', requireAdmin, jobSizeLinkAction);
+app.post('/admin/production/:code/sizes/close', requireAdmin, jobSizeLinkAction);
 
 /** The customer's Business Partner brand files, on their job page, so the
  *  shop never asks for a logo the business already gave. Nothing when the
