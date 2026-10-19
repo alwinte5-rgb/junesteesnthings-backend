@@ -61,7 +61,7 @@ function shell() {
     grab('const ADMIN_ICONS = {', '};'),
     grab('const ADMIN_CSS = `', '\n`;'),
     grab('const ADMIN_BADGE_JS = `', '`;'),
-    lift('escEmail'), lift('icon'), lift('navItemsFor'), lift('navSectionsFor'), lift('adminNav'), lift('sectionTabs'), lift('clockChip'), lift('clockScript'), lift('pageTip'), lift('htmlDocument'), lift('adminPage'), lift('quotePage'),
+    lift('escEmail'), lift('icon'), lift('navItemsFor'), lift('navSectionsFor'), lift('adminNav'), lift('notifyBell'), lift('sectionTabs'), lift('clockChip'), lift('clockScript'), lift('pageTip'), lift('htmlDocument'), lift('adminPage'), lift('quotePage'),
   ].join('\n'), sandbox);
   return sandbox;
 }
@@ -147,8 +147,8 @@ test('the dashboard, the Leads page and the menu counts are admin only', () => {
 
 test('each count fails on its own, to zero', () => {
   const r = route("app.get('/admin/nav-counts', requireAdmin");
-  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 10,
-    'leads, reviews, late jobs, certificates, approvals waiting, unread team chat, unread mailbox, orders to ship, art not yet Got it and job messages not yet addressed');
+  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 11,
+    'notifications, leads, reviews, late jobs, certificates, approvals waiting, unread team chat, unread mailbox, orders to ship, art not yet Got it and job messages not yet addressed');
 });
 
 test('/admin lands the owner on the dashboard and a helper on My Day', () => {

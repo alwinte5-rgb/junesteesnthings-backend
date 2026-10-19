@@ -46,7 +46,7 @@ function menu(actor) {
     grab('const ADMIN_NAV = [', '];'), grab('const ADMIN_SECTIONS = [', '];'),
     grab('const STUDIO_ADMIN = ', "'/admin.php';"), grab('const ADMIN_ICONS = {', '};'),
     lift('escEmail'), lift('icon'), "function clockChip() { return ''; }", lift('navItemsFor'), lift('navSectionsFor'),
-    lift('adminNav'), lift('sectionTabs'),
+    lift('adminNav'), lift('notifyBell'), lift('sectionTabs'),
     'this.NAV = ADMIN_NAV; this.SECTIONS = ADMIN_SECTIONS;',
   ].join('\n'), sandbox);
   return sandbox;
@@ -67,6 +67,7 @@ const NOT_A_MENU_PAGE = {
   '/admin/campaign/sign': 'a printable sign, opened from the campaign page',
   '/admin/delivery/new': 'booking for one job, opened from that job',
   '/admin/hiring/test': 'a role guide, opened from Hiring',
+  '/admin/notifications/settings': 'email settings, opened from Notifications',
   '/admin/tax.csv': 'a download on Exports',
   '/admin/mailbox/new': 'the New conversation button on Mailbox and on each order and task',
   '/admin/training/attempts': "one helper's tries at one quiz, opened from Training",
