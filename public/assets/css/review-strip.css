@@ -16,7 +16,7 @@
 }
 .rv{flex:0 0 250px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:12px;padding:12px 14px}
 .rv .stars{color:#F4A623;font-size:13px;letter-spacing:1px}
-.rv-t{font-weight:700;font-size:13.5px;color:#0B1F4B;margin:4px 0 3px}
+.rv-t{font-weight:700;font-size:13.5px;color:#0D0D12;margin:4px 0 3px}
 .rv-x{font-size:12.5px;line-height:1.5;color:#46505f;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .rv-w{font-size:11px;color:#8b95a5;margin-top:7px}
 @keyframes rvscroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
@@ -29,8 +29,8 @@
 .jtr{background:#F7F6F3;padding:2.4rem 0;border-top:1px solid #E7E3DB;font-family:Inter,system-ui,sans-serif}
 .jtr-in{max-width:1200px;margin:0 auto;padding:0 1.25rem}
 .jtr-h{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;margin-bottom:1rem}
-.jtr-h b{color:#0B1F4B;font-size:1.15rem}
-.jtr-badge{background:#fff;border:1px solid #E7E3DB;border-radius:999px;padding:.2rem .7rem;font-size:.82rem;color:#0B1F4B;font-weight:700}
+.jtr-h b{color:#0D0D12;font-size:1.15rem}
+.jtr-badge{background:#fff;border:1px solid #E7E3DB;border-radius:999px;padding:.2rem .7rem;font-size:.82rem;color:#0D0D12;font-weight:700}
 .jtr-badge span{color:#F4A623}
-.jtr-all{margin-left:auto;color:#1848B8;font-weight:700;font-size:.9rem;text-decoration:none}
+.jtr-all{margin-left:auto;color:#0E78B8;font-weight:700;font-size:.9rem;text-decoration:none}
 .jtr .rv{background:#fff}

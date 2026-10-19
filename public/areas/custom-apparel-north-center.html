@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <style>
-    :root{--navy:#0B1F4B;--gold:#F0275A;--gold-dk:#C41E47;--white:#ffffff;--off-white:#f7f6f3;--text:#374151;--muted:#6B7280;--border:#E5E7EB;--radius:10px;--radius-lg:16px;}
+    :root{--navy:#0D0D12;--gold:#E0107A;--gold-dk:#B80D64;--white:#ffffff;--off-white:#f7f6f3;--text:#374151;--muted:#6B7280;--border:#E5E7EB;--radius:10px;--radius-lg:16px;}
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
     html{scroll-behavior:smooth;}body{font-family:'Inter',sans-serif;color:var(--text);background:var(--white);line-height:1.6;}
     a{text-decoration:none;color:inherit;}
@@ -35,7 +35,7 @@
     .logo-name{font-size:1rem;font-weight:700;color:var(--gold);line-height:1.2;}.logo-sub{font-size:.65rem;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.08em;}
     .nav-links{display:flex;align-items:center;gap:1.5rem;}.nav-links a{font-size:.88rem;font-weight:500;color:rgba(255,255,255,.8);transition:color .2s;}.nav-links a:hover{color:var(--gold);}
     .btn-cta{background:var(--gold);color:var(--navy)!important;font-weight:700;padding:.5rem 1.25rem;border-radius:100px;}
-    .hero{background:linear-gradient(135deg,#061229 0%,var(--navy) 55%,#162a5e 100%);color:var(--white);padding:5rem 0 4rem;}
+    .hero{background:linear-gradient(135deg,#000000 0%,var(--navy) 55%,#23232B 100%);color:var(--white);padding:5rem 0 4rem;}
     .hero-eyebrow{font-size:.78rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);margin-bottom:1rem;}
     .hero h1{font-size:clamp(2rem,5vw,3.2rem);font-weight:900;line-height:1.1;margin-bottom:1.25rem;}.hero h1 em{font-style:normal;color:var(--gold);}
     .hero p{font-size:1.05rem;color:rgba(255,255,255,.85);max-width:600px;margin-bottom:2rem;line-height:1.7;}
@@ -60,41 +60,41 @@
     .faq-list{display:flex;flex-direction:column;gap:1rem;margin-top:2rem;}.faq-item{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
     .faq-q{font-weight:700;font-size:.95rem;color:var(--navy);padding:1.1rem 1.25rem;display:flex;justify-content:space-between;align-items:center;}.faq-q::after{content:'+';font-size:1.25rem;color:var(--gold);font-weight:400;}
     .faq-a{padding:0 1.25rem 1.1rem;font-size:.9rem;color:var(--text);line-height:1.7;}
-    .cta-band{background:linear-gradient(135deg,var(--navy) 0%,#162a5e 100%);color:var(--white);padding:4rem 0;text-align:center;}.cta-band h2{color:var(--white);margin-bottom:.75rem;}.cta-band p{color:rgba(255,255,255,.8);margin-bottom:2rem;font-size:1.05rem;}
+    .cta-band{background:linear-gradient(135deg,var(--navy) 0%,#23232B 100%);color:var(--white);padding:4rem 0;text-align:center;}.cta-band h2{color:var(--white);margin-bottom:.75rem;}.cta-band p{color:rgba(255,255,255,.8);margin-bottom:2rem;font-size:1.05rem;}
     footer{background:var(--navy);color:rgba(255,255,255,.7);padding:2rem 0;text-align:center;font-size:.85rem;}footer a{color:var(--gold);}
     @media(max-width:768px){.two-col{grid-template-columns:1fr;gap:2rem;}.nav-links{display:none;}section{padding:2.5rem 0;}}
 
     /* ── Marquee ── */
 
     /* ── Announcement bar ── */
-    .announcement-bar{background:#F0275A;color:#0B1F4B;text-align:center;padding:.6rem 1rem;font-size:.82rem;font-weight:500;letter-spacing:.03em;}
+    .announcement-bar{background:#E0107A;color:#0D0D12;text-align:center;padding:.6rem 1rem;font-size:.82rem;font-weight:500;letter-spacing:.03em;}
 
     /* ── Full header ── */
-    header{background:#0B1F4B;position:sticky;top:0;z-index:1000;box-shadow:0 2px 20px rgba(0,0,0,.3);}
+    header{background:#0D0D12;position:sticky;top:0;z-index:1000;box-shadow:0 2px 20px rgba(0,0,0,.3);}
     .header-inner{display:flex;align-items:center;justify-content:space-between;height:70px;padding:0 2rem;max-width:1300px;margin:0 auto;}
     .logo{display:flex;align-items:center;gap:.75rem;}
     .logo img{width:44px;height:44px;border-radius:50%;object-fit:cover;}
-    .logo-text{font-size:1.05rem;font-weight:700;color:#F0275A;line-height:1.2;}
+    .logo-text{font-size:1.05rem;font-weight:700;color:#E0107A;line-height:1.2;}
     .logo-text span{display:block;font-size:.7rem;font-weight:400;color:rgba(255,255,255,.7);letter-spacing:.08em;text-transform:uppercase;}
     nav{display:flex;align-items:center;gap:.25rem;}
     nav a{font-size:.85rem;font-weight:500;color:#ffffff;padding:.5rem .75rem;border-radius:8px;transition:color .2s,background .2s;}
     nav a:hover{color:#ffffff;background:rgba(255,255,255,.12);}
     .header-actions{display:flex;align-items:center;gap:1rem;}
     .icon-link{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.06);color:#ffffff;transition:background .2s,color .2s;}
-    .icon-link:hover{background:#F0275A;color:#0B1F4B;}
+    .icon-link:hover{background:#E0107A;color:#0D0D12;}
     .icon-link svg{width:16px;height:16px;fill:currentColor;}
-    .btn-quote{background:#F0275A;color:#0B1F4B;font-size:.82rem;font-weight:600;padding:.55rem 1.25rem;border-radius:100px;transition:background .2s,transform .2s;white-space:nowrap;}
-    .btn-quote:hover{background:#C41E47;transform:translateY(-1px);}
+    .btn-quote{background:#E0107A;color:#0D0D12;font-size:.82rem;font-weight:600;padding:.55rem 1.25rem;border-radius:100px;transition:background .2s,transform .2s;white-space:nowrap;}
+    .btn-quote:hover{background:#B80D64;transform:translateY(-1px);}
     .hamburger{display:none;flex-direction:column;gap:5px;cursor:pointer;padding:4px;}
     .hamburger span{display:block;width:22px;height:2px;background:#ffffff;border-radius:2px;}
-    .mobile-drawer{position:fixed;top:0;left:-100%;width:280px;height:100vh;background:#0B1F4B;z-index:2000;padding:2rem 1.5rem;transition:left .3s;border-right:1px solid rgba(255,255,255,.1);overflow-y:auto;}
+    .mobile-drawer{position:fixed;top:0;left:-100%;width:280px;height:100vh;background:#0D0D12;z-index:2000;padding:2rem 1.5rem;transition:left .3s;border-right:1px solid rgba(255,255,255,.1);overflow-y:auto;}
     .mobile-drawer.open{left:0;}
     .drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1999;display:none;}
     .drawer-overlay.visible{display:block;}
     .drawer-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:2rem;}
     .drawer-close{background:none;border:none;color:#ffffff;font-size:1.5rem;cursor:pointer;line-height:1;}
     .drawer-nav a{display:block;padding:.9rem 0;font-size:1.05rem;font-weight:500;color:#ffffff;border-bottom:1px solid rgba(255,255,255,.1);transition:color .2s;}
-    .drawer-nav a:hover{color:#F0275A;}
+    .drawer-nav a:hover{color:#E0107A;}
     .drawer-actions{margin-top:2rem;display:flex;flex-direction:column;gap:.75rem;}
 
     /* ── Nav dropdown ── */
@@ -102,24 +102,24 @@
     .nav-dropdown-toggle{display:flex;align-items:center;gap:4px;cursor:pointer;}
     .nav-dropdown-toggle::after{content:'▾';font-size:.7rem;opacity:.6;}
     .nav-dropdown-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%) translateY(8px);opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:500;white-space:nowrap;}
-    .nav-dropdown-menu-inner{background:#0B1F4B;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:.5rem;box-shadow:0 8px 32px rgba(0,0,0,.5);}
+    .nav-dropdown-menu-inner{background:#0D0D12;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:.5rem;box-shadow:0 8px 32px rgba(0,0,0,.5);}
     .nav-dropdown-menu.open{opacity:1;pointer-events:auto;}
     .nav-dropdown-menu-inner a{display:block;padding:.45rem 1.1rem;font-size:.82rem;font-weight:500;color:rgba(248,244,233,.8);transition:background .15s,color .15s;}
     .nav-dropdown-menu-inner a:hover{background:rgba(255,255,255,.07);color:#fff;}
     .nav-dropdown-menu-inner .dropdown-divider{height:1px;background:rgba(255,255,255,.08);margin:.4rem 0;}
 
     /* ── Full footer ── */
-    footer{background:#0B1F4B;color:rgba(255,255,255,.7);padding:0;}
+    footer{background:#0D0D12;color:rgba(255,255,255,.7);padding:0;}
     .footer-top{display:grid;grid-template-columns:1.8fr 1fr 1fr 1fr;gap:3rem;padding:3.5rem 0 2.5rem;}
     .footer-tagline{font-size:.88rem;color:rgba(255,255,255,.7);line-height:1.7;margin-bottom:1.25rem;}
     .footer-social{display:flex;gap:.75rem;}
     .footer-social a{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.1);color:rgba(255,255,255,.8);transition:background .2s,color .2s;}
-    .footer-social a:hover{background:#F0275A;color:#0B1F4B;}
+    .footer-social a:hover{background:#E0107A;color:#0D0D12;}
     .footer-social svg{width:15px;height:15px;fill:currentColor;}
-    .footer-col h4{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#F0275A;margin-bottom:1rem;}
+    .footer-col h4{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#E0107A;margin-bottom:1rem;}
     .footer-links{list-style:none;display:flex;flex-direction:column;gap:.6rem;}
     .footer-links a{font-size:.875rem;color:rgba(255,255,255,.65);transition:color .2s;}
-    .footer-links a:hover{color:#F0275A;}
+    .footer-links a:hover{color:#E0107A;}
     .footer-bottom{display:flex;justify-content:space-between;align-items:center;padding:1.25rem 0;border-top:1px solid rgba(255,255,255,.08);font-size:.82rem;color:rgba(255,255,255,.5);}
 
     @media(max-width:1024px){.footer-top{grid-template-columns:1fr 1fr;}}
@@ -128,55 +128,55 @@
     /* ── White clean scheme to match design.jtees.net (v2) ── */
     body{background:#fff;}
     header{background:#fff!important;box-shadow:0 1px 12px rgba(16,35,63,.08)!important;}
-    header nav a{color:#0B1F4B!important;}
-    header nav a:hover{color:#1848B8!important;}
-    .logo-text{color:#0B1F4B!important;}
+    header nav a{color:#0D0D12!important;}
+    header nav a:hover{color:#0E78B8!important;}
+    .logo-text{color:#0D0D12!important;}
     .logo-text span{color:#6B7280!important;}
-    .header-actions .icon-link svg{fill:#0B1F4B;}
+    .header-actions .icon-link svg{fill:#0D0D12;}
     .hcontact{display:flex;align-items:center;gap:.55rem;text-decoration:none;white-space:nowrap;}
-    .hcontact svg{width:22px;height:22px;fill:#F0275A;flex:0 0 auto;}
-    .hcontact:hover svg{fill:#C41E47;}
+    .hcontact svg{width:22px;height:22px;fill:#E0107A;flex:0 0 auto;}
+    .hcontact:hover svg{fill:#B80D64;}
     .hcontact .hl{line-height:1.15;}
-    .hcontact .hl b{display:block;font-size:.8rem;font-weight:800;color:#0B1F4B;}
-    .hcontact .hl span{display:block;font-size:.72rem;color:#F0275A;font-weight:700;}
+    .hcontact .hl b{display:block;font-size:.8rem;font-weight:800;color:#0D0D12;}
+    .hcontact .hl span{display:block;font-size:.72rem;color:#E0107A;font-weight:700;}
     @media (max-width:1200px){.hcontact .hl{display:none;}}
-    .hamburger span{background:#0B1F4B!important;}
-    .drawer-nav a{color:#0B1F4B!important;}
-    .drawer-header .logo-text{color:#0B1F4B!important;}
-    .drawer-close{color:#0B1F4B!important;}
+    .hamburger span{background:#0D0D12!important;}
+    .drawer-nav a{color:#0D0D12!important;}
+    .drawer-header .logo-text{color:#0D0D12!important;}
+    .drawer-close{color:#0D0D12!important;}
     .mobile-drawer{background:#fff!important;}
     .nav-dropdown-menu{background:#fff!important;border:1px solid #E7E3DB!important;box-shadow:0 8px 32px rgba(16,35,63,.15)!important;}
-    .nav-dropdown-menu a{color:#0B1F4B!important;}
+    .nav-dropdown-menu a{color:#0D0D12!important;}
     .nav-dropdown-menu-inner{background:#fff!important;border:1px solid #E7E3DB!important;}
-    .nav-dropdown-menu-inner a{color:#0B1F4B!important;}
-    .announcement-bar{background:#0B1F4B!important;color:#fff!important;}
-    .hero{background:#FFF8EF!important;color:#0B1F4B!important;}
-    .hero h1{color:#0B1F4B!important;}
-    .hero h1 em{color:#1848B8!important;}
+    .nav-dropdown-menu-inner a{color:#0D0D12!important;}
+    .announcement-bar{background:#0D0D12!important;color:#fff!important;}
+    .hero{background:#FFF8EF!important;color:#0D0D12!important;}
+    .hero h1{color:#0D0D12!important;}
+    .hero h1 em{color:#0E78B8!important;}
     .hero p{color:#374151!important;}
-    .hero-eyebrow{color:#C41E47!important;}
-    .hero-badge{background:rgba(11,31,75,.05)!important;border:1px solid rgba(11,31,75,.14)!important;color:#374151!important;}
+    .hero-eyebrow{color:#B80D64!important;}
+    .hero-badge{background:rgba(13,13,18,.05)!important;border:1px solid rgba(13,13,18,.14)!important;color:#374151!important;}
     .blog-hero{background:#FFF8EF!important;}
-    .blog-hero h1{color:#0B1F4B!important;}
+    .blog-hero h1{color:#0D0D12!important;}
     .blog-hero .intro,.blog-hero .post-meta,.blog-hero .post-meta span{color:#374151!important;}
-    .post-category{background:#1848B8!important;color:#fff!important;}
-    h1,h2,h3,h4{color:#0B1F4B;}
+    .post-category{background:#0E78B8!important;color:#fff!important;}
+    h1,h2,h3,h4{color:#0D0D12;}
     .cta-band{background:#FFF8EF!important;}
-    .cta-band h2{color:#0B1F4B!important;}
+    .cta-band h2{color:#0D0D12!important;}
     .cta-band p{color:#374151!important;}
-    .btn-outline-white{border:2px solid #0B1F4B!important;color:#0B1F4B!important;background:#fff!important;}
+    .btn-outline-white{border:2px solid #0D0D12!important;color:#0D0D12!important;background:#fff!important;}
     article,article p,article li{color:#374151;}
-    article h1,article h2,article h3{color:#0B1F4B;}
+    article h1,article h2,article h3{color:#0D0D12;}
     /* footer stays navy — force readable light text */
     footer .logo-text{color:#fff!important;}
     footer .logo-text span{color:rgba(255,255,255,.55)!important;}
     footer h4{color:#fff!important;}
     footer p,footer li,footer span{color:rgba(255,255,255,.75);}
     .footer-links a{color:rgba(255,255,255,.85)!important;}
-    .footer-links a:hover{color:#F0275A!important;}
+    .footer-links a:hover{color:#E0107A!important;}
     /* cohesive CTAs — royal blue primaries site-wide */
-    .btn-primary,.btn-cta,.btn-gold,.btn-quote{background:#1848B8!important;color:#fff!important;}
-    .btn-primary:hover,.btn-cta:hover,.btn-gold:hover,.btn-quote:hover{background:#123A9A!important;color:#fff!important;}
+    .btn-primary,.btn-cta,.btn-gold,.btn-quote{background:#0E78B8!important;color:#fff!important;}
+    .btn-primary:hover,.btn-cta:hover,.btn-gold:hover,.btn-quote:hover{background:#0A5E92!important;color:#fff!important;}
 </style>
   <script type="application/ld+json">
   {
@@ -226,8 +226,8 @@
   <script type="application/ld+json">
   {"@context": "https://schema.org", "@type": "Service", "serviceType": "Custom T-Shirt Printing", "provider": {"@type": "LocalBusiness", "@id": "https://www.jtees.net/#business", "name": "June's Tees & Things", "address": {"@type": "PostalAddress", "streetAddress": "3047 N Lincoln Ave #435", "addressLocality": "Chicago", "addressRegion": "IL", "postalCode": "60657", "addressCountry": "US"}, "geo": {"@type": "GeoCoordinates", "latitude": 41.9393, "longitude": -87.6726}, "telephone": "+17739004592", "url": "https://www.jtees.net", "sameAs": ["https://www.instagram.com/jtees228", "https://www.facebook.com/Jtees228", "https://www.yelp.com/biz/junes-tees-and-things-oak-lawn"]}, "areaServed": [{"@type": "City", "name": "Chicago"}, {"@type": "Place", "name": "Lakeview"}, {"@type": "Place", "name": "Lincoln Park"}, {"@type": "Place", "name": "North Center"}, {"@type": "Place", "name": "Logan Square"}, {"@type": "AdministrativeArea", "name": "Cook County"}], "description": "Custom apparel printing for North Center and Roscoe Village, Chicago — little league jerseys, school and family shirts, and business apparel with no minimums, minutes away in Lakeview.", "url": "https://www.jtees.net/areas/custom-apparel-north-center.html"}
   </script>
-  <link rel="stylesheet" href="/assets/css/site-nav.css?v=7e16f084" />
-  <link rel="stylesheet" href="/assets/css/page-blocks.css?v=df6ad33e" />
+  <link rel="stylesheet" href="/assets/css/site-nav.css?v=9870dae6" />
+  <link rel="stylesheet" href="/assets/css/page-blocks.css?v=6d61120d" />
 </head>
 <body>
 <!-- site-header:start — generated by tools/site-nav.js from assets/data/site-nav.json; edit that file, not this block -->
@@ -236,7 +236,7 @@
 <div class="jtn-tick" aria-hidden="true"><div class="jtn-tick-track"><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Screen Printing</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Custom Embroidery</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> DTF Transfers</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Banners &amp; Signs</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Event Décor</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Graphic Design</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Custom Tees</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Team &amp; Group Orders</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Yard Signs</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Step &amp; Repeat Backdrops</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Big Head Cutouts</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Black-Owned</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Women-Owned</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Screen Printing</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Custom Embroidery</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> DTF Transfers</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Banners &amp; Signs</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Event Décor</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Graphic Design</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Custom Tees</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Team &amp; Group Orders</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Yard Signs</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Step &amp; Repeat Backdrops</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Big Head Cutouts</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Black-Owned</span><span class="jtn-tick-i"><b aria-hidden="true">✦</b> Women-Owned</span></div></div>
 <div class="jtn" role="banner">
   <div class="jtn-in">
-    <a href="/" class="jtn-logo"><img src="/assets/images/brand/logo-mark.png" alt="June's Tees &amp; Things logo" width="40" height="44" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
+    <a href="/" class="jtn-logo"><img src="/assets/images/brand/logo-2026.webp" alt="June's Tees &amp; Things, Chicago custom printing" width="382" height="150" /></a>
     <nav class="jtn-menu" aria-label="Main">
       <div class="jtn-dd"><button type="button" class="jtn-dd-t" aria-expanded="false">Shop</button><div class="jtn-dd-m"><a href="https://design.jtees.net/products.php?category_id=52" data-from="nav">T-Shirts</a><a href="https://design.jtees.net/products.php?category_id=54" data-from="nav">Tank Tops</a><a href="https://design.jtees.net/products.php?category_id=55" data-from="nav">Kids &amp; Youth</a><a href="https://design.jtees.net/products.php?category_id=56" data-from="nav">Baby &amp; Onesies</a><a href="https://design.jtees.net/products.php?category_id=53" data-from="nav">Hoodies &amp; Sweatshirts</a><a href="https://design.jtees.net/products.php?category_id=59" data-from="nav">Polos &amp; Business</a><a href="https://design.jtees.net/products.php?category_id=57" data-from="nav">Hats &amp; Caps</a><a href="https://design.jtees.net/products.php?category_id=58" data-from="nav">Tote Bags</a><a href="https://design.jtees.net/products.php?category_id=67" data-from="nav">Banners</a><a href="https://design.jtees.net/products.php?category_id=68" data-from="nav">Yard &amp; Rigid Signs</a><a href="https://design.jtees.net/products.php?category_id=69" data-from="nav">Window, Wall &amp; Floor</a><a href="https://design.jtees.net/products.php?category_id=70" data-from="nav">Vehicle Graphics &amp; Magnets</a><a href="https://design.jtees.net/products.php?category_id=71" data-from="nav">Photo Panels &amp; Canvas</a><a href="https://design.jtees.net/editor.php?product_base=14" data-from="nav">Design Lab</a><a href="https://design.jtees.net/products.php" class="jtn-strong" data-from="nav">All Products →</a></div></div>
       <div class="jtn-dd"><button type="button" class="jtn-dd-t" aria-expanded="false">Groups &amp; Events</button><div class="jtn-dd-m"><a href="https://design.jtees.net/collection.php?c=family-reunion" data-from="nav">Family Reunions</a><a href="https://design.jtees.net/collection.php?c=birthday" data-from="nav">Birthdays</a><a href="https://design.jtees.net/collection.php?c=graduation" data-from="nav">Graduation</a><a href="https://design.jtees.net/collection.php?c=church-groups" data-from="nav">Church Groups</a><a href="https://design.jtees.net/collection.php?c=sports-teams" data-from="nav">Sports Teams &amp; Schools</a><a href="https://design.jtees.net/collection.php?c=staff-uniforms" data-from="nav">Business / Staff</a><a href="https://design.jtees.net/collection.php?c=memorial" data-from="nav">Memorial</a><a href="https://design.jtees.net/collection.php?c=bulk-orders" data-from="nav">Bulk Orders</a><a href="/occasions/wedding-bachelorette-chicago.html">Weddings &amp; Bachelorette</a><div class="jtn-sub"><button type="button" class="jtn-sub-t" aria-expanded="false">Holidays</button><div class="jtn-sub-m"><a href="/occasions/valentines-day-gifts-chicago.html">Valentine's Day</a><a href="/occasions/black-history-month-shirts-chicago.html">Black History Month</a><a href="/occasions/mothers-day-gifts-chicago.html">Mother's Day</a><a href="/occasions/juneteenth-shirts-chicago.html">Juneteenth</a><a href="/occasions/halloween-shirts-chicago.html">Halloween</a><a href="/occasions/christmas-shirts-chicago.html">Christmas</a></div></div><a href="/contact" class="jtn-strong">Get Design Help →</a></div></div>
@@ -499,12 +499,12 @@
     <div class="section-tag">Popular in Chicago</div>
     <h2>What Chicago Orders Most</h2>
     <div class="cards">
-      <div class="card"><h3>Family Reunion Shirts</h3><p>Matching family name tees with the year and location — bulk pricing for the whole family, youth through adult. <a href="https://design.jtees.net/collection.php?c=family-reunion" style="color:#1848B8;font-weight:600;">Design reunion shirts →</a></p></div>
-      <div class="card"><h3>Birthday Shirts</h3><p>Name, age, theme, and photos for the birthday star and the whole party crew. <a href="https://design.jtees.net/collection.php?c=birthday" style="color:#1848B8;font-weight:600;">Design birthday shirts →</a></p></div>
-      <div class="card"><h3>Graduation Shirts</h3><p>“That's My Grad” family tees and senior class shirts in your school colors. <a href="/blog/graduation-shirts-chicago.html" style="color:#1848B8;font-weight:600;">Grad shirt ideas →</a></p></div>
-      <div class="card"><h3>Church & Group Shirts</h3><p>Ministry, choir, usher board, and youth-group shirts with bulk pricing. <a href="https://design.jtees.net/collection.php?c=church-groups" style="color:#1848B8;font-weight:600;">Design church shirts →</a></p></div>
-      <div class="card"><h3>Sports Team Shirts</h3><p>Jerseys with names and numbers, school spirit wear, and fan shirts. <a href="https://design.jtees.net/collection.php?c=sports-teams" style="color:#1848B8;font-weight:600;">Design team shirts →</a></p></div>
-      <div class="card"><h3>Business &amp; Bulk Orders</h3><p>Branded staff shirts, embroidered polos, and volume discounts for companies. <a href="https://design.jtees.net/collection.php?c=business-apparel" style="color:#1848B8;font-weight:600;">Business apparel →</a></p></div>
+      <div class="card"><h3>Family Reunion Shirts</h3><p>Matching family name tees with the year and location — bulk pricing for the whole family, youth through adult. <a href="https://design.jtees.net/collection.php?c=family-reunion" style="color:#0E78B8;font-weight:600;">Design reunion shirts →</a></p></div>
+      <div class="card"><h3>Birthday Shirts</h3><p>Name, age, theme, and photos for the birthday star and the whole party crew. <a href="https://design.jtees.net/collection.php?c=birthday" style="color:#0E78B8;font-weight:600;">Design birthday shirts →</a></p></div>
+      <div class="card"><h3>Graduation Shirts</h3><p>“That's My Grad” family tees and senior class shirts in your school colors. <a href="/blog/graduation-shirts-chicago.html" style="color:#0E78B8;font-weight:600;">Grad shirt ideas →</a></p></div>
+      <div class="card"><h3>Church & Group Shirts</h3><p>Ministry, choir, usher board, and youth-group shirts with bulk pricing. <a href="https://design.jtees.net/collection.php?c=church-groups" style="color:#0E78B8;font-weight:600;">Design church shirts →</a></p></div>
+      <div class="card"><h3>Sports Team Shirts</h3><p>Jerseys with names and numbers, school spirit wear, and fan shirts. <a href="https://design.jtees.net/collection.php?c=sports-teams" style="color:#0E78B8;font-weight:600;">Design team shirts →</a></p></div>
+      <div class="card"><h3>Business &amp; Bulk Orders</h3><p>Branded staff shirts, embroidered polos, and volume discounts for companies. <a href="https://design.jtees.net/collection.php?c=business-apparel" style="color:#0E78B8;font-weight:600;">Business apparel →</a></p></div>
     </div>
   </div>
 </section>
@@ -556,7 +556,7 @@
     <div class="section-tag">Helpful Guides</div>
     <h2 style="margin-bottom:1.5rem;">Related Reading</h2>
     <ul style="list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;padding:0;margin:0;">
-      <li style="margin:0;"><a href="/blog/graduation-shirts-chicago.html" style="color:#1848B8;font-weight:600;text-decoration:none;">&rarr; Custom Graduation Shirts in Chicago</a></li><li style="margin:0;"><a href="/blog/group-event-shirt-ideas.html" style="color:#1848B8;font-weight:600;text-decoration:none;">&rarr; Custom Apparel Ideas for Groups &amp; Events</a></li><li style="margin:0;"><a href="/blog/custom-hoodie-tips.html" style="color:#1848B8;font-weight:600;text-decoration:none;">&rarr; Picking the Right Garment</a></li>
+      <li style="margin:0;"><a href="/blog/graduation-shirts-chicago.html" style="color:#0E78B8;font-weight:600;text-decoration:none;">&rarr; Custom Graduation Shirts in Chicago</a></li><li style="margin:0;"><a href="/blog/group-event-shirt-ideas.html" style="color:#0E78B8;font-weight:600;text-decoration:none;">&rarr; Custom Apparel Ideas for Groups &amp; Events</a></li><li style="margin:0;"><a href="/blog/custom-hoodie-tips.html" style="color:#0E78B8;font-weight:600;text-decoration:none;">&rarr; Picking the Right Garment</a></li>
     </ul>
   </div>
 </section>
@@ -566,7 +566,7 @@
   <div class="jtf-in">
     <div class="jtf-brand">
       <div class="jtf-brand-l">
-      <a href="/" class="jtf-logo"><img src="/assets/images/brand/logo-mark.png" alt="" width="40" height="44" loading="lazy" /><span>June's Tees &amp; Things<small>Chicago Custom Printing</small></span></a>
+      <a href="/" class="jtf-logo"><img src="/assets/images/brand/logo-2026.webp" alt="June's Tees &amp; Things" width="382" height="150" loading="lazy" /></a>
       <p>Chicago's custom print shop for the culture. Shirts, signs, standees, party favors — if you can dream it, we can print it. Black-owned. Women-owned. Built for the community.</p>
       <p><a class="jtf-texts" href="/texts?src=site">Get 10% off: join our texts →</a></p>
       </div>
@@ -647,7 +647,7 @@ s0.parentNode.insertBefore(s1,s0);
 <script src="/assets/js/jt-chat.js?v=20261015b" defer></script>
 <script src="/assets/js/shop-feed.js?v=20261017d" defer></script>
 <script src="/assets/js/pb-reviews.js" defer></script>
-<script src="/assets/js/quote-form.js?v=713a8fc0" defer></script>
-<script src="/assets/js/texts-popup.js?v=44a81298" defer></script>
+<script src="/assets/js/quote-form.js?v=8d3088aa" defer></script>
+<script src="/assets/js/texts-popup.js?v=bf86ca2d" defer></script>
 </body>
 </html>

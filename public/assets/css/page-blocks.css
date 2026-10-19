@@ -11,27 +11,27 @@
 .pb-work{background:#fff}
 .pb-head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.4rem}
 .pb-tag a,.pb-head h2 a{color:inherit;text-decoration:underline;text-underline-offset:3px}
-.pb-tag{font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#F0275A;margin-bottom:.4rem}
-.pb-products h2,.pb-reviews h2,.pb-work h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0}
-.pb-all{color:#1848B8;font-weight:700;font-size:.92rem;text-decoration:none;white-space:nowrap}
+.pb-tag{font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#E0107A;margin-bottom:.4rem}
+.pb-products h2,.pb-reviews h2,.pb-work h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0D0D12;line-height:1.15;margin:0}
+.pb-all{color:#0E78B8;font-weight:700;font-size:.92rem;text-decoration:none;white-space:nowrap}
 .pb-all:hover{text-decoration:underline}
 
 /* Product cards, on the category shelves below. */
 .pb-card{display:flex;flex-direction:column;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .2s,transform .2s}
 .pb-card[hidden]{display:none!important}
-.pb-card:hover{box-shadow:0 10px 24px rgba(11,31,75,.12);transform:translateY(-2px)}
+.pb-card:hover{box-shadow:0 10px 24px rgba(13,13,18,.12);transform:translateY(-2px)}
 .pb-im{aspect-ratio:1/1;background:#F3F4F6;display:flex;align-items:center;justify-content:center}
 .pb-im img{width:100%;height:100%;object-fit:contain}
 .pb-bd{padding:.85rem 1rem 1rem;display:flex;flex-direction:column;gap:.25rem;flex:1}
-.pb-nm{font-weight:700;color:#0B1F4B;font-size:.98rem;line-height:1.3}
-.pb-pr{color:#0B1F4B;font-weight:600;font-size:.88rem}
-.pb-go{color:#1848B8;font-weight:700;font-size:.88rem;margin-top:auto;padding-top:.35rem}
+.pb-nm{font-weight:700;color:#0D0D12;font-size:.98rem;line-height:1.3}
+.pb-pr{color:#0D0D12;font-weight:600;font-size:.88rem}
+.pb-go{color:#0E78B8;font-weight:700;font-size:.88rem;margin-top:auto;padding-top:.35rem}
 .pb-note{margin:1.3rem 0 0;color:#4B5563;font-size:.95rem}
-.pb-note a{color:#1848B8;font-weight:600}
+.pb-note a{color:#0E78B8;font-weight:600}
 
 /* Top reviews */
 .pb-stars{color:#F4A623;letter-spacing:1px}
-.pb-reviews .pb-tag{color:#0B1F4B}
+.pb-reviews .pb-tag{color:#0D0D12}
 .pb-rvs{display:grid;grid-template-columns:repeat(3,1fr);gap:1.1rem}
 .pb-rv{margin:0;background:#fff;border:1px solid #E7E3DB;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
 .pb-rv[hidden]{display:none!important}
@@ -42,12 +42,12 @@
 .pb-rv:has(img) figcaption{min-height:96px}
 .pb-rv:has(img) .pb-stars,.pb-rv:has(img) b{margin-right:76px}
 .pb-rv figcaption{padding:1rem 1.1rem 1.15rem;display:flex;flex-direction:column;gap:.35rem}
-.pb-rv b{color:#0B1F4B;font-size:1rem}
+.pb-rv b{color:#0D0D12;font-size:1rem}
 .pb-rv p{margin:0;color:#374151;font-size:.92rem;line-height:1.55}
 .pb-rv span{color:#6B7280;font-size:.8rem;margin-top:auto}
 
 /* The Google rating under the hero's pitch. */
-.pb-rating{display:inline-flex;align-items:center;gap:.4rem;margin:.2rem 0 1.4rem;font:600 .95rem Inter,system-ui,sans-serif;color:#0B1F4B;text-decoration:none}
+.pb-rating{display:inline-flex;align-items:center;gap:.4rem;margin:.2rem 0 1.4rem;font:600 .95rem Inter,system-ui,sans-serif;color:#0D0D12;text-decoration:none}
 .pb-rating:hover{text-decoration:underline}
 
 /* Recent work */
@@ -62,13 +62,13 @@
 .pb-gallery img.pb-bd{position:absolute;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);object-fit:cover;filter:blur(18px) brightness(.85);transition:none}
 .pb-gallery figure:hover img.pb-bd{transform:none}
 .pb-gallery figure:hover img{transform:scale(1.04)}
-.pb-gallery figcaption{position:absolute;left:0;right:0;bottom:0;padding:1.6rem .9rem .7rem;background:linear-gradient(transparent,rgba(11,31,75,.82));color:#fff;font:600 .85rem Inter,system-ui,sans-serif}
+.pb-gallery figcaption{position:absolute;left:0;right:0;bottom:0;padding:1.6rem .9rem .7rem;background:linear-gradient(transparent,rgba(13,13,18,.82));color:#fff;font:600 .85rem Inter,system-ui,sans-serif}
 
 /* Hero photo: the hero's text keeps the left column, the photo takes the
    right one. Phones hide it; the product photos follow straight after. */
 .hero:has(.pb-hero-img) .container{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);column-gap:3rem;align-items:center}
 .hero:has(.pb-hero-img) .container>*{grid-column:1}
-.hero .pb-hero-img{grid-column:2!important;grid-row:1/span 8;margin:0;justify-self:center;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(11,31,75,.18)}
+.hero .pb-hero-img{grid-column:2!important;grid-row:1/span 8;margin:0;justify-self:center;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(13,13,18,.18)}
 .pb-hero-img img{display:block;max-width:100%;width:auto;height:auto;max-height:520px}
 
 /* The pages' checklists were display:flex, which split a line holding a link
@@ -84,26 +84,26 @@
    beside a short pitch, stacked on phones. */
 .pb-lab{font-family:Inter,system-ui,sans-serif;padding:2.6rem 0;background:#F7F6F3}
 .pb-lab-in{display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:center}
-.pb-lab-shot img{display:block;width:100%;height:auto;border-radius:14px;box-shadow:0 10px 24px rgba(11,31,75,.12)}
+.pb-lab-shot img{display:block;width:100%;height:auto;border-radius:14px;box-shadow:0 10px 24px rgba(13,13,18,.12)}
 .pb-lab h2 a{color:inherit;text-decoration:underline;text-underline-offset:3px}
-.pb-lab h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0 0 .7rem}
+.pb-lab h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0D0D12;line-height:1.15;margin:0 0 .7rem}
 .pb-lab p{color:#374151;line-height:1.65;margin:0 0 1rem}
 .pb-lab-feats{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0;margin:0 0 1.2rem}
-.pb-lab-feats li{background:#fff;border:1px solid #E7E3DB;border-radius:999px;padding:.35rem .8rem;font-size:.88rem;font-weight:600;color:#0B1F4B}
-.pb-lab-go{display:inline-block;background:#F0275A;color:#fff;font-weight:700;padding:.8rem 1.4rem;border-radius:999px;text-decoration:none}
+.pb-lab-feats li{background:#fff;border:1px solid #E7E3DB;border-radius:999px;padding:.35rem .8rem;font-size:.88rem;font-weight:600;color:#0D0D12}
+.pb-lab-go{display:inline-block;background:#E0107A;color:#fff;font-weight:700;padding:.8rem 1.4rem;border-radius:999px;text-decoration:none}
 .pb-lab-go:hover{background:#d81f4e}
 
 /* Product shelves: one category per row, its products side by side (four
    across; two by two on phones, so nothing scrolls sideways). */
 .pb-shelf{margin:0 0 1.8rem;font-family:Inter,system-ui,sans-serif}
 .pb-shelf-h{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin:0 0 .7rem}
-.pb-shelf-h h3{font-size:1.15rem;font-weight:800;color:#0B1F4B;margin:0}
-.pb-shelf-h a{color:#1848B8;font-weight:700;font-size:.9rem;text-decoration:none;white-space:nowrap}
+.pb-shelf-h h3{font-size:1.15rem;font-weight:800;color:#0D0D12;margin:0}
+.pb-shelf-h a{color:#0E78B8;font-weight:700;font-size:.9rem;text-decoration:none;white-space:nowrap}
 .pb-shelf-h a:hover{text-decoration:underline}
 .pb-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
 .pb-shelves .pb-shelf:last-child{margin-bottom:0}
-.pb-links{margin:0 0 1.4rem;font-weight:600;color:#0B1F4B}
-.pb-links a{color:#1848B8;font-weight:700}
+.pb-links{margin:0 0 1.4rem;font-weight:600;color:#0D0D12}
+.pb-links a{color:#0E78B8;font-weight:700}
 
 /* Phone action bar: it stops short of the "Chat with us" button
    (assets/js/jt-chat.js, about 130px wide at the bottom right). */
@@ -127,9 +127,9 @@
   .pb-nm{font-size:.9rem}
   .pb-gallery{gap:.6rem}.pb-gallery figure{flex-basis:calc((100% - .6rem)/2)}
   .pb-sticky{display:flex;position:fixed;left:12px;right:156px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:900;gap:8px;font-family:Inter,system-ui,sans-serif}
-  .pb-sticky a{flex:1;text-align:center;padding:.8rem .5rem;border-radius:999px;font-weight:700;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(11,31,75,.25)}
-  .pb-sticky-go{background:#F0275A;color:#fff}
-  .pb-sticky-call{background:#0B1F4B;color:#fff;flex:0 0 48px!important;padding:.8rem 0!important}
+  .pb-sticky a{flex:1;text-align:center;padding:.8rem .5rem;border-radius:999px;font-weight:700;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(13,13,18,.25)}
+  .pb-sticky-go{background:#E0107A;color:#fff}
+  .pb-sticky-call{background:#0D0D12;color:#fff;flex:0 0 48px!important;padding:.8rem 0!important}
   body:has(.pb-sticky){padding-bottom:72px}
 }
 @media (prefers-reduced-motion:reduce){.pb-card,.pb-gallery img{transition:none}}
@@ -138,9 +138,9 @@
    quote-form.js styles the form itself. */
 .pb-quote{font-family:Inter,system-ui,sans-serif;background:#F7F6F3;padding:3rem 0;scroll-margin-top:7rem}
 .pb-quote-in{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:2.5rem;align-items:start}
-.pb-quote h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0B1F4B;line-height:1.15;margin:0 0 .8rem}
+.pb-quote h2{font-size:clamp(1.45rem,3.2vw,2rem);font-weight:800;color:#0D0D12;line-height:1.15;margin:0 0 .8rem}
 .pb-quote-copy p{color:#374151;line-height:1.7;margin:0 0 .8rem}
-.pb-quote-copy a{color:#1848B8;font-weight:700}
+.pb-quote-copy a{color:#0E78B8;font-weight:700}
 .pb-quote-form .jtqf h3{display:none} /* the section's own h2 names the form */
 .pb-quote-form{background:#fff;border:1px solid #E5E7EB;border-radius:16px;padding:28px}
 @media (max-width:820px){.pb-quote-in{grid-template-columns:1fr;gap:1.2rem}.pb-quote-form{padding:20px}}
@@ -148,7 +148,7 @@
 /* FAQs stay closed until a question is clicked (<details>); the pages' own
    .faq-q styles draw the row and its "+". */
 summary.faq-q{list-style:none;cursor:pointer}
-summary.faq-q:hover{background:rgba(11,31,75,.04)}
-summary.faq-q:focus-visible{outline:2px solid #1848B8;outline-offset:-2px}
+summary.faq-q:hover{background:rgba(13,13,18,.04)}
+summary.faq-q:focus-visible{outline:2px solid #0E78B8;outline-offset:-2px}
 summary.faq-q::-webkit-details-marker{display:none}
 details.faq-item[open]>summary.faq-q::after{content:'\2212'}

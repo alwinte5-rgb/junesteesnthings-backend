@@ -30,7 +30,7 @@
 
   var PCT = 10;
   var KEY_SEEN = 'jt_tx_pop_seen', KEY_JOINED = 'jt_tx_joined';
-  // A 410x80 copy of brand/logo.png (7 KB, not the 107 KB master), loaded while it waits.
+  // An 80px-tall copy of brand/logo-2026 (small, not the master), loaded while it waits.
   var LOGO = '/assets/images/brand/logo-popup.png';
   var AGAIN_MS = 14 * 86400000, ARM_MS = 6000, PHONE_MS = 30000, PHONE_DEPTH = 0.35;
 
@@ -64,26 +64,26 @@
     '.jttx-bg{position:fixed;inset:0;z-index:2147483000;background:rgba(8,16,40,.6);display:flex;align-items:center;justify-content:center;padding:16px;font-family:Inter,system-ui,sans-serif}' +
     '.jttx-w{position:relative;max-width:420px;width:100%}' +
     '.jttx{overscroll-behavior:contain;background:#fff;border-radius:18px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 20px 50px rgba(0,0,0,.3);color:#374151;text-align:left}' +
-    '.jttx-logo{background:#fff;border-radius:18px 18px 0 0;border-bottom:4px solid #F0275A;text-align:center;padding:14px 44px 12px}' +
+    '.jttx-logo{background:#fff;border-radius:18px 18px 0 0;border-bottom:4px solid #E0107A;text-align:center;padding:14px 44px 12px}' +
     '.jttx-logo img{max-height:40px;height:auto;width:auto;max-width:100%;display:inline-block}' +
-    '.jttx-top{background:#0B1F4B;color:#fff;padding:22px 24px 20px;text-align:center}' +
+    '.jttx-top{background:#0D0D12;color:#fff;padding:22px 24px 20px;text-align:center}' +
     '.jttx-top h2{margin:0 0 6px;font-size:1.65rem;line-height:1.15;font-weight:800;color:#fff}' +
-    '.jttx-top h2 span{color:#F0275A}' +
+    '.jttx-top h2 span{color:#E0107A}' +
     '.jttx-top p{margin:0;font-size:.95rem;line-height:1.5;color:#dbe2f1}' +
     '.jttx-x{position:absolute;z-index:1;top:8px;right:10px;border:0;background:none;color:#6B7280;font-size:26px;line-height:1;cursor:pointer;padding:6px;opacity:.8}' +
     '.jttx-x:hover,.jttx-x:focus-visible{opacity:1}' +
     // Short screens (small phones, landscape): a slimmer top so the button stays in view.
     '@media(max-height:700px){.jttx-logo{padding:8px 44px 7px}.jttx-logo img{max-height:28px}.jttx-top{padding:14px 20px 12px}.jttx-top h2{font-size:1.35rem}}' +
     '.jttx form{padding:18px 22px 20px;margin:0}' +
-    '.jttx label.l{display:block;font-size:13px;font-weight:700;color:#0B1F4B;margin:10px 0 4px}' +
+    '.jttx label.l{display:block;font-size:13px;font-weight:700;color:#0D0D12;margin:10px 0 4px}' +
     '.jttx input[type=tel],.jttx input[type=email]{width:100%;box-sizing:border-box;padding:12px 13px;font:inherit;font-size:16px;border:1.5px solid #E5E7EB;border-radius:10px;background:#fff;color:#111827}' +
-    '.jttx input:focus{outline:none;border-color:#F0275A;box-shadow:0 0 0 3px rgba(240,39,90,.15)}' +
+    '.jttx input:focus{outline:none;border-color:#E0107A;box-shadow:0 0 0 3px rgba(224,16,122,.15)}' +
     '.jttx .c{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.45;margin:9px 0 0;color:#4B5563}' +
     '.jttx .c input{width:auto;margin-top:2px;flex:none}' +
-    '.jttx .t{font-size:11px;margin:6px 0 0;color:#6B7280}.jttx .t a{color:#1848B8}' +
+    '.jttx .t{font-size:11px;margin:6px 0 0;color:#6B7280}.jttx .t a{color:#0E78B8}' +
     '.jttx .e{display:none;color:#b91c1c;font-size:13px;font-weight:600;margin:10px 0 0}' +
-    '.jttx button[type=submit]{display:block;width:100%;border:0;border-radius:100px;background:#F0275A;color:#fff;font:inherit;font-weight:800;font-size:16px;padding:14px;margin-top:14px;cursor:pointer}' +
-    '.jttx button[type=submit]:hover{background:#C41E47}' +
+    '.jttx button[type=submit]{display:block;width:100%;border:0;border-radius:100px;background:#E0107A;color:#fff;font:inherit;font-weight:800;font-size:16px;padding:14px;margin-top:14px;cursor:pointer}' +
+    '.jttx button[type=submit]:hover{background:#B80D64}' +
     '.jttx button[type=submit]:disabled{opacity:.6;cursor:wait}' +
     '.jttx .no{display:block;margin:10px auto 0;border:0;background:none;color:#6B7280;font:inherit;font-size:13px;text-decoration:underline;cursor:pointer}';
 
@@ -93,7 +93,7 @@
       '<div class="jttx-w" role="dialog" aria-modal="true" aria-labelledby="jttx-h">' +
       '<button type="button" class="jttx-x" aria-label="Close">&times;</button>' +
       '<div class="jttx">' +
-      '<div class="jttx-logo"><img src="' + LOGO + '" alt="June\'s Tees &amp; Things" width="205" height="40"></div>' +
+      '<div class="jttx-logo"><img src="' + LOGO + '" alt="June\'s Tees &amp; Things" width="102" height="40"></div>' +
       '<div class="jttx-top"><h2 id="jttx-h">Get <span>' + PCT + '% off</span> your next order</h2>' +
       '<p>Join June\'s Tees texts for new products and seasonal deals. Your code comes right away.</p></div>' +
       '<form method="POST" action="/texts">' +

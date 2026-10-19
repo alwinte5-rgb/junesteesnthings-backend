@@ -5971,7 +5971,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
     ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
       alt="Custom ${label}" loading="lazy">${label}</a>`).join('');
-  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo.png" alt="June's Tees &amp; Things"></a></div>`;
+  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo-2026-900.png" alt="June's Tees &amp; Things"></a></div>`;
   const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 900-4592<br>
     <a href="/">jtees.net</a> &middot; <a href="${LAB}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
     <a href="${D}/privacy.php">Privacy</a></div>`;
@@ -6373,7 +6373,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
       .k{font-size:30px;font-weight:800;margin:18px 0}.k b{background:#12203c;color:#fff;padding:2px 12px;border-radius:8px}
       img.qr{width:300px;height:300px}.f{font-size:13px;color:#4b5563;line-height:1.5;margin-top:22px}
       @media print{.np{display:none}}</style></head><body><div class="s">
-    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo.png" alt="June's Tees" style="width:220px">
+    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo-2026-900.png" alt="June's Tees" style="width:220px">
     <h1>Get ${REINTRO.PCT}% off</h1>
     <p style="font-size:22px;margin:0">your next order when you join our texts</p>
     <img class="qr" src="${escEmail(qr)}" alt="QR code to sign up">
