@@ -166,7 +166,7 @@ function scaleDrawing(sizes) {
   return `<svg viewBox="0 0 ${Math.round(w)} ${Math.round(h)}" width="100%" role="img" ` +
     `aria-label="The ${sizes.join(', ')} inch big head cutouts drawn to the same scale beside a real head, which is about ${REAL_HEAD} inches tall" ` +
     `xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="cut" x1="0" y1="0" x2="0" y2="1">` +
-    `<stop offset="0%" stop-color="#1b3a78"/><stop offset="100%" stop-color="#0D0D12"/></linearGradient></defs>` +
+    `<stop offset="0%" stop-color="#23232B"/><stop offset="100%" stop-color="#0D0D12"/></linearGradient></defs>` +
     `${parts}</svg>`;
 }
 
