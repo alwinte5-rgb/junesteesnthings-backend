@@ -78,8 +78,11 @@ function urlFromStdinJson(buf) {
  *  The SQL goes in on STDIN, never as `-e <sql>`: an argument is capped (128KB
  *  per argument on Linux, 1MB for them all on macOS), and the daily sync's
  *  batch of 260 rebuilt size fields failed with E2BIG before a single statement
- *  ran (2026-10-18). stdin has no cap. A non-terminal stdin puts the client in
- *  batch mode, which aborts on the first error exactly as `-e` did. */
+ *  ran (2026-10-18). stdin has no argument cap; each statement is still bounded
+ *  by max_allowed_packet (16MB client default). A non-terminal stdin puts the
+ *  client in batch mode, which aborts on the first error exactly as `-e` did,
+ *  and prints bare tab-separated text — so `-t` keeps the bordered table a
+ *  person reads when output goes straight to their terminal. */
 function mysql(url, sql, { rows = false } = {}) {
   const u = new URL(url);
   const args = ['-h', u.hostname, '-P', u.port || '3306',
@@ -92,7 +95,7 @@ function mysql(url, sql, { rows = false } = {}) {
     throw new Error('no mysql client on this machine — install one, or set ' +
       'JT_MYSQL_BIN to its path');
   }
-  const r = spawnSync(MYSQL, rows ? ['-B', ...args] : args, {
+  const r = spawnSync(MYSQL, rows ? ['-B', ...args] : process.stdout.isTTY ? ['-t', ...args] : args, {
     env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }),
     encoding: 'utf8',
     input: sql,
@@ -105,9 +108,12 @@ function mysql(url, sql, { rows = false } = {}) {
        schema can produce in one read. */
     maxBuffer: 256 * 1024 * 1024,
   });
-  if (r.error || r.status !== 0) {
+  /* The exit status first: a client that refuses the login exits before
+     reading stdin, the write then fails with EPIPE, and reporting the pipe
+     would hide the failed login behind it. */
+  if (r.status !== 0 || r.error) {
     throw new Error('mysql (' + MYSQL + ') failed: ' +
-      (r.error ? r.error.code || r.error.message : 'exit ' + r.status));
+      (r.status !== null && r.status !== 0 ? 'exit ' + r.status : r.error ? r.error.code || r.error.message : 'exit ' + r.status));
   }
   if (!rows) return null;
   const lines = r.stdout.replace(/\n$/, '').split('\n');
