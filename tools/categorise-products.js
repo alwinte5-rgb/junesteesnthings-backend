@@ -19,28 +19,38 @@
  *
  * Categories are resolved by SLUG rather than id, so this does not break if the
  * list is reordered.
+ *
+ * 3. The TREE (tools/data/category-tree.js, owner 2026-10-19): seven groups,
+ *    each opening into specific garments. Every group and leaf is created or
+ *    renamed and moved into place; a live product is filed under each leaf it
+ *    matches and that leaf's group, and taken OUT of any tree category it no
+ *    longer matches, so a re-run after a rename or a rule change converges.
+ *    A switched-off product keeps its filings: no list shows it, and they are
+ *    right again if it comes back.
+ *    Sustainable stays as membership (it drives the shop's Organic filter) but
+ *    is switched off as a menu category. The reference rows the run replaces
+ *    are saved to ~/jtees-backups first.
  */
 
 const { urlFromStdinJson, mysql, sq } = require('./lib/db');
 const { classify } = require('./lib/garments');
+const TREE = require('./data/category-tree');
+
+/** Tree category slugs a product belongs in: matching leaves and their group. */
+function treeSlugs(name) {
+  const p = { name, cls: classify(name) };
+  const out = [];
+  for (const g of TREE) {
+    if (g.manual) continue;
+    const leaves = (g.leaves || []).filter((l) => l.match(p)).map((l) => l.slug);
+    if (leaves.length || (g.match && g.match(p))) out.push(g.slug, ...leaves);
+  }
+  return out;
+}
 
 const APPLY = process.argv.includes('--apply');
 
 const SUSTAINABLE = { name: 'Sustainable', slug: 'custom-sustainable-apparel', order: 9 };
-
-/* What a garment class is filed under. Vests and jackets are deliberately
-   absent: there is no outerwear category yet, and inventing one while every
-   vest is held for artwork would put an empty tab on the storefront. */
-const FILE_UNDER = {
-  tee: 'custom-t-shirts', longslv: 'custom-t-shirts',
-  hoodie: 'custom-hoodies-sweatshirts', qzip: 'custom-hoodies-sweatshirts',
-  tank: 'custom-tank-tops',
-  kids: 'custom-kids-youth-apparel',
-  onesie: 'custom-baby-onesies',
-  cap: 'custom-hats-caps',
-  bag: 'custom-tote-bags',
-  polo: 'custom-business-apparel', woven: 'custom-business-apparel',
-};
 
 /* An explicit, repeatable claim — organic, recycled, hemp, RPET, post-consumer.
    S&S's own `sustainableStyle` flag alone is too broad to sell against: it
@@ -65,8 +75,9 @@ async function ssaSustainableIds(env) {
 }
 
 let buf = '';
-process.stdin.on('data', (d) => (buf += d));
-process.stdin.on('end', async () => {
+if (require.main === module) process.stdin.on('data', (d) => (buf += d));
+if (require.main !== module) module.exports = { treeSlugs };
+else process.stdin.on('end', async () => {
   const env = JSON.parse(buf);
   const url = urlFromStdinJson(buf);
   if (!env.SSA_ACCOUNT || !env.SSA_API_KEY) { console.error('SSA credentials missing'); process.exit(2); }
@@ -76,7 +87,7 @@ process.stdin.on('end', async () => {
     ' styles carry both the flag and an explicit eco claim\n');
 
   const cats = mysql(url,
-    "SELECT id, name, slug FROM lumise_categories WHERE type='products';", { rows: true });
+    "SELECT id, name, slug, parent, active, `order` FROM lumise_categories WHERE type='products';", { rows: true });
   const bySlug = new Map(cats.map((c) => [c.slug, c]));
   const stmts = [];
 
@@ -107,19 +118,75 @@ process.stdin.on('end', async () => {
     return true;
   };
 
-  let nSus = 0, nType = 0; const unfiled = [];
+  /* The tree: every group and leaf exists, named, ordered and parented. */
+  const treeIds = new Map();   // slug -> id
+  const ensure = (slug, name, parent, order) => {
+    const c = bySlug.get(slug);
+    if (c) {
+      if (c.name !== name || String(c.parent) !== String(parent) || String(c.order) !== String(order) || String(c.active) !== '1') {
+        console.log('  category ' + slug + ': ' + c.name + ' -> ' + name + (String(c.parent) !== String(parent) ? ' (moved)' : ''));
+        stmts.push('UPDATE lumise_categories SET name=' + sq(name) + ', parent=' + Number(parent) + ', `order`=' + Number(order) +
+          ', active=1, updated=NOW() WHERE id=' + Number(c.id) + ';');
+      }
+      return c.id;
+    }
+    console.log('  creating category ' + name + ' (' + slug + ')');
+    if (!APPLY) return '<new:' + slug + '>';
+    mysql(url, 'INSERT INTO lumise_categories (name, slug, upload, thumbnail_url, parent, type, active, `order`, author, created, updated) VALUES (' +
+      sq(name) + ', ' + sq(slug) + ", '', '', " + Number(parent) + ", 'products', 1, " + Number(order) + ", '', NOW(), NOW());");
+    const id = mysql(url, 'SELECT id FROM lumise_categories WHERE slug=' + sq(slug) + " AND type='products';", { rows: true })[0].id;
+    bySlug.set(slug, { id, name, slug, parent, order, active: '1' });
+    return id;
+  };
+  for (const g of TREE) {
+    const gid = ensure(g.slug, g.name, 0, g.order);
+    treeIds.set(g.slug, gid);
+    /* In a dry run a new group has no id yet: its leaves are shown as new, unparented. */
+    (g.leaves || []).forEach((l, i) => treeIds.set(l.slug, ensure(l.slug, l.name, String(gid).startsWith('<') ? 0 : gid, i + 1)));
+    for (const a of g.adopt || []) {
+      const c = bySlug.get(a);
+      if (String(gid).startsWith('<')) { console.log('  ' + a + ' moves under ' + g.name + ' once it exists (next --apply)'); continue; }
+      if (c && String(c.parent) !== String(gid)) stmts.push('UPDATE lumise_categories SET parent=' + Number(gid) + ', updated=NOW() WHERE id=' + Number(c.id) + ';');
+    }
+  }
+  /* Sustainable: membership kept for the Organic filter, off the menus. */
+  if (susId && bySlug.get(SUSTAINABLE.slug) && String(bySlug.get(SUSTAINABLE.slug).active) !== '0') {
+    stmts.push('UPDATE lumise_categories SET active=0, updated=NOW() WHERE id=' + Number(susId) + ';');
+  }
+
+  const managed = new Set([...TREE.filter((g) => !g.manual).flatMap((g) => [g.slug, ...(g.leaves || []).map((l) => l.slug)])]
+    .map((sl) => String(treeIds.get(sl))));
+  const held = mysql(url, "SELECT category_id, item_id FROM lumise_categories_reference WHERE type='products';", { rows: true });
+  const backup = held.filter((r) => managed.has(String(r.category_id)));
+  if (APPLY) {
+    const bdir = require('os').homedir() + '/jtees-backups';
+    require('fs').mkdirSync(bdir, { recursive: true });
+    require('fs').writeFileSync(bdir + '/categories-ref-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json', JSON.stringify(backup));
+  }
+
+  let nSus = 0, nType = 0, nOut = 0; const unfiled = [];
+  const count = {};
   for (const p of products) {
     if (p.sid && sustainable.has(String(p.sid))) {
       if (add(susId || '<new>', p.id)) { nSus++; console.log('  sustainable  #' + String(p.id).padStart(3) + '  ' + p.name.slice(0, 52)); }
     }
-    const slug = FILE_UNDER[classify(p.name)];
-    if (!slug) { unfiled.push(p); continue; }
-    const c = bySlug.get(slug);
-    if (!c) { unfiled.push(p); continue; }
-    if (add(c.id, p.id)) { nType++; }
+    const want = new Set(treeSlugs(p.name).map((sl) => String(treeIds.get(sl))));
+    if (!want.size) { unfiled.push(p); continue; }
+    for (const id of want) { count[id] = (count[id] || 0) + 1; if (add(id, p.id)) nType++; }
+    for (const r of backup) {
+      if (String(r.item_id) === String(p.id) && !want.has(String(r.category_id))) {
+        stmts.push('DELETE FROM lumise_categories_reference WHERE type=\'products\' AND category_id=' + Number(r.category_id) + ' AND item_id=' + Number(p.id) + ';');
+        nOut++;
+      }
+    }
   }
 
-  console.log('\n  ' + nSus + ' products into Sustainable · ' + nType + ' into their garment category');
+  console.log('\n  per category (live products):');
+  for (const g of TREE.filter((x) => !x.manual)) {
+    console.log('    ' + g.name.padEnd(24) + (count[String(treeIds.get(g.slug))] || 0));
+    for (const l of g.leaves || []) console.log('      ' + l.name.padEnd(22) + (count[String(treeIds.get(l.slug))] || 0));
+  }
+  console.log('\n  ' + nSus + ' products into Sustainable · ' + nType + ' new tree filings · ' + nOut + ' taken out of a tree category they no longer match');
   if (unfiled.length) {
     console.log('\n  no category for these (' + unfiled.length + '):');
     for (const p of unfiled) console.log('    #' + String(p.id).padStart(3) + '  ' + p.name.slice(0, 52));
