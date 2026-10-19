@@ -132,3 +132,25 @@ test('the streetwear rows are unique and each name is the garment its type says'
   }
   assert.ok(rows.length >= 170, 'the 2026-10-17 batch');
 });
+
+/* Owner, 2026-10-19: "model photo + stand-in" for styles S&S only shot on a
+   person. The drawn garment is accepted only when it IS the garment. */
+const drawn = (front, back, keys = KEYS.closed) => enc(Object.fromEntries(keys.map((k) => [k,
+  { label: k, url: 'products/' + (k === 'back' ? back : front) + '.png', edit_zone: { width: 100, height: 100, left: 0, top: 0 } }])));
+
+test('--standin: a style with no photos goes live on the drawing of its own garment', () => {
+  const standin = { ...tee, variations: '', stages: drawn('basic_tshirt_front', 'basic_tshirt_back') };
+  assert.match(notReady(standin), /no product images for 2 of 2/, 'not without --standin');
+  assert.strictEqual(notReady(standin, { standin: true }), null);
+});
+
+test('--standin never accepts the wrong garment, or a style with SOME photos', () => {
+  const jacket = { ...tee, name: 'Shaka Wear SHBJ Unisex Bomber Jacket', variations: '',
+    stages: drawn('hoodies_sweatshirt_front', 'hoodies_sweatshirt_back', KEYS.open) };
+  assert.match(notReady(jacket, { standin: true }), /stand-in is the wrong garment/);
+  const flannel = { ...tee, name: 'Shaka Wear SHHFS Unisex Plaid Flannel Overshirt', variations: '',
+    stages: drawn('women_tshirt_front', 'women_tshirt_back', KEYS.open) };
+  assert.match(notReady(flannel, { standin: true }), /stand-in is (not this|the wrong) garment/);
+  /* One colour photographed: its other colours are recolor.js's job, not a stand-in's. */
+  assert.match(notReady({ ...tee, variations: vars('#000001') }, { standin: true }), /no product images for 1 of 2/);
+});

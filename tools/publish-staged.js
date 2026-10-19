@@ -5,6 +5,7 @@
  *     node tools/publish-staged.js                      # dry run: ready / not ready, and why
  *   ... node tools/publish-staged.js --apply            # publish every READY product
  *   ... node tools/publish-staged.js --apply --only=358,374
+ *   ... node tools/publish-staged.js --apply --standin  # also styles S&S never shot flat
  *
  * tools/ssa-add-products.js --staged adds a style switched off with
  * supplier='ssa-staged': the quote form can sell it (jt-catalog.php lists it),
@@ -26,11 +27,19 @@
  *     plain lines (product.php prints descriptions escaped, not as HTML), which
  *     needs SSA_ACCOUNT / SSA_API_KEY in the environment.
  *
+ * --standin (owner, 2026-10-19: "model photo + stand-in"): a style S&S has
+ * NO flat photo for — only on-model shots (most of Shaka Wear) — may go live
+ * on the drawn garment of its own type, with S&S's photo as the listing image.
+ * Only when canvasVerdict calls that drawing the garment itself ('ok'): a
+ * jacket on hoodie art, or a flannel on a crew-neck tee, stays staged. A style
+ * with SOME photos is not a stand-in case — its missing colours are made by
+ * tools/product-art/recolor.js instead.
+ *
  * Prices: the daily S&S sync re-costs staged rows too (tools/ssa-sync.js), so a
  * product published after weeks in staging goes live at today's cost.
  */
 const { mysql, mysqlUrlFrom, sq, dejson } = require('./lib/db');
-const { photoCoverage } = require('./lib/canvas');
+const { photoCoverage, canvasVerdict } = require('./lib/canvas');
 const { localChecks } = require('./catalog-inventory');
 const { makeClient } = require('./lib/ssa-client');
 const { STAGED_SUPPLIER, parseIds } = require('./lib/ssa-staged');
@@ -58,10 +67,14 @@ const decodePrintings = (v) => {
 
 /** Why a staged product is not ready, or null when it is. `desc` is the
  *  description it WILL have (the stored one, or the one S&S supplied). */
-function notReady(p, { desc = p.description } = {}) {
+function notReady(p, { desc = p.description, standin = false } = {}) {
   const cov = photoCoverage(dejson(p.attributes) || {}, dejson(p.variations) || {});
   if (!cov.colours) return 'no colours';
-  if (cov.withPhotos < cov.colours) return 'no product images for ' + (cov.colours - cov.withPhotos) + ' of ' + cov.colours + ' colour(s)';
+  if (standin && cov.withPhotos === 0) {
+    const v = canvasVerdict(p);
+    if (v.verdict === 'borrowed') return 'stand-in is not this garment: drawn as ' + v.sub.looks;
+    if (v.verdict !== 'ok') return 'stand-in is the wrong garment' + (v.art ? ' (' + v.art + ')' : v.why ? ' (' + v.why + ')' : '');
+  } else if (cov.withPhotos < cov.colours) return 'no product images for ' + (cov.colours - cov.withPhotos) + ' of ' + cov.colours + ' colour(s)';
   /* The same checks the catalogue inventory reports, so "ready" here and
      "ok" there cannot disagree: the garment's full placement set on the
      product AND every colourway, and a size attribute beside the colours. */
@@ -78,6 +91,7 @@ function notReady(p, { desc = p.description } = {}) {
 
 async function main() {
   const APPLY = process.argv.includes('--apply');
+  const STANDIN = process.argv.includes('--standin');
   /* --only must name real ids. A typo that parsed to nothing used to mean
      "no filter" — i.e. publish everything ready. */
   let ONLY = null;
@@ -99,7 +113,7 @@ async function main() {
     rows = rows.filter((p) => ONLY.has(Number(p.id)));
   }
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + rows.length + ' staged product(s)' +
-    '\n');
+    (STANDIN ? ', stand-in canvas accepted where S&S has no flat photo' : '') + '\n');
 
   /* Descriptions from S&S, only for rows that have none AND would otherwise
      be ready — a jacket held for its canvas does not cost an API call on every
@@ -107,7 +121,7 @@ async function main() {
      fails is reported and held back, never fatal to the run. */
   const fetched = {}, fetchFailed = [];
   const need = rows.filter((p) => !String(p.description).trim() && Number(p.sid) &&
-    !notReady(p, { desc: 'x' }));
+    !notReady(p, { desc: 'x', standin: STANDIN }));
   if (need.length && acct && key) {
     const ssa = makeClient(acct, key);
     for (const p of need) {
@@ -124,7 +138,7 @@ async function main() {
   const ready = [], held = [];
   for (const p of rows) {
     const desc = String(p.description).trim() ? p.description : (fetched[p.id] || '');
-    const why = notReady(p, { desc });
+    const why = notReady(p, { desc, standin: STANDIN });
     (why ? held : ready).push({ p, why, desc, fill: !String(p.description).trim() && desc });
   }
   console.log('  READY (' + ready.length + ')');
