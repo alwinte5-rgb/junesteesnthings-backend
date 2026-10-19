@@ -180,4 +180,34 @@ function stagesFor(base, boxes, images, sizes) {
   return st;
 }
 
-module.exports = { placementSet, boxesFor, toEditZone, stagesFor, SETS, BODY_IN, ZIP_FRONT_RE };
+const isPhoto = (s) => /^https:\/\//.test(String((s && s.image) || ''));
+
+/** The stand-in drawing per side: the product's own stage when it is not a
+ *  photo, else the first old colourway still carrying one. After a run the
+ *  product's stages are the DEFAULT colourway's, so its back can be that
+ *  colour's photo; copied onto a colour with no back photo it would show a
+ *  white back on a navy tote (code review, 2026-10-18). */
+function standins(stages, oldVars) {
+  const pool = [stages || {}, ...Object.values((oldVars && oldVars.variations) || {}).map((v) => (v && v.stages) || {})];
+  const out = {};
+  for (const side of ['front', 'back']) {
+    const s = pool.map((st) => st[side]).find((x) => x && !isPhoto(x));
+    if (s) out[side] = s;
+  }
+  return out;
+}
+
+/** A side the photos do not cover keeps its stand-in drawing (`base` is
+ *  standins()) instead of vanishing. S&S has no back photo of most totes, and the
+ *  rewire of 2026-10-18 took the Back off five totes and the EC1000 tee (#177)
+ *  that way: a customer could no longer design on the back. Only front/back
+ *  are kept: they are the sides a photo replaces. */
+function keepUncovered(base, boxes, st) {
+  const covered = new Set(boxes.filter((b) => st[b.key]).map((b) => b.side));
+  for (const side of ['front', 'back']) {
+    if (base[side] && !covered.has(side) && !st[side]) st[side] = JSON.parse(JSON.stringify(base[side]));
+  }
+  return st;
+}
+
+module.exports = { placementSet, boxesFor, toEditZone, stagesFor, keepUncovered, standins, SETS, BODY_IN, ZIP_FRONT_RE };
