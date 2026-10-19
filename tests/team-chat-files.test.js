@@ -77,8 +77,10 @@ test('the file route checks who may read the conversation before fetching', () =
   const body = src.slice(at, src.indexOf('\n});\n', at));
   assert.match(body, /m\.staff_id !== actor\.id/, 'a helper only their own direct chat');
   assert.match(body, /chatChannelFor\(m\.channel_id/, 'only a channel they belong to');
-  assert.match(body, /private_download_url/);
-  assert.match(body, /application\/octet-stream/);
-  assert.match(body, /nosniff/);
+  assert.match(body, /await sendChatFile\(res, src, m\.file_name, 'chat'\)/);
+  const send = src.slice(src.indexOf('async function sendChatFile('), src.indexOf('\n}\n', src.indexOf('async function sendChatFile(')));
+  assert.match(send, /private_download_url/);
+  assert.match(send, /application\/octet-stream/);
+  assert.match(send, /nosniff/);
   assert.strictEqual(require('../tools/lib/staff').ROUTES['GET /admin/team-chat/file/:kind/:id'], 'any');
 });
