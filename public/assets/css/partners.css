@@ -57,8 +57,22 @@ a{color:var(--bp-blue-dk)}
 .bp-fine{font-size:.88rem;color:#4b4858;padding:0 0 48px}
 .bp-fine h2{font-size:1rem;color:var(--bp-black);margin:0 0 6px}
 .bp-fine ul{padding-left:20px;margin:0}
+.bp-work{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.bp-work figure{margin:0;background:#fff;border-radius:16px;overflow:hidden;border:1px solid var(--bp-line)}
+.bp-work img{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover}
+.bp-work figcaption{padding:12px 14px 14px;font-size:.92rem;color:#4b4858}
+.bp-work figcaption b{display:block;color:var(--bp-black);font-size:1rem;font-weight:800}
+.bp-links a.bp-card{text-decoration:none;display:block;transition:transform .15s,box-shadow .15s}
+.bp-links a.bp-card:hover,.bp-links a.bp-card:focus-visible{transform:translateY(-2px);box-shadow:0 6px 16px rgba(13,13,18,.1)}
+.bp-links a.bp-card h3::after{content:" \2192";color:var(--bp-pink-dk)}
+.bp-local p{max-width:760px;color:#4b4858;margin:0}
+.bp-faq{margin:8px 0 28px}
+.bp-q{background:#fff;border:1px solid var(--bp-line);border-radius:12px;padding:0 16px;margin:0 0 8px}
+.bp-q summary{cursor:pointer;font-weight:800;color:var(--bp-black);padding:14px 0;list-style-position:outside}
+.bp-q p{margin:0 0 14px;color:#4b4858}
+@media(max-width:900px){.bp-work{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:900px){.bp-perks,.bp-grid{grid-template-columns:minmax(0,1fr)}.bp-steps{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:560px){.bp-hero::before{width:200px;height:44px;right:-80px;top:16px}.bp-hero::after{display:none}.bp-offer b{font-size:1.7rem}.bp-photos{gap:8px}}
+@media(max-width:560px){.bp-hero{padding-top:64px}.bp-hero::before{width:200px;height:40px;right:-80px;top:8px}.bp-hero::after{display:none}.bp-offer b{font-size:1.7rem}.bp-photos{gap:8px}}
 /* /mail15: the mailer's code, shown as what they scanned for */
 .bp-code{display:inline-flex;align-items:center;gap:12px;margin:18px 0 0;background:#fff;color:var(--bp-black);border-radius:12px;padding:8px 10px 8px 18px;font-weight:800;font-size:.8rem;text-transform:uppercase;letter-spacing:.08em}
 .bp-code b{background:var(--bp-black);color:var(--bp-blue);font-size:1.5rem;font-weight:900;letter-spacing:.12em;padding:4px 14px;border-radius:8px}
