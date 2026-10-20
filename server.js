@@ -8547,6 +8547,26 @@ function quoteTax(subtotal, taxable) {
   return taxable ? round2(Number(subtotal) * TAX_RATE) : 0;
 }
 
+/* DESIGN-ONLY QUOTES ARE NOT TAXED (owner, 2026-10-20: "design fee no sales
+ * tax"). Illinois taxes goods: design delivered as a file, or a sourcing spec
+ * sheet, sells none (IDOR ST 19-0002-GIL, ST 24-0018-GIL). Design sold WITH
+ * the goods it is for is part of their selling price and is taxed, even when
+ * listed on its own line (86 Ill. Adm. Code 130.410), so the garment design
+ * tiers stay taxed and so does a design fee beside anything printed.
+ *
+ * A staff-only service is design work when its name says "Design" or
+ * "Sourcing". Folding and the printed brochure rows are goods, and stay taxed. */
+const UNTAXED_SERVICE_RE = /\bdesign\b|\bsourcing\b/i;
+function isUntaxedService(p) {
+  return !!(p && p.service && UNTAXED_SERVICE_RE.test(String(p.name || '')));
+}
+/* Every line, optional ones included: an optional printed line could be
+   accepted, and then the job sells goods. ES5 for the quote form. */
+function designOnly(items) {
+  var list = (items || []).filter(function (it) { return !!it; });
+  return list.length > 0 && list.every(function (it) { return it.untaxed === true; });
+}
+
 /**
  * Was this job taxed? One definition, because the answer is read by the quote
  * form, the tax export and the ST-1 position, and those three disagreeing is
@@ -8582,6 +8602,7 @@ const EXEMPT_DOCUMENTED_SQL = `(CASE
     WHEN q.tax_exempt_reason IN ('e_number', 'resale') THEN EXISTS (
       SELECT 1 FROM tax_certificates c WHERE c.id = q.tax_certificate_id AND c.status <> 'rejected')
     WHEN q.tax_exempt_reason IN ('out_of_state', 'other') THEN NULLIF(btrim(q.tax_exempt_ref), '') IS NOT NULL
+    WHEN q.tax_exempt_reason = 'design_only' THEN TRUE
     ELSE NULLIF(btrim(q.tax_exempt_ref), '') IS NOT NULL OR EXISTS (
       SELECT 1 FROM tax_certificates c WHERE c.id = q.tax_certificate_id AND c.status <> 'rejected')
   END)`;
@@ -11930,6 +11951,8 @@ function productGroupOf(name) {
           <tr><td class="muted"><label style="display:inline;margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400">
             <input type="checkbox" name="taxable" value="1" ${(!isEdit && !reorderOf) || quoteTaxable(E) ? 'checked' : ''} style="width:auto;margin-right:6px" onchange="calc()"${
               isOwner() ? '' : ' disabled title="Tax is set automatically"'}> Illinois sales tax</label>
+            <div id="designonly" class="muted" style="display:none;font-size:11px;margin-top:3px;text-transform:none;letter-spacing:0">
+              Design only: no sales tax. Illinois taxes goods, and this job sells none.</div>
             ${isOwner() ? '' : `<div class="muted" style="font-size:11px;margin-top:3px;text-transform:none;letter-spacing:0">
               Set automatically. If the customer is tax-exempt, attach their certificate on the job page and the owner will take the tax off.</div>`}
             <div id="exemptbox" style="display:none;margin-top:5px"${isOwner() ? '' : ' hidden'}>
@@ -11939,7 +11962,7 @@ function productGroupOf(name) {
                     file; out of state and "other" need only the note. */ ''}
               <select name="tax_exempt_reason" style="width:100%;padding:5px 7px;font-size:13px;margin-bottom:5px">
                 <option value="">Why no tax? (choose one)</option>
-                ${Object.entries(TAXCERT.EXEMPT_REASONS).map(([k, r]) => `<option value="${k}"${
+                ${Object.entries(TAXCERT.EXEMPT_REASONS).filter(([, r]) => !r.auto).map(([k, r]) => `<option value="${k}"${
                   E.tax_exempt_reason === k ? ' selected' : ''}>${escEmail(r.label)}</option>`).join('')}
               </select>
               <input name="tax_exempt_ref" value="${val(E.tax_exempt_ref)}" maxlength="60"
@@ -13310,11 +13333,23 @@ ${quotePricingSource()}
         disc = Math.round(disc*100)/100;
         var net = gross - disc;
 
-        var taxable = document.querySelector('[name=taxable]').checked;
+        /* All design or sourcing work: no tax, whatever the box says, as the
+           server saves it (designOnly). */
+        var dLines = Array.prototype.slice.call(document.querySelectorAll('#lines .line')).map(function(L){
+          var pid = (L.querySelector('.p') || {}).value;
+          var pr = pid ? CAT.products.filter(function(p){ return String(p.id) === String(pid); })[0] : null;
+          if (pr) return { untaxed: pr.untaxed === true };
+          /* A typed line with no product is goods as far as the server knows. */
+          return String((L.querySelector('.d') || {}).value || '').trim() ? { untaxed: false } : null;
+        }).filter(Boolean);
+        var dOnly = dLines.length > 0 && dLines.every(function(x){ return x.untaxed; });
+        var dNote = document.getElementById('designonly');
+        if (dNote) dNote.style.display = dOnly ? '' : 'none';
+        var taxable = !dOnly && document.querySelector('[name=taxable]').checked;
         /* The reason is asked for exactly when there is a zero to explain, so an
            exempt sale cannot be saved as a silently untaxed one. */
         var exbox = document.getElementById('exemptbox');
-        if (exbox) exbox.style.display = taxable ? 'none' : '';
+        if (exbox) exbox.style.display = (taxable || dOnly) ? 'none' : '';
         var tax = taxable ? net*TAX : 0;
         var tot = net + tax;
         var dep = tot <= 0 ? 0 : (tot < FULL_UNDER ? tot : tot*DEP);
@@ -13738,7 +13773,11 @@ async function getCatalog() {
     const r = await studioFetch('https://design.jtees.net/jt-catalog.php');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    if (d && d.ok) { _catCache = { at: Date.now(), data: d }; return d; }
+    if (d && d.ok) {
+      /* So the quote form can see a design-only job (designOnly). */
+      for (const p of d.products || []) if (isUntaxedService(p)) p.untaxed = true;
+      _catCache = { at: Date.now(), data: d }; return d;
+    }
     throw new Error('bad payload');
   } catch (err) {
     console.error('catalog fetch failed:', err.message);
@@ -14457,6 +14496,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
            twice — and again on the next save, and the next. See typedUnitOf(). */
         unit_override: manual ? round2(unit) : null,
         line_total: lineTotal,
+        /* Design or sourcing work, not goods (designOnly). */
+        ...(isUntaxedService(prod) ? { untaxed: true } : {}),
         size_mix: mix,
         size_upcharge: priced.sizeUpcharge,
         /* Every extra, itemised, so the customer's page can name each one
@@ -14688,14 +14729,15 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        exemption the owner already set, or one a customer's certificate set,
        is kept as it was. Only the owner takes tax off. */
     const staffTax = saver.kind === 'staff';
-    const taxable = staffTax
+    const designJob = designOnly(items);
+    const taxable = designJob ? false : staffTax
       ? !(basis && basis.taxable === false)
       : (b.taxable === '1' || b.taxable === 'on' || b.taxable === true);
     /* Kept only when the sale is actually untaxed. A reference sitting on a
        taxable quote is a contradiction the export would have to interpret, and
        it would survive un-ticking the box later as evidence for an exemption
        nobody claimed. */
-    const exemptRef = taxable
+    const exemptRef = taxable || designJob
       ? null
       : staffTax ? (basis.tax_exempt_ref || null)
       : (String(one(b.tax_exempt_ref) || '').trim().slice(0, 60) || null);
@@ -14703,7 +14745,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        (tools/lib/tax-certificates.js). Kept on an untaxed quote only, for the
        same reason as the note; anything not on the list is no answer. */
     const reasonIn = staffTax ? String((basis && basis.tax_exempt_reason) || '') : String(one(b.tax_exempt_reason) || '').trim();
-    const exemptReason = taxable ? null : (TAXCERT.EXEMPT_REASONS[reasonIn] ? reasonIn : null);
+    /* design_only is the form's own answer, never one a person picks: it
+       stands only on a job that really is all design work. */
+    const exemptReason = taxable ? null : designJob ? 'design_only'
+      : (TAXCERT.EXEMPT_REASONS[reasonIn] && !TAXCERT.EXEMPT_REASONS[reasonIn].auto ? reasonIn : null);
     const tax = quoteTax(net, taxable);
     /* A delivery the customer booked at Accept stays on the job when the shop
        edits it afterwards: re-saving used to recompute the total from the

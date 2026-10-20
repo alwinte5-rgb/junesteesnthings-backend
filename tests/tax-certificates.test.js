@@ -147,7 +147,12 @@ test('the SQL rule names exactly the reasons that need a certificate', () => {
   const sql = src.slice(at, src.indexOf('`;', at));
   const listed = (when) => (sql.match(new RegExp(`WHEN q\\.tax_exempt_reason IN \\(([^)]*)\\) THEN ${when}`)) || [])[1];
   const needs = Object.keys(T.EXEMPT_REASONS).filter((k) => T.EXEMPT_REASONS[k].certificate);
-  const noNeed = Object.keys(T.EXEMPT_REASONS).filter((k) => !T.EXEMPT_REASONS[k].certificate);
+  /* design_only (2026-10-20) is set by the form and documented by its own
+     lines, so it has a WHEN of its own rather than needing a note. */
+  const noNeed = Object.keys(T.EXEMPT_REASONS).filter((k) => !T.EXEMPT_REASONS[k].certificate && !T.EXEMPT_REASONS[k].auto);
+  for (const k of Object.keys(T.EXEMPT_REASONS).filter((k) => T.EXEMPT_REASONS[k].auto)) {
+    assert.match(sql, new RegExp(`WHEN q\\.tax_exempt_reason = '${k}' THEN TRUE`));
+  }
   assert.deepStrictEqual(listed('EXISTS').split(',').map((s) => s.trim().replace(/'/g, '')), needs);
   assert.deepStrictEqual(listed('NULLIF').split(',').map((s) => s.trim().replace(/'/g, '')), noNeed);
   assert.match(sql, /c\.status <> 'rejected'/, 'a refused certificate documents nothing');
@@ -223,7 +228,7 @@ test('the menu, its badge and the dashboard all see what is waiting', () => {
 
 test('the builder asks why, and only an untaxed quote keeps the answer', () => {
   assert.match(src, /<select name="tax_exempt_reason"/);
-  assert.match(src, /const exemptReason = taxable \? null : \(TAXCERT\.EXEMPT_REASONS\[reasonIn\] \? reasonIn : null\);/);
+  assert.match(src, /const exemptReason = taxable \? null : designJob \? 'design_only'\s*: \(TAXCERT\.EXEMPT_REASONS\[reasonIn\] && !TAXCERT\.EXEMPT_REASONS\[reasonIn\]\.auto \? reasonIn : null\);/);
   assert.match(src, /tax_exempt_ref=\$18, tax_exempt_reason=\$19,/, 'the edit stores it');
   assert.match(src, /taxable,tax_exempt_ref,tax_exempt_reason,\s*\n\s*from_submission_id[,)]/, 'and so does a new quote');
 });

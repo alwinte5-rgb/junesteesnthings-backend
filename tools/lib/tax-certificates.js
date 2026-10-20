@@ -48,6 +48,11 @@ const EXEMPT_REASONS = {
   resale:       { label: 'Bought for resale (CRT-61)',         certificate: true },
   out_of_state: { label: 'Shipped outside Illinois',           certificate: false },
   other:        { label: 'Other — say why',                    certificate: false },
+  /* Set by the quote form itself, never picked: every line is design or
+     sourcing work, and Illinois taxes goods, not services delivered as a file
+     (owner, 2026-10-20; IDOR ST 19-0002-GIL, ST 24-0018-GIL). The lines are
+     the evidence, so it needs neither a certificate nor a note. */
+  design_only:  { label: 'Design or sourcing only (no goods sold)', certificate: false, auto: true },
 };
 
 const REVIEW_STATES = ['pending', 'approved', 'rejected'];
@@ -215,6 +220,7 @@ function exemptionDocumented(q, cert) {
   const certOk = !!cert && cert.status !== 'rejected';
   const r = exemptReasonOf(q);
   if (r === null) return certOk || !!note;
+  if (EXEMPT_REASONS[r].auto) return true;
   return EXEMPT_REASONS[r].certificate ? certOk : !!note;
 }
 
