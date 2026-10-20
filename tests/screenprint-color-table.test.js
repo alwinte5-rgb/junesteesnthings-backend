@@ -117,19 +117,16 @@ test('garments are classified the way the catalogue actually names them', () => 
 });
 
 test('nothing is offered a decoration the shop would have to refuse', () => {
-  // A curved cap front takes no screen and has no back panel to hoop.
-  assert.ok(!DECORATIONS.cap.includes('screen'), 'a cap cannot be screen printed');
-  /* Owner, 2026-10-20: "hats can do dtf". */
-  assert.ok(DECORATIONS.cap.includes('dtf'), 'a cap takes DTF');
+  /* Owner, 2026-10-20: DTF and screen printing on every garment (the screen
+     minimum is the method's); a cap still has no back or large-logo spot. */
+  for (const [cls, roles] of Object.entries(DECORATIONS)) {
+    assert.ok(roles.includes('dtf') && roles.includes('screen'), cls + ' takes DTF and screen printing');
+  }
   assert.ok(!DECORATIONS.cap.some((r) => /fullback|upperback|large/.test(r)),
     'a cap has no back or large-logo placement');
   // An infant bodysuit is smaller than the hoop, and stitching sits on skin.
   assert.ok(!DECORATIONS.onesie.some((r) => r.startsWith('emb:')), 'a bodysuit is not embroidered');
   assert.ok(!DECORATIONS.kids.some((r) => r.startsWith('emb:')), 'youth/toddler is not embroidered');
-  // A placket, zip or quilted shell has no flat panel for a platen.
-  for (const cls of ['polo', 'vest', 'jacket', 'woven']) {
-    assert.ok(!DECORATIONS[cls].includes('screen'), cls + ' cannot be screen printed');
-  }
   // Every class the classifier can return must have a rule, or the tool skips it.
   for (const cls of ['tee', 'longslv', 'tank', 'hoodie', 'qzip', 'bag', 'woven',
     'polo', 'vest', 'jacket', 'cap', 'kids', 'onesie']) {
