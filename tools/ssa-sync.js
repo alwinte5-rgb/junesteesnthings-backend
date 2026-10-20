@@ -345,7 +345,12 @@ process.stdin.on('end', async () => {
         if (!keep.length) {
           retire = true;                             // nothing left to sell: the product goes, the field stays
         } else {
-          if (!keep.some((o) => o.default === '1' || o.default === true)) keep[0] = { ...keep[0], default: '1' };
+          /* The default went: White, then Black, then the first left, rather
+             than whatever sorts first (Bella 3001 opened in Aqua). */
+          if (!keep.some((o) => o.default === '1' || o.default === true)) {
+            const i = Math.max(0, ['White', 'Black'].map((t) => keep.findIndex((o) => o.title === t)).find((x) => x > -1) ?? 0);
+            keep[i] = { ...keep[i], default: '1' };
+          }
           const today = new Date().toISOString().slice(0, 10);
           const next = { ...cv, options: keep,
             jt_dropped: (cv.jt_dropped || []).concat(cv.options.filter((o) => drop.includes(o.title)).map((o) => ({ ...o, default: '', dropped: today }))) };
