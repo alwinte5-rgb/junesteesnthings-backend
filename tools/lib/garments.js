@@ -186,16 +186,18 @@ const DECORATIONS = {
   hoodie:  ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
   qzip:    ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
   bag:     ['dtf', 'screen', ...EMB_PANEL],
-  woven:   ['dtf', 'dtf:oversized', ...EMB_FULL],
-  polo:    ['dtf', 'dtf:oversized', ...EMB_FULL],
-  vest:    ['dtf', ...EMB_FULL],
-  jacket:  ['dtf', 'dtf:oversized', ...EMB_FULL],
-  /* Owner, 2026-10-20: "hats can do dtf" — "dtf should be available on
-     everything but sublimation". */
-  cap:     ['dtf', ...EMB_FRONT_ONLY],
-  /* Decorated as the shirt it was filed as (owner, 2026-10-20: "apron can
-     take dtf"); the class only stops it being sold as a shirt. */
-  apron:   ['dtf', 'dtf:oversized', ...EMB_FULL],
+  /* Owner, 2026-10-20: DTF and screen printing on every garment but the
+     sublimation blanks ("Screen printing should be available across all
+     products as well with the minimums in place" — the 50-piece minimum lives
+     on the method, tools/screenprint-minimum.js). */
+  woven:   ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
+  polo:    ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
+  vest:    ['dtf', 'screen', ...EMB_FULL],
+  jacket:  ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
+  cap:     ['dtf', 'screen', ...EMB_FRONT_ONLY],
+  /* Decorated as the shirt it was filed as; the class only stops it being
+     sold as a shirt. */
+  apron:   ['dtf', 'dtf:oversized', 'screen', ...EMB_FULL],
   kids:    ['dtf', 'screen'],
   onesie:  ['dtf', 'screen'],
 };

@@ -124,7 +124,7 @@ function ssaChecks(p, style, prods) {
 }
 
 
-const ALSO_OK = { woven: ['screen'] };
+const ALSO_OK = {};
 
 /** The keys a garment's stages should have, in order. */
 function expectedKeys(set) {
