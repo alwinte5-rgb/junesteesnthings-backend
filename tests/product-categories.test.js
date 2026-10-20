@@ -46,7 +46,7 @@ test('every garment class is either filed or knowingly left out', () => {
      in at least one tree category. */
   const { treeSlugs } = require('../tools/categorise-products');
   const { classify } = require('../tools/lib/garments');
-  const sample = { cap: 'Richardson 112 Cap', bag: 'Q-Tees Q800 Tote', vest: 'Port Authority Vest', jacket: 'Port Authority Jacket',
+  const sample = { apron: 'Artisan Collection RP144 Annex Oxford Bib Apron', cap: 'Richardson 112 Cap', bag: 'Q-Tees Q800 Tote', vest: 'Port Authority Vest', jacket: 'Port Authority Jacket',
     qzip: 'Gildan 18810 Quarter Zip', hoodie: 'Gildan 18500 Hooded Sweatshirt', polo: 'Sport-Tek Polo', woven: 'Red Kap Work Shirt',
     onesie: 'Rabbit Skins Infant Bodysuit', kids: 'Gildan Youth Tee', tank: 'Next Level Tank', longslv: 'Gildan Long Sleeve Tee', tee: 'Gildan Tee' };
   for (const [cls] of CLASSIFY) {

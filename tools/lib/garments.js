@@ -35,6 +35,9 @@ const CORE_SIZES = [
    the specific before the general, so "Youth Heavy Blend Hoodie" is a hoodie
    rather than a youth tee, and "Quarter-Zip Sweatshirt" is not a plain tee. */
 const CLASSIFY = [
+  /* Before 'woven': the RP144 is an "Annex Oxford Bib Apron", and "Oxford"
+     made it a shirt — sold as one until the 2026-10-19 audit (#143). */
+  ['apron',   /\bapron\b/i],
   ['cap',     /\b(cap|hat|beanie|visor|snapback|trucker)\b/i],
   ['bag',     /\b(tote|bag|backpack|duffel|sackpack|drawstring|pack)\b/i],
   ['vest',    /\bvest\b/i],
@@ -188,6 +191,9 @@ const DECORATIONS = {
   vest:    [...EMB_FULL],
   jacket:  ['dtf', 'dtf:oversized', ...EMB_FULL],
   cap:     [...EMB_FRONT_ONLY],
+  /* No apron drawing exists and S&S has no flat apron photo, so an apron is
+     embroidered on the bib and quoted, like a cap (owner, 2026-10-20). */
+  apron:   [...EMB_FRONT_ONLY],
   kids:    ['dtf', 'screen'],
   onesie:  ['dtf', 'screen'],
 };
