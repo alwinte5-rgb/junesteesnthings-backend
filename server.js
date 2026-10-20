@@ -10488,6 +10488,7 @@ body{font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,s
 h1{font-size:21px;margin-bottom:2px;color:#0B1F4B}
 .sub{color:#6b7280;font-size:13px;margin-bottom:16px}
 .card{background:#fff;border:1px solid #e3e8f2;border-radius:14px;padding:18px;margin-bottom:14px;box-shadow:0 1px 3px rgba(12,28,60,.05)}
+.lead-msg[open] .lead-prev{display:none}
 label{display:block;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin:12px 0 5px}
 input,select,textarea{width:100%;padding:12px;border:1px solid #cfd8e8;border-radius:9px;font-size:16px;font-family:inherit;background:#fff}
 input:focus,select:focus,textarea:focus{outline:2px solid #1848B8;outline-offset:-1px;border-color:#1848B8}
@@ -25957,6 +25958,8 @@ function ageInWords(d) {
 /** One enquiry as a card. A new one carries the three ways to deal with it;
  *  an answered one says how it was answered. `back` is the page the dismiss
  *  buttons return to. */
+/* How much of a lead's message its card shows before "Read the full message". */
+const LEAD_PREVIEW_MAX = 300;
 function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
   const [srcLabel, srcTone] = LEAD_SOURCES[l.source] || LEAD_SOURCES.form;
   const status = l.lead_status || 'new';
@@ -25980,8 +25983,14 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
           </div>
           <span class="muted" style="font-size:12.5px">${escEmail(ageInWords(l.created_at))}</span>
         </div>
-        ${l.description ? `<div class="muted" style="margin-top:6px;font-size:13.5px">${
-          escEmail(String(l.description).slice(0, 300))}</div>` : ''}${
+        ${/* A long message shows its opening and opens in full: cut at 300 with
+              no mark, the card read as the whole message and the rest was lost. */
+          l.description ? (String(l.description).length > LEAD_PREVIEW_MAX
+          ? `<details class="lead-msg" style="margin-top:6px;font-size:13.5px"><summary class="muted" style="cursor:pointer"><span class="lead-prev">${
+              escEmail(String(l.description).slice(0, LEAD_PREVIEW_MAX).trimEnd())}… </span><b style="color:#1d4ed8">Read the full message</b></summary>
+              <div class="muted" style="margin-top:6px;white-space:pre-wrap">${escEmail(String(l.description))}</div></details>`
+          : `<div class="muted" style="margin-top:6px;font-size:13.5px;white-space:pre-wrap">${
+              escEmail(String(l.description))}</div>`) : ''}${
           l.source === 'designer' && l.design_url ? `<div style="margin-top:8px;display:flex;gap:10px;align-items:center">${
             l.photo_url ? `<img src="${escEmail(l.photo_url)}" alt="" style="width:72px;height:72px;object-fit:contain;border:1px solid #e3e8f2;border-radius:6px;background:#fff">` : ''}
             <a href="${escEmail(l.design_url)}" target="_blank" rel="noopener">Open the design</a></div>` : ''}${contactedLine}
