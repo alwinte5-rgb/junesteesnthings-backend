@@ -1,0 +1,124 @@
+'use strict';
+
+/* The printed-product pages (plan step 5, owner 2026-10-20): calendars, table
+ * covers, X-frames, stickers and labels, brochures, pouches. Written by
+ * tools/occasion-pages.js (kind "print") from the SinaLite table. What must
+ * hold on every one:
+ *   - every price on the page is what a staff quote charges for that
+ *     quantity (sinalite.js eachFor), and the "from" line is the lowest one;
+ *   - the minimum the page promises is the family's real minimum;
+ *   - the quote form is on the page with the item ticked (a real pick key);
+ *   - Product schema parses and its low price is the page's "from" price;
+ *   - no apparel shelves, and no claim that we print it in our shop.
+ *
+ * The generic SEO rules (word count, title, sitemap, menu) are in
+ * tests/occasion-pages.test.js, which covers these pages too.
+ */
+
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const O = require('../tools/occasion-pages');
+const SL = require('../tools/lib/sinalite');
+const { PICKS } = require('../tools/lib/quote-picks');
+
+const PUBLIC = path.join(__dirname, '..', 'public');
+const pages = O.load().pages.filter((p) => p.kind === 'print');
+const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
+const money = (s) => Number(s.replace(/[$,]/g, ''));
+
+test('there is a page for each SinaLite family sold on its own', () => {
+  const covered = new Set(pages.flatMap((p) => p.print.families));
+  /* Mugs and tumblers have no page: the shop sublimates its own in house
+     (services/custom-glassware.html) for far less than the resold ones. */
+  for (const k of Object.keys(SL.table().families)) {
+    if (k === 'mug' || k === 'tumbler') continue;
+    assert.ok(covered.has(k), `no page sells ${k}`);
+  }
+});
+
+test('every price on a page is the staff quote price for that quantity', () => {
+  const fams = SL.table().families;
+  for (const p of pages) {
+    const html = read(p.path);
+    const tables = [...html.matchAll(/<table class="pp-table">([\s\S]*?)<\/table>/g)].map((m) => m[1]);
+    assert.strictEqual(tables.length, p.print.families.length, p.path);
+    p.print.families.forEach((k, i) => {
+      const f = fams[k];
+      const ladders = [];
+      for (const m of f.materials) for (const z of f.sizes) ladders.push(f.prices[m.key][z.key]['']);
+      const rows = [...tables[i].matchAll(/<tr><th scope="row">([\d,]+)<\/th>([\s\S]*?)<\/tr>/g)];
+      assert.deepStrictEqual(rows.map((r) => Number(r[1].replace(/,/g, ''))), f.runs, `${p.path} ${k}: runs`);
+      for (const r of rows) {
+        const q = Number(r[1].replace(/,/g, ''));
+        const cells = [...r[2].matchAll(/<b>(\$[\d,.]+)<\/b> each<span>(\$[\d,.]+) total/g)];
+        assert.strictEqual(cells.length, ladders.length, `${p.path} ${k} ${q}: columns`);
+        cells.forEach((c, j) => {
+          const each = SL.eachFor(ladders[j], q, f.any_qty);
+          assert.strictEqual(money(c[1]), each, `${p.path} ${k} ${q} col ${j}`);
+          assert.strictEqual(money(c[2]), Math.round(each * q * 100) / 100, `${p.path} ${k} ${q} col ${j} total`);
+        });
+      }
+    });
+  }
+});
+
+test('the "from" line is the lowest price on the page, at its quantity', () => {
+  for (const p of pages) {
+    const html = read(p.path);
+    const all = [...html.matchAll(/<b>(\$[\d,.]+)<\/b> each/g)].map((m) => money(m[1]));
+    const low = Math.min(...all);
+    const badge = html.match(/<span class="hero-badge">From (\$[\d,.]+) each at ([\d,]+)<\/span>/);
+    assert.ok(badge, `${p.path}: from badge`);
+    assert.strictEqual(money(badge[1]), low, p.path);
+    const sum = O.printSummary(O.printFamilies(p));
+    assert.strictEqual(Number(badge[2].replace(/,/g, '')), sum.low.q, p.path);
+  }
+});
+
+test('the minimum a page promises is the real one', () => {
+  const fams = SL.table().families;
+  for (const p of pages) {
+    const mins = p.print.families.map((k) => fams[k].min);
+    for (const b of p.badges) {
+      const m = b.match(/From ([\d,]+)\b/);
+      if (m) assert.ok(mins.includes(Number(m[1].replace(/,/g, ''))), `${p.path}: badge "${b}" vs minimums ${mins}`);
+    }
+    const sum = O.printSummary(O.printFamilies(p));
+    assert.strictEqual(sum.start.q, Math.min(...mins), p.path);
+  }
+});
+
+test('the quote form is on the page with this item ticked', () => {
+  const keys = new Set(PICKS.map((x) => x.key));
+  for (const p of pages) {
+    const html = read(p.path);
+    assert.ok(keys.has(p.print.pick), `${p.path}: pick ${p.print.pick} is not on the quote form`);
+    assert.match(html, new RegExp(`<body data-jt-pick="${p.print.pick}">`), p.path);
+    assert.match(html, /id="get-quote"/, `${p.path}: quote form block`);
+    assert.match(html, /data-jt-quote-form/, p.path);
+    assert.match(html, /\/assets\/js\/quote-form\.js/, p.path);
+    assert.doesNotMatch(html, /pb-products/, `${p.path}: no apparel shelves`);
+  }
+});
+
+test('Product schema parses and agrees with the page', () => {
+  for (const p of pages) {
+    const html = read(p.path);
+    const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    const prod = blocks.find((b) => b['@type'] === 'Product');
+    assert.ok(prod, `${p.path}: Product`);
+    const sum = O.printSummary(O.printFamilies(p));
+    assert.strictEqual(prod.offers.lowPrice, sum.low.each.toFixed(2), p.path);
+    assert.strictEqual(prod.offers.priceCurrency, 'USD');
+    assert.ok(Number(prod.offers.highPrice) >= Number(prod.offers.lowPrice), p.path);
+  }
+});
+
+test('the copy never says we print these in our shop, or names the supplier', () => {
+  for (const p of pages) {
+    const text = read(p.path).replace(/<[^>]+>/g, ' ');
+    assert.doesNotMatch(text, /printed (in|at) our|in-house|sinalite/i, p.path);
+  }
+});

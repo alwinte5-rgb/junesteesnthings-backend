@@ -68,7 +68,7 @@ const studioLink = (html, from) => html.replace(/Design Studio/, `<a href="${STU
 
 function fromTag(rel) {
   const [dir, file] = rel.split('/');
-  const pre = { services: 'svc', areas: 'area', blog: 'blog', occasions: 'occ' }[dir] || 'page';
+  const pre = { services: 'svc', areas: 'area', blog: 'blog', occasions: 'occ', print: 'prt' }[dir] || 'page';
   return `${pre}_${file.replace(/\.html$/, '').replace(/[^a-z0-9]+/gi, '_')}`;
 }
 
@@ -225,6 +225,10 @@ function labSection(from) {
 }
 
 function productsBlock(data, page, rel) {
+  /* A printed-product page (calendars, pouches: tools/occasion-pages.js kind
+     "print") is about one item the Design Studio does not sell; apparel
+     shelves and the garment Design Lab there would be off the subject. */
+  if (page.print) return '';
   const [s, e] = mark('pb-products');
   const from = fromTag(rel);
   return `${s}
@@ -413,7 +417,15 @@ const where = {
     if (g !== -1) return lineAfter(html, elementEnd(html, g) - 1);
     return -1;
   },
-  reviews: afterBlock('pb-products'),
+  /* After the products, or on a page without them (printed products) after
+     its price list, else straight after the hero. */
+  reviews(html) {
+    const p = afterBlock('pb-products')(html);
+    if (p !== -1) return p;
+    const pr = html.indexOf('<section class="pp-prices"');
+    if (pr !== -1) return lineAfter(html, elementEnd(html, pr) - 1);
+    return where.work(html);
+  },
   quote(html) {
     const c = html.search(/<(section|div) class="cta-band"/);
     return c === -1 ? -1 : lineAfter(html, elementEnd(html, c) - 1);
@@ -475,7 +487,7 @@ function load() {
   const data = JSON.parse(fs.readFileSync(DATA, 'utf8'));
   if (fs.existsSync(OCCASION_DATA)) {
     for (const o of JSON.parse(fs.readFileSync(OCCASION_DATA, 'utf8')).pages) {
-      data.pages[o.path] = { heading: o.heading, products: o.products, hero: o.hero, work: o.work, ...(o.short_gallery ? { short_gallery: o.short_gallery } : {}) };
+      data.pages[o.path] = { heading: o.heading, products: o.products, hero: o.hero, work: o.work, ...(o.short_gallery ? { short_gallery: o.short_gallery } : {}), ...(o.kind === 'print' ? { print: true } : {}) };
     }
   }
   return { data, reviews: JSON.parse(fs.readFileSync(REVIEWS, 'utf8')) };
@@ -518,7 +530,8 @@ function validate(data) {
     if (!fs.existsSync(path.join(PUBLIC, rel))) bad.push(`${rel}: no such page`); // a new occasion page: run tools/occasion-pages.js --write first
     for (const id of p.products || []) if (!data.catalog[id]) bad.push(`${rel}: unknown product ${id}`);
     for (const k of [p.hero, ...(p.work || [])].filter(Boolean)) if (!data.work[k]) bad.push(`${rel}: unknown work photo ${k}`);
-    if (!p.heading || !(p.products || []).length) bad.push(`${rel}: needs a heading and products`);
+    // A printed-product page shows no product shelves (productsBlock), so needs none.
+    if (!p.print && (!p.heading || !(p.products || []).length)) bad.push(`${rel}: needs a heading and products`);
     // A page's main photo is never repeated in its own gallery, and a gallery
     // fills its rows: 6 or 9 photos (owner, 2026-10-17). A page short of
     // photos says why in short_gallery instead.

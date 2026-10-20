@@ -1534,6 +1534,727 @@
      "href": "/services/event-decor.html"
     }
    ]
+  },
+  {
+   "calendar": null,
+   "kind": "print",
+   "hero": null,
+   "work": [],
+   "products": [],
+   "heading": "",
+   "related": [
+    {
+     "href": "/services/graphic-design.html",
+     "label": "Graphic design for print"
+    },
+    {
+     "href": "/services/banners-signs.html",
+     "label": "Banners and signs"
+    },
+    {
+     "href": "/contact",
+     "label": "Request a free quote"
+    }
+   ],
+   "path": "print/wall-calendars.html",
+   "keyword": "custom wall calendars",
+   "eyebrow": "Wall Calendars · Chicago, IL",
+   "title": "Custom Wall Calendars Chicago | June's Tees & Things",
+   "meta": "Custom wall calendars printed in full color for businesses, churches, schools and families in Chicago. 8.5 x 11, from 25 calendars, priced online.",
+   "h1": "Custom <em>Wall Calendars</em> in Chicago",
+   "pitch": "Full-color 8.5 by 11 inch wall calendars with your photos, your logo and your dates, from 25 calendars. See every price below, then get a free quote.",
+   "badges": [
+    "📅 From 25 Calendars",
+    "🎨 Full Color Every Page",
+    "📍 Pickup in Lakeview"
+   ],
+   "print": {
+    "pick": "calendar",
+    "families": [
+     "calendar"
+    ],
+    "product": "Custom Wall Calendars",
+    "prices_h2": "Wall calendar prices"
+   },
+   "sections": [
+    {
+     "h2": "Custom wall calendars that stay on the wall all year",
+     "p": [
+      "Custom wall calendars are one of the few printed pieces people keep for twelve months. A business that hands out custom wall calendars in December is on a customer's kitchen wall or office desk every day of the next year, and a family calendar of grandchildren's photos becomes the gift everyone asks for again. We print full-color 8.5 by 11 inch wall calendars from 25 copies, with your photos, your logo, your colors and the dates that matter to you: store hours, service times, school holidays, birthdays and events."
+     ]
+    },
+    {
+     "h2": "Two ways to build it",
+     "p": [
+      "Choose 28 pages on one paper all the way through, a self cover, for a light calendar that mails and hangs easily. Or choose 24 pages with a heavier cover stock, which gives the front a sturdier, more finished feel when it is handed over as a gift or a thank-you. Both are printed in full color on every page, so photos, gradients and logos print exactly as designed. The price table above lists both for every quantity, with the price each and the total."
+     ]
+    },
+    {
+     "h2": "Who orders custom calendars",
+     "p": [
+      "Real estate agents, insurance offices, salons, barbershops, restaurants, auto shops and contractors give them to clients so their name and number are in sight all year. Churches print a year of services, holy days and events. Schools, teams and clubs print fundraiser calendars with a photo of each group. Families make photo calendars for grandparents, and memorial calendars that keep a loved one's photos and dates together. If you can picture it on a wall for a year, we can lay it out."
+     ]
+    },
+    {
+     "h2": "Design help, from your photos to a finished proof",
+     "p": [
+      "Send us print-ready pages and we check them before anything is printed. If you are starting from photos and a logo, we can design the whole calendar for you: we choose a layout, place a photo on each month, add your holidays and events, and send a proof of every page. Design is a separate fee, shown on your quote before any work starts, and you approve the proof before we print. Nothing is printed until you say it is right."
+     ]
+    },
+    {
+     "h2": "How ordering works",
+     "p": [
+      "Tell us how many calendars you need, which version you want and when you need them, using the quote form on this page. We reply with a written quote, usually within one business day. Once you approve the quote and the proof, your calendars go to print and are ready at our shop in the number of business days shown above the price table. Your order is delivered to our Lakeview shop. Pick it up by appointment, or ask about local delivery or shipping, which we quote with your order."
+     ]
+    },
+    {
+     "h2": "Photos that print well",
+     "p": [
+      "Calendar photos print best when they are the original files from your phone or camera, not screenshots or pictures saved from social media, which lose detail when they are enlarged to fill a page. Send the largest version you have and we will tell you if any photo is too small before it goes to print. Bright, sharp photos with the subject near the middle work best, since a little of each edge is trimmed when the pages are cut to size. If you only have printed photos, a clear scan works too."
+     ]
+    },
+    {
+     "h2": "Plan ahead for the holidays",
+     "p": [
+      "Calendars given at Christmas or the New Year are the busiest order of the season, so start early. Allow time for design and proofing as well as printing: if we are designing it for you, a week or two of back and forth is normal before the proof is final. The sooner you send your photos and dates, the more relaxed the whole order is, and the more time there is to get every page right."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "What is the smallest calendar order?",
+     "a": "25 calendars. Calendars are printed in the set runs listed in the price table. Another quantity is made up from those runs at the lowest total, and your quote shows exactly what it costs."
+    },
+    {
+     "q": "What size are the calendars?",
+     "a": "8.5 by 11 inches, in full color on every page, with your choice of 28 pages on one paper or 24 pages with a heavier cover."
+    },
+    {
+     "q": "Can you design the calendar for us?",
+     "a": "Yes. Send your photos, logo and dates and we lay out every month for you, then send a proof. Design is a separate fee shown on your quote, and nothing prints until you approve the proof."
+    },
+    {
+     "q": "Can every calendar be different?",
+     "a": "Each run is one design printed many times. If you need versions, for example one per family or one per location, ask on the quote form and we will price each version as its own run."
+    },
+    {
+     "q": "Do the prices include tax and shipping?",
+     "a": "Every price includes shipping to our Lakeview shop. Sales tax is added to your quote. Delivery or shipping to you is quoted separately if you need it."
+    },
+    {
+     "q": "What photos should I send?",
+     "a": "The original files from your phone or camera, as large as you have them. We check every photo before printing and tell you if one is too small to look sharp."
+    },
+    {
+     "q": "How do I pay?",
+     "a": "Your quote comes with a secure online payment link. Your order goes to print once the quote is paid and the proof is approved."
+    }
+   ],
+   "cta": {
+    "h2": "Ready to order your calendars?",
+    "p": "Tell us how many calendars you need and when, and send your photos or ask for design."
+   }
+  },
+  {
+   "calendar": null,
+   "kind": "print",
+   "hero": null,
+   "work": [],
+   "products": [],
+   "heading": "",
+   "related": [
+    {
+     "href": "/services/graphic-design.html",
+     "label": "Graphic design for print"
+    },
+    {
+     "href": "/services/banners-signs.html",
+     "label": "Banners and signs"
+    },
+    {
+     "href": "/contact",
+     "label": "Request a free quote"
+    }
+   ],
+   "path": "print/table-covers.html",
+   "keyword": "custom table covers",
+   "eyebrow": "Table Covers · Chicago, IL",
+   "title": "Custom Table Covers Chicago | June's Tees & Things",
+   "meta": "Custom printed table covers for 6 ft and 8 ft tables, open or closed back, printed all over with your logo. For vendors, events and trade shows in Chicago.",
+   "h1": "Custom <em>Table Covers</em> in Chicago",
+   "pitch": "Printed table covers for 6 foot and 8 foot tables, open back or closed back, printed all over with your logo and colors, from just one cover. Prices are below.",
+   "badges": [
+    "🎪 6 ft or 8 ft Tables",
+    "🎨 Printed All Over",
+    "📍 Pickup in Lakeview"
+   ],
+   "print": {
+    "pick": "table_cover",
+    "families": [
+     "table_cover"
+    ],
+    "product": "Custom Printed Table Covers",
+    "prices_h2": "Table cover prices"
+   },
+   "sections": [
+    {
+     "h2": "Custom table covers that make a booth look finished",
+     "p": [
+      "Custom table covers turn a plain folding table into a branded booth in a minute. At a vendor market, a trade show, a church fair or a school night, a printed cover tells people who you are from across the room and hides boxes and stock under the table. We print custom table covers for standard 6 foot and 8 foot tables, with your logo, colors, name and message printed all over the outside of the cover, starting with a single cover."
+     ]
+    },
+    {
+     "h2": "Open back or closed back",
+     "p": [
+      "A 3-sided cover is open at the back, so you can sit behind the table and reach supplies underneath without lifting the cover. A 4-sided cover closes all the way around, which looks neat from every side for a table people can walk around, or a table at the front of a room. Both are printed all over the outside, not just with a logo patch on the front, so the whole cover carries your design."
+     ]
+    },
+    {
+     "h2": "Who uses printed table covers",
+     "p": [
+      "Small businesses selling at markets and pop-ups, food vendors, artists, authors at book signings, nonprofits at resource fairs, churches at community days, schools and sports teams at registration nights, recruiters at career fairs and companies at trade shows. A table cover is reused at every event, so one cover pays for itself many times over and looks the same at the tenth event as at the first."
+     ]
+    },
+    {
+     "h2": "Getting the design right",
+     "p": [
+      "A table cover is seen from a few steps away, so big, simple designs work best: your logo, your name, one short line and your website or social handle. We check your artwork before anything is printed, and if you would like us to design it, we lay out the front, sides and top for you and send a proof. Design is a separate fee, shown on your quote before work starts. Nothing is printed until you approve the proof."
+     ]
+    },
+    {
+     "h2": "Pairing a cover with a banner",
+     "p": [
+      "Many booths pair a table cover with an X-frame banner standing beside the table, so people can read your name above the crowd as well as on the table. Both can be designed together so the colors and logo match, and quoted together on one quote. Just tick both on the quote form below and tell us about your event."
+     ]
+    },
+    {
+     "h2": "Artwork that reads from across the room",
+     "p": [
+      "The best table cover designs are bold and simple. A large logo in the center of the front panel, your business name in big letters and one line about what you do will be read by people walking past, where small print and long lists are lost. Use high contrast colors, such as dark text on a light background or white text on a dark one, and send your logo as a vector file or a large, sharp image. If all you have is a small logo, we can usually redraw it cleanly as part of the design, and we will tell you before the proof if anything needs attention."
+     ]
+    },
+    {
+     "h2": "How ordering works",
+     "p": [
+      "Choose your table size and style, tell us how many covers you need and when your event is, and we reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your covers go to print and are ready at our shop in the number of business days shown above the price table. Your order is delivered to our Lakeview shop. Pick it up by appointment, or ask about local delivery or shipping, which we quote with your order."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "Which size do I need?",
+     "a": "Measure the length of your table. Standard folding tables are 6 feet or 8 feet long, and we print covers to fit both. If you are not sure, tell us the table's length on the quote form."
+    },
+    {
+     "q": "What is the difference between 3-sided and 4-sided?",
+     "a": "A 3-sided cover is open at the back so you can sit behind the table and reach under it. A 4-sided cover goes all the way around for a table seen from every side."
+    },
+    {
+     "q": "Is the whole cover printed?",
+     "a": "Yes. The whole outside of the cover is printed with your design, not just a logo on the front."
+    },
+    {
+     "q": "Can I order just one?",
+     "a": "Yes, from one cover. The price each comes down as the order grows, as the table above shows."
+    },
+    {
+     "q": "Can you design it for me?",
+     "a": "Yes. Send your logo and what you want it to say and we design it and send a proof. Design is a separate fee shown on your quote."
+    },
+    {
+     "q": "What file should I send for my logo?",
+     "a": "A vector file such as AI, EPS, SVG or PDF is best. A large PNG or JPG can work too, and we tell you before printing if it is too small to print sharply at table size."
+    },
+    {
+     "q": "Do the prices include tax and shipping?",
+     "a": "Every price includes shipping to our Lakeview shop. Sales tax is added to your quote, and delivery or shipping to you is quoted separately if you need it."
+    }
+   ],
+   "cta": {
+    "h2": "Ready for your next event?",
+    "p": "Tell us your table size, how many covers and your event date."
+   }
+  },
+  {
+   "calendar": null,
+   "kind": "print",
+   "hero": null,
+   "work": [],
+   "products": [],
+   "heading": "",
+   "related": [
+    {
+     "href": "/services/graphic-design.html",
+     "label": "Graphic design for print"
+    },
+    {
+     "href": "/services/banners-signs.html",
+     "label": "Banners and signs"
+    },
+    {
+     "href": "/contact",
+     "label": "Request a free quote"
+    }
+   ],
+   "path": "print/x-frame-banners.html",
+   "keyword": "x-frame banners",
+   "eyebrow": "X-Frame Banners · Chicago, IL",
+   "title": "X-Frame Banners Chicago | June's Tees & Things",
+   "meta": "Custom X-frame banners in Chicago: a 23.6 x 63 inch printed vinyl banner, alone or with its X-frame stand. For events, lobbies and vendor booths.",
+   "h1": "Custom <em>X-Frame Banners</em> in Chicago",
+   "pitch": "A tall 23.6 by 63 inch printed banner on its own X-frame stand: sets up in a minute, packs down small and stands anywhere. From one banner, priced below.",
+   "badges": [
+    "🏁 23.6 x 63 in",
+    "🧰 Stand Included or Banner Only",
+    "📍 Pickup in Lakeview"
+   ],
+   "print": {
+    "pick": "xframe",
+    "families": [
+     "xframe"
+    ],
+    "product": "Custom X-Frame Banner",
+    "prices_h2": "X-frame banner prices"
+   },
+   "sections": [
+    {
+     "h2": "X-frame banners: a sign that stands up anywhere",
+     "p": [
+      "X-frame banners are the simplest standing sign there is. A light X-shaped frame holds a printed banner tight at its four corners, so it stands on its own beside a booth, at a lobby door, at the front of a church or at a check-in table, with no wall, no stand to rent and no tools. We print custom X-frame banners 23.6 inches wide by 63 inches tall on matte vinyl, which shows color well without glare under event lights, and sell them with the frame or as a banner alone."
+     ]
+    },
+    {
+     "h2": "Banner only, or banner and stand",
+     "p": [
+      "Order the banner with its X-frame stand for your first one. If you already own a frame of the same size, order the banner only and swap designs for each event or season: a welcome sign for Sunday, a sale for the spring market, a sponsor banner for the tournament. The price table above lists both, for one banner and for larger orders."
+     ]
+    },
+    {
+     "h2": "Where X-frame banners work best",
+     "p": [
+      "Vendor booths and pop-up shops, trade shows and career fairs, restaurant and salon entrances, church lobbies and welcome tables, school open houses, sports registration, real estate open houses, grand openings and photo spots at parties. Because the banner is tall and narrow, it is read at eye level from across a room, even when a crowd is standing in front of the table."
+     ]
+    },
+    {
+     "h2": "Designing a tall banner",
+     "p": [
+      "Put your logo and name at the top, where people see it over a crowd, and keep the message short: a few words, a phone number or website and a QR code if you want people to scan. Leave the bottom area simple, since it sits behind tables and people. We check every file before it prints, and we can design the banner for you and send a proof. Design is a separate fee shown on your quote, and nothing prints until you approve the proof."
+     ]
+    },
+    {
+     "h2": "Matching your table and your team",
+     "p": [
+      "Pair an X-frame banner with a printed table cover and matching shirts for your team, and the whole booth looks like one brand. We can design and quote all of it together. Tick each item on the quote form below and tell us about your event and its date."
+     ]
+    },
+    {
+     "h2": "Setting up and caring for your banner",
+     "p": [
+      "An X-frame stand folds into a short bundle that fits in a car trunk or a closet. To set it up, open the frame, hook the four corners of the banner onto the arms and stand it up; it takes about a minute and needs no tools. Roll the banner with the printed side facing out when you take it down, and keep it dry and away from heat between events so it lies flat the next time. With a little care, one banner and stand are used at event after event, which makes it one of the best value signs a small business or group can own."
+     ]
+    },
+    {
+     "h2": "How ordering works",
+     "p": [
+      "Tell us how many banners you need, with or without stands, and when you need them. We reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your banners go to print and are ready at our shop in the number of business days shown above the price table. Your order is delivered to our Lakeview shop. Pick it up by appointment, or ask about local delivery or shipping, which we quote with your order."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "What size is the banner?",
+     "a": "23.6 inches wide by 63 inches tall, printed in full color on matte vinyl."
+    },
+    {
+     "q": "Is the stand included?",
+     "a": "Choose banner and X-frame stand, or banner only if you already have a frame the same size. Both are priced in the table above."
+    },
+    {
+     "q": "Can I order one banner?",
+     "a": "Yes, from one. The price each comes down as the order grows, as the table above shows."
+    },
+    {
+     "q": "Can it be used outdoors?",
+     "a": "X-frame stands are light and made for indoor use or calm days outside. For windy outdoor spots, ask us about a heavier banner or sign on the quote form."
+    },
+    {
+     "q": "Can you design it?",
+     "a": "Yes. Send your logo and message and we design it and send a proof. Design is a separate fee shown on your quote."
+    },
+    {
+     "q": "How do I set up an X-frame banner?",
+     "a": "Open the frame, hook the banner's four corners onto the arms and stand it up. It takes about a minute, needs no tools and folds back into a small bundle."
+    },
+    {
+     "q": "Do the prices include tax and shipping?",
+     "a": "Every price includes shipping to our Lakeview shop. Sales tax is added to your quote, and delivery or shipping to you is quoted separately if you need it."
+    }
+   ],
+   "cta": {
+    "h2": "Ready to stand out at your event?",
+    "p": "Tell us how many banners you need, with or without stands, and your date."
+   }
+  },
+  {
+   "calendar": null,
+   "kind": "print",
+   "hero": null,
+   "work": [],
+   "products": [],
+   "heading": "",
+   "related": [
+    {
+     "href": "/services/graphic-design.html",
+     "label": "Graphic design for print"
+    },
+    {
+     "href": "/services/banners-signs.html",
+     "label": "Banners and signs"
+    },
+    {
+     "href": "/contact",
+     "label": "Request a free quote"
+    }
+   ],
+   "path": "print/stickers-labels.html",
+   "keyword": "custom stickers and labels",
+   "eyebrow": "Stickers &amp; Labels · Chicago, IL",
+   "title": "Custom Stickers & Labels Chicago | June's Tees & Things",
+   "meta": "Custom stickers and roll labels in Chicago: cut-to-shape white vinyl stickers from 10, and gloss laminated roll labels from 25, in circles and rectangles.",
+   "h1": "Custom <em>Stickers &amp; Labels</em> in Chicago",
+   "pitch": "Cut-to-shape vinyl stickers from 10 and gloss laminated roll labels from 25, in circles and rectangles, for products, packaging, giveaways and events.",
+   "badges": [
+    "🏷️ Stickers From 10",
+    "🧻 Roll Labels From 25",
+    "📍 Pickup in Lakeview"
+   ],
+   "print": {
+    "pick": "stickers",
+    "families": [
+     "sticker",
+     "roll_label"
+    ],
+    "product": "Custom Stickers and Roll Labels",
+    "prices_h2": "Sticker and label prices"
+   },
+   "sections": [
+    {
+     "h2": "Custom stickers and labels for your brand",
+     "p": [
+      "Custom stickers and labels put your name on everything you sell and give away. A logo sticker on a bag, a box or a laptop is advertising that travels, and a clean product label makes a homemade candle, hot sauce or soap look ready for a store shelf. We print two kinds: cut-to-shape stickers on white permanent vinyl, made one by one for handing out, and gloss laminated roll labels on a roll, made for putting on products quickly and neatly."
+     ]
+    },
+    {
+     "h2": "Cut-to-shape stickers",
+     "p": [
+      "Our stickers are printed in full color on white vinyl with a permanent adhesive and cut to shape. They come in 2 inch and 3 inch circles and 2 by 3 inch and 3 by 4 inch rectangles, from 10 stickers. They are made for handing out at events, tucking into orders, sealing bags and boxes, decorating water bottles and laptops, and for team, school and church giveaways."
+     ]
+    },
+    {
+     "h2": "Roll labels for products and packaging",
+     "p": [
+      "Roll labels are printed on white gloss BOPP, a plastic film that holds up to moisture and handling better than paper, with a gloss laminate on top. They come on a roll so you can peel and apply them fast, by hand or with a label dispenser, in the same circle and rectangle sizes as the stickers, from 25 labels. They suit jars, bottles, candles, cosmetics, coffee bags, boxes and mailers."
+     ]
+    },
+    {
+     "h2": "Designing a label that works",
+     "p": [
+      "Keep text large enough to read at arm's length, leave a little space between the text and the edge, and use your brand colors. For a product label, include what it is, your brand, the size or weight and your website. If your label needs ingredients, warnings or other required wording, you are responsible for what it says; we print it exactly as approved. We check every file before printing, and we can design stickers or labels for you for a separate design fee shown on your quote."
+     ]
+    },
+    {
+     "h2": "Stickers, labels and the rest of your order",
+     "p": [
+      "Many customers order stickers or labels alongside shirts, tote bags, pouches or table covers, so a market booth or a product launch has one look from the table to the bag. Tick everything you need on the quote form below, with a quantity for each, and we will quote it all together on one written quote."
+     ]
+    },
+    {
+     "h2": "Choosing a size and a shape",
+     "p": [
+      "A 2 inch circle suits a logo on a bag, a box seal or a small jar lid. A 3 inch circle gives a logo room for a short line under it, such as your website or a tagline. A 2 by 3 inch rectangle is a good size for a simple product label with a name and size, and a 3 by 4 inch rectangle fits a full product label with a description, ingredients or directions. If you are not sure, measure the flat area of the item the label goes on and tell us on the quote form, and we will recommend the size that fits it best before anything is printed."
+     ]
+    },
+    {
+     "h2": "How ordering works",
+     "p": [
+      "Choose a size and a quantity, tell us whether you want stickers or roll labels, and send your artwork or ask for design. We reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your order goes to print and is ready at our shop in the number of business days shown above the price table. Your order is delivered to our Lakeview shop. Pick it up by appointment, or ask about local delivery or shipping, which we quote with your order."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "What is the difference between stickers and roll labels?",
+     "a": "Stickers are cut one by one on white vinyl, for handing out and decorating. Roll labels come on a roll, laminated, for putting on products and packaging quickly."
+    },
+    {
+     "q": "What sizes do you offer?",
+     "a": "2 inch and 3 inch circles, and 2 by 3 inch and 3 by 4 inch rectangles, for both stickers and roll labels."
+    },
+    {
+     "q": "What is the smallest order?",
+     "a": "10 stickers or 25 roll labels. Larger orders cost less each, as the price tables above show."
+    },
+    {
+     "q": "Are the labels waterproof?",
+     "a": "Roll labels are printed on a plastic film with a gloss laminate, which stands up to moisture and handling far better than paper. Tell us how your product is stored and we will advise."
+    },
+    {
+     "q": "Can you design my label?",
+     "a": "Yes. Send your logo and the wording and we design it and send a proof. Design is a separate fee shown on your quote."
+    },
+    {
+     "q": "Which size should I choose?",
+     "a": "Measure the flat area where the sticker or label will go and tell us on the quote form. We recommend the size that fits before anything is printed."
+    },
+    {
+     "q": "Do the prices include tax and shipping?",
+     "a": "Every price includes shipping to our Lakeview shop. Sales tax is added to your quote, and delivery or shipping to you is quoted separately if you need it."
+    }
+   ],
+   "cta": {
+    "h2": "Ready to label your brand?",
+    "p": "Tell us the size, how many and whether you need stickers or roll labels."
+   }
+  },
+  {
+   "calendar": null,
+   "kind": "print",
+   "hero": "birthday-party-flyer",
+   "work": [],
+   "products": [],
+   "heading": "",
+   "related": [
+    {
+     "href": "/services/graphic-design.html",
+     "label": "Graphic design for print"
+    },
+    {
+     "href": "/services/banners-signs.html",
+     "label": "Banners and signs"
+    },
+    {
+     "href": "/contact",
+     "label": "Request a free quote"
+    }
+   ],
+   "path": "print/brochures.html",
+   "keyword": "trifold brochures",
+   "eyebrow": "Brochures · Chicago, IL",
+   "title": "Trifold Brochure Printing Chicago | June's Tees & Things",
+   "meta": "Trifold brochures printed in full color in Chicago: 8.5 x 11 on 100 lb gloss, scored and folded, one or both sides, from 25 brochures. Prices online.",
+   "h1": "<em>Trifold Brochures</em> Printed in Chicago",
+   "pitch": "Full-color 8.5 by 11 inch trifold brochures on 100 lb gloss paper, scored and folded and ready to hand out, from 25 brochures. Every price is listed below.",
+   "badges": [
+    "📄 From 25 Brochures",
+    "📐 Scored &amp; Folded",
+    "📍 Pickup in Lakeview"
+   ],
+   "print": {
+    "pick": "brochure",
+    "families": [
+     "brochure"
+    ],
+    "product": "Trifold Brochures",
+    "prices_h2": "Trifold brochure prices"
+   },
+   "sections": [
+    {
+     "h2": "Trifold brochures that tell your whole story",
+     "p": [
+      "Trifold brochures fit everything a customer needs to know into one sheet that slips into a pocket, a bag or a mail slot: what you do, your services and prices, a few photos and how to reach you. We print trifold brochures in full color on 8.5 by 11 inch 100 lb gloss paper, scored and folded into three panels that close to 3.67 by 8.5 inches, ready to hand out the day you pick them up."
+     ]
+    },
+    {
+     "h2": "One side or both sides",
+     "p": [
+      "A brochure printed on both sides uses all six panels: a cover, a back with your contact details and four panels inside for your services, menu, story or photos. Printed on one side only, the inside carries your message and the outside stays plain, which suits handouts and inserts. The price table above lists both at every run, with the price each and the total."
+     ]
+    },
+    {
+     "h2": "Who orders brochures",
+     "p": [
+      "Salons and barbers with a service menu, restaurants and caterers with a take-away menu, churches with a welcome guide, schools and daycares with enrollment information, contractors and cleaners with their services and areas, nonprofits explaining their programs, real estate agents with a listing or a buyer's guide, and event planners with a schedule. A brochure on a counter keeps working after the conversation is over."
+     ]
+    },
+    {
+     "h2": "Brochure design",
+     "p": [
+      "A good brochure leads with a strong cover, keeps each panel to one idea and ends with a clear way to contact you. Send a print-ready file and we check the panels and folds before printing, or let us design it: we write the layout around your services, place your photos and logo and send a proof of both sides. Brochure design is a separate fee shown on your quote, and nothing prints until you approve the proof."
+     ]
+    },
+    {
+     "h2": "Brochures with the rest of your marketing",
+     "p": [
+      "Brochures pair well with stickers or labels for your packaging, a table cover and an X-frame banner for events, and shirts for your staff. If you are getting ready for an opening or an event season, tick everything you need on the quote form below and we quote it together, with one design style across all of it."
+     ]
+    },
+    {
+     "h2": "Planning the panels",
+     "p": [
+      "Folded, a trifold has six panels. The front cover is what people see first, so give it your logo, a strong photo and one line that says what you do. The back panel usually carries your address, phone number, website and a map or QR code. The short inside flap is seen as soon as the brochure is opened, which makes it the place for an offer or your most popular service. The three inside panels opened flat work like one wide page for your full list of services, prices, menu or story. We lay out the panels and folds for you if you are not sure where everything goes."
+     ]
+    },
+    {
+     "h2": "How ordering works",
+     "p": [
+      "Tell us how many brochures you need, one side or both, and when you need them. We reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your brochures go to print and are ready at our shop in the number of business days shown above the price table. Your order is delivered to our Lakeview shop. Pick it up by appointment, or ask about local delivery or shipping, which we quote with your order."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "What size is a trifold brochure?",
+     "a": "8.5 by 11 inches flat, folded into three panels that close to 3.67 by 8.5 inches."
+    },
+    {
+     "q": "What paper do you use?",
+     "a": "100 lb gloss text, a smooth, bright paper that shows photos well, scored before folding for a clean fold."
+    },
+    {
+     "q": "What is the smallest order?",
+     "a": "25 brochures. Brochures are printed in the set runs listed in the price table; another quantity is made up from those runs at the lowest total."
+    },
+    {
+     "q": "Do you print other brochure folds or sizes?",
+     "a": "Trifold 8.5 by 11 is listed here. Ask on the quote form for a half fold, Z fold or another size and we will quote it."
+    },
+    {
+     "q": "Can you design my brochure?",
+     "a": "Yes. Send your services, photos and logo and we design it and send a proof. Design is a separate fee shown on your quote."
+    },
+    {
+     "q": "How do I lay out a trifold?",
+     "a": "The front cover carries your logo and main message, the back your contact details, and the three inside panels your services or menu. We can set it up for you if you are not sure."
+    },
+    {
+     "q": "Do the prices include tax and shipping?",
+     "a": "Every price includes shipping to our Lakeview shop. Sales tax is added to your quote, and delivery or shipping to you is quoted separately if you need it."
+    }
+   ],
+   "cta": {
+    "h2": "Ready to print your brochures?",
+    "p": "Tell us how many brochures you need, one side or both, and your date."
+   }
+  },
+  {
+   "calendar": null,
+   "kind": "print",
+   "hero": null,
+   "work": [],
+   "products": [],
+   "heading": "",
+   "related": [
+    {
+     "href": "/services/graphic-design.html",
+     "label": "Graphic design for print"
+    },
+    {
+     "href": "/services/banners-signs.html",
+     "label": "Banners and signs"
+    },
+    {
+     "href": "/contact",
+     "label": "Request a free quote"
+    }
+   ],
+   "path": "print/stand-up-pouches.html",
+   "keyword": "custom stand-up pouches",
+   "eyebrow": "Stand-Up Pouches · Chicago, IL",
+   "title": "Custom Stand-Up Pouches Chicago | June's Tees & Things",
+   "meta": "Custom printed stand-up pouches in Chicago, white gloss with a zipper and tear notch, in three sizes from 500 pouches. For small brands and makers.",
+   "h1": "Custom <em>Stand-Up Pouches</em> in Chicago",
+   "pitch": "Printed stand-up pouches with a zipper and tear notch, in three sizes, from 500 pouches: packaging that makes a small brand look ready for the shelf.",
+   "badges": [
+    "🛍️ From 500 Pouches",
+    "🔒 Zipper &amp; Tear Notch",
+    "📍 Pickup in Lakeview"
+   ],
+   "print": {
+    "pick": "pouch",
+    "families": [
+     "pouch"
+    ],
+    "product": "Custom Printed Stand-Up Pouches",
+    "prices_h2": "Stand-up pouch prices"
+   },
+   "sections": [
+    {
+     "h2": "Custom stand-up pouches for small brands",
+     "p": [
+      "Custom stand-up pouches give a product made in a home kitchen or a small shop the look of a brand on a store shelf. The pouch stands on its own gusset, so it displays well on a table or a shelf, and it reseals with a zipper after the customer tears it open at the notch. We print custom stand-up pouches in full color on white gloss, in three sizes, from 500 pouches, with your design printed on the pouch itself instead of a sticker on a plain bag."
+     ]
+    },
+    {
+     "h2": "Three sizes",
+     "p": [
+      "Choose 4.375 by 6 inches with a 2 inch gusset for samples, small snacks, tea and favors; 5 by 8 inches with a 3 inch gusset for coffee, candy, treats and bath salts; or 7 by 9 inches with a 3 inch gusset for larger bags of snacks, pet treats and gift sets. Every size has a zipper and a tear notch. The price table above lists each size at every quantity break."
+     ]
+    },
+    {
+     "h2": "Who orders printed pouches",
+     "p": [
+      "Bakers, candy makers, coffee roasters, tea and spice blenders, pet treat makers, bath and body brands, and anyone moving from plain bags and labels to packaging that looks finished. Printed pouches also make wedding and party favors, church and school fundraiser packs, and corporate gift bags with a logo. If your product fits in a bag, a printed pouch makes it look more valuable."
+     ]
+    },
+    {
+     "h2": "What goes inside",
+     "p": [
+      "Before you order, tell us what you are packing and how it is stored, and we will check that the pouch suits it. You are responsible for the wording on your package, such as ingredients, weights or warnings your product needs; we print it exactly as you approve it. Send print-ready art, or ask us to design the pouch for a separate design fee shown on your quote. Nothing prints until you approve the proof."
+     ]
+    },
+    {
+     "h2": "Pouches with labels, stickers and shirts",
+     "p": [
+      "Many brands pair pouches with roll labels for jars and bottles, stickers to seal bags, and shirts or aprons for market days, so the whole line looks like one brand. Tick everything you need on the quote form below with a quantity each, and we will quote it together."
+     ]
+    },
+    {
+     "h2": "Designing for the shelf",
+     "p": [
+      "Shoppers decide in a second or two, so put your brand name and what the product is large and near the top of the front, where it shows above other products on a shelf or in a basket. Leave the back for the details: a short description, the weight or count, ingredients or directions, your website and any wording your product needs. Use your brand colors and keep the design simple enough to recognize from a few steps away. If you sell several flavors or scents, we can design one layout and change the color and name for each, and quote each version as its own run."
+     ]
+    },
+    {
+     "h2": "How ordering works",
+     "p": [
+      "Tell us the size, how many pouches you need and when you need them. Any quantity from 500 can be ordered. We reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your pouches go to print and are ready at our shop in the number of business days shown above the price table. Your order is delivered to our Lakeview shop. Pick it up by appointment, or ask about local delivery or shipping, which we quote with your order."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "What is the smallest order?",
+     "a": "500 pouches of one design and size. Any quantity from 500 can be ordered, and the price each comes down as the order grows."
+    },
+    {
+     "q": "What sizes are available?",
+     "a": "4.375 by 6 inches with a 2 inch gusset, 5 by 8 inches with a 3 inch gusset, and 7 by 9 inches with a 3 inch gusset."
+    },
+    {
+     "q": "Do the pouches reseal?",
+     "a": "Yes. Every pouch has a zipper to reseal it and a tear notch to open it cleanly."
+    },
+    {
+     "q": "Are the pouches food safe?",
+     "a": "Tell us what you are packing on the quote form, and we will confirm the pouch suits it before you order."
+    },
+    {
+     "q": "Can you design my pouch?",
+     "a": "Yes. Send your logo and the wording and we design it and send a proof. Design is a separate fee shown on your quote."
+    },
+    {
+     "q": "Can I order several flavors or designs?",
+     "a": "Yes. Each design is its own run of 500 or more. We can design one layout and change the color and name for each version, and quote them together."
+    },
+    {
+     "q": "Do the prices include tax and shipping?",
+     "a": "Every price includes shipping to our Lakeview shop. Sales tax is added to your quote, and delivery or shipping to you is quoted separately if you need it."
+    }
+   ],
+   "cta": {
+    "h2": "Ready to package your product?",
+    "p": "Tell us the pouch size, how many and what you are packing."
+   }
   }
  ]
 }
