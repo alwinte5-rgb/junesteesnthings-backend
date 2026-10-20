@@ -198,6 +198,11 @@ const FAMILIES = {
        after the print arrives: two days on top of the printer's promise.
        An estimate until the owner times one job. */
     turnaround_days: sg.BANNER_TURNAROUND_DAYS + 2,
+    /* The design runs round the bars: the customer picks the FACE size and
+       the design area grows by this much on every side (owner, 2026-10-20:
+       "customer sizing should not include the 3in"). The print is billed at
+       the same size (stretchedCanvasCost). */
+    wrap_in: CANVAS_WRAP_IN,
     note: 'Gallery-wrapped on 1-1/2" bars, ready to hang.',
     sizes: [[10, 8], [14, 11], [12, 12], [20, 16], [24, 18], [30, 20], [36, 24], [40, 30]],
     materials: [m('canvas', 'Canvas, gallery wrapped 1-1/2"', 'item', null)],
@@ -276,6 +281,10 @@ function signsTable() {
       /* Business days, all in. Every family runs on the printer's banner
          promise unless it says otherwise (stretched canvas waits on bars). */
       turnaround_days: fam.turnaround_days || sg.BANNER_TURNAROUND_DAYS,
+      /* Inches added on every side of the face: wrap (canvas) and bleed. Bleed
+         stays 0 until Signs365's own file spec is read (behind their login);
+         a guessed bleed would print a margin or cut into the design. */
+      wrap_in: fam.wrap_in || 0, bleed_in: fam.bleed_in || 0,
       markup: sg.MARKUP, freight: sg.FREIGHT.standard,
       materials: fam.materials.map((x) => ({ key: x.key, label: x.label, unit: x.unit, double: !!x.double,
         ...(fam.sizing === 'area' ? { cost: x.cost } : {}) })),
