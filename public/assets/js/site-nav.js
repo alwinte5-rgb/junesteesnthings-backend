@@ -2,6 +2,23 @@
    the phone drawer. Hover and keyboard focus are handled in CSS. */
 (function () {
   'use strict';
+  /* The cart's count (owner, 2026-10-20: "the cart says its empty in the
+     menu"). The Design Studio keeps the cart in its own browser storage, which
+     this site cannot read; it publishes only the number of lines, in the
+     cookie jt_cart_n on .jtees.net (lumise-designer jt-cart-sync.php). Drawn
+     with textContent, from a whole number only. */
+  window.jtCartBadge = function () {
+    var m = /(?:^|;\s*)jt_cart_n=(\d{1,4})(?:;|$)/.exec(document.cookie || '');
+    var n = m ? parseInt(m[1], 10) : 0, label = n > 99 ? '99+' : String(n);
+    Array.prototype.forEach.call(document.querySelectorAll('.jtn-ico-cart, .jtn-drawer-me a[href$="/cart.php"]'), function (a) {
+      var b = a.querySelector('.jtn-cart-n');
+      if (!n) { if (b) b.remove(); a.setAttribute('aria-label', 'Cart'); return; }
+      if (!b) { b = document.createElement('span'); b.className = 'jtn-cart-n'; a.appendChild(b); }
+      b.textContent = label;
+      a.setAttribute('aria-label', 'Cart, ' + n + (n === 1 ? ' item' : ' items'));
+    });
+  };
+  window.jtCartBadge();
   var dds = document.querySelectorAll('.jtn-dd');
   function closeAll(except) {
     Array.prototype.forEach.call(dds, function (d) {
