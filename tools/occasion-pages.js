@@ -80,8 +80,11 @@ function printFamilies(page) {
       cols.push({ label: [f.materials.length > 1 ? m.label : '', f.sizes.length > 1 ? z.label : ''].filter(Boolean).join(', ') || `${m.label}, ${z.label}`,
         ladder: f.prices[m.key][z.key][''] });
     }
+    /* f.runs is every run any option sells; an option whose own minimum is
+       higher has no price at the smaller runs, shown as a dash (null). The
+       first row must price somewhere, or the page would say nothing. */
     const rows = f.runs.map((q) => ({ q, cells: cols.map((c) => SL.eachFor(c.ladder, q, f.any_qty)) }));
-    for (const r of rows) for (const e of r.cells) if (!(e > 0)) throw new Error(`${page.path}: ${k} has no price at ${r.q}`);
+    if (!rows.length || !rows[0].cells.some((e) => e > 0)) throw new Error(`${page.path}: ${k} has no price at its smallest run`);
     return { key: k, f, cols, rows, lead: SL.leadDays(k) };
   });
 }
@@ -93,16 +96,24 @@ function printSummary(fams) {
   let low = null, start = null, high = 0, offers = 0;
   for (const fm of fams) {
     for (const r of fm.rows) for (const e of r.cells) {
+      if (!(e > 0)) continue;
       offers++;
       if (e > high) high = e;
       if (!low || e < low.each) low = { each: e, q: r.q };
     }
     const first = fm.rows[0];
-    const each = Math.min(...first.cells);
+    const each = Math.min(...first.cells.filter((e) => e > 0));
     if (!start || first.q < start.q || (first.q === start.q && each * first.q < start.total)) start = { q: first.q, total: Math.round(each * first.q * 100) / 100 };
   }
   const lead = [Math.min(...fams.map((x) => x.lead[0])), Math.max(...fams.map((x) => x.lead[1]))];
   return { low, start, high, offers, lead };
+}
+
+/* The smallest quantity between two runs, for the note's example. */
+function notRun(rows) {
+  const runs = new Set(rows.map((r) => r.q));
+  for (let q = rows[0].q + 1; q < rows[rows.length - 1].q; q++) if (!runs.has(q)) return q;
+  return null;
 }
 
 function pricesSection(page, fams, sum) {
@@ -111,12 +122,12 @@ function pricesSection(page, fams, sum) {
       <div class="pp-scroll"><table class="pp-table">
         <thead><tr><th scope="col">Quantity</th>${fm.cols.map((c) => `<th scope="col">${esc(c.label)}</th>`).join('')}</tr></thead>
         <tbody>
-        ${fm.rows.map((r) => `<tr><th scope="row">${count(r.q)}</th>${r.cells.map((e) => `<td><b>${money(e)}</b> each<span>${money(Math.round(e * r.q * 100) / 100)} total</span></td>`).join('')}</tr>`).join('\n        ')}
+        ${fm.rows.map((r) => `<tr><th scope="row">${count(r.q)}</th>${r.cells.map((e) => (e > 0 ? `<td><b>${money(e)}</b> each<span>${money(Math.round(e * r.q * 100) / 100)} total</span></td>` : '<td>&mdash;<span>not sold at this quantity</span></td>')).join('')}</tr>`).join('\n        ')}
         </tbody>
       </table></div>
       <p class="pp-note">${fm.f.any_qty
         ? `Any quantity from ${count(fm.rows[0].q)}. A quantity between two rows pays the lower row's price each, or the next row's total if that is less.`
-        : `Sold in these runs. Another quantity is made up from the runs above at the lowest total, so ${count(fm.rows[0].q + 1)} costs no more than the runs it takes.`}</p>
+        : `Sold in these runs. Another quantity is made up from the runs above at the lowest total${notRun(fm.rows) ? `: ${count(notRun(fm.rows))}, for example, is priced as the cheapest set of runs that covers it` : ''}.`}</p>
     </div>`).join('\n    ');
   return `<section class="pp-prices" id="prices">
   <div class="container">

@@ -1564,7 +1564,7 @@
    "h1": "Custom <em>Wall Calendars</em> in Chicago",
    "pitch": "Full-color 8.5 by 11 inch wall calendars with your photos, your logo and your dates, from 25 calendars. See every price below, then get a free quote.",
    "badges": [
-    "📅 From 25 Calendars",
+    "📅 Minimum 25 Calendars",
     "🎨 Full Color Every Page",
     "📍 Pickup in Lakeview"
    ],
@@ -1924,8 +1924,8 @@
    "h1": "Custom <em>Stickers &amp; Labels</em> in Chicago",
    "pitch": "Cut-to-shape vinyl stickers from 10 and gloss laminated roll labels from 25, in circles and rectangles, for products, packaging, giveaways and events.",
    "badges": [
-    "🏷️ Stickers From 10",
-    "🧻 Roll Labels From 25",
+    "🏷️ Stickers: Minimum 10",
+    "🧻 Roll Labels: Minimum 25",
     "📍 Pickup in Lakeview"
    ],
    "print": {
@@ -2019,7 +2019,7 @@
   {
    "calendar": null,
    "kind": "print",
-   "hero": "birthday-party-flyer",
+   "hero": null,
    "work": [],
    "products": [],
    "heading": "",
@@ -2045,7 +2045,7 @@
    "h1": "<em>Trifold Brochures</em> Printed in Chicago",
    "pitch": "Full-color 8.5 by 11 inch trifold brochures on 100 lb gloss paper, scored and folded and ready to hand out, from 25 brochures. Every price is listed below.",
    "badges": [
-    "📄 From 25 Brochures",
+    "📄 Minimum 25 Brochures",
     "📐 Scored &amp; Folded",
     "📍 Pickup in Lakeview"
    ],
@@ -2165,7 +2165,7 @@
    "h1": "Custom <em>Stand-Up Pouches</em> in Chicago",
    "pitch": "Printed stand-up pouches with a zipper and tear notch, in three sizes, from 500 pouches: packaging that makes a small brand look ready for the shelf.",
    "badges": [
-    "🛍️ From 500 Pouches",
+    "🛍️ Minimum 500 Pouches",
     "🔒 Zipper &amp; Tear Notch",
     "📍 Pickup in Lakeview"
    ],

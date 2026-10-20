@@ -52,10 +52,11 @@ test('every price on a page is the staff quote price for that quantity', () => {
       assert.deepStrictEqual(rows.map((r) => Number(r[1].replace(/,/g, ''))), f.runs, `${p.path} ${k}: runs`);
       for (const r of rows) {
         const q = Number(r[1].replace(/,/g, ''));
-        const cells = [...r[2].matchAll(/<b>(\$[\d,.]+)<\/b> each<span>(\$[\d,.]+) total/g)];
+        const cells = [...r[2].matchAll(/<td>(?:<b>(\$[\d,.]+)<\/b> each<span>(\$[\d,.]+) total|&mdash;)/g)];
         assert.strictEqual(cells.length, ladders.length, `${p.path} ${k} ${q}: columns`);
         cells.forEach((c, j) => {
           const each = SL.eachFor(ladders[j], q, f.any_qty);
+          if (!c[1]) { assert.strictEqual(each, null, `${p.path} ${k} ${q} col ${j}: dash but priced`); return; }
           assert.strictEqual(money(c[1]), each, `${p.path} ${k} ${q} col ${j}`);
           assert.strictEqual(money(c[2]), Math.round(each * q * 100) / 100, `${p.path} ${k} ${q} col ${j} total`);
         });
@@ -82,7 +83,7 @@ test('the minimum a page promises is the real one', () => {
   for (const p of pages) {
     const mins = p.print.families.map((k) => fams[k].min);
     for (const b of p.badges) {
-      const m = b.match(/From ([\d,]+)\b/);
+      const m = b.match(/Minimum ([\d,]+)\b/);
       if (m) assert.ok(mins.includes(Number(m[1].replace(/,/g, ''))), `${p.path}: badge "${b}" vs minimums ${mins}`);
     }
     const sum = O.printSummary(O.printFamilies(p));
@@ -113,6 +114,32 @@ test('Product schema parses and agrees with the page', () => {
     assert.strictEqual(prod.offers.lowPrice, sum.low.each.toFixed(2), p.path);
     assert.strictEqual(prod.offers.priceCurrency, 'USD');
     assert.ok(Number(prod.offers.highPrice) >= Number(prod.offers.lowPrice), p.path);
+  }
+});
+
+test('a column that starts above the smallest run shows a dash, not a broken page', () => {
+  const t = SL.table();
+  const f = JSON.parse(JSON.stringify(t.families.sticker));
+  const m = f.materials[0].key, z = f.sizes[0].key;
+  f.prices[m][z][''] = f.prices[m][z][''].filter(([q]) => q >= 50);
+  const orig = SL.table;
+  SL.table = () => ({ ...t, families: { ...t.families, sticker: f } });
+  try {
+    const p = pages.find((x) => x.print.families.includes('sticker'));
+    const fams = O.printFamilies(p);
+    const st = fams.find((x) => x.key === 'sticker');
+    assert.strictEqual(st.rows[0].cells[0], null);
+    assert.match(O.render(p, '<style></style>', '', new Date()), /not sold at this quantity/);
+  } finally { SL.table = orig; }
+});
+
+test('the run note never gives a run as its example', () => {
+  for (const p of pages) {
+    const html = read(p.path);
+    for (const m of html.matchAll(/: ([\d,]+), for example, is priced/g)) {
+      const q = Number(m[1].replace(/,/g, ''));
+      for (const k of p.print.families) assert.ok(!SL.table().families[k].runs.includes(q), `${p.path}: ${q} is a run`);
+    }
   }
 });
 
