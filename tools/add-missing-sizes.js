@@ -52,8 +52,10 @@ function withSizes(attrs, add, order, bySize) {
 async function main(buf) {
   const APPLY = process.argv.includes('--apply');
   const onlyArg = process.argv.find((a) => a.startsWith('--only='));
-  const ONLY = onlyArg ? onlyArg.slice(7).split(',').map(Number).filter((n) => n > 0) : null;
-  if (APPLY && !(ONLY && ONLY.length)) { console.error('--apply needs --only=<ids>'); process.exit(2); }
+  const ONLY = onlyArg ? onlyArg.slice(7).split(',').map((x) => x.trim()) : null;
+  /* A typo must never become "no filter" or an empty IN (). */
+  if (ONLY && (!ONLY.length || ONLY.some((x) => !/^\d+$/.test(x) || Number(x) <= 0))) { console.error('--only takes product ids, e.g. --only=88,94'); process.exit(2); }
+  if (APPLY && !ONLY) { console.error('--apply needs --only=<ids>'); process.exit(2); }
   const e = JSON.parse(buf || '{}');
   const url = urlFromStdinJson(buf);
   if (!e.SSA_ACCOUNT || !e.SSA_API_KEY) { console.error('no SSA_ACCOUNT / SSA_API_KEY on stdin'); process.exit(2); }
