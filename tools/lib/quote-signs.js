@@ -200,8 +200,8 @@ function sizerOptions() {
       /* The smallest quantity any size can be bought at, so the form can say
          "min 25" before anyone types a quantity (owner, 2026-10-15). */
       min: fam.min || null, supplier: fam.supplier || 'signs365',
-      /* SinaLite only: the date its prices were read, and whether that is
-         past STALE_DAYS, so the sizer can say so. */
+      /* SinaLite only: the date its prices were read, and whether the table
+         is missing, so the sizer can say so. */
       ...(fam.supplier === 'sinalite' ? (() => { const t = SL.table();
         /* The quantities SinaLite sells, shown under the sizer so nobody has
            to guess a run (owner, 2026-10-15: "there are no quantities"). */

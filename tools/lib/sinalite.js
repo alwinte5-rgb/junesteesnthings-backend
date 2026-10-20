@@ -5,9 +5,15 @@
  * WHERE THE COSTS COME FROM
  *   tools/data/sinalite-costs.json, captured from SinaLite's own site while
  *   logged in (tools/sinalite-capture.js). Each row is one SinaLite quantity
- *   tier: what SinaLite charges and the cheapest shipping to the shop. Their
- *   prices include whatever sale is running, so the file carries the date it
- *   was read and `stale()` says when it is old enough to re-read.
+ *   tier: what SinaLite charges and the cheapest shipping to the shop, at its
+ *   REGULAR price, never a sale price (owner, 2026-10-15 and 2026-10-20).
+ *
+ *   FIXED PRICES (owner, 2026-10-20: "keep a constant price on sinalite").
+ *   Regular prices do not end with a sale, so they never go stale by age:
+ *   they change only when the owner has them re-read. `stale()` is true only
+ *   when there is no table at all. Until SinaLite opens its API, a monthly
+ *   reminder in the daily summary asks the owner to check (server.js,
+ *   sinaliteApiReminder).
  *
  * THE PRICE RULE (owner, 2026-10-14, the same one tools/add-services.js wrote
  * by hand for the 3,000 brochure run):
@@ -31,7 +37,6 @@ const path = require('path');
 const DATA_FILE = path.join(__dirname, '..', 'data', 'sinalite-costs.json');
 const MARKUP = 2;              // the shop's x2 (tools/lib/markup.js)
 const SHIP_HANDLING = 25;      // added to shipping before rounding (owner rule)
-const STALE_DAYS = 35;         // SinaLite runs monthly sales; re-read after one
 
 const ceil2 = (n) => Math.ceil(n * 100 - 1e-9) / 100;
 const ceil5 = (n) => Math.ceil(n / 5 - 1e-9) * 5;
@@ -159,7 +164,7 @@ function ageDays(now = Date.now()) {
   const d = load().captured ? Date.parse(load().captured) : NaN;
   return Number.isFinite(d) ? Math.floor((now - d) / 86400000) : null;
 }
-const stale = (now) => { const a = ageDays(now); return a === null || a > STALE_DAYS; };
+const stale = (now) => ageDays(now) === null;
 
 /** One family from one captured product. */
 function familyOf(key, p) {
@@ -205,8 +210,7 @@ function table() {
     built = { families, captured: d.captured || null, ship_to: d.ship_to || null };
     builtFrom = d;
   }
-  /* Worked out on every call: a long-running server must start saying
-     "stale" the day the prices pass STALE_DAYS, not at its next restart. */
+  /* Worked out on every call, so a table that goes missing says so at once. */
   return { ...built, stale: stale(), ...(loadError ? { error: loadError } : {}) };
 }
 
@@ -257,4 +261,4 @@ function _recheck() { checkedAt = 0; }
 
 function _setData(d) { checkedAt = 0; cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
 
-module.exports = { _recheck, priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, MAX_QTY, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE, STALE_DAYS };
+module.exports = { _recheck, priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, MAX_QTY, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE };

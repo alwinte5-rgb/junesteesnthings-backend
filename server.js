@@ -12456,9 +12456,10 @@ ${quotePricingSource()}
               o.runs.map(function(q){ return q.toLocaleString(); }).join(' · ') +
               (o.any_qty ? ' (in between, never more than the next one up)' : ' (other quantities are priced as the cheapest mix of runs)') +
               '. Shipping to the shop is included in the price.</div>' : '') +
-            /* Stale SinaLite prices (read over STALE_DAYS ago, sale may be over):
-               said where the price is made, not only in the morning email. */
-            (o.stale ? '<div style="font-size:12px;color:#b45309;margin:4px 0 6px">Supplier prices last read ' + esc(o.captured || 'on an unknown date') +
+            /* No SinaLite table, or one that cannot be read: said where the
+               price is made, not only in the morning email. Prices are fixed,
+               so age alone is never a warning (owner, 2026-10-20). */
+            (o.stale ? '<div style="font-size:12px;color:#b45309;margin:4px 0 6px">SinaLite prices are missing or unreadable' +
               ' — check SinaLite before sending.</div>' : '');
           if (kind === 'banner') {
             var ft = []; for (var i = 1; i <= o.max.long; i++) ft.push([i, i + ' ft']);
@@ -28496,15 +28497,13 @@ async function siteHealthHtml() {
     console.error('funnel health failed:', e.message); return ''; }) : '');
 }
 
-/** Every morning while SinaLite's prices are older than STALE_DAYS (or the
- *  file cannot be read): the quote form keeps pricing from them, and they
- *  include a sale that may have ended (Codex on #293). */
+/** Every morning while SinaLite's price table is missing or unreadable. Its
+ *  prices are fixed regular prices, so their age is never a warning (owner,
+ *  2026-10-20); a monthly reminder covers re-checking (sinaliteApiReminder). */
 function sinaliteStaleHtml() {
   const t = SINALITE.table();
   if (!t.stale && !t.error) return '';
-  const age = SINALITE.ageDays();
-  const why = t.error ? escEmail(t.error)
-    : `SinaLite prices were read ${age === null ? 'at an unknown date' : age + ' days ago'} and may include a sale that has ended.`;
+  const why = t.error ? escEmail(t.error) : 'There is no SinaLite price table on the server.';
   return `<h3 style="margin:18px 0 6px;font-size:15px;color:#b45309">SinaLite prices need re-reading</h3>
     <p style="margin:0 0 6px;font-size:14px">${why} Quotes for brochures, calendars, table covers and the other SinaLite items still price from them.
     Re-run tools/sinalite-capture.js in the logged-in SinaLite tab, then tools/sinalite-assemble.js --captured=&lt;date&gt;.</p>`;
@@ -30570,6 +30569,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('error digest', sendErrorDigest);
     await step('supplier sync', runSupplierSync);
     /* Last, after every email the sweep itself writes, so they arrive inside it. */
+    await step('SinaLite API reminder', sinaliteApiReminder);
     await step('daily summary', sendShopDigest);
     setTimeout(runSweep, 60 * 60 * 1000);
   };
@@ -31305,6 +31305,30 @@ app.post('/admin/followups/:id/done', requireAdmin, async (req, res) => {
  *  first run at or after JT_DIGEST_HOUR (7am) shop time, once a day. Items
  *  are taken atomically, so two sweeps cannot both send one; a send that
  *  fails puts them back for the next hour. */
+/** Once a month until SinaLite opens its API (owner, 2026-10-20: "the
+ *  sinalite api is not available at the moment but will be in the future. Add
+ *  an alert to check back once a month"). An ordinary shop email, so it rides
+ *  in the daily summary. JT_SINALITE_API_REMINDER=off stops it. */
+async function sinaliteApiReminder() {
+  if (/^(0|off|false|no)$/i.test(String(process.env.JT_SINALITE_API_REMINDER || '').trim())) return '';
+  const month = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }).slice(0, 7);
+  const { rows: [done] } = await pool.query(
+    `SELECT 1 FROM staff_activity WHERE action = 'sinalite api reminder' AND subject_id = $1 LIMIT 1`, [month]);
+  if (done) return '';
+  await sendEmail({
+    to: NOTIFY_EMAIL, promo: false,
+    subject: 'Monthly check: is the SinaLite API open yet?',
+    html: `<p>SinaLite's API was not open yet. When it is, our SinaLite prices can be watched automatically
+      instead of being read by hand.</p>
+      <p><a href="https://sinalite.com/en_us/api-signup">Check the SinaLite API sign-up page</a>. If you can sign up,
+      do it and send the client id and secret, and the price watch gets switched on.</p>
+      <p style="color:#6b7280;font-size:12px">Our SinaLite prices are fixed at SinaLite's regular prices until then.
+      This reminder comes once a month.</p>`,
+  });
+  await logActivity(OWNER_ACTOR, 'sinalite api reminder', { type: 'reminder', id: month });
+  return 'sent for ' + month;
+}
+
 async function sendShopDigest() {
   if (!SHOPDIGEST.on()) return '';
   const day = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
