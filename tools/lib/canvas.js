@@ -30,6 +30,8 @@ const OK_ART = {
 const CREW_RE = /\bcrew(neck)?\b|\bsweatshirt\b/i;
 const HOOD_RE = /\bhood(ed|ie|y)?\b/i;
 const TANK_RE = /\btank\b/i;
+/** A crewneck sweatshirt: the hoodie class, without a hood. */
+const isCrew = (name) => classify(name) === 'hoodie' && CREW_RE.test(String(name || '')) && !HOOD_RE.test(String(name || ''));
 
 const decodeStages = (b) => { try { return JSON.parse(decodeURIComponent(Buffer.from(String(b || ''), 'base64').toString('utf8'))); }
   catch { return null; } };
@@ -52,9 +54,12 @@ function canvasVerdict(p) {
      sweatshirt is in the hoodie class but both hoodie drawings have a hood
      (Bayside 4025 opened as a hoodie), and a youth tank is in the kids class,
      whose tee drawing has sleeves (Shaka Wear SHKTT). */
-  if (cls === 'hoodie' && CREW_RE.test(p.name) && !HOOD_RE.test(p.name) && /hoodie/.test(art)) {
+  if (isCrew(p.name) && /hoodie/.test(art)) {
     return { verdict: 'bad', cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') + ' — a hood on a crewneck' };
   }
+  /* No crewneck drawing exists; the long-sleeve crew (no hood, ribbed cuffs)
+     is its stand-in. */
+  if (isCrew(p.name) && /long_sleeve/.test(art) && !/hoodie/.test(art)) return { verdict: 'ok', cls };
   if (TANK_RE.test(p.name) && !/tank/.test(art)) {
     return { verdict: 'bad', cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') + ' — sleeves on a tank' };
   }
@@ -81,4 +86,4 @@ function photoCoverage(attrs, vars) {
   return { colours: opts.length, withPhotos: opts.filter((o) => wired.has(o.value)).length };
 }
 
-module.exports = { OK_ART, canvasVerdict, decodeStages, photoCoverage };
+module.exports = { OK_ART, canvasVerdict, decodeStages, photoCoverage, isCrew, TANK_RE };

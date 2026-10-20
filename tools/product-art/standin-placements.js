@@ -28,7 +28,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('../lib/db');
 const { placementSet, boxesFor, toEditZone } = require('../lib/placements');
-const { canvasVerdict } = require('../lib/canvas');
+const { canvasVerdict, isCrew, TANK_RE } = require('../lib/canvas');
 const { classify } = require('../lib/garments');
 
 /* The designer's drawing of each garment class (core/raws/products). */
@@ -36,7 +36,11 @@ const DRAWING = { tee: 'basic_tshirt', longslv: 'long_sleeve', tank: 'tank_tops'
 /* A cropped tee drawn full length reads as the wrong garment (owner,
    2026-10-19: "cropped tee but full shirt"); lumise-designer #126 added it. */
 const CROPPED_RE = /\bcrop(ped)?\b/i;
-const drawingFor = (cls, name) => (cls === 'tee' && CROPPED_RE.test(name) ? 'cropped_tshirt' : DRAWING[cls]);
+/* A crewneck has no drawing of its own: the long-sleeve crew, not a hood
+   (owner, 2026-10-20, Bayside 4025). A tank of any class — a youth tank is
+   'kids' — is drawn as a tank, not a sleeved tee (Shaka Wear SHKTT). */
+const drawingFor = (cls, name) => (cls === 'tee' && CROPPED_RE.test(name) ? 'cropped_tshirt'
+  : isCrew(name) ? 'long_sleeve' : TANK_RE.test(name) ? 'tank_tops' : DRAWING[cls]);
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -79,7 +83,7 @@ function standinStages(p) {
   const set = placementSet(p.name);
   if (!set) return { why: 'no placement set for this garment' };
   const v = canvasVerdict(p), cls = classify(p.name);
-  if (!(v.verdict === 'ok' || (v.verdict === 'bad' && DRAWING[cls])) || v.real) return { why: 'canvas is ' + (v.real ? 'a photo' : v.verdict) + ' — not a stand-in this tool may place on' };
+  if (!(v.verdict === 'ok' || (v.verdict === 'bad' && drawingFor(cls, p.name))) || v.real) return { why: 'canvas is ' + (v.real ? 'a photo' : v.verdict) + ' — not a stand-in this tool may place on' };
   /* On another garment's drawing (a muscle tee on the sleeved tee): moved to
      its own class's drawing, then checked again. */
   const want = drawingFor(cls, p.name);
@@ -134,4 +138,4 @@ if (require.main === module) {
   else { let b = ''; process.stdin.on('data', (d) => (b += d)); process.stdin.on('end', () => run(b)); }
 }
 
-module.exports = { standinStages, MASK };
+module.exports = { standinStages, drawingFor, MASK };
