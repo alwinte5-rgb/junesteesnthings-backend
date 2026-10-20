@@ -419,7 +419,7 @@ const BODY = `<section class="hero">
   </div>
 </section>
 
-<section class="alt">
+<section class="alt" id="pricing">
   <div class="container">
     <div class="section-tag">By the pack</div>
     <h2>A pack is a sheet, or half of one</h2>

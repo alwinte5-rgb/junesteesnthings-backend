@@ -136,7 +136,7 @@ test('a page whose end marker was lost fails loudly instead of being spliced', (
 
 test('a gallery never repeats its main photo and fills its rows', () => {
   const { data } = PB.load();
-  const page = (over) => ({ ...data, pages: { 'services/embroidery.html': { ...data.pages['services/embroidery.html'], ...over } } });
+  const page = (over) => ({ ...data, featured: {}, pages: { 'services/embroidery.html': { ...data.pages['services/embroidery.html'], ...over } } });
   const w = data.pages['services/embroidery.html'].work;
   assert.match(PB.validate(page({ hero: w[0] })).join('\n'), /main photo repeated/);
   assert.match(PB.validate(page({ work: w.slice(0, 5) })).join('\n'), /gallery has 5 photos/);
@@ -165,10 +165,14 @@ test('every page shows the Design Lab, then three category shelves of real produ
   }
 });
 
-test('a sign page still opens each sign designer, as plain links (no drawn cards)', () => {
+test('a sign page links each sign designer that has products, and never an empty one (no drawn cards)', () => {
   const html = read('services/banners-signs.html');
   const row = html.slice(html.indexOf('<p class="pb-links">'), html.indexOf('</p>', html.indexOf('<p class="pb-links">')));
-  for (const c of [67, 68, 69, 70, 71, 72]) assert.match(row, new RegExp(`products\\.php\\?category_id=${c}"`));
+  for (const c of [67, 68, 69, 70, 71, 72]) {
+    const linked = new RegExp(`products\\.php\\?category_id=${c}"`).test(row);
+    /* 2026-10-20: the sign products are switched off, so 67-71 opened "0 products". */
+    assert.strictEqual(linked, !data.empty.includes('c' + c), `category ${c}`);
+  }
   assert.ok(PB.shelvesFor(data, data.pages['services/banners-signs.html'], 'services/banners-signs.html').length === 3);
 });
 
@@ -210,4 +214,41 @@ test('photos the owner pulled from the site stay off it', () => {
     const all = (r.stdout || '').trim();
     assert.strictEqual(all, '', k + ' still named in: ' + all);
   }
+});
+
+/* Owner, 2026-10-20: "these are the dedicated pages ... match the services to
+   the products". A service page's own products come first, in their own
+   section after the Design Lab, larger than the shelf cards. */
+test('a service page shows the products it is about first, in their own section', () => {
+  for (const [rel, f] of Object.entries(data.featured)) {
+    const html = read(rel);
+    const feat = html.indexOf('<section class="pb-products pb-featured"');
+    /* Owner, 2026-10-20: "do the design lab first". */
+    assert.ok(feat > html.indexOf('<section class="pb-lab"') && feat < html.indexOf('<section class="pb-products" aria-labelledby="pb-products-h"'), `${rel}: after the Design Lab, before the category shelves`);
+    const box = html.slice(feat, html.indexOf('</section>', feat));
+    for (const id of f.products) assert.ok(box.includes(`href="${data.catalog[id].link}"`), `${rel}: shows ${id}`);
+    for (const c of f.covers || []) {
+      const links = html.slice(html.indexOf('<p class="pb-links">'), html.indexOf('</p>', html.indexOf('<p class="pb-links">')));
+      assert.ok(!links.includes(data.catalog[c].link + '"'), `${rel}: ${c} is not linked again below`);
+    }
+  }
+  const sub = read('services/sublimation.html');
+  const box = sub.slice(sub.indexOf('pb-featured'), sub.indexOf('</section>', sub.indexOf('pb-featured')));
+  assert.match(box, /class="pb-row pb-row-lg"/, 'several products make a row of large cards');
+  assert.strictEqual((box.match(/Sublimation Tee/g) || []).length >= 3, true, 'and they are sublimation blanks');
+  const bh = read('services/big-head-cutouts.html');
+  assert.match(bh, /<div class="pb-feature">[\s\S]*product_id=188[\s\S]*<div class="pb-feature-info">[\s\S]*How it works/, 'big heads: the product beside how it works');
+  assert.match(bh, /data-own="1"/, 'and its card keeps its own photo (the feed has only a drawing)');
+  assert.match(bh, /<section class="alt" id="pricing">/, 'the "every size and price" link has somewhere to land');
+});
+
+test('the feed leaves a card with its own photo alone', () => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
+  const at = js.indexOf("a.getAttribute('data-own') === '1'");
+  assert.ok(at !== -1 && at < js.indexOf('img.src = it.image'), 'checked before the photo is swapped');
+});
+
+test('a featured product that is not a product, has no photo, or a missing heading is refused', () => {
+  const bad = PB.validate({ ...data, featured: { 'services/sublimation.html': { products: ['c52'] } } });
+  assert.ok(bad.some((b) => /c52 is not a product/.test(b)) && bad.some((b) => /needs a heading/.test(b)));
 });
