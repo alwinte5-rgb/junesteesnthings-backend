@@ -119,7 +119,8 @@ test('garments are classified the way the catalogue actually names them', () => 
 test('nothing is offered a decoration the shop would have to refuse', () => {
   // A curved cap front takes no screen and has no back panel to hoop.
   assert.ok(!DECORATIONS.cap.includes('screen'), 'a cap cannot be screen printed');
-  assert.ok(!DECORATIONS.cap.includes('dtf'), 'a cap is not DTF printed here');
+  /* Owner, 2026-10-20: "hats can do dtf". */
+  assert.ok(DECORATIONS.cap.includes('dtf'), 'a cap takes DTF');
   assert.ok(!DECORATIONS.cap.some((r) => /fullback|upperback|large/.test(r)),
     'a cap has no back or large-logo placement');
   // An infant bodysuit is smaller than the hoop, and stitching sits on skin.
