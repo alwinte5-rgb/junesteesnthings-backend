@@ -52,6 +52,10 @@ a.jt-studio{color:#0E78B8;font-weight:700;text-decoration:underline;text-underli
 .jtn-icon{display:flex;align-items:center;}
 .jtn-icon svg,.jtn-contact svg{width:20px;height:20px;fill:#E0107A;flex-shrink:0;}
 .jtn-icon svg{fill:#fff;}
+/* The cart's count (site-nav.js jtCartBadge). */
+.jtn-ico-cart{position:relative;}
+.jtn-cart-n{position:absolute;top:-7px;right:-9px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#E0107A;color:#fff;font:800 11px/17px Inter,system-ui,sans-serif;text-align:center;}
+.jtn-drawer-me .jtn-cart-n{position:static;display:inline-block;margin-left:6px;vertical-align:1px;}
 .jtn-contact{display:flex;align-items:center;gap:.4rem;color:#E0107A;font:600 .72rem/1.2 Inter,system-ui,sans-serif;}
 .jtn-contact span{display:flex;flex-direction:column;}
 .jtn-contact b{color:#fff;font-size:.8rem;}

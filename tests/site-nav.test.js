@@ -254,3 +254,32 @@ test('footer brand block is a full-width row with its own left and right halves'
   assert.match(css, /\.jtf-in\{[^}]*grid-template-columns:repeat\(6,minmax\(0,1fr\)\)/, 'six even link columns');
   assert.ok(!/\.jtf-brand>p:nth-of-type/.test(css), 'no layout tied to paragraph order');
 });
+
+/* Owner, 2026-10-20: "the cart says its empty in the menu". The badge reads
+   only the count cookie the Design Studio writes, and draws it as text. */
+test('the menu cart shows the Design Studio count from jt_cart_n, as text only', () => {
+  const js = read('assets/js/site-nav.js');
+  const start = js.indexOf('window.jtCartBadge = function');
+  const body = js.slice(start, js.indexOf('window.jtCartBadge();', start));
+  assert.ok(start !== -1 && !/innerHTML/.test(body), 'no innerHTML');
+  const vm = require('node:vm');
+  const mk = (cls, href) => ({ cls, href, kids: [], attrs: {}, querySelector() { return this.kids[0] || null; },
+    appendChild(c) { this.kids.push(c); c.parent = this; }, setAttribute(k, v) { this.attrs[k] = v; } });
+  const icon = mk('jtn-ico-cart'), drawerLink = mk('', 'https://design.jtees.net/cart.php');
+  const ctx = { window: {}, document: { cookie: '', querySelectorAll: () => [icon, drawerLink],
+    createElement: () => ({ remove() { this.parent.kids = []; } }) }, parseInt, String, Array };
+  vm.createContext(ctx);
+  vm.runInContext(body + '; window.jtCartBadge();', ctx);
+  assert.strictEqual(icon.kids.length, 0, 'no cookie: no badge');
+  ctx.document.cookie = 'a=1; jt_cart_n=3; b=2';
+  ctx.window.jtCartBadge();
+  assert.strictEqual(icon.kids[0].textContent, '3');
+  assert.strictEqual(drawerLink.kids[0].textContent, '3', 'the phone drawer link too');
+  assert.strictEqual(icon.attrs['aria-label'], 'Cart, 3 items');
+  ctx.document.cookie = 'jt_cart_n=250';
+  ctx.window.jtCartBadge();
+  assert.strictEqual(icon.kids[0].textContent, '99+');
+  ctx.document.cookie = 'jt_cart_n=<img src=x>';
+  ctx.window.jtCartBadge();
+  assert.strictEqual(icon.kids.length, 0, 'anything but a number is ignored');
+});
