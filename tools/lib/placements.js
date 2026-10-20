@@ -1,11 +1,14 @@
 /* Where a design can go on each garment, measured on the garment's own photo.
  *
- * Owner, 2026-10-18 — the placement set per garment:
+ * Owner, 2026-10-20 — the designer offers FRONT and BACK only; any other
+ * spot (a separate chest logo, sleeves) is quoted ("lets only do front and
+ * back on the designer. The extra sides will have to come in a quote"). This
+ * replaces the 2026-10-18 sets, which added Left chest / Right chest tabs.
  *
  *   quarter-zips, polos, button-downs, full-zip hoodies, jackets, vests
- *        Left chest · Right chest · Back       (no full front: zipper/placket)
+ *        Front (on the left chest, clear of the zipper/placket) · Back
  *   tees, long sleeves, tanks, pullover hoodies and crews
- *        Full front · Left chest · Back
+ *        Front (full) · Back — a chest logo is placed inside the front box
  *   kids, infant bodysuits, totes      Front · Back
  *   caps                               Front only (decided 2026-09-12)
  *
@@ -22,8 +25,9 @@
  * canvas is.
  *
  * Stage keys stay compatible with designs already saved: `front` and `back`
- * keep existing; a zip or placket garment's `front` IS its left chest, and the
- * extra placements are new keys (`left_chest`, `right_chest`). The first stage
+ * keep existing; a zip or placket garment's `front` IS its left chest. The
+ * retired `left_chest` / `right_chest` keys are removed by
+ * tools/front-back-only.js. The first stage
  * is the one the quote feed shows as the colour's photo, so it is the front.
  *
  * A placement that the review finds wrong for one style is corrected in
@@ -68,21 +72,18 @@ const BODY_IN = { closed: 15, tank: 14.5, open: 15, kids: 12, onesie: 7.5 };
 const CHEST = { w: 5.5, h: 5.5 };
 const SETS = {
   closed: [
-    { key: 'front',      label: 'Full front',  side: 'front', w: 14, h: 17, x: 0,    top: 4.5 },
-    { key: 'left_chest', label: 'Left chest',  side: 'front', ...CHEST,    x: 4.5,  cy: 6.5 },
+    { key: 'front',      label: 'Front',       side: 'front', w: 14, h: 17, x: 0,    top: 4.5 },
     { key: 'back',       label: 'Back',        side: 'back',  w: 14, h: 18, x: 0,    top: 4 },
   ],
   /* A tank's measured "shoulder" is the armpit — the straps are narrower than
      the body — so its boxes start near that line. */
   tank: [
-    { key: 'front',      label: 'Full front',  side: 'front', w: 12, h: 16, x: 0,    top: 0.5 },
-    { key: 'left_chest', label: 'Left chest',  side: 'front', w: 5, h: 5,  x: 4,    cy: 3 },
+    { key: 'front',      label: 'Front',       side: 'front', w: 12, h: 16, x: 0,    top: 0.5 },
     { key: 'back',       label: 'Back',        side: 'back',  w: 12, h: 17, x: 0,    top: -0.5 },
   ],
   /* Clear of the zipper or placket: 4.75" out from the centre line. */
   open: [
-    { key: 'front',       label: 'Left chest',  side: 'front', ...CHEST,   x: 4.75,  cy: 6.5 },
-    { key: 'right_chest', label: 'Right chest', side: 'front', ...CHEST,   x: -4.75, cy: 6.5 },
+    { key: 'front',       label: 'Front',       side: 'front', ...CHEST,   x: 4.75,  cy: 6.5 },
     { key: 'back',        label: 'Back',        side: 'back',  w: 14, h: 17, x: 0,  top: 4 },
   ],
   kids: [

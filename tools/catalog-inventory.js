@@ -240,8 +240,23 @@ async function compareWithSsa(r, p, ssa, { style } = {}) {
 
 const CHECKS = ['identity', 'naming', 'description', 'colours', 'swatches', 'swatchPhotos', 'price', 'sizes', 'upcharges', 'decoration',
   'photos', 'placements', 'canvas', 'category', 'listing', 'copy', 'shopmade'];
+/* Findings that are reported but are not faults (owner, 2026-10-20, after
+   checking the flagged products by hand: "they all have the image loaded
+   fine", "the canvas drawings look fine", "I think we need to loosen the
+   audit a bit"): a short description, a colour opening on the product's
+   drawing or default photo instead of its own, and a drawing that IS the
+   garment (or a generic fit of it, as on the Bayside oversized styles). A
+   wrong garment, an unusable canvas, a drawing that cannot show a pattern, and
+   a cropped cut on a full-length drawing (owner, 2026-10-19: "cropped tee but
+   full shirt" — cropped_tshirt exists for it) stay faults. */
+const NOTE_CHECKS = new Set(['copy', 'photos', 'swatchPhotos']);
+const NOTE_CANVAS = /^(drawing \(no real photo\)|generic drawing for an? (?!crop))/i;
+const isNote = (k, v) => NOTE_CHECKS.has(k) || (k === 'canvas' && NOTE_CANVAS.test(String(v)));
+const flagged = (r) => CHECKS.filter((k) => r[k] && r[k] !== 'ok' && r[k] !== '-' && !String(r[k]).startsWith('shop-made'));
 /** The checks a report row fails. */
-const bad = (r) => CHECKS.filter((k) => r[k] && r[k] !== 'ok' && r[k] !== '-' && !String(r[k]).startsWith('shop-made'));
+const bad = (r) => flagged(r).filter((k) => !isNote(k, r[k]));
+/** The checks a report row only notes. */
+const noted = (r) => flagged(r).filter((k) => isNote(k, r[k]));
 
 /* Credentials come in on stdin as one JSON object, as for
    tools/product-art/run.js — never on the command line, where `ps` shows them. */
@@ -296,8 +311,11 @@ async function main(buf) {
   }
   const tally = {};
   for (const r of report) for (const k of bad(r)) tally[k] = (tally[k] || 0) + 1;
+  const notes = {};
+  for (const r of report) for (const k of noted(r)) notes[k] = (notes[k] || 0) + 1;
   console.log('\n  ' + report.filter((r) => !bad(r).length).length + ' ready · ' +
-    Object.entries(tally).map(([k, n]) => n + ' ' + k).join(' · '));
+    Object.entries(tally).map(([k, n]) => n + ' ' + k).join(' · ') +
+    '\n  notes, not faults: ' + (Object.entries(notes).map(([k, n]) => n + ' ' + k).join(' · ') || 'none'));
   if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(report, null, 1));
 }
 
@@ -306,4 +324,4 @@ if (require.main === module) {
   process.stdin.on('data', (d) => (buf += d));
   process.stdin.on('end', () => main(buf).catch((e) => { console.error(e.message); process.exit(1); }));
 }
-module.exports = { localChecks, ssaChecks, compareWithSsa, bad, CHECKS, sublimationId, expectedKeys };
+module.exports = { localChecks, ssaChecks, compareWithSsa, bad, noted, isNote, CHECKS, sublimationId, expectedKeys };

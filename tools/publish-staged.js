@@ -5,7 +5,6 @@
  *     node tools/publish-staged.js                      # dry run: ready / not ready, and why
  *   ... node tools/publish-staged.js --apply            # publish every READY product
  *   ... node tools/publish-staged.js --apply --only=358,374
- *   ... node tools/publish-staged.js --apply --standin  # also styles S&S never shot flat
  *
  * tools/ssa-add-products.js --staged adds a style switched off with
  * supplier='ssa-staged': the quote form can sell it (jt-catalog.php lists it),
@@ -27,13 +26,13 @@
  *     plain lines (product.php prints descriptions escaped, not as HTML), which
  *     needs SSA_ACCOUNT / SSA_API_KEY in the environment.
  *
- * --standin (owner, 2026-10-19: "model photo + stand-in"): a style S&S has
- * NO flat photo for — only on-model shots (most of Shaka Wear) — may go live
- * on the drawn garment of its own type, with S&S's photo as the listing image.
- * Only when canvasVerdict calls that drawing the garment itself ('ok'): a
- * jacket on hoodie art, or a flannel on a crew-neck tee, stays staged. A style
- * with SOME photos is not a stand-in case — its missing colours are made by
- * tools/product-art/recolor.js instead.
+ * A style S&S has NO flat photo for — only on-model shots (most of Shaka
+ * Wear) — goes live on the drawn garment of its own type, with S&S's photo as
+ * the listing image (owner, 2026-10-19 "model photo + stand-in"; the default
+ * since 2026-10-20, when the owner checked the flagged drawings and photos and
+ * found them fine). Only when canvasVerdict calls that drawing the garment
+ * itself ('ok'): a jacket on hoodie art, a crewneck on a hooded drawing or a
+ * flannel on a crew-neck tee stays staged.
  *
  * AUDIT: a product that passes the list above is then run through the whole
  * catalogue audit (tools/catalog-inventory.js) — its name against S&S's title,
@@ -48,7 +47,7 @@
  */
 const { mysql, mysqlUrlFrom, sq, dejson } = require('./lib/db');
 const { photoCoverage, canvasVerdict } = require('./lib/canvas');
-const { localChecks, compareWithSsa, bad, sublimationId } = require('./catalog-inventory');
+const { localChecks, compareWithSsa, bad, noted, sublimationId } = require('./catalog-inventory');
 const { resolveRoles } = require('./lib/garments');
 const { makeClient } = require('./lib/ssa-client');
 const { STAGED_SUPPLIER, parseIds } = require('./lib/ssa-staged');
@@ -94,16 +93,20 @@ function patterned(p) {
 
 /** Why a staged product is not ready, or null when it is. `desc` is the
  *  description it WILL have (the stored one, or the one S&S supplied). */
-function notReady(p, { desc = p.description, standin = false } = {}) {
+function notReady(p, { desc = p.description } = {}) {
   const cov = photoCoverage(dejson(p.attributes) || {}, dejson(p.variations) || {});
   if (!cov.colours) return 'no colours';
-  if (standin && cov.withPhotos === 0) {
+  /* Owner, 2026-10-20: a colour without its own photo is fine ("they all
+     have the image loaded fine") — it opens on the product's drawing or
+     default photo. What still holds a style back is a drawing that is the
+     wrong garment or cannot show its pattern, when NO colour has a photo. */
+  if (cov.withPhotos === 0) {
     const pat = patterned(p);
-    if (pat) return 'stand-in cannot show a pattern: ' + pat;
+    if (pat) return 'drawing cannot show a pattern: ' + pat;
     const v = canvasVerdict(p);
-    if (v.verdict === 'borrowed') return 'stand-in is not this garment: drawn as ' + v.sub.looks;
-    if (v.verdict !== 'ok') return 'stand-in is the wrong garment' + (v.art ? ' (' + v.art + ')' : v.why ? ' (' + v.why + ')' : '');
-  } else if (cov.withPhotos < cov.colours) return 'no product images for ' + (cov.colours - cov.withPhotos) + ' of ' + cov.colours + ' colour(s)';
+    if (v.verdict === 'borrowed') return 'drawing is not this garment: drawn as ' + v.sub.looks;
+    if (v.verdict !== 'ok') return 'drawing is the wrong garment' + (v.art ? ' (' + v.art + ')' : v.why ? ' (' + v.why + ')' : '');
+  }
   /* The same checks the catalogue inventory reports, so "ready" here and
      "ok" there cannot disagree: the garment's full placement set on the
      product AND every colourway, and a size attribute beside the colours. */
@@ -118,24 +121,19 @@ function notReady(p, { desc = p.description, standin = false } = {}) {
   return null;
 }
 
-/* Audit findings that are reported but do not hold a product back: a short
-   description is filled later (jt-product-copy.php), categories are filed by
-   this script, photos are notReady's test, and a stand-in's colours share its
-   one drawing by design. */
-const ADVISORY = new Set(['copy', 'category', 'photos', 'swatchPhotos']);
+/* Audit findings that are reported but do not hold a product back. The
+   catalogue's own notes (copy, photos, swatch photos, an acceptable drawing —
+   catalog-inventory.js isNote) plus categories, which this script files. */
+const ADVISORY = new Set(['category']);
 
 /** The audit faults that hold back a product: [[check, finding]]. Exported
  *  for tests. */
-function auditFaults(r, { standin = false } = {}) {
-  return bad(r).filter((k) => !ADVISORY.has(k))
-    /* notReady already judged a stand-in's drawing to be the garment itself. */
-    .filter((k) => !(standin && k === 'canvas' && r.canvas === 'drawing (no real photo)'))
-    .map((k) => [k, r[k]]);
+function auditFaults(r) {
+  return bad(r).filter((k) => !ADVISORY.has(k)).map((k) => [k, r[k]]);
 }
 
 async function main() {
   const APPLY = process.argv.includes('--apply');
-  const STANDIN = process.argv.includes('--standin');
   /* --only must name real ids. A typo that parsed to nothing used to mean
      "no filter" — i.e. publish everything ready. */
   let ONLY = null;
@@ -157,8 +155,7 @@ async function main() {
     if (absent.length) { console.error('not staged products: #' + absent.join(', #')); process.exit(2); }
     rows = rows.filter((p) => ONLY.has(Number(p.id)));
   }
-  console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + rows.length + ' staged product(s)' +
-    (STANDIN ? ', stand-in canvas accepted where S&S has no flat photo' : '') + '\n');
+  console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + rows.length + ' staged product(s)\n');
 
   /* Descriptions from S&S, only for rows that have none AND would otherwise
      be ready — a jacket held for its canvas does not cost an API call on every
@@ -166,7 +163,7 @@ async function main() {
      fails is reported and held back, never fatal to the run. */
   const fetched = {}, fetchedStyle = {}, fetchFailed = [];
   const need = rows.filter((p) => !String(p.description).trim() && Number(p.sid) &&
-    !notReady(p, { desc: 'x', standin: STANDIN }));
+    !notReady(p, { desc: 'x' }));
   if (need.length && acct && key) {
     const ssa = makeClient(acct, key);
     for (const p of need) {
@@ -185,7 +182,7 @@ async function main() {
   const candidates = [];
   for (const p of rows) {
     const desc = String(p.description).trim() ? p.description : (fetched[p.id] || '');
-    const why = notReady(p, { desc, standin: STANDIN });
+    const why = notReady(p, { desc });
     (why ? held : candidates).push({ p, why, desc, fill: !String(p.description).trim() && desc });
   }
   /* The catalogue audit, on the description each product WILL have (one
@@ -199,10 +196,10 @@ async function main() {
       const r = localChecks(p, { roleIds, subId });
       if (ssa) await compareWithSsa(r, p, ssa, { style: fetchedStyle[c.p.id] });
       else r.identity = 'not audited against S&S (no SSA credentials)';
-      const faults = auditFaults(r, { standin: STANDIN });
+      const faults = auditFaults(r);
       if (faults.length) held.push({ ...c, why: 'audit: ' + faults.map(([k, v]) => k + ' ' + v).join(' · ') });
       else ready.push(c);
-      const notes = bad(r).filter((k) => ADVISORY.has(k) && k !== 'photos');
+      const notes = [...bad(r).filter((k) => ADVISORY.has(k)), ...noted(r).filter((k) => k !== 'photos')];
       if (!faults.length && notes.length) warned.push('#' + c.p.id + ' ' + notes.map((k) => k + ': ' + r[k]).join(' · '));
     }
   }

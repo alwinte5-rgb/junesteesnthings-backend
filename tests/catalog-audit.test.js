@@ -127,10 +127,17 @@ test('no S&S audit means no publish', () => {
   assert.deepStrictEqual(auditFaults({ identity: 'S&S unreachable: timeout' }).map(([k]) => k), ['identity']);
 });
 
-test('a stand-in drawing is allowed only with --standin, and never a generic drawing of a cropped cut', () => {
-  assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }).map(([k]) => k), ['canvas']);
-  assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }, { standin: true }), []);
-  assert.deepStrictEqual(auditFaults({ canvas: 'generic drawing for a cropped garment' }, { standin: true }).map(([k]) => k), ['canvas']);
+/* Owner, 2026-10-20: "I think we need to loosen the audit a bit. There are a
+   lot of errors but when I check them they are fine." */
+test('a drawing of the garment and a colour without its own photo are notes, a cropped cut on a full drawing is not', () => {
+  assert.deepStrictEqual(auditFaults({ canvas: 'drawing (no real photo)' }), []);
+  assert.deepStrictEqual(auditFaults({ canvas: 'generic drawing for a Oversized garment' }), [], 'Bayside is fine');
+  assert.deepStrictEqual(auditFaults({ photos: '12/13 colours have photos' }), []);
+  assert.deepStrictEqual(auditFaults({ canvas: 'generic drawing for a Cropped garment' }).map(([k]) => k), ['canvas']);
+  assert.deepStrictEqual(auditFaults({ canvas: 'wrong garment drawing (hoodies_sweatshirt_front — a hood on a crewneck)' }).map(([k]) => k), ['canvas']);
+  const { noted } = require('../tools/catalog-inventory');
+  assert.deepStrictEqual(noted({ canvas: 'drawing (no real photo)', photos: '0/3 colours have photos', copy: 'description 80 chars' }),
+    ['photos', 'canvas', 'copy']);
 });
 
 const { compareWithSsa } = require('../tools/catalog-inventory');

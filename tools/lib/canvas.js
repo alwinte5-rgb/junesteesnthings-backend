@@ -21,11 +21,15 @@ const OK_ART = {
   polo:    [/polo/],
   woven:   [/premium|woven|twill|polo/],
   onesie:  [/onesie|kids_babies/],
-  kids:    [/kids_babies|basic_tshirt|onesie/],
+  kids:    [/kids_babies|basic_tshirt|onesie|tank/],
   tank:    [/tank/],
   longslv: [/long_sleeve/],
   tee:     [/basic_tshirt|women_tshirt|cropped_tshirt|premium|v_neck/],
 };
+
+const CREW_RE = /\bcrew(neck)?\b|\bsweatshirt\b/i;
+const HOOD_RE = /\bhood(ed|ie|y)?\b/i;
+const TANK_RE = /\btank\b/i;
 
 const decodeStages = (b) => { try { return JSON.parse(decodeURIComponent(Buffer.from(String(b || ''), 'base64').toString('utf8'))); }
   catch { return null; } };
@@ -44,6 +48,16 @@ function canvasVerdict(p) {
   if (!art.trim()) return { verdict: 'unusable', why: 'stages carry no artwork url' };
   const cls = classify(p.name);
   if (cls === 'unknown') return { verdict: 'unusable', why: 'cannot tell what garment this is' };
+  /* The family is not enough on its own (owner, 2026-10-20): a crewneck
+     sweatshirt is in the hoodie class but both hoodie drawings have a hood
+     (Bayside 4025 opened as a hoodie), and a youth tank is in the kids class,
+     whose tee drawing has sleeves (Shaka Wear SHKTT). */
+  if (cls === 'hoodie' && CREW_RE.test(p.name) && !HOOD_RE.test(p.name) && /hoodie/.test(art)) {
+    return { verdict: 'bad', cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') + ' — a hood on a crewneck' };
+  }
+  if (TANK_RE.test(p.name) && !/tank/.test(art)) {
+    return { verdict: 'bad', cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') + ' — sleeves on a tank' };
+  }
   if ((OK_ART[cls] || []).some((re) => re.test(art))) {
     /* The family is right. That is not the same as the garment being right:
        one hat.png stands in for every beanie, visor and trucker, and a vest is
