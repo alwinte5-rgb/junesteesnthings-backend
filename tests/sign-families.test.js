@@ -122,3 +122,16 @@ test('magnets print at 200 DPI, as planned (sign launch, 2026-10-20)', () => {
   assert.strictEqual(F.FAMILIES.vehicle_magnet.target_dpi, 200);
   assert.strictEqual(F.FAMILIES.custom_magnet.target_dpi, 200);
 });
+
+test('stretched canvas publishes its 3" wrap, the same wrap its print is billed at (sign launch, 2026-10-20)', () => {
+  const t = F.signsTable().families;
+  assert.strictEqual(t.stretched_canvas.wrap_in, 3);
+  for (const [k, f] of Object.entries(t)) {
+    assert.strictEqual(typeof f.bleed_in, 'number', k);
+    if (k !== 'stretched_canvas') assert.strictEqual(f.wrap_in, 0, k);
+  }
+  // the print is the face plus the wrap on every side
+  const sg = require('../tools/lib/signage');
+  const bars = 2 * F.STRETCHER_BAR[24] + 2 * F.STRETCHER_BAR[18];
+  assert.ok(Math.abs(F.stretchedCanvasCost(24, 18) - bars - sg.billableSqft(30, 24) * sg.CANVAS) < 1e-9);
+});
