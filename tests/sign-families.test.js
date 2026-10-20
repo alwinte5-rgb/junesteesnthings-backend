@@ -110,3 +110,15 @@ test('contour-cut work carries the cut-file time, once a design (owner, 2026-10-
   if (r.route === 'signs365 4mm') assert.ok(Math.abs(r.cost - s365) < 0.01, 'the contour file is in the Signs365 route');
   assert.ok(Math.abs(r.premium10mm.cost - (sg.CORO[10].single * 10 + sg.FREIGHT.oversized_coro + sg.contourFileCost(1) + 24 * 10)) < 0.01);
 });
+
+test('every family publishes its own turnaround; canvas waits on its bars (sign launch, 2026-10-20)', () => {
+  const t = F.signsTable().families;
+  for (const [k, f] of Object.entries(t)) assert.ok(Number.isInteger(f.turnaround_days) && f.turnaround_days >= 1, k);
+  assert.strictEqual(t.yard_sign.turnaround_days, sg.BANNER_TURNAROUND_DAYS);
+  assert.ok(t.stretched_canvas.turnaround_days > sg.BANNER_TURNAROUND_DAYS, 'bars are bought per job');
+});
+
+test('magnets print at 200 DPI, as planned (sign launch, 2026-10-20)', () => {
+  assert.strictEqual(F.FAMILIES.vehicle_magnet.target_dpi, 200);
+  assert.strictEqual(F.FAMILIES.custom_magnet.target_dpi, 200);
+});
