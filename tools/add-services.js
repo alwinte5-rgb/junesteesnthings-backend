@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 /* Add the staff-only services to the catalogue: design fees and folding.
  *
- *   node tools/add-services.js --vars=~/.jtees-art.json
- *   node tools/add-services.js --vars=~/.jtees-art.json --apply
+ *   node tools/add-services.js --vars=<(jtees-env)
+ *   node tools/add-services.js --vars=<(jtees-env) --apply
+ *   node tools/add-services.js --vars=<(jtees-env) --only="Garment Sourcing" --apply
+ *
+ * --only=<text> limits the run to services whose name contains <text>, so
+ * one new service can go live without writing every other row in the list.
  *
  * WHY THEY ARE STORED INACTIVE
  * ----------------------------
@@ -80,7 +84,22 @@ const SERVICES = [
   { name: 'Trifold Brochures 8.5x11, folded — 3,000 run (per brochure)', price: '0.23',
     description: '8.5 x 11 trifold brochures, 100lb gloss text, full color both sides, ' +
       'folded, shipping included. Printed by SinaLite. Price is for a 3,000 run only.' },
+  /* Owner, 2026-10-20: customers took the garment research and spec sheets
+     and bought elsewhere ("I've made at least 10 of these"). Paid up front
+     (under $100, so the quote page asks for it in full) and taken off their
+     order with the quote's discount fields if they order within 30 days. */
+  { name: 'Garment Sourcing — options + spec sheet', price: '25.00',
+    description: 'We research garments for your project: options that fit your budget, ' +
+      'fabric and fit details, colors, size charts and supplier pricing, on a spec sheet ' +
+      'with photos. The $25 comes off your order if you order with us within 30 days.' },
 ];
+
+const ONLY = (argv.find((a) => a.startsWith('--only=')) || '').split('=').slice(1).join('=').trim().toLowerCase();
+if (ONLY) {
+  const keep = SERVICES.filter((s) => s.name.toLowerCase().includes(ONLY));
+  if (!keep.length) { console.error('!! --only matched no service'); process.exit(2); }
+  SERVICES.splice(0, SERVICES.length, ...keep);
+}
 
 for (const s of SERVICES) {
   if (!(parseFloat(s.price) > 0)) { console.error('!! no price on ' + s.name + ' — refusing'); process.exit(1); }
