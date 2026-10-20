@@ -128,7 +128,9 @@ test('sales tax is automatic for a helper: the form cannot take it off', () => {
   /* basis is the quote being edited, or (2026-10-19) the same customer's job
      a reorder copies: either way an exemption the owner set, never the form's. */
   assert.match(save, /const basis = prior \|\| reorderOf;/);
-  assert.match(save, /const taxable = staffTax\s*\? !\(basis && basis\.taxable === false\)/);
+  /* A design-only job (2026-10-20) is untaxed for everyone, as Illinois law
+     has it; otherwise a helper's job takes the owner's decision only. */
+  assert.match(save, /const taxable = designJob \? false : staffTax\s*\? !\(basis && basis\.taxable === false\)/);
   assert.match(save, /: staffTax \? \(basis\.tax_exempt_ref \|\| null\)/, 'a helper keeps the owner\'s exemption note, never their own');
   assert.match(src, /isOwner\(\) \? '' : ' disabled title="Tax is set automatically"'/, 'the box is locked on the form');
 });

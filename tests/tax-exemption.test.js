@@ -117,7 +117,8 @@ test('an untaxed sale with no reference is flagged, a documented one is not', ()
 test('an exemption reference is not kept on a taxable quote', () => {
   /* Otherwise it survives un-ticking the box later and reads as evidence for
      an exemption nobody actually claimed. */
-  assert.match(src, /const exemptRef = taxable\s*\n?\s*\?\s*null/,
+  /* `|| designJob` (2026-10-20): a design-only job needs no note either. */
+  assert.match(src, /const exemptRef = taxable(?: \|\| designJob)?\s*\n?\s*\?\s*null/,
     'a taxable quote must store no exemption reference');
 });
 
@@ -130,7 +131,7 @@ test('both the flag and the reference are actually persisted', () => {
 
 test('the form asks for the reason exactly when there is a zero to explain', () => {
   assert.match(src, /name="tax_exempt_ref"/, 'no field, no reason, no deduction');
-  assert.match(src, /exbox\.style\.display = taxable \? 'none' : ''/,
+  assert.match(src, /exbox\.style\.display = \(taxable \|\| dOnly\) \? 'none' : ''/,
     'the reason appears when tax comes off, so it cannot be quietly skipped');
   /* A reorder (2026-10-19) keeps the job's own flag, as an edit does. */
   assert.match(src, /\$\{\(!isEdit && !reorderOf\) \|\| quoteTaxable\(E\) \? 'checked' : ''\}/,
