@@ -19,6 +19,12 @@
  *   - a file whose style number is not in that product's name — a misnumbered
  *     file would otherwise put one garment's photo on another.
  *
+ * OWN-PRINT PRODUCTS (signs, banners, big heads; sign launch 2026-10-20) have
+ * no style number. Their files are named `NNN-Words[-A|B|C]`: the product must
+ * be one of those kinds by name, and the file's first word must be in it
+ * ("197-Yard-sign-front-lawn-A" on "Yard Signs"). A/B/C are one product's
+ * scenes: A is the listing photo, B and C are skipped (and said so).
+ *
  * Uploads are signed, into one folder, with a public_id ending in a hash of the
  * file's bytes: a re-run of the same file replaces nothing, a new version gets
  * a new URL (no stale CDN copy). The thumbnail_urls being replaced are saved
@@ -40,9 +46,23 @@ function readDir(d) {
   return fs.readdirSync(d).filter((f) => /^\d{1,5}-.+\.(webp|png|jpe?g)$/i.test(f)).sort().map((f) => {
     const [idTok, ...rest] = f.replace(/\.[a-z]+$/i, '').split('-');
     const first = rest.findIndex((t) => /\d/.test(t));
+    const scene = rest.length > 1 && /^[A-Z]$/.test(rest[rest.length - 1]) ? rest[rest.length - 1] : null;
     return { id: Number(idTok), file: path.join(d, f), styles: rest.filter((t) => /\d/.test(t)),
-      brand: first > 0 ? rest.slice(0, first) : [] };
+      brand: first > 0 ? rest.slice(0, first) : [], words: rest, scene };
   });
+}
+
+/* What an own-print product's name carries; garments carry none of these. */
+const OWN_PRINT = /\b(signs?|banners?|magnets?|graphics?|panels?|canvas|big head)\b/i;
+
+/** Why `name` is not the own-print product a file says it is, or null. */
+function ownPrintMismatch(name, words) {
+  if (!OWN_PRINT.test(String(name || ''))) return 'no style number in the file name';
+  const first = String(words[0] || '').toUpperCase();
+  const norm = new Set(String(name).toUpperCase().replace(/[^A-Z0-9]/g, ' ').split(/\s+/));
+  /* "Yard" in "Yard Signs", "Banner" in "Custom Size Vinyl Banner"; a plural on either side. */
+  const has = first && [...norm].some((w) => w === first || w === first + 'S' || w + 'S' === first);
+  return has ? null : '"' + words[0] + '" is not in "' + name + '"';
 }
 
 /** Why `name` is not the product a file says it is, or null. */
@@ -90,9 +110,15 @@ function main(buf) {
     files.map((f) => f.id).join(',') + ');', { rows: true });
   const byId = new Map(rows.map((r) => [Number(r.id), r]));
 
-  const plan = [], bad = [], seen = new Map();
-  for (const f of files) seen.set(f.id, (seen.get(f.id) || 0) + 1);
-  for (const f of files) {
+  const plan = [], bad = [], seen = new Map(), skipped = [];
+  /* An own-print product's B and C scenes are not listing photos: only A is. */
+  const listed = files.filter((f) => {
+    if (f.styles.length || !f.scene || f.scene === 'A') return true;
+    skipped.push('#' + f.id + '  ' + path.basename(f.file) + ' — scene ' + f.scene + ' (only A is the listing photo)');
+    return false;
+  });
+  for (const f of listed) seen.set(f.id, (seen.get(f.id) || 0) + 1);
+  for (const f of listed) {
     const p = byId.get(f.id);
     const was = p && p.thumb !== 'NULL' ? p.thumb : null;     // mysql -B prints NULL
     /* ssa-sync resolves a row with no supplier_style_id from a '/Style/<id>_'
@@ -100,12 +126,14 @@ function main(buf) {
     const why = seen.get(f.id) > 1 ? 'more than one file for product #' + f.id
       : !p ? 'no product #' + f.id
       : (!Number(p.sid) && /\/Style\/\d+_/.test(was || '')) ? 'no supplier_style_id — its thumbnail is how ssa-sync finds its S&S style'
+      : !f.styles.length ? ownPrintMismatch(p.name, f.words)
       : mismatch(p.name, f.styles, f.brand);
     if (why) bad.push('#' + f.id + '  ' + path.basename(f.file) + ' — ' + why);
     else plan.push({ ...f, name: p.name, was });
   }
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + plan.length + ' listing photo(s)\n');
   for (const x of plan) console.log('  #' + String(x.id).padStart(3) + '  ' + x.name.slice(0, 50).padEnd(52) + path.basename(x.file));
+  if (skipped.length) { console.log('\n  SKIPPED:'); for (const b of skipped) console.log('    ' + b); }
   if (bad.length) { console.log('\n  REFUSED:'); for (const b of bad) console.log('    ' + b); }
   if (!APPLY) { console.log('\n  report only — pass --apply to upload and write'); if (bad.length) process.exitCode = 1; return; }
   if (bad.length) { console.error('\n  fix the refused files first — nothing written'); process.exit(1); }
@@ -141,4 +169,4 @@ if (require.main === module) {
   process.stdin.on('data', (d) => (buf += d));
   process.stdin.on('end', () => { try { main(buf); } catch (err) { console.error(err.message); process.exit(1); } });
 }
-module.exports = { readDir, mismatch };
+module.exports = { readDir, mismatch, ownPrintMismatch };

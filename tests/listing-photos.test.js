@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readDir, mismatch } = require('../tools/set-listing-photos');
+const { readDir, mismatch, ownPrintMismatch } = require('../tools/set-listing-photos');
 
 test('files are read by their id prefix, with the style number as the check', () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-'));
@@ -28,4 +28,19 @@ test('a misnumbered file is refused rather than put on the wrong garment', () =>
 test('the brand must match too — style numbers repeat across brands', () => {
   assert.strictEqual(mismatch('Bella+Canvas 3001 Unisex Jersey Tee', ['3001'], ['Bella', 'Canvas']), null);
   assert.match(mismatch('Next Level 3001 Cotton Tee', ['3001'], ['Bella', 'Canvas']), /brand Bella Canvas is not in/);
+});
+
+test('own-print products match by their first word; only scene A is listed (sign launch, 2026-10-20)', () => {
+  assert.strictEqual(ownPrintMismatch('Yard Signs', ['Yard', 'sign', 'front', 'lawn', 'A']), null);
+  assert.strictEqual(ownPrintMismatch('Custom Size Vinyl Banner', ['Banner', 'on', 'event', 'fence']), null);
+  assert.strictEqual(ownPrintMismatch('Big Head Cutout', ['Big', 'Head', 'Cutout']), null);
+  assert.match(ownPrintMismatch('Yard Signs', ['Rigid', 'sign']), /"Rigid" is not in "Yard Signs"/);
+  // a garment never takes a file with no style number, whatever its words
+  assert.match(ownPrintMismatch('Gildan 5000 Heavy Cotton Tee', ['Gildan', 'tee']), /no style number/);
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-'));
+  for (const f of ['197-Yard-sign-front-lawn-A.png', '197-Yard-sign-front-lawn-B.png', '196-Banner-on-event-fence.png']) fs.writeFileSync(path.join(d, f), '');
+  const r = readDir(d);
+  assert.deepStrictEqual(r.map((x) => [x.id, x.scene]), [[196, null], [197, 'A'], [197, 'B']]);
+  fs.rmSync(d, { recursive: true });
 });
