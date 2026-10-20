@@ -168,3 +168,16 @@ test('a SubliVie tee wants its sublimation method; another tee does not', () => 
   assert.strictEqual(localChecks({ name: 'SubliVie 1910 Tee', printings: printings([...base, 99]) }, { roleIds, subId: 99 }).decoration, 'ok');
   assert.match(localChecks({ name: 'Gildan 5000 Tee', printings: printings([...base, 99]) }, { roleIds, subId: 99 }).decoration, /extra 99/);
 });
+
+/* Owner, 2026-10-20: "dtf should be available on everything but sublimation",
+   "hats can do dtf", "apron can take dtf", and the Shoreline Shirt "takes
+   screen printing". */
+test('DTF is a decoration of every garment class, and screen printing is allowed on a button-up', () => {
+  const { DECORATIONS } = require('../tools/lib/garments');
+  for (const [cls, roles] of Object.entries(DECORATIONS)) assert.ok(roles.includes('dtf'), cls + ' has no DTF');
+  const enc = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('base64');
+  const roleIds = { dtf: 1, 'dtf:oversized': 64, screen: 22, 'emb:name-chest': 7, 'emb:small': 8, 'emb:medium': 9, 'emb:large': 10, 'emb:xl': 19, 'emb:fullback': 11, 'emb:name-upperback': 18 };
+  const shirt = { name: 'CORE365 CE520 Men\'s Shoreline Shirt', price: '1', cost: '0', stages: enc({}), attributes: enc({}), variations: '',
+    printings: encodeURIComponent(JSON.stringify({ _1: '', _7: '', _8: '', _9: '', _10: '', _11: '', _18: '', _22: '', _19: '', _64: '' })) };
+  assert.strictEqual(localChecks(shirt, { roleIds }).decoration, 'ok');
+});

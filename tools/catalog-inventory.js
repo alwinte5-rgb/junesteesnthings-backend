@@ -124,9 +124,11 @@ function ssaChecks(p, style, prods) {
 }
 
 
+const ALSO_OK = { woven: ['screen'] };
+
 /** The keys a garment's stages should have, in order. */
 function expectedKeys(set) {
-  if (set === 'cap' || set === 'beanie' || set === 'apron') return ['front'];
+  if (set === 'cap' || set === 'beanie') return ['front'];
   if (set === 'bag') return ['front', 'back'];
   return (SETS[set] || []).map((p) => p.key);
 }
@@ -160,7 +162,10 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null, subId = n
   let have = [];
   try { const o = JSON.parse(decodeURIComponent(String(p.printings || ''))); have = o && typeof o === 'object' ? Object.keys(o).map((k) => Number(String(k).replace(/\D/g, ''))) : []; } catch { /* legacy csv */ }
   have = have.filter(Number.isFinite).sort((a, b) => a - b);
-  const missing = want.filter((id) => !have.includes(id)), extra = have.filter((id) => !want.includes(id));
+  /* Methods a class MAY carry without being required to (owner, 2026-10-20:
+     the CORE365 Shoreline Shirt "takes screen printing"). */
+  const mayAlso = (ALSO_OK[out.cls] || []).map((r) => roleIds[r]).filter(Number.isFinite);
+  const missing = want.filter((id) => !have.includes(id)), extra = have.filter((id) => !want.includes(id) && !mayAlso.includes(id));
   out.decoration = !want.length ? 'no rule for class ' + out.cls
     : (missing.length || extra.length) ? (missing.length ? 'missing ' + missing.join(',') : '') + (extra.length ? ' extra ' + extra.join(',') : '') : 'ok';
 
@@ -173,7 +178,7 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null, subId = n
   /* A product set up by hand in the Lumise admin has generated stage ids
      (#14 Bella+Canvas 3001: 'ZWEnsr7gXm', 'mr83j4pl'). Renaming them would
      orphan saved designs, so its Front / Back labels are what is judged. */
-  const label = (k) => k.charAt(0).toUpperCase() + k.slice(1);
+  const label = (k) => ((SETS[set] || []).find((s) => s.key === k) || { label: k.charAt(0).toUpperCase() + k.slice(1) }).label;
   const sameLabels = keys.length === exp.length && keys.every((k, i) => st[k] && st[k].label === label(exp[i]));
   /* Every colourway too: wire.js's fallback writes one copied box per colour,
      so a product's own stages can be right while a swatch is not. */
@@ -187,8 +192,7 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null, subId = n
   /* canvas: what the designer draws under a customer's design. */
   const v = canvasVerdict(p);
   const pat = (Number(cov.withPhotos) === 0) ? patterned(p) : null;
-  out.canvas = out.cls === 'apron' ? '-'   /* embroidered and quoted: never opened in the designer */
-    : v.verdict === 'bad' ? 'wrong garment drawing (' + v.art + ')'
+  out.canvas = v.verdict === 'bad' ? 'wrong garment drawing (' + v.art + ')'
     : v.verdict === 'unusable' ? 'unusable: ' + v.why
     : v.verdict === 'borrowed' ? 'drawn as ' + v.sub.looks
     : v.real ? 'ok'

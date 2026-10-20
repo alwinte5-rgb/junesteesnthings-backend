@@ -188,12 +188,14 @@ const DECORATIONS = {
   bag:     ['dtf', 'screen', ...EMB_PANEL],
   woven:   ['dtf', 'dtf:oversized', ...EMB_FULL],
   polo:    ['dtf', 'dtf:oversized', ...EMB_FULL],
-  vest:    [...EMB_FULL],
+  vest:    ['dtf', ...EMB_FULL],
   jacket:  ['dtf', 'dtf:oversized', ...EMB_FULL],
-  cap:     [...EMB_FRONT_ONLY],
-  /* No apron drawing exists and S&S has no flat apron photo, so an apron is
-     embroidered on the bib and quoted, like a cap (owner, 2026-10-20). */
-  apron:   [...EMB_FRONT_ONLY],
+  /* Owner, 2026-10-20: "hats can do dtf" — "dtf should be available on
+     everything but sublimation". */
+  cap:     ['dtf', ...EMB_FRONT_ONLY],
+  /* Decorated as the shirt it was filed as (owner, 2026-10-20: "apron can
+     take dtf"); the class only stops it being sold as a shirt. */
+  apron:   ['dtf', 'dtf:oversized', ...EMB_FULL],
   kids:    ['dtf', 'screen'],
   onesie:  ['dtf', 'screen'],
 };

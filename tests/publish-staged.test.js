@@ -17,7 +17,7 @@ const enc = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('
 const attrs = enc({ COL: { type: 'product_color', values: { options: [{ title: 'Black', value: '#000001' }, { title: 'White', value: '#fffffe' }] } },
   QTYS: { type: 'quantity' } });
 /* What wire.js writes: each placement of the garment's set, on that colour's photo. */
-const KEYS = { closed: ['front', 'back'], open: ['front', 'back'], cap: ['front'] };
+const KEYS = { closed: ['front', 'left_chest', 'back'], open: ['front', 'right_chest', 'back'], cap: ['front'] };
 const st = (keys, v = '000001') => Object.fromEntries(keys.map((k) => [k,
   { label: k, image: 'https://res.cloudinary.com/x/' + v + '-' + (k === 'back' ? 'back' : 'front') + '.webp' }]));
 const photo = (v, keys = KEYS.closed) => ({ cfgstages: true, conditions: { COL: v }, stages: st(keys, v.slice(1)) });
@@ -52,12 +52,11 @@ test('jackets and caps with real photos and their own placements go live too', (
 /* Code review 2026-10-18: "ready" used to mean only "every colour has a
    photo", so a product wire.js wired through its copy-the-box fallback — one
    full front over a jacket's zipper — would have gone live. */
-test('a product, or any one colourway, with spots other than front + back is held back', () => {
+test('a product, or any one colourway, without the garment\'s full placement set is held back', () => {
   const jacket = { ...tee, name: 'Shaka Wear SHCJ Unisex Coaches Jacket' };
-  const old = ['front', 'right_chest', 'back'];
-  assert.match(notReady({ ...jacket, stages: enc(st(old)), variations: varsFor(old, '#000001', '#fffffe') }),
-    /placements: has front \/ right_chest \/ back, wants Front \/ Back/);
-  const mixed = enc({ variations: { 1: photo('#000001', KEYS.open), 2: photo('#fffffe', old) } });
+  assert.match(notReady({ ...jacket, stages: enc(st(['front', 'back'])), variations: varsFor(['front', 'back'], '#000001', '#fffffe') }),
+    /placements: has front \/ back, wants Left chest \/ Right chest \/ Back/);
+  const mixed = enc({ variations: { 1: photo('#000001', KEYS.open), 2: photo('#fffffe', ['front', 'back']) } });
   assert.match(notReady({ ...jacket, stages: enc(st(KEYS.open)), variations: mixed }), /1 colourway\(s\) without the full placement set/);
 });
 
@@ -151,9 +150,10 @@ test('a drawing of the wrong garment is never accepted', () => {
     stages: drawn('hoodies_sweatshirt_front', 'hoodies_sweatshirt_back') };
   assert.match(notReady(crew), /drawing is the wrong garment .*a hood on a crewneck/);
   assert.strictEqual(notReady({ ...crew, name: 'Gildan 18500 Unisex Heavy Blend Hooded Sweatshirt' }), null, 'a hooded sweatshirt is fine');
-  const tank = { ...tee, name: 'Shaka Wear SHKTT Youth Tank', variations: '', stages: drawn('kids_babies_front', 'kids_babies_back') };
+  const kids = ['front', 'back'];
+  const tank = { ...tee, name: 'Shaka Wear SHKTT Youth Tank', variations: '', stages: drawn('kids_babies_front', 'kids_babies_back', kids) };
   assert.match(notReady(tank), /sleeves on a tank/);
-  assert.strictEqual(notReady({ ...tank, stages: drawn('tank_tops_front', 'tank_tops_back') }), null, 'on the tank drawing it is fine');
+  assert.strictEqual(notReady({ ...tank, stages: drawn('tank_tops_front', 'tank_tops_back', kids) }), null, 'on the tank drawing it is fine');
 });
 
 test('a patterned style is refused: a drawing is one plain colour', () => {

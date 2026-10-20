@@ -1,11 +1,9 @@
-/* Garment-correct print placements (owner, 2026-10-18; front + back only
- * since 2026-10-20).
+/* Garment-correct print placements (owner, 2026-10-18).
  *
  * The live quarter-zip #136 offered one full-front box straight over its
  * zipper. Each garment now gets its own set, measured on its own photo:
- * zips/polos/wovens/jackets a left-chest Front and a Back; tees, long
- * sleeves, tanks and pullovers a full Front and a Back. Any other spot is
- * quoted.
+ * zips/polos/wovens/jackets Left chest · Right chest · Back; tees, long
+ * sleeves, tanks and pullovers Full front · Left chest · Back.
  *
  * Run: node --test tests/placements.test.js
  */
@@ -38,34 +36,26 @@ test('each garment gets the owner-approved placement set', () => {
 const M = { W: 640, H: 800, bbox: [20, 20, 620, 790], cx: 320, torso: 360, shoulder: 100 };
 const m = { front: M, back: M };
 
-test('a zip or placket garment: a front on the left chest, clear of the centre line, and a back', () => {
+test('a zip or placket garment: two chest logos clear of the centre line, and a back — no full front', () => {
   const b = boxesFor('open', m);
-  assert.deepStrictEqual(b.map((x) => x.key), ['front', 'back']);
-  assert.deepStrictEqual(b.map((x) => x.label), ['Front', 'Back']);
-  const [left] = b;
-  assert.ok(left.cx > M.cx, 'wearer\'s left chest is the viewer\'s right');
-  assert.ok(Math.abs(left.cx - M.cx) - left.w / 2 > 0, 'does not cross the zipper');
+  assert.deepStrictEqual(b.map((x) => x.key), ['front', 'right_chest', 'back']);
+  assert.deepStrictEqual(b.map((x) => x.label), ['Left chest', 'Right chest', 'Back']);
+  const [left, right] = b;
+  assert.ok(left.cx > M.cx && right.cx < M.cx, 'wearer\'s left chest is the viewer\'s right');
+  for (const c of [left, right]) assert.ok(Math.abs(c.cx - M.cx) - c.w / 2 > 0, c.label + ' does not cross the zipper');
   assert.ok(left.w < M.torso * 0.45, 'a chest logo, not a full front');
 });
 
-test('a tee: a full front centred below the shoulders, and a back — nothing else', () => {
+test('a tee: full front centred below the shoulders, a left chest, and a back', () => {
   const b = boxesFor('closed', m);
-  assert.deepStrictEqual(b.map((x) => x.label), ['Front', 'Back']);
+  assert.deepStrictEqual(b.map((x) => x.label), ['Full front', 'Left chest', 'Back']);
   assert.strictEqual(b[0].cx, M.cx);
   assert.ok(b[0].cy - b[0].h / 2 > M.shoulder, 'starts below the shoulder line');
-});
-
-test('every set is front + back (or front only on a cap): other spots are quoted (owner, 2026-10-20)', () => {
-  const { SETS } = require('../tools/lib/placements');
-  for (const [set, boxes] of Object.entries(SETS)) {
-    assert.deepStrictEqual(boxes.map((x) => x.key), ['front', 'back'], set);
-  }
-  for (const set of Object.keys(SETS)) assert.deepStrictEqual(expectedKeys(set), ['front', 'back'], set);
-  assert.deepStrictEqual(expectedKeys('cap'), ['front']);
+  assert.ok(b[1].cx > M.cx, 'left chest on the wearer\'s left');
 });
 
 test('an override nudges one placement of one style without touching the rule', () => {
-  const base = boxesFor('closed', m), moved = boxesFor('closed', m, { back: { dy: 1 } });
+  const base = boxesFor('closed', m), moved = boxesFor('closed', m, { left_chest: { dy: 1 } });
   assert.ok(moved[1].cy > base[1].cy && moved[0].cy === base[0].cy);
 });
 
@@ -81,22 +71,23 @@ test('stages: one per placement, front first, drawn on that side\'s photo', () =
   const base = { front: { product_width: 400, product_height: 475, url: 'products/x.png' }, back: { product_width: 400 } };
   const st = stagesFor(base, boxesFor('open', m), { front: 'https://c/f.webp', back: 'https://c/b.webp' },
     { front: { W: 640, H: 800 }, back: { W: 640, H: 800 } });
-  assert.deepStrictEqual(Object.keys(st), ['front', 'back']);
-  assert.strictEqual(st.front.image, 'https://c/f.webp');
+  assert.deepStrictEqual(Object.keys(st), ['front', 'right_chest', 'back']);
+  assert.strictEqual(st.right_chest.image, 'https://c/f.webp');
   assert.strictEqual(st.back.image, 'https://c/b.webp');
   for (const s of Object.values(st)) { assert.strictEqual(s.overlay, false); assert.strictEqual(s.product_width, 400); }
 });
 
-test('the inventory flags a quarter-zip that still offers a retired chest tab, and notes a missing photo', () => {
+test('the inventory flags a quarter-zip that still offers a full front, and a missing photo', () => {
   const enc = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('base64');
   const p = { name: 'Comfort Colors 1580 Garment-Dyed Quarter-Zip', price: '40.00', cost: '20.00', printings: '',
-    stages: enc({ front: { label: 'Left chest' }, right_chest: { label: 'Right chest' }, back: { label: 'Back' } }),
+    stages: enc({ front: { label: 'Front' }, back: { label: 'Back' } }),
     attributes: enc({ COL: { type: 'product_color', values: { options: [{ title: 'Blue', value: '#1' }] } }, QTYS: { type: 'q' } }),
     variations: '' };
   const r = localChecks(p);
-  assert.match(r.placements, /wants Front \/ Back/);
+  assert.match(r.placements, /wants Left chest \/ Right chest \/ Back/);
   assert.match(r.photos, /0\/1 colours have photos/);
   assert.strictEqual(r.price, 'ok');
+  assert.deepStrictEqual(expectedKeys('closed'), ['front', 'left_chest', 'back']);
 });
 
 test('a real-photo canvas is the right garment by construction', () => {
@@ -127,7 +118,7 @@ test('a tank keeps its merged outline as the body, and never starts on the neckl
 
 test('every placement override names a real placement key', () => {
   const ov = require('../tools/data/placement-overrides.json');
-  const keys = new Set(['front', 'back', 'bodyIn', '_why']);
+  const keys = new Set(['front', 'left_chest', 'right_chest', 'back', 'bodyIn', '_why']);
   for (const [sid, o] of Object.entries(ov)) {
     assert.match(sid, /^\d+$/, 'keyed by S&S style id');
     for (const k of Object.keys(o)) assert.ok(keys.has(k), sid + ': unknown key ' + k);
@@ -146,10 +137,10 @@ test('a side with no photo keeps its stand-in stage instead of vanishing (#170 t
   const both = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'back', side: 'back' }],
     { front: { image: 'f' }, back: { image: 'b' } });
   assert.strictEqual(both.back.image, 'b');
-  /* An open garment's front side is covered by its chest box, so no stray stage is added. */
-  const open = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'back', side: 'back' }],
-    { front: { label: 'Front' }, back: { label: 'Back' } });
-  assert.deepStrictEqual(Object.keys(open), ['front', 'back']);
+  /* An open garment's front side is covered by its chest boxes, so no stray Front stage is added. */
+  const open = keepUncovered(base, [{ key: 'front', side: 'front' }, { key: 'right_chest', side: 'front' }, { key: 'back', side: 'back' }],
+    { front: { label: 'Left chest' }, right_chest: { label: 'Right chest' }, back: { label: 'Back' } });
+  assert.deepStrictEqual(Object.keys(open), ['front', 'right_chest', 'back']);
 });
 
 test('the stand-in comes from a drawing, never from another colour\'s photo', () => {

@@ -89,7 +89,14 @@ function standinStages(p) {
   const want = drawingFor(cls, p.name);
   const onOther = want && Object.values(stages).some((s) => s && s.url && !String(s.url).includes(want + '_'));
   if (onOther && (v.verdict === 'bad' || want !== DRAWING[cls])) {
-    for (const side of ['front', 'back']) if (stages[side]) stages[side].url = 'products/' + want + '_' + side + '.png';
+    /* Every stage, the chest ones included: a left_chest still on the hoodie
+       art would keep the canvas the wrong garment. */
+    for (const [k, st] of Object.entries(stages)) {
+      /* Drawings only: a stage that shows a real photo (#476, #506 fronts) keeps it. */
+      if (st && /^products\//.test(String(st.url || '')) && !/^https:\/\//.test(String(st.image || ''))) {
+        st.url = 'products/' + want + '_' + (k === 'back' ? 'back' : 'front') + '.png';
+      }
+    }
     const again = canvasVerdict({ name: p.name, stages: enjson(stages) });
     if (again.verdict !== 'ok') return { why: 'no drawing of this garment (' + again.verdict + ')' };
   }
