@@ -51,3 +51,8 @@ test('the add tool filters discontinued colours before sizing (code review)', ()
   const at = src.indexOf('rows = rows.filter((r) => !closed.has(r.colorName))');
   assert.ok(at > 0 && at < src.indexOf('const bySize = costBySize(rows)'), 'rows filtered before costing');
 });
+
+test('a dropped default falls back to White, then Black', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  assert.match(src, /\['White', 'Black'\]\.map/);
+});
