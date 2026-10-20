@@ -32,7 +32,7 @@
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
 const { mysql, sq, mysqlUrlFrom, dejson, enjson } = require('./lib/db');
-const { pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions } = require('./lib/ssa-costs');
+const { pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours, CLOSEOUT_MIN } = require('./lib/ssa-costs');
 const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
@@ -195,7 +195,7 @@ async function sizeCosts(ssa, styleId) {
   /* The earliest end date of any core-size sale, for the report. */
   const ends = rows.filter((r) => CORE_SIZES.includes(r.sizeName) && r.saleExpiration)
     .map((r) => String(r.saleExpiration).slice(0, 10)).sort()[0] || null;
-  return { bySize, listBySize, homeQty, farQty, saleEnds: ends };
+  return { bySize, listBySize, homeQty, farQty, saleEnds: ends, colours: colourStock(rows) };
 }
 
 /* The base cost the markup applies to — cheapest CORE size, else cheapest size —
@@ -278,6 +278,10 @@ process.stdin.on('end', async () => {
   /* Stocked far from Chicago. Reported so buying decisions can favour what
      ships cheaply, never used to change a price or hide a product. */
   const lowLocal = [];
+  /* Colours S&S is clearing out, dropped once a core size is under
+     CLOSEOUT_MIN (lib/ssa-costs closedColours); and the products left with
+     none, retired for good. */
+  const droppedColours = [], retired = [];
 
   for (const p of products) {
     let style, bySize;
@@ -316,6 +320,7 @@ process.stdin.on('end', async () => {
     }
 
     const attrs = dejson(p.attributes);
+    let attrsChanged = false, retire = false;
     const sz = readSizes(attrs);
     if (sz && sz.values.unreadable) unreadable.push(p);
     else if (sz && Array.isArray(sz.values.multiple_options)) {
@@ -323,13 +328,40 @@ process.stdin.on('end', async () => {
       const next = sizeOptions(vals, bySize.bySize, cost);
       if (JSON.stringify(next) !== JSON.stringify(vals)) {
         attrs[sz.key] = { ...attrs[sz.key], values: sz.asString ? JSON.stringify(next) : next };
-        /* Written only if the field is still what this run read: the run
-           takes minutes of S&S calls, and an edit made in admin meanwhile
-           must not be overwritten with this run's older copy. */
-        sets.push('attributes=IF(attributes=' + sq(p.attributes) + ', ' + sq(enjson(attrs)) + ', attributes)');
+        attrsChanged = true;
         resized.push({ p, before: vals, after: next });
       }
     }
+
+    /* Discontinued colours come off the product. The dropped options are kept
+       on the field (jt_dropped, with the date) so a person can put one back. */
+    const ck = Object.keys(attrs || {}).find((k) => attrs[k] && attrs[k].type === 'product_color');
+    if (ck) {
+      let cv = attrs[ck].values; const cvStr = typeof cv === 'string';
+      if (cvStr) { try { cv = JSON.parse(cv); } catch { cv = null; } }
+      const drop = cv && Array.isArray(cv.options) ? closedColours(cv.options, bySize.colours || {}) : [];
+      if (drop.length) {
+        const keep = cv.options.filter((o) => !drop.includes(o.title));
+        if (!keep.length) {
+          retire = true;                             // nothing left to sell: the product goes, the field stays
+        } else {
+          if (!keep.some((o) => o.default === '1' || o.default === true)) keep[0] = { ...keep[0], default: '1' };
+          const today = new Date().toISOString().slice(0, 10);
+          const next = { ...cv, options: keep,
+            jt_dropped: (cv.jt_dropped || []).concat(cv.options.filter((o) => drop.includes(o.title)).map((o) => ({ ...o, default: '', dropped: today }))) };
+          attrs[ck] = { ...attrs[ck], values: cvStr ? JSON.stringify(next) : next };
+          attrsChanged = true;
+        }
+        droppedColours.push({ p, colours: drop, left: keep.length });
+      }
+    }
+    if (attrsChanged) {
+      /* Written only if the field is still what this run read: the run
+         takes minutes of S&S calls, and an edit made in admin meanwhile
+         must not be overwritten with this run's older copy. */
+      sets.push('attributes=IF(attributes=' + sq(p.attributes) + ', ' + sq(enjson(attrs)) + ', attributes)');
+    }
+    if (retire) retired.push(p);
 
     if (Math.abs(cost - was) >= 0.01) {
       repriced.push({ p, cost, price, saleEnds: bySize.saleEnds });
@@ -338,6 +370,10 @@ process.stdin.on('end', async () => {
       unchanged.push(p);                         // a rebuilt size field is not "already correct"
     }
     stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
+    /* Retired: off the storefront AND the quote form, and out of the daily
+       sync and its reactivation (both read only 'ssa' / 'ssa-staged'). Set
+       supplier back to 'ssa' by hand to bring one back. */
+    if (retire) stmts.push(`UPDATE lumise_products SET active=0, ssa_auto_off=NOW(), supplier='ssa-retired' WHERE id=${p.id};`);
   }
 
   /* Deactivate only what has been unavailable for a sustained period. A product
@@ -458,6 +494,14 @@ process.stdin.on('end', async () => {
     }
     console.log();
   }
+  if (droppedColours.length) {
+    console.log('DISCONTINUED COLOURS DROPPED (' + droppedColours.length + ') — closeout at S&S, a core size under ' + CLOSEOUT_MIN);
+    for (const d of droppedColours) {
+      console.log('  #' + String(d.p.id).padStart(3) + '  ' + d.p.name.slice(0, 44).padEnd(46) + d.colours.join(', ') +
+        (d.left ? '   (' + d.left + ' left)' : '   -> NO COLOURS LEFT, RETIRED'));
+    }
+    console.log();
+  }
   if (revived.length) {
     console.log('BACK IN STOCK — reactivating (' + revived.length + ')');
     for (const r of revived) console.log('  #' + String(r.p.id).padStart(3) + '  ' + r.p.name);
@@ -465,7 +509,8 @@ process.stdin.on('end', async () => {
   }
 
   console.log(unchanged.length + ' already correct · ' + repriced.length + ' repriced · ' + resized.length + ' sizes rebuilt · ' +
-    stale.length + ' deactivating · ' + revived.length + ' reactivating');
+    stale.length + ' deactivating · ' + revived.length + ' reactivating · ' +
+    droppedColours.length + ' with colours dropped · ' + retired.length + ' retired');
   console.log('\n' + stmts.length + ' statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
 
   if (JSON_OUT) {
@@ -475,6 +520,7 @@ process.stdin.on('end', async () => {
       resized: resized.map((r) => ({ ...row(r.p), before: r.before, after: r.after })),
       unreadable: unreadable.map(row),
       suspicious: suspicious.map((s) => ({ ...row(s.p), newCost: s.cost, newPrice: s.price, move: s.move, saleEnds: s.saleEnds || null })),
+      droppedColours: droppedColours.map((d) => ({ ...row(d.p), colours: d.colours, left: d.left })),
     }, null, 1));
   }
   if (!APPLY || !stmts.length) process.exit(0);

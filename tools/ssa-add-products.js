@@ -257,7 +257,7 @@ const SUBLIMATION_RE = /^sublimation/i;
 /* ── S&S ── tools/lib/ssa-client.js (shared with publish-staged.js). */
 const { makeClient } = require('./lib/ssa-client');
 
-const { pieceCost, costBySize, baseCostOf, sizeOptions } = require('./lib/ssa-costs');
+const { pieceCost, costBySize, baseCostOf, sizeOptions, colourStock, closedColours } = require('./lib/ssa-costs');
 
 function buildStages(type) {
   const t = TYPES[type];
@@ -468,6 +468,16 @@ async function run(env) {
     }
     if (!Array.isArray(rows) || !rows.length) {
       console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) + 'no live pricing — skipped');
+      skipped++; continue;
+    }
+
+    /* Discontinued colours are left out before anything is costed or sized
+       (owner, 2026-10-20), so a size only a dropped colour carried is never
+       offered. A style with nothing left is not added. */
+    const closed = new Set(closedColours([...new Set(rows.map((r) => r.colorName).filter(Boolean))].map((title) => ({ title })), colourStock(rows)));
+    rows = rows.filter((r) => !closed.has(r.colorName));
+    if (!rows.length) {
+      console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) + 'discontinued at S&S — skipped');
       skipped++; continue;
     }
 
