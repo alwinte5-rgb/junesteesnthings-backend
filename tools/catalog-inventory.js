@@ -124,8 +124,6 @@ function ssaChecks(p, style, prods) {
 }
 
 
-const ALSO_OK = {};
-
 /** The keys a garment's stages should have, in order. */
 function expectedKeys(set) {
   if (set === 'cap' || set === 'beanie') return ['front'];
@@ -162,10 +160,7 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null, subId = n
   let have = [];
   try { const o = JSON.parse(decodeURIComponent(String(p.printings || ''))); have = o && typeof o === 'object' ? Object.keys(o).map((k) => Number(String(k).replace(/\D/g, ''))) : []; } catch { /* legacy csv */ }
   have = have.filter(Number.isFinite).sort((a, b) => a - b);
-  /* Methods a class MAY carry without being required to (owner, 2026-10-20:
-     the CORE365 Shoreline Shirt "takes screen printing"). */
-  const mayAlso = (ALSO_OK[out.cls] || []).map((r) => roleIds[r]).filter(Number.isFinite);
-  const missing = want.filter((id) => !have.includes(id)), extra = have.filter((id) => !want.includes(id) && !mayAlso.includes(id));
+  const missing = want.filter((id) => !have.includes(id)), extra = have.filter((id) => !want.includes(id));
   out.decoration = !want.length ? 'no rule for class ' + out.cls
     : (missing.length || extra.length) ? (missing.length ? 'missing ' + missing.join(',') : '') + (extra.length ? ' extra ' + extra.join(',') : '') : 'ok';
 
