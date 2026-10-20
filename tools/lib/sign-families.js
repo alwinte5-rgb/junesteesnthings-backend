@@ -159,7 +159,7 @@ const FAMILIES = {
     upgrades: [],
   },
   vehicle_magnet: {
-    label: 'Vehicle Magnets', sizing: 'stock', target_dpi: 150, labour: 'magnet',
+    label: 'Vehicle Magnets', sizing: 'stock', target_dpi: 200, labour: 'magnet',
     note: 'Stock sizes; they lift off for the car wash.',
     sizes: Object.keys(sg.MAGNET_FIXED).map((k) => k.split('x').map(Number)),
     materials: [m('magnet', 'Vehicle magnet, one side', 'item', null)],
@@ -168,7 +168,7 @@ const FAMILIES = {
     ],
   },
   custom_magnet: {
-    label: 'Custom Magnets', sizing: 'area', target_dpi: 150, labour: 'magnet',
+    label: 'Custom Magnets', sizing: 'area', target_dpi: 200, labour: 'magnet',
     note: 'Any size, priced by the square inch.',
     limits: { min: 2, max_w: 48, max_h: 48, max_short: 24 },
     /* The size the designer opens on. The shared 36x24 suits a wall graphic;
@@ -194,6 +194,10 @@ const FAMILIES = {
   },
   stretched_canvas: {
     label: 'Stretched Canvas', sizing: 'stock', target_dpi: 200, labour: 'rigid',
+    /* The bars are bought per job (Blick, a Chicago store) and stretched here
+       after the print arrives: two days on top of the printer's promise.
+       An estimate until the owner times one job. */
+    turnaround_days: sg.BANNER_TURNAROUND_DAYS + 2,
     note: 'Gallery-wrapped on 1-1/2" bars, ready to hang.',
     sizes: [[10, 8], [14, 11], [12, 12], [20, 16], [24, 18], [30, 20], [36, 24], [40, 30]],
     materials: [m('canvas', 'Canvas, gallery wrapped 1-1/2"', 'item', null)],
@@ -269,6 +273,9 @@ function signsTable() {
   for (const [key, fam] of Object.entries(FAMILIES)) {
     const out = {
       label: fam.label, note: fam.note, sizing: fam.sizing, target_dpi: fam.target_dpi,
+      /* Business days, all in. Every family runs on the printer's banner
+         promise unless it says otherwise (stretched canvas waits on bars). */
+      turnaround_days: fam.turnaround_days || sg.BANNER_TURNAROUND_DAYS,
       markup: sg.MARKUP, freight: sg.FREIGHT.standard,
       materials: fam.materials.map((x) => ({ key: x.key, label: x.label, unit: x.unit, double: !!x.double,
         ...(fam.sizing === 'area' ? { cost: x.cost } : {}) })),
