@@ -1,9 +1,9 @@
 {
-  "13536": {"_why": "#316 Lane Seven LS16001 — hood photographed up, shoulder reads at the hood's base; dy set against BODY_IN 20, scaled x0.75 when it became 15", "front": {"dy": -3}, "left_chest": {"dy": -3}},
-  "12404": {"_why": "#325 LAT 3536 — hood photographed up, front and back sit low; dy scaled x0.75 for BODY_IN 15", "front": {"dy": -2.6}, "left_chest": {"dy": -2.6}, "back": {"dy": -3.4}},
-  "17212": {"_why": "#318 Lane Seven LS86000GD — cropped tee, a full-length box reaches the hem; dy scaled x0.75 for BODY_IN 15", "front": {"scale": 0.75, "dy": -0.4}, "left_chest": {"dy": -0.4}, "back": {"scale": 0.75, "dy": -0.4}},
+  "13536": {"_why": "#316 Lane Seven LS16001 — hood photographed up, shoulder reads at the hood's base; dy set against BODY_IN 20, scaled x0.75 when it became 15", "front": {"dy": -3}},
+  "12404": {"_why": "#325 LAT 3536 — hood photographed up, front and back sit low; dy scaled x0.75 for BODY_IN 15", "front": {"dy": -2.6}, "back": {"dy": -3.4}},
+  "17212": {"_why": "#318 Lane Seven LS86000GD — cropped tee, a full-length box reaches the hem; dy scaled x0.75 for BODY_IN 15", "front": {"scale": 0.75, "dy": -0.4}, "back": {"scale": 0.75, "dy": -0.4}},
   "6536": {"_why": "#78 Bella+Canvas 6008 racerback — the racerback straps read as the shoulder on the back photo, so the back box sat at the hem; -14.5 overshot into the straps, -11 starts below the racerback V", "back": {"dy": -11}},
-  "2030": {"_why": "#99 Bella+Canvas 8800 flowy racerback — the flared hem reads as the armpit, so every box sat at the hem; -16 overshot onto the neckline and straps", "front": {"dy": -13.5}, "left_chest": {"dy": -13.5}, "back": {"dy": -14}},
+  "2030": {"_why": "#99 Bella+Canvas 8800 flowy racerback — the flared hem reads as the armpit, so every box sat at the hem; -16 overshot onto the neckline and straps", "front": {"dy": -13.5}, "back": {"dy": -14}},
   "4332": {"_why": "#88 Richardson 112 — box sat high on the crown; lowered toward the brim (owner, 2026-10-18)", "front": {"dy": 0.08}},
   "10297": {"_why": "#164 Richardson 112RE — same photo as the 112; lowered toward the brim (owner, 2026-10-18)", "front": {"dy": 0.08}},
   "1652": {"_why": "#155 Valucap 8804H — photographed three-quarter, so the box covered the side panel and mesh; moved onto the front panel", "front": {"dx": -0.17, "dy": 0.03, "scale": 0.72}},

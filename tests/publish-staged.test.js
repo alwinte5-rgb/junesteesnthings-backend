@@ -17,7 +17,7 @@ const enc = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('
 const attrs = enc({ COL: { type: 'product_color', values: { options: [{ title: 'Black', value: '#000001' }, { title: 'White', value: '#fffffe' }] } },
   QTYS: { type: 'quantity' } });
 /* What wire.js writes: each placement of the garment's set, on that colour's photo. */
-const KEYS = { closed: ['front', 'left_chest', 'back'], open: ['front', 'right_chest', 'back'], cap: ['front'] };
+const KEYS = { closed: ['front', 'back'], open: ['front', 'back'], cap: ['front'] };
 const st = (keys, v = '000001') => Object.fromEntries(keys.map((k) => [k,
   { label: k, image: 'https://res.cloudinary.com/x/' + v + '-' + (k === 'back' ? 'back' : 'front') + '.webp' }]));
 const photo = (v, keys = KEYS.closed) => ({ cfgstages: true, conditions: { COL: v }, stages: st(keys, v.slice(1)) });
@@ -35,9 +35,8 @@ test('a tee with a real photo for every colour is ready', () => {
   assert.strictEqual(notReady(tee), null);
 });
 
-test('owner, 2026-10-18: held back only for missing product images (or a broken basic)', () => {
-  assert.match(notReady({ ...tee, variations: vars('#000001') }), /no product images for 1 of 2/);
-  assert.match(notReady({ ...tee, variations: '' }), /no product images for 2 of 2/);
+test('held back for a broken basic — a colour without its own photo is not one (owner, 2026-10-20)', () => {
+  assert.strictEqual(notReady({ ...tee, variations: vars('#000001') }), null, 'one colour photographed is enough');
   assert.match(notReady({ ...tee, printings: '' }), /no decoration/);
   assert.match(notReady({ ...tee, price: '0' }), /no price/);
   assert.match(notReady({ ...tee, thumbnail_url: 'http://x/a.jpg' }), /no catalogue photo/);
@@ -53,18 +52,13 @@ test('jackets and caps with real photos and their own placements go live too', (
 /* Code review 2026-10-18: "ready" used to mean only "every colour has a
    photo", so a product wire.js wired through its copy-the-box fallback — one
    full front over a jacket's zipper — would have gone live. */
-test('a product, or any one colourway, without the garment\'s full placement set is held back', () => {
+test('a product, or any one colourway, with spots other than front + back is held back', () => {
   const jacket = { ...tee, name: 'Shaka Wear SHCJ Unisex Coaches Jacket' };
-  assert.match(notReady({ ...jacket, stages: enc(st(['front', 'back'])), variations: varsFor(['front', 'back'], '#000001', '#fffffe') }),
-    /placements: has front \/ back, wants Left chest \/ Right chest \/ Back/);
-  const mixed = enc({ variations: { 1: photo('#000001', KEYS.open), 2: photo('#fffffe', ['front', 'back']) } });
+  const old = ['front', 'right_chest', 'back'];
+  assert.match(notReady({ ...jacket, stages: enc(st(old)), variations: varsFor(old, '#000001', '#fffffe') }),
+    /placements: has front \/ right_chest \/ back, wants Front \/ Back/);
+  const mixed = enc({ variations: { 1: photo('#000001', KEYS.open), 2: photo('#fffffe', old) } });
   assert.match(notReady({ ...jacket, stages: enc(st(KEYS.open)), variations: mixed }), /1 colourway\(s\) without the full placement set/);
-});
-
-test('a colour counts as photographed only when EVERY placement shows its photo', () => {
-  const half = enc({ variations: { 1: photo('#000001'), 2: { ...photo('#fffffe'),
-    stages: { ...st(KEYS.closed, 'fffffe'), back: { label: 'back', url: 'products/basic_tshirt_back.png' } } } } });
-  assert.match(notReady({ ...tee, variations: half }), /no product images for 1 of 2/);
 });
 
 test('a staged product with colours but no size list is held back', () => {
@@ -134,39 +128,46 @@ test('the streetwear rows are unique and each name is the garment its type says'
 });
 
 /* Owner, 2026-10-19: "model photo + stand-in" for styles S&S only shot on a
-   person. The drawn garment is accepted only when it IS the garment. */
+   person — the default since 2026-10-20. The drawn garment is accepted only
+   when it IS the garment. */
 const drawn = (front, back, keys = KEYS.closed) => enc(Object.fromEntries(keys.map((k) => [k,
   { label: k, url: 'products/' + (k === 'back' ? back : front) + '.png', edit_zone: { width: 100, height: 100, left: 0, top: 0 } }])));
 
-test('--standin: a style with no photos goes live on the drawing of its own garment', () => {
+test('a style with no photos goes live on the drawing of its own garment', () => {
   const standin = { ...tee, variations: '', stages: drawn('basic_tshirt_front', 'basic_tshirt_back') };
-  assert.match(notReady(standin), /no product images for 2 of 2/, 'not without --standin');
-  assert.strictEqual(notReady(standin, { standin: true }), null);
+  assert.strictEqual(notReady(standin), null);
 });
 
-test('--standin never accepts the wrong garment, or a style with SOME photos', () => {
+test('a drawing of the wrong garment is never accepted', () => {
   const jacket = { ...tee, name: 'Shaka Wear SHBJ Unisex Bomber Jacket', variations: '',
     stages: drawn('hoodies_sweatshirt_front', 'hoodies_sweatshirt_back', KEYS.open) };
-  assert.match(notReady(jacket, { standin: true }), /stand-in is the wrong garment/);
+  assert.match(notReady(jacket), /drawing is the wrong garment/);
   const flannel = { ...tee, name: 'Shaka Wear SHHFS Unisex Plaid Flannel Overshirt', variations: '',
     stages: drawn('women_tshirt_front', 'women_tshirt_back', KEYS.open) };
-  assert.match(notReady(flannel, { standin: true }), /stand-in (is not this|is the wrong) garment|cannot show a pattern/);
-  /* One colour photographed: its other colours are recolor.js's job, not a stand-in's. */
-  assert.match(notReady({ ...tee, variations: vars('#000001') }, { standin: true }), /no product images for 1 of 2/);
+  assert.match(notReady(flannel), /drawing (is not this|is the wrong) garment|cannot show a pattern/);
+  /* Owner, 2026-10-20: the Bayside 4025 crewneck opened on a hooded drawing,
+     and the Shaka Wear SHKTT youth tank on a tee. */
+  const crew = { ...tee, name: 'Bayside 4025 Unisex USA-Made Super Heavy Oversized Crewneck Sweatshirt', variations: '',
+    stages: drawn('hoodies_sweatshirt_front', 'hoodies_sweatshirt_back') };
+  assert.match(notReady(crew), /drawing is the wrong garment .*a hood on a crewneck/);
+  assert.strictEqual(notReady({ ...crew, name: 'Gildan 18500 Unisex Heavy Blend Hooded Sweatshirt' }), null, 'a hooded sweatshirt is fine');
+  const tank = { ...tee, name: 'Shaka Wear SHKTT Youth Tank', variations: '', stages: drawn('kids_babies_front', 'kids_babies_back') };
+  assert.match(notReady(tank), /sleeves on a tank/);
+  assert.strictEqual(notReady({ ...tank, stages: drawn('tank_tops_front', 'tank_tops_back') }), null, 'on the tank drawing it is fine');
 });
 
-test('--standin refuses a patterned style: a drawing is one plain colour', () => {
+test('a patterned style is refused: a drawing is one plain colour', () => {
   const plain = { ...tee, variations: '', stages: drawn('basic_tshirt_front', 'basic_tshirt_back') };
-  assert.match(notReady({ ...plain, name: 'Champion CD100D Unisex Classic Jersey Dip Dye T-Shirt' }, { standin: true }), /pattern/);
-  assert.match(notReady({ ...plain, name: 'Comfort Colors 6045 Unisex Colorblast™ Long Sleeve T-Shirt' }, { standin: true }), /pattern/);
+  assert.match(notReady({ ...plain, name: 'Champion CD100D Unisex Classic Jersey Dip Dye T-Shirt' }), /pattern/);
+  assert.match(notReady({ ...plain, name: 'Comfort Colors 6045 Unisex Colorblast™ Long Sleeve T-Shirt' }), /pattern/);
   const twoTone = enc({ COL: { type: 'product_color', values: { options: [{ title: 'Heather Grey/ Black', value: '#000001' }, { title: 'Heather Grey/ Navy', value: '#fffffe' }] } }, QTYS: { type: 'quantity' } });
-  assert.match(notReady({ ...plain, name: 'Shaka Wear SHRAGY Youth Tee', attributes: twoTone }, { standin: true }), /pattern/);
-  assert.strictEqual(notReady(plain, { standin: true }), null, 'a plain tee is still fine');
+  assert.match(notReady({ ...plain, name: 'Shaka Wear SHRAGY Youth Tee', attributes: twoTone }), /pattern/);
+  assert.strictEqual(notReady(plain), null, 'a plain tee is still fine');
 });
 
 test('a slash in a style name is not a pattern ("50/50")', () => {
   const plain = { ...tee, variations: '', stages: drawn('basic_tshirt_front', 'basic_tshirt_back') };
-  assert.strictEqual(notReady({ ...plain, name: 'Gildan 8000 50/50 Blend Tee' }, { standin: true }), null);
+  assert.strictEqual(notReady({ ...plain, name: 'Gildan 8000 50/50 Blend Tee' }), null);
 });
 
 test('the 2026-10-19 expansion rows are unique, capped per brand, and each name is the garment its type says', () => {
