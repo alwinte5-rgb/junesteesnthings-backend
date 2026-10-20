@@ -214,9 +214,90 @@
   // ============================
   // Wire one form
   // ============================
+  /* What they need, ticked (owner, 2026-10-20). The keys and labels must match
+     PICKS in tools/lib/quote-picks.js — tests/quote-picks.test.js checks it.
+     /submit reads pick_<key> and pick_<key>_qty and writes them as the first
+     line of the enquiry. */
+  var PICKS = [
+    ['apparel', 'Shirts, hoodies & apparel'],
+    ['embroidery', 'Embroidery'],
+    ['signs', 'Banners & signs'],
+    ['calendar', 'Wall calendars'],
+    ['drinkware', 'Mugs & tumblers'],
+    ['stickers', 'Stickers & labels'],
+    ['table_cover', 'Table covers'],
+    ['xframe', 'X-frame banners'],
+    ['brochure', 'Brochures & flyers'],
+    ['pouch', 'Stand-up pouches'],
+    ['other', 'Something else']
+  ];
+  var PICK_STYLE = '' +
+    '.jtpk{border:0;padding:0;margin:0 0 1rem}' +
+    '.jtpk legend{display:block;font-size:.78rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#4B5563;margin-bottom:.45rem;padding:0}' +
+    '.jtpk .g{display:grid;grid-template-columns:1fr 1fr;gap:.4rem .8rem}' +
+    '.jtpk .i{display:flex;align-items:center;gap:.45rem;min-height:2.3rem;font-size:.9rem;color:#1f2937}' +
+    '.jtpk .i label{display:flex;align-items:center;gap:.45rem;margin:0;font-weight:400;text-transform:none;letter-spacing:0;font-size:.9rem;cursor:pointer;flex:1;min-width:0}' +
+    '.jtpk .i input[type=checkbox]{width:auto;margin:0;flex:none}' +
+    '.jtpk .i input[type=number]{width:5.2rem;flex:none;box-sizing:border-box;border:1px solid #D1D5DB;border-radius:6px;padding:.3rem .45rem;font:inherit;font-size:.85rem}' +
+    '@media(max-width:560px){.jtpk .g{grid-template-columns:1fr}}';
+  /* Which item this page is about, ticked for them: a data-jt-pick on the
+     form or anything around it, or ?pick=<key> in the address. */
+  function pagePick(form) {
+    var el = form.closest('[data-jt-pick]');
+    var want = el ? el.getAttribute('data-jt-pick') : '';
+    if (!want) { try { want = new URLSearchParams(location.search).get('pick') || ''; } catch (e) { want = ''; } }
+    return want;
+  }
+  function picker(form) {
+    var desc = form.elements.description;
+    var anchor = desc && (desc.closest('.form-group') || desc);
+    if (!anchor || !anchor.parentNode || form.querySelector('.jtpk')) return null;
+    if (!document.getElementById('jtpk-style')) {
+      var st = document.createElement('style');
+      st.id = 'jtpk-style';
+      st.textContent = PICK_STYLE;
+      document.head.appendChild(st);
+    }
+    var id = 'jtpk' + Math.random().toString(36).slice(2, 7) + '-';
+    var box = document.createElement('fieldset');
+    box.className = 'jtpk';
+    /* Static markup only: the labels are the constant list above. */
+    box.innerHTML = '<legend>What do you need? <span style="font-weight:400;text-transform:none;letter-spacing:0">(tick any)</span></legend>' +
+      '<div class="g">' + PICKS.map(function (p) {
+        return '<div class="i"><label for="' + id + p[0] + '"><input type="checkbox" id="' + id + p[0] + '" name="pick_' + p[0] + '" value="1">' +
+          '<span>' + p[1].replace(/&/g, '&amp;') + '</span></label>' +
+          '<input type="number" name="pick_' + p[0] + '_qty" min="1" max="100000" step="1" inputmode="numeric" placeholder="Qty" aria-label="How many: ' + p[1].replace(/&/g, '&amp;') + '" hidden></div>';
+      }).join('') + '</div>';
+    anchor.parentNode.insertBefore(box, anchor);
+    var sync = function () {
+      PICKS.forEach(function (p) {
+        var cb = form.elements['pick_' + p[0]], q = form.elements['pick_' + p[0] + '_qty'];
+        if (!cb || !q) return;
+        q.hidden = !cb.checked;
+        if (!cb.checked) q.value = '';
+      });
+      /* The browser's own required check would stop a picks-only enquiry
+         before the submit handler runs, so the box is required only while
+         nothing is ticked. */
+      if (desc) desc.required = !PICKS.some(function (p) { var cb = form.elements['pick_' + p[0]]; return cb && cb.checked; });
+    };
+    box.addEventListener('change', sync);
+    var want = pagePick(form);
+    if (want && form.elements['pick_' + want]) form.elements['pick_' + want].checked = true;
+    sync();
+    return {
+      any: function () { return PICKS.some(function (p) { var cb = form.elements['pick_' + p[0]]; return cb && cb.checked; }); },
+      reset: function () { if (want && form.elements['pick_' + want]) form.elements['pick_' + want].checked = true; sync(); }
+    };
+  }
+
   function wire(form) {
     if (!form || form.jtQuoteWired) return;
     form.jtQuoteWired = true;
+    /* The boxes are a help, never a gate: if they cannot be drawn, the form
+       works exactly as it did without them. */
+    var picks = null;
+    try { picks = picker(form); } catch (e) { picks = null; }
     var submitBtn = form.querySelector('button[type="submit"]');
     var formStatus = form.querySelector('.form-status');
     var phoneField = form.elements.phone;
@@ -282,7 +363,8 @@
         if (emailField) emailField.focus();
         return;
       }
-      if (descField && descField.required && !descField.value.trim()) {
+      /* Ticking what they need is enough to send; the words are optional then. */
+      if (descField && descField.required && !descField.value.trim() && !(picks && picks.any())) {
         status('error', 'Please tell us about your order.');
         formError('description');
         descField.focus();
@@ -327,6 +409,7 @@
             if (window.gtag) window.gtag('event', 'generate_lead');
             if (window.jtTrack && saved.lead_event_id) window.jtTrack('quote_submitted', { meta_event_id: saved.lead_event_id });
             form.reset();
+            if (picks) picks.reset();
             up.clear();
             if (heard && rep) heard.dispatchEvent(new Event('change'));
           });

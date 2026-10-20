@@ -61,6 +61,7 @@ const TAXCERT = require('./tools/lib/tax-certificates');
 const QPHOTOS = require('./tools/lib/quote-photos');
 const LEADFILES = require('./tools/lib/lead-files');
 const SHOPDIGEST = require('./tools/lib/shop-digest');
+const QPICKS = require('./tools/lib/quote-picks');
 const ZIPSTREAM = require('./tools/lib/zip-stream');
 const { Readable, pipeline } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
@@ -3933,7 +3934,12 @@ app.post('/submit', countFormFailures('quote'), makeRateLimit(4, 60 * 60 * 1000)
     return res.status(400).json({ error: 'Invalid photo URL.' });
   }
 
-  const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description, photo_url,
+  /* What they ticked on the form leads the description, so the shop email,
+     /admin/leads and Brevo all show it with no new column (quote-picks.js). */
+  const picks = QPICKS.parsePicks(req.body);
+  const typed = description == null ? '' : String(description).trim();
+  const fullDescription = [QPICKS.picksLine(picks), typed].filter(Boolean).join('\n\n');
+  const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description: fullDescription, photo_url,
               first_touch: parseFirstTouch(req.headers.cookie) };
   /* "How did you hear about us?" (optional). Naming a salesperson makes the
      lead `pending` for the owner to decide; it never pays on its own. A
