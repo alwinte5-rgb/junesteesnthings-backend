@@ -116,10 +116,12 @@ ${e}`;
 const PRODUCT_LINK = /\/product\.php\?product_id=\d+$/;
 const DOTS_ROW = '<div class="pb-dots" aria-hidden="true"></div>';
 
+/* item.own: the card keeps its own photo and line instead of the feed's
+   (Big Head Cutouts: the feed has only a drawing and no single price). */
 function card(item, from, kind = 'service') {
-  return `<a class="pb-card" href="${esc(item.link)}" data-from="${from}" data-card="${kind}">
+  return `<a class="pb-card" href="${esc(item.link)}" data-from="${from}" data-card="${kind}"${item.own ? ' data-own="1"' : ''}>
       <div class="pb-im"><img src="${esc(item.image)}" alt="Custom ${esc(item.name)} by June's Tees" loading="lazy" width="300" height="300" /></div>
-      <div class="pb-bd"><div class="pb-nm">${esc(item.name)}</div><div class="pb-pr">${esc(item.price)}</div>${PRODUCT_LINK.test(item.link) ? DOTS_ROW : ''}<span class="pb-go">Design This &rarr;</span></div>
+      <div class="pb-bd"><div class="pb-nm">${esc(item.name)}</div><div class="pb-pr">${esc(item.price)}</div>${PRODUCT_LINK.test(item.link) && !item.own ? DOTS_ROW : ''}<span class="pb-go">Design This &rarr;</span></div>
     </a>`;
 }
 
@@ -146,11 +148,52 @@ function shelvesFor(data, page, rel) {
 /* Categories a page is about that have no shelf (signs, banners, cutouts,
    panels: their only pictures are drawings) stay one tap away as plain
    links, so a banner ad's page still opens the banner designer. */
-function linkRow(data, page, from) {
-  const ids = [...new Set((page.products || []).filter((id) => /^c\d+$/.test(id) && data.catalog[id] && !data.rows[id]))];
+function linkRow(data, page, from, rel) {
+  /* A category its page's featured product already shows is not linked again. */
+  const covered = (((data.featured || {})[rel] || {}).covers) || [];
+  /* A category with nothing live (data.empty) is left out: its link opened a
+     "0 products" page (2026-10-20, the sign products are switched off). */
+  const ids = [...new Set((page.products || []).filter((id) => /^c\d+$/.test(id) && data.catalog[id] && !data.rows[id] && !(data.empty || []).includes(id) && !covered.includes(id)))];
   if (!ids.length) return '';
   return `<p class="pb-links">Design your: ${ids.map((id) => `<a href="${esc(data.catalog[id].link)}" data-from="${from}">${esc(data.catalog[id].name)}</a>`).join(' &middot; ')}</p>
     `;
+}
+
+/* The products a service page is about, first and larger (owner,
+   2026-10-20: "these are the dedicated pages ... match the services to the
+   products"): sublimation shows sublimation blanks, the big head page the big
+   head product. One product sits beside how it works; several make a row of
+   large cards. The category shelves follow. data.featured[rel]. */
+function featuredBlock(data, rel, from) {
+  const f = (data.featured || {})[rel];
+  if (!f) return '';
+  const items = f.products.map((id) => data.catalog[id]);
+  let body;
+  if (items.length === 1 && f.info) {
+    const i = data.info[f.info];
+    body = `<div class="pb-feature">
+      ${card(items[0], from, 'product').replace('class="pb-card"', 'class="pb-card pb-card-lg"')}
+      <div class="pb-feature-info">
+        <h3>${esc(i.title)}</h3>
+        <ol>${i.steps.map((t) => `<li>${esc(t)}</li>`).join('')}</ol>
+        <p class="pb-feature-tip">${esc(i.tip)}</p>
+        <div class="pb-feature-go"><a class="pb-lab-go" href="${esc(items[0].link)}" data-from="${from}_feature">${esc(i.go)} &rarr;</a>${i.more ? ` <a class="pb-feature-more" href="${esc(i.more.link)}" data-from="${from}_feature">${esc(i.more.label)}</a>` : ''}</div>
+      </div>
+    </div>`;
+  } else {
+    body = `<div class="pb-row pb-row-lg">
+      ${items.map((it) => card(it, from, 'product')).join('\n      ')}
+    </div>`;
+  }
+  return `<section class="pb-products pb-featured" aria-labelledby="pb-featured-h">
+  <div class="pb-wrap">
+    <div class="pb-head">
+      <div><div class="pb-tag"><a href="${STUDIO}" data-from="${from}">Design Studio</a> &middot; design it online</div><h2 id="pb-featured-h">${esc(f.heading)}</h2></div>
+    </div>
+    ${body}
+  </div>
+</section>
+`;
 }
 
 function shelves(data, cats, from) {
@@ -186,13 +229,14 @@ function productsBlock(data, page, rel) {
   const from = fromTag(rel);
   return `${s}
 ${labSection(from)}
+${featuredBlock(data, rel, from)}
 <section class="pb-products" aria-labelledby="pb-products-h">
   <div class="pb-wrap">
     <div class="pb-head">
       <div><div class="pb-tag"><a href="${STUDIO}" data-from="${from}">Design Studio</a> &middot; see it before you buy</div><h2 id="pb-products-h">${studioLink(esc(page.heading), from)}</h2></div>
       <a class="pb-all" href="${STUDIO}" data-from="${from}">All products &rarr;</a>
     </div>
-    ${linkRow(data, page, from)}${shelves(data, shelvesFor(data, page, rel), from)}
+    ${linkRow(data, page, from, rel)}${shelves(data, shelvesFor(data, page, rel), from)}
     <p class="pb-note">Pick a product, add your text, photo or logo, and see the price as you go. Prefer help? <a href="/contact">Send us your idea</a>, call <a href="tel:${PHONE.tel}">${PHONE.display}</a> or email <!--email_off--><a href="mailto:${EMAIL}">${EMAIL}</a><!--/email_off-->.</p>
   </div>
 </section>
@@ -459,6 +503,17 @@ function validate(data) {
     }
   }
   for (const c of [...SHELF_ORDER, ...((data.home || {}).shelves || [])]) if (!(data.rows || {})[c]) bad.push(`rows: no shelf for ${c}`);
+  for (const [rel, f] of Object.entries(data.featured || {})) {
+    if (!data.pages[rel]) bad.push(`featured: no page ${rel}`);
+    if (!(f.products || []).length) bad.push(`featured.${rel}: no products`);
+    for (const id of f.products || []) {
+      if (!data.catalog[id] || !PRODUCT_LINK.test(data.catalog[id].link)) bad.push(`featured.${rel}: ${id} is not a product`);
+      else if (!/\.jpe?g$/i.test(data.catalog[id].image)) bad.push(`featured.${rel}: ${id} has no photo`);
+    }
+    if (f.info && !(data.info || {})[f.info]) bad.push(`featured.${rel}: unknown info ${f.info}`);
+    if (!f.heading) bad.push(`featured.${rel}: needs a heading`);
+  }
+  for (const c of data.empty || []) if (!data.catalog[c]) bad.push(`empty: unknown category ${c}`);
   for (const [rel, p] of Object.entries(data.pages)) {
     if (!fs.existsSync(path.join(PUBLIC, rel))) bad.push(`${rel}: no such page`); // a new occasion page: run tools/occasion-pages.js --write first
     for (const id of p.products || []) if (!data.catalog[id]) bad.push(`${rel}: unknown product ${id}`);

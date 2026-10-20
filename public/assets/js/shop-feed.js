@@ -36,6 +36,9 @@
         if (d.products_complete === true && /\/product\.php\?product_id=\d+$/.test(a.href)) a.hidden = true;
         return;
       }
+      /* A card with its own photo and line (data-own) keeps them: the feed
+         has only a drawing and no single price for Big Head Cutouts. */
+      if (a.getAttribute('data-own') === '1') return;
       var img = a.querySelector('.pb-im img');
       if (img && it.image) img.src = it.image;
       var pr = a.querySelector('.pb-pr');

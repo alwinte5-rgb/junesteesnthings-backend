@@ -15,6 +15,10 @@
     "c70": { "name": "Vehicle Graphics & Magnets", "link": "https://design.jtees.net/products.php?category_id=70", "image": "/assets/images/products/vehicle-graphics.svg", "price": "Priced as you design" },
     "c71": { "name": "Photo Panels & Canvas", "link": "https://design.jtees.net/products.php?category_id=71", "image": "/assets/images/products/acrylic-canvas.svg", "price": "Priced as you design" },
     "c72": { "name": "Big Head Cutouts", "link": "https://design.jtees.net/products.php?category_id=72", "image": "/assets/images/products/big-head-cutouts.svg", "price": "Priced as you design" },
+    "p129": { "name": "SubliVie 1910 Men's Polyester Sublimation Tee", "link": "https://design.jtees.net/product.php?product_id=129", "image": "/assets/images/shop/listing-p129.jpg", "price": "From $12.30 + printing" },
+    "p130": { "name": "SubliVie 1210 Youth Polyester Sublimation Tee", "link": "https://design.jtees.net/product.php?product_id=130", "image": "/assets/images/shop/listing-p130.jpg", "price": "From $9.72 + printing" },
+    "p131": { "name": "SubliVie 1310 Toddler Polyester Sublimation Tee", "link": "https://design.jtees.net/product.php?product_id=131", "image": "/assets/images/shop/listing-p131.jpg", "price": "From $9.72 + printing" },
+    "p188": { "name": "Big Head Cutouts", "link": "https://design.jtees.net/product.php?product_id=188", "image": "/assets/images/work/big-head-cutouts-row.jpg", "price": "12″ to 36″, by the pack or one at a time", "own": true },
     "p12": { "name": "Gildan 5000 Unisex Heavy Cotton Tee", "link": "https://design.jtees.net/product.php?product_id=12", "image": "/assets/images/shop/ssa-33476_f_fm.jpg", "price": "From $5.12 + printing" },
     "p13": { "name": "Gildan 64000 Unisex Softstyle Tee", "link": "https://design.jtees.net/product.php?product_id=13", "image": "/assets/images/shop/ssa-33310_f_fm.jpg", "price": "From $6.28 + printing" },
     "p59": { "name": "Hanes 5280 Essential-T T-Shirt", "link": "https://design.jtees.net/product.php?product_id=59", "image": "/assets/images/shop/ssa-27220_f_fm.jpg", "price": "From $5.02 + printing" },
@@ -44,6 +48,28 @@
     "p185": { "name": "Recover EC500 Men's Eco Polo", "link": "https://design.jtees.net/product.php?product_id=185", "image": "/assets/images/shop/ssa-113653_f_fm.jpg", "price": "From $32.20 + printing" },
     "p159": { "name": "Dickies 2574 Men's Short Sleeve Work Shirt", "link": "https://design.jtees.net/product.php?product_id=159", "image": "/assets/images/shop/ssa-94244_f_fm.jpg", "price": "From $42.94 + printing" }
   },
+  "_featured": "The products a service page is about, shown first and larger. One product with an info key sits beside how it works; several make a row of large cards. Only products that really match the service (owner, 2026-10-20).",
+  "featured": {
+    "services/sublimation.html": { "heading": "Made for sublimation", "products": ["p129", "p130", "p131"] },
+    "services/big-head-cutouts.html": { "heading": "Design your big heads online", "products": ["p188"], "info": "bighead", "covers": ["c72"] },
+    "services/event-decor.html": { "heading": "Big head cutouts, designed online", "products": ["p188"], "info": "bighead", "covers": ["c72"] }
+  },
+  "info": {
+    "bighead": {
+      "title": "How it works",
+      "steps": [
+        "Pick a size and pack. A pack holds that many heads, in any mix of faces.",
+        "Upload one clear photo of one face. We cut around the head for you.",
+        "Set how many copies of that face you want, then add it to your cart.",
+        "Start the next face and repeat. Each face fills your pack, and the pack is paid once."
+      ],
+      "tip": "Photo tips: face the camera, good light, the whole head and hair in the shot, nothing over the face, and the biggest photo you have.",
+      "go": "Start your big heads",
+      "more": { "label": "See every size and price", "link": "https://www.jtees.net/services/big-head-cutouts.html#pricing" }
+    }
+  },
+  "_empty": "Categories with nothing live in the Design Studio. Their links are left off the pages until products are switched back on (2026-10-20: the sign products #196-#205 are off).",
+  "empty": ["c67", "c68", "c69", "c70", "c71"],
   "_rows": "Each category's shelf on the pages: its most-ordered products with real photos, left to right. Signs have no shelf (their pictures are drawings).",
   "rows": {
     "c52": ["p12", "p13", "p59", "p17"],

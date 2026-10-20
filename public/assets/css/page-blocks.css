@@ -109,6 +109,25 @@
 .pb-shelves .pb-shelf:last-child{margin-bottom:0}
 .pb-links{margin:0 0 1.4rem;font-weight:600;color:#0D0D12}
 .pb-links a{color:#0E78B8;font-weight:700}
+/* A service page's own products, first and larger (tools/page-blocks.js
+   featuredBlock): a row of three big cards, or one product beside how it works. */
+/* Its own section, right after the Design Lab; the category shelves follow. */
+.pb-featured{background:#FFF8F0}
+.pb-row-lg{grid-template-columns:repeat(3,1fr);gap:1.4rem}
+.pb-row-lg .pb-nm{font-size:1.1rem}.pb-row-lg .pb-pr{font-size:.98rem}.pb-row-lg .pb-go{font-size:.98rem}
+.pb-feature{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:2rem;align-items:start;margin:0 0 2.2rem;font-family:Inter,system-ui,sans-serif}
+.pb-card-lg .pb-im{aspect-ratio:4/3;background:#F3F4F6}
+.pb-card-lg .pb-im img{object-fit:cover}
+.pb-card-lg .pb-nm{font-size:1.3rem}.pb-card-lg .pb-pr{font-size:1rem}.pb-card-lg .pb-go{font-size:1rem}
+.pb-feature-info{background:#F7F6F3;border-radius:14px;padding:1.5rem 1.6rem}
+.pb-feature-info h3{margin:0 0 .8rem;font-size:1.35rem;font-weight:800;color:#0D0D12}
+.pb-feature-info ol{margin:0 0 .9rem;padding-left:1.3rem;color:#1F2937;line-height:1.6}
+.pb-feature-info li{margin:0 0 .45rem}
+.pb-feature-tip{margin:0 0 1.2rem;color:#4B5563;font-size:.93rem;line-height:1.55}
+.pb-feature-go{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1.2rem}
+.pb-feature-more{color:#0E78B8;font-weight:700;text-decoration:none}
+.pb-feature-more:hover{text-decoration:underline}
+@media (max-width:900px){.pb-row-lg{grid-template-columns:repeat(2,1fr)}.pb-feature{grid-template-columns:1fr;gap:1.2rem}}
 
 /* Phone action bar: it stops short of the "Chat with us" button
    (assets/js/jt-chat.js, about 130px wide at the bottom right). */
