@@ -71,8 +71,9 @@ test('the published table carries the minimum, the group and the capture date', 
   assert.strictEqual(t.families.calendar.min, 25);
   assert.strictEqual(t.families.calendar.group, 'Print & Paper');
   assert.strictEqual(t.captured, FIXTURE.captured);
+  /* Fixed regular prices (owner, 2026-10-20): never stale by age. */
   assert.strictEqual(SL.stale(Date.parse('2026-10-20')), false);
-  assert.strictEqual(SL.stale(Date.parse('2026-12-20')), true, 'a sale price read two months ago is stale');
+  assert.strictEqual(SL.stale(Date.parse('2028-12-20')), false, 'two years on, a regular price is still the price');
 });
 
 const SERVER = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
@@ -149,11 +150,11 @@ test('table covers say the whole outside is printed (SinaLite templates, not the
   assert.doesNotMatch(JSON.stringify(tc), /front panel printed/i);
 });
 
-test('stale is worked out on every call, not frozen when the table is first built', () => {
-  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - 86400000).toISOString() })));
-  assert.strictEqual(SL.table().stale, false);
-  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - (SL.STALE_DAYS + 2) * 86400000).toISOString() })));
-  assert.strictEqual(SL.table().stale, true);
+test('stale means no table, worked out on every call; age never makes it stale', () => {
+  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - 400 * 86400000).toISOString() })));
+  assert.strictEqual(SL.table().stale, false, 'a year-old regular price is not stale');
+  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: null })));
+  assert.strictEqual(SL.table().stale, true, 'no capture date at all is');
 });
 
 test('an unpriceable cost row is reported by name, not skipped in silence', () => {
@@ -194,15 +195,31 @@ test('a tier with no usable shipping is reported, not priced with $0 freight', (
   assert.strictEqual(said.length, 4);
 });
 
-test('stale SinaLite prices are said on the quote sizer and in the morning email', () => {
+test('a missing SinaLite table is said on the quote sizer and in the morning email', () => {
   const QS = require('../tools/lib/quote-signs');
-  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - (SL.STALE_DAYS + 2) * 86400000).toISOString() })));
+  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: null })));
   const o = QS.sizerOptions().calendar;
   assert.strictEqual(o.stale, true);
-  assert.match(o.captured, /^\d{4}-\d{2}-\d{2}$/);
+  SL._setData(JSON.parse(JSON.stringify({ ...FIXTURE, captured: new Date(Date.now() - 400 * 86400000).toISOString() })));
+  assert.strictEqual(QS.sizerOptions().calendar.stale, false, 'an old capture is not a warning');
+  assert.match(QS.sizerOptions().calendar.captured, /^\d{4}-\d{2}-\d{2}$/);
   assert.strictEqual(QS.sizerOptions().yard_sign && QS.sizerOptions().yard_sign.stale, undefined, 'Signs365 families carry no SinaLite date');
   assert.match(SERVER, /return health \+ sinaliteStaleHtml\(\) \+/);
-  assert.ok(SERVER.includes("(o.stale ? '<div") && SERVER.includes(">Supplier prices last read '"));
+  assert.ok(SERVER.includes("(o.stale ? '<div") && SERVER.includes("SinaLite prices are missing or unreadable"));
+  assert.doesNotMatch(SERVER, /may include a sale that has ended/);
+});
+
+test('a monthly reminder asks whether the SinaLite API is open, once a month, and can be switched off', () => {
+  const i = SERVER.indexOf('async function sinaliteApiReminder()');
+  assert.ok(i > 0);
+  const fn = SERVER.slice(i, SERVER.indexOf('\n}\n', i));
+  assert.match(fn, /JT_SINALITE_API_REMINDER/);
+  assert.match(fn, /\.slice\(0, 7\)/, 'keyed by month');
+  assert.match(fn, /action = 'sinalite api reminder' AND subject_id = \$1/);
+  assert.match(fn, /sinalite\.com\/en_us\/api-signup/);
+  assert.doesNotMatch(fn, /urgent: true/, 'it rides in the daily summary');
+  assert.ok(SERVER.indexOf("step('SinaLite API reminder', sinaliteApiReminder)") < SERVER.indexOf("step('daily summary', sendShopDigest)"),
+    'before the summary, so it is in that morning\'s email');
 });
 
 test('switching Category clears the old product BEFORE filtering, so its section closes', () => {
@@ -410,4 +427,13 @@ test('captures read SinaLite REGULAR prices, never a sale price', () => {
   assert.doesNotMatch(data.source, /sale prices included/);
   const each = (k, q) => data.products[k].rows.find((r) => r.qty === q).cost / q;
   assert.ok(each('mug', 1) >= 8.58 && each('tumbler', 1) >= 19.23, 'drinkware at regular price');
+});
+
+test('the live SinaLite table is regular prices, never sale prices (owner, 2026-10-15 and 2026-10-20)', () => {
+  const live = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'data', 'sinalite-costs.json'), 'utf8'));
+  assert.match(String(live.source || ''), /at REGULAR price/);
+  const asm = fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-assemble.js'), 'utf8');
+  assert.match(asm, /at REGULAR price \(SinaLite sales left out/, 'every re-assembly writes the same promise');
+  const cap = fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-capture.js'), 'utf8');
+  assert.match(cap, /regular price ' \+ box\.textContent \+ ' unreadable or below/, 'a regular price below the shown one stops the capture');
 });

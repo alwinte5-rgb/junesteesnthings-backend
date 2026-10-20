@@ -28,8 +28,8 @@
  * the shop's prices are built on what the job costs without it. On a sale,
  * some pages move window.product.price to the sale figure (roll labels) and
  * some leave it regular (calendars), so the price is read from the page's own
- * "Regular Price" box whenever it shows one. Re-run monthly
- * (tools/lib/sinalite.js marks the file stale after STALE_DAYS).
+ * "Regular Price" box whenever it shows one. Prices are fixed (owner,
+ * 2026-10-20): re-run only when the owner asks, or to add new items.
  */
 /* eslint-disable no-undef */
 async function slCapture(spec) {
