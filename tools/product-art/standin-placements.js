@@ -138,4 +138,21 @@ if (require.main === module) {
   else { let b = ''; process.stdin.on('data', (d) => (b += d)); process.stdin.on('end', () => run(b)); }
 }
 
-module.exports = { standinStages, drawingFor, MASK };
+/** A Back stage on the garment's own drawing, its box measured there, for a
+ *  colourway S&S has no back photo of — or null when the garment has no
+ *  drawing (polos, quarter-zips). `like` is a stage of the product to copy
+ *  the canvas size from. */
+function drawnBack(name, like) {
+  const cls = classify(name), want = drawingFor(cls, name), set = placementSet(name);
+  if (!want || !set) return null;
+  const url = 'products/' + want + '_back.png';
+  if (!fs.existsSync(path.join(RAWS, url))) return null;
+  const m = { back: measure(url) };
+  const b = boxesFor(set, m).find((x) => x.key === 'back');
+  if (!b) return null;
+  const pw = (like && like.product_width) || 400, ph = (like && like.product_height) || 475;
+  return { source: 'raws', overlay: true, url, label: 'Back', product_width: pw, product_height: ph,
+    edit_zone: toEditZone(b, m.back.W, m.back.H, pw) };
+}
+
+module.exports = { standinStages, drawingFor, drawnBack, MASK };

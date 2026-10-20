@@ -87,6 +87,9 @@ test('naming: a fit word S&S uses is kept (oversized, cropped, muscle, pocket)',
 test('description: a fabric weight we state must be S&S\'s', () => {
   assert.strictEqual(ssaChecks({ name: 'X 1 Tee', thumb: '', description: '• 6.1 oz cotton' }, { title: 'Tee', description: '<li>5.3 oz./yd²</li>' }, []).description, 'says 6.1 oz, S&S says 5.3 oz');
   assert.strictEqual(ssaChecks({ name: 'X 1 Tee', thumb: '', description: '• 5.3 oz cotton' }, { title: 'Tee', description: '5.3 oz' }, []).description, 'ok');
+  /* #149 Next Level 9643: S&S gives the Canadian weight first. */
+  assert.strictEqual(ssaChecks({ name: 'X 1 Tee', thumb: '', description: '• 7.4 oz./yd² (US), 12.4 oz./L yd (CA)' },
+    { title: 'Tee', description: '<li>12.4 oz./L yd (CA), 7.4 oz./yd² (US)</li>' }, []).description, 'ok');
 });
 
 test('canvas: a fit or pattern a drawing cannot show is flagged (#365 muscle, #357 cropped, #251 dip dye)', () => {

@@ -43,6 +43,7 @@ function placementSet(name) {
   /* A beanie is decorated on its folded cuff, not its crown (owner, 2026-10-18). */
   if (cls === 'cap') return subtype(name) === 'beanie' ? 'beanie' : 'cap';
   if (cls === 'bag') return 'bag';
+  if (cls === 'apron') return 'apron';
   if (cls === 'kids') return 'kids';
   if (cls === 'onesie') return 'onesie';
   if (['qzip', 'polo', 'woven', 'jacket', 'vest'].includes(cls)) return 'open';

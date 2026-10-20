@@ -45,3 +45,32 @@ test('every colourway is cut as well as the product, and reported once', () => {
   assert.deepStrictEqual(c.variations.variations[2].stages, dejson(p.variations).variations[2].stages, 'an already-right colourway is untouched');
   assert.strictEqual(cutProduct({ stages: enjson(st({ front: 'Front', back: 'Back' })), variations: '' }), null);
 });
+
+test('a colour with no back photo gets the back DRAWING, never another colour\'s photo', () => {
+  const p = {
+    stages: enjson({ front: { label: 'Front', image: 'https://c/white-front.webp', url: 'products/polo_front.png' },
+      back: { label: 'Back', image: 'https://c/white-back.webp', url: 'products/polo_back.png' } }),
+    variations: enjson({ variations: {
+      1: { cfgstages: true, conditions: { C: '#1' }, stages: { front: { label: 'Front', image: 'https://c/navy-front.webp' } } },
+      2: { cfgstages: true, conditions: { C: '#2' }, stages: { front: { label: 'Front', url: 'products/polo_front.png' }, back: { label: 'Back', url: 'products/polo_back.png' } } },
+    } }),
+  };
+  const c = cutProduct(p);
+  assert.strictEqual(c.backs, 1);
+  const back = c.variations.variations[1].stages.back;
+  assert.strictEqual(back.url, 'products/polo_back.png');
+  assert.ok(!/^https/.test(String(back.image || '')), 'not the white back photo');
+  assert.strictEqual(back.label, 'Back');
+});
+
+test('when every back is a photo, the back is measured on the garment\'s drawing', () => {
+  const photo = (c, side) => ({ label: side === 'front' ? 'Front' : 'Back', image: 'https://c/' + c + '-' + side + '.webp', url: 'x.webp' });
+  const p = { name: 'ComfortWash by Hanes GDH100 Men\'s Garment-Dyed T-Shirt',
+    stages: enjson({ front: photo('white', 'front'), back: photo('white', 'back') }),
+    variations: enjson({ variations: { 1: { cfgstages: true, conditions: { C: '#1' }, stages: { front: photo('navy', 'front') } } } }) };
+  const seen = [];
+  const c = cutProduct(p, { drawnBack: (name, like) => { seen.push(name); return { url: 'products/basic_tshirt_back.png', label: 'Back' }; } });
+  assert.deepStrictEqual(seen, [p.name]);
+  assert.strictEqual(c.variations.variations[1].stages.back.url, 'products/basic_tshirt_back.png');
+  assert.strictEqual(cutProduct(p, { drawnBack: () => null }), null, 'no drawing (a polo): left as it is');
+});

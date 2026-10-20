@@ -55,6 +55,7 @@ const FIT_WORDS = ['cropped', 'crop', 'oversized', 'boxy', 'muscle', 'pocket', '
 const DRAWN_FIT = /\b(crop(ped)?|oversized|boxy|muscle|pocket|raglan|dip.?dye|tie.?dye|ombr[eé]|colou?rblast|camo)\b/i;
 /* A fabric weight a description states, in oz. */
 const ozOf = (t) => { const m = String(t || '').match(/(\d+(?:\.\d+)?)\s*oz/i); return m ? Number(m[1]) : null; };
+const ozAll = (t) => [...String(t || '').matchAll(/(\d+(?:\.\d+)?)\s*oz/gi)].map((m) => Number(m[1]));
 const { costBySize, baseCostOf, readSizes, pieceCost } = require('./lib/ssa-costs');
 /* ssa-add-products gives the SubliVie poly tees dye sublimation on top of their
    garment class's methods, so it is wanted there, not an extra. */
@@ -114,7 +115,10 @@ function ssaChecks(p, style, prods) {
   out.naming = lost.length || lostFit.length ? 'S&S calls it "' + style.title + '"' : 'ok';
   /* description: a fabric weight we state must be S&S's. */
   const ours = ozOf(String(p.description || '').replace(/<[^>]+>/g, ' ')), theirs = ozOf(String((style && style.description) || '').replace(/<[^>]+>/g, ' '));
-  out.description = ours != null && theirs != null && Math.abs(ours - theirs) > 0.05
+  /* S&S states US and Canadian weights ("7.4 oz./yd² (US), 12.4 oz./L yd
+     (CA)") in either order, so ours is right when it is any weight S&S gives. */
+  const theirAll = ozAll(String((style && style.description) || '').replace(/<[^>]+>/g, ' '));
+  out.description = ours != null && theirs != null && !theirAll.some((t) => Math.abs(ours - t) <= 0.05)
     ? 'says ' + ours + ' oz, S&S says ' + theirs + ' oz' : 'ok';
   return out;
 }
@@ -122,7 +126,7 @@ function ssaChecks(p, style, prods) {
 
 /** The keys a garment's stages should have, in order. */
 function expectedKeys(set) {
-  if (set === 'cap' || set === 'beanie') return ['front'];
+  if (set === 'cap' || set === 'beanie' || set === 'apron') return ['front'];
   if (set === 'bag') return ['front', 'back'];
   return (SETS[set] || []).map((p) => p.key);
 }
@@ -166,19 +170,25 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null, subId = n
   const st = decodeStages(p.stages) || {};
   const keys = Object.keys(st), exp = expectedKeys(set);
   const same = (ks) => exp.every((k) => ks.includes(k)) && ks.every((k) => exp.includes(k));
+  /* A product set up by hand in the Lumise admin has generated stage ids
+     (#14 Bella+Canvas 3001: 'ZWEnsr7gXm', 'mr83j4pl'). Renaming them would
+     orphan saved designs, so its Front / Back labels are what is judged. */
+  const label = (k) => k.charAt(0).toUpperCase() + k.slice(1);
+  const sameLabels = keys.length === exp.length && keys.every((k, i) => st[k] && st[k].label === label(exp[i]));
   /* Every colourway too: wire.js's fallback writes one copied box per colour,
      so a product's own stages can be right while a swatch is not. */
   const off = Object.values(((dejson(p.variations) || {}).variations) || {})
     .filter((v) => v && v.cfgstages && v.stages && !same(Object.keys(v.stages))).length;
   out.placements = !set ? 'no placement set for ' + out.cls
-    : same(keys) && off ? off + ' colourway(s) without the full placement set'
-    : same(keys) ? 'ok'
+    : (same(keys) || sameLabels) && off ? off + ' colourway(s) without the full placement set'
+    : same(keys) || sameLabels ? 'ok'
       : 'has ' + (keys.map((k) => (st[k] && st[k].label) || k).join(' / ') || 'none') + ', wants ' +
         exp.map((k) => ((SETS[set] || []).find((s) => s.key === k) || { label: k }).label).join(' / ');
   /* canvas: what the designer draws under a customer's design. */
   const v = canvasVerdict(p);
   const pat = (Number(cov.withPhotos) === 0) ? patterned(p) : null;
-  out.canvas = v.verdict === 'bad' ? 'wrong garment drawing (' + v.art + ')'
+  out.canvas = out.cls === 'apron' ? '-'   /* embroidered and quoted: never opened in the designer */
+    : v.verdict === 'bad' ? 'wrong garment drawing (' + v.art + ')'
     : v.verdict === 'unusable' ? 'unusable: ' + v.why
     : v.verdict === 'borrowed' ? 'drawn as ' + v.sub.looks
     : v.real ? 'ok'

@@ -28,7 +28,7 @@ module.exports = [
     { slug: 'custom-crewneck-sweatshirts', name: 'Crewnecks', match: (p) => p.cls === 'hoodie' && !/hood|zip/i.test(p.name) },
     { slug: 'custom-quarter-zips', name: 'Quarter-Zips', match: (p) => p.cls === 'qzip' },
   ] },
-  { slug: 'custom-business-apparel', name: 'Polos & Workwear', order: 3, leaves: [
+  { slug: 'custom-business-apparel', name: 'Polos & Workwear', order: 3, match: (p) => p.cls === 'apron', leaves: [
     { slug: 'custom-polos', name: 'Polos', match: (p) => p.cls === 'polo' },
     { slug: 'custom-button-ups', name: 'Button-Ups', match: (p) => p.cls === 'woven' },
     { slug: 'custom-jackets-vests', name: 'Jackets & Vests', match: (p) => p.cls === 'jacket' || p.cls === 'vest' },
