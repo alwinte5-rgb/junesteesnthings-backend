@@ -154,7 +154,9 @@ test('a blog page with a gallery shows it after the article, before the cards', 
 });
 
 test('every page shows the Design Lab, then three category shelves of real products (owner, 2026-10-17)', () => {
-  for (const rel of Object.keys(data.pages)) {
+  /* Printed-product pages (calendars, pouches) show no apparel shelves:
+     tests/print-pages.test.js holds them to that instead. */
+  for (const rel of Object.keys(data.pages).filter((r) => !data.pages[r].print)) {
     const html = read(rel);
     const lab = html.indexOf('<section class="pb-lab"');
     const prod = html.indexOf('<section class="pb-products"');

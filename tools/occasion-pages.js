@@ -23,6 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { escHtml: esc } = require('./lib/html-escape');
 const CAL = require('./lib/marketing-calendar');
+const SL = require('./lib/sinalite');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const DATA = path.join(PUBLIC, 'assets', 'data', 'occasion-pages.json');
@@ -59,8 +60,107 @@ function orderNote(page) {
   return `<p class="lead" style="margin-bottom:0"><strong>When to order:</strong> ${esc(o.note)} Order at least 4 weeks ahead: standard turnaround is 7 to 14 business days after you approve the proof.</p>`;
 }
 
+/* PRINTED PRODUCTS (kind "print", plan step 5, owner 2026-10-20): calendars,
+   table covers, X-frames, stickers and labels, brochures and pouches, bought
+   from the print partner and resold. Their prices are written from the same
+   SinaLite table the staff quote reads (tools/lib/sinalite.js), at each run
+   SinaLite sells, through the same eachFor(), so the page and a staff quote
+   for that quantity agree to the cent. A re-capture changes the table, the
+   --check below fails, and the pages are written again. */
+const money = (n) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const count = (n) => n.toLocaleString('en-US');
+
+function printFamilies(page) {
+  const t = SL.table();
+  return page.print.families.map((k) => {
+    const f = t.families[k];
+    if (!f) throw new Error(`${page.path}: no SinaLite family "${k}" in tools/data/sinalite-costs.json`);
+    const cols = [];
+    for (const m of f.materials) for (const z of f.sizes) {
+      cols.push({ label: [f.materials.length > 1 ? m.label : '', f.sizes.length > 1 ? z.label : ''].filter(Boolean).join(', ') || `${m.label}, ${z.label}`,
+        ladder: f.prices[m.key][z.key][''] });
+    }
+    /* f.runs is every run any option sells; an option whose own minimum is
+       higher has no price at the smaller runs, shown as a dash (null). The
+       first row must price somewhere, or the page would say nothing. */
+    const rows = f.runs.map((q) => ({ q, cells: cols.map((c) => SL.eachFor(c.ladder, q, f.any_qty)) }));
+    if (!rows.length || !rows[0].cells.some((e) => e > 0)) throw new Error(`${page.path}: ${k} has no price at its smallest run`);
+    return { key: k, f, cols, rows, lead: SL.leadDays(k) };
+  });
+}
+
+/* The lowest price each anywhere on the page, the quantity it takes, and the
+   smallest order with what it costs: the "from" line says all three, so a
+   10,000-piece price is never read as the price of 25. */
+function printSummary(fams) {
+  let low = null, start = null, high = 0, offers = 0;
+  for (const fm of fams) {
+    for (const r of fm.rows) for (const e of r.cells) {
+      if (!(e > 0)) continue;
+      offers++;
+      if (e > high) high = e;
+      if (!low || e < low.each) low = { each: e, q: r.q };
+    }
+    const first = fm.rows[0];
+    const each = Math.min(...first.cells.filter((e) => e > 0));
+    if (!start || first.q < start.q || (first.q === start.q && each * first.q < start.total)) start = { q: first.q, total: Math.round(each * first.q * 100) / 100 };
+  }
+  const lead = [Math.min(...fams.map((x) => x.lead[0])), Math.max(...fams.map((x) => x.lead[1]))];
+  return { low, start, high, offers, lead };
+}
+
+/* The smallest quantity between two runs, for the note's example. */
+function notRun(rows) {
+  const runs = new Set(rows.map((r) => r.q));
+  for (let q = rows[0].q + 1; q < rows[rows.length - 1].q; q++) if (!runs.has(q)) return q;
+  return null;
+}
+
+function pricesSection(page, fams, sum) {
+  const tables = fams.map((fm) => `<div class="pp-fam">
+      <h3>${esc(fm.f.label)}</h3>
+      <div class="pp-scroll"><table class="pp-table">
+        <thead><tr><th scope="col">Quantity</th>${fm.cols.map((c) => `<th scope="col">${esc(c.label)}</th>`).join('')}</tr></thead>
+        <tbody>
+        ${fm.rows.map((r) => `<tr><th scope="row">${count(r.q)}</th>${r.cells.map((e) => (e > 0 ? `<td><b>${money(e)}</b> each<span>${money(Math.round(e * r.q * 100) / 100)} total</span></td>` : '<td>&mdash;<span>not sold at this quantity</span></td>')).join('')}</tr>`).join('\n        ')}
+        </tbody>
+      </table></div>
+      <p class="pp-note">${fm.f.any_qty
+        ? `Any quantity from ${count(fm.rows[0].q)}. A quantity between two rows pays the lower row's price each, or the next row's total if that is less.`
+        : `Sold in these runs. Another quantity is made up from the runs above at the lowest total${notRun(fm.rows) ? `: ${count(notRun(fm.rows))}, for example, is priced as the cheapest set of runs that covers it` : ''}.`}</p>
+    </div>`).join('\n    ');
+  return `<section class="pp-prices" id="prices">
+  <div class="container">
+    <div class="section-tag">Prices</div>
+    <h2>${esc(page.print.prices_h2)}</h2>
+    <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop; sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
+    ${tables}
+    <p class="pp-note">Design is not included. Send a print-ready file, or ask us to design it for a separate design fee, shown on your quote before anything is made.</p>
+    <div class="hero-btns"><a href="#get-quote" class="btn btn-gold">Get a Free Quote</a><a href="tel:+17739004592" class="btn btn-outline-white pp-call">📞 Call Us</a></div>
+  </div>
+</section>`;
+}
+
+const PRINT_STYLE = `<style>
+    .pp-prices .pp-fam{margin:0 0 2rem;}
+    .pp-prices h3{font-size:1.15rem;font-weight:800;color:var(--navy);margin:0 0 .75rem;}
+    .pp-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius);}
+    .pp-table{border-collapse:collapse;width:100%;min-width:420px;font-size:.9rem;}
+    .pp-table th,.pp-table td{padding:.6rem .8rem;text-align:left;border-bottom:1px solid var(--border);vertical-align:top;}
+    .pp-table thead th{background:var(--off-white);color:var(--navy);font-weight:700;font-size:.8rem;}
+    .pp-table tbody th{color:var(--navy);font-weight:700;white-space:nowrap;}
+    .pp-table td b{color:var(--navy);}.pp-table td span{display:block;font-size:.78rem;color:var(--muted);}
+    .pp-note{font-size:.85rem;color:var(--muted);margin:.6rem 0 0;max-width:720px;}
+    .pp-call{border:1px solid var(--border);}
+    @media(max-width:768px){.container{padding:0 16px;}}
+  </style>`;
+
 function render(page, style, business, now) {
   const url = `${SITE}/${page.path}`;
+  const print = page.kind === 'print';
+  const fams = print ? printFamilies(page) : null;
+  const sum = print ? printSummary(fams) : null;
+  const ogImage = page.hero ? `${SITE}/assets/images/work/${esc(page.hero)}.jpg` : `${SITE}/assets/images/social-share.jpg`;
   const title = page.title;
   const crumbs = { '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [
     { '@type': 'ListItem', position: 1, name: 'Home', item: SITE },
@@ -70,10 +170,15 @@ function render(page, style, business, now) {
     { '@type': 'ListItem', position: page.kind === 'service' ? 3 : 2, name: strip(page.h1), item: url }] };
   const service = { '@context': 'https://schema.org', '@type': 'Service', serviceType: strip(page.h1).replace(/ in Chicago$/, ''),
     provider: { '@type': 'LocalBusiness', '@id': `${SITE}/#business`, name: "June's Tees & Things" }, areaServed: { '@type': 'City', name: 'Chicago' }, url };
+  const product = print ? { '@context': 'https://schema.org', '@type': 'Product', name: page.print.product, description: page.meta, url,
+    ...(page.hero ? { image: `${SITE}/assets/images/work/${page.hero}.jpg` } : {}),
+    brand: { '@type': 'Brand', name: "June's Tees & Things" },
+    offers: { '@type': 'AggregateOffer', priceCurrency: 'USD', lowPrice: sum.low.each.toFixed(2), highPrice: sum.high.toFixed(2), offerCount: sum.offers,
+      seller: { '@type': 'LocalBusiness', '@id': `${SITE}/#business`, name: "June's Tees & Things" } } } : null;
   const faq = { '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: page.faq.map((f) => ({ '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } })) };
   const sections = page.sections.map((s, i) => `<section${i % 2 ? ' class="alt"' : ''}>
   <div class="container">
-    ${i === 0 ? `<div class="section-tag">${page.kind === 'service' ? 'The service' : 'Ideas &amp; planning'}</div>\n    ` : ''}<h2>${esc(s.h2)}</h2>
+    ${i === 0 ? `<div class="section-tag">${{ service: 'The service', print: 'The product' }[page.kind] || 'Ideas &amp; planning'}</div>\n    ` : ''}<h2>${esc(s.h2)}</h2>
     ${s.p.map((p) => `<p class="lead">${esc(p)}</p>`).join('\n    ')}${i === page.sections.length - 1 ? '\n    ' + orderNote(page) : ''}
   </div>
 </section>`).join('\n');
@@ -89,7 +194,7 @@ function render(page, style, business, now) {
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <meta property="og:title" content="${esc(title)}" />
   <meta property="og:description" content="${esc(page.meta)}" />
-  <meta property="og:image" content="${SITE}/assets/images/work/${esc(page.hero)}.jpg" />
+  <meta property="og:image" content="${ogImage}" />
   <meta property="og:url" content="${url}" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="June's Tees &amp; Things" />
@@ -99,25 +204,27 @@ function render(page, style, business, now) {
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  ${style}
+  ${style}${print ? '\n  ' + PRINT_STYLE : ''}
   ${business}
   <script type="application/ld+json">${json(crumbs)}</script>
   <script type="application/ld+json">${json(service)}</script>
-  <script type="application/ld+json">${json(faq)}</script>
+  <script type="application/ld+json">${json(faq)}</script>${product ? `\n  <script type="application/ld+json">${json(product)}</script>` : ''}
   <script src="/assets/js/analytics.js"></script>
 </head>
-<body>
+<body${print ? ` data-jt-pick="${esc(page.print.pick)}"` : ''}>
 <section class="hero">
   <div class="container">
     <div class="hero-eyebrow">${page.eyebrow}</div>
     <h1>${page.h1}</h1>
     <p>${esc(page.pitch)}</p>
-    <div class="hero-btns"><a href="https://design.jtees.net/products.php" class="btn btn-gold">🎨 Design Your Own &rarr;</a><a href="/contact" class="btn btn-outline-white">Request a Quote</a><a href="tel:+17739004592" class="btn btn-outline-white">📞 Call Us</a></div>
-    <div class="hero-badges">${page.badges.map((b) => `<span class="hero-badge">${b}</span>`).join('')}</div>
+    <div class="hero-btns">${print
+      ? `<a href="#get-quote" class="btn btn-gold">Get a Free Quote &rarr;</a><a href="#prices" class="btn btn-outline-white">See Prices</a>`
+      : `<a href="https://design.jtees.net/products.php" class="btn btn-gold">🎨 Design Your Own &rarr;</a><a href="/contact" class="btn btn-outline-white">Request a Quote</a>`}<a href="tel:+17739004592" class="btn btn-outline-white">📞 Call Us</a></div>
+    <div class="hero-badges">${print ? `<span class="hero-badge">From ${money(sum.low.each)} each at ${count(sum.low.q)}</span>` : ''}${page.badges.map((b) => `<span class="hero-badge">${b}</span>`).join('')}</div>
   ${/* the blank line is where page-blocks.js puts the main photo; it keeps the same shape on every run */ ''}
 </div>
 </section>
-${sections}
+${print ? pricesSection(page, fams, sum) + '\n' : ''}${sections}
 <section class="alt">
   <div class="container">
     <div class="section-tag">Common questions</div>
@@ -132,7 +239,7 @@ ${sections}
     <div class="section-tag">Ready to order?</div>
     <h2>${esc(page.cta.h2)}</h2>
     <p>${esc(page.cta.p)} We reply within one business day.</p>
-    <div class="hero-btns" style="justify-content:center"><a href="/contact" class="btn btn-gold">Get a Quote</a><a href="tel:+17739004592" class="btn btn-outline-white">📞 Call Now</a></div>
+    <div class="hero-btns" style="justify-content:center"><a href="${print ? '#get-quote' : '/contact'}" class="btn btn-gold">Get a Quote</a><a href="tel:+17739004592" class="btn btn-outline-white">📞 Call Now</a></div>
   </div>
 </section>
 <section style="background:#fff;padding:3rem 0;border-top:1px solid #E5E7EB;">
@@ -201,7 +308,7 @@ function run(mode, now = new Date()) {
   return drifted;
 }
 
-module.exports = { load, render, build, run };
+module.exports = { load, render, build, run, printFamilies, printSummary };
 
 if (require.main === module) {
   const mode = process.argv.includes('--write') ? 'write' : 'check';

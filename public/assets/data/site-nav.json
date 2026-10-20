@@ -46,6 +46,35 @@
           "href": "/services/banners-signs.html"
         },
         {
+          "label": "Printing",
+          "items": [
+            {
+              "label": "Wall Calendars",
+              "href": "/print/wall-calendars.html"
+            },
+            {
+              "label": "Table Covers",
+              "href": "/print/table-covers.html"
+            },
+            {
+              "label": "X-Frame Banners",
+              "href": "/print/x-frame-banners.html"
+            },
+            {
+              "label": "Stickers & Labels",
+              "href": "/print/stickers-labels.html"
+            },
+            {
+              "label": "Trifold Brochures",
+              "href": "/print/brochures.html"
+            },
+            {
+              "label": "Stand-Up Pouches",
+              "href": "/print/stand-up-pouches.html"
+            }
+          ]
+        },
+        {
           "label": "Design Lab",
           "href": "https://design.jtees.net/editor.php?product_base=14"
         },
