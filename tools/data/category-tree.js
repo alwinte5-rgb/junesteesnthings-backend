@@ -1,6 +1,6 @@
 /* The shop's category tree (owner, 2026-10-19: "the list needs to tighten and
  * then go deeper"; tree approved as proposed). Seven groups at the top, each
- * opening into specific garments; style details (garment-dyed, heavyweight,
+ * opening into specific garments (Women's added 2026-10-20); style details (garment-dyed, heavyweight,
  * women's fit ...) are filters on the list, not categories.
  *
  * `slug` is the key: existing categories keep theirs (and their ids, so old
@@ -12,6 +12,10 @@
  */
 const YOUTH = /\b(youth|kids?|toddler|infant|baby|bodysuit|onesie)\b/i;
 const BABY = /\b(toddler|infant|baby|bodysuit|onesie)\b/i;
+/* Women's and ladies' cuts (owner, 2026-10-20: "create a womens category").
+   Girls' sizes are Kids & Baby, not here. */
+const WOMEN = /\b(women'?s?|ladies'?|womens)\b/i;
+const womens = (p) => WOMEN.test(p.name) && !YOUTH.test(p.name) && !/\bgirls?'?\b/i.test(p.name);
 
 module.exports = [
   { slug: 'custom-t-shirts', name: 'T-Shirts', order: 1, leaves: [
@@ -33,18 +37,24 @@ module.exports = [
     { slug: 'custom-button-ups', name: 'Button-Ups', match: (p) => p.cls === 'woven' },
     { slug: 'custom-jackets-vests', name: 'Jackets & Vests', match: (p) => p.cls === 'jacket' || p.cls === 'vest' },
   ] },
-  { slug: 'custom-kids-youth-apparel', name: 'Kids & Baby', order: 4, leaves: [
+  { slug: 'custom-womens-apparel', name: "Women's", order: 4, leaves: [
+    { slug: 'custom-womens-tees', name: 'T-Shirts', match: (p) => womens(p) && ['tee', 'longslv'].includes(p.cls) },
+    { slug: 'custom-womens-tanks', name: 'Tanks', match: (p) => womens(p) && p.cls === 'tank' },
+    { slug: 'custom-womens-hoodies', name: 'Hoodies & Sweatshirts', match: (p) => womens(p) && ['hoodie', 'qzip'].includes(p.cls) },
+    { slug: 'custom-womens-polos', name: 'Polos & Button-Ups', match: (p) => womens(p) && ['polo', 'woven', 'jacket', 'vest'].includes(p.cls) },
+  ] },
+  { slug: 'custom-kids-youth-apparel', name: 'Kids & Baby', order: 5, leaves: [
     { slug: 'custom-youth-apparel', name: 'Youth', match: (p) => YOUTH.test(p.name) && !BABY.test(p.name) },
     { slug: 'custom-baby-onesies', name: 'Toddler & Baby', match: (p) => BABY.test(p.name) || p.cls === 'onesie' },
   ] },
-  { slug: 'custom-hats-caps', name: 'Hats', order: 5, leaves: [
+  { slug: 'custom-hats-caps', name: 'Hats', order: 6, leaves: [
     { slug: 'custom-beanies', name: 'Beanies', match: (p) => p.cls === 'cap' && /beanie|knit/i.test(p.name) },
     { slug: 'custom-trucker-hats', name: 'Trucker', match: (p) => p.cls === 'cap' && /trucker|mesh/i.test(p.name) && !/beanie/i.test(p.name) },
     { slug: 'custom-dad-hats', name: 'Dad Hats', match: (p) => p.cls === 'cap' && /dad|unstructured|relaxed/i.test(p.name) && !/trucker|beanie/i.test(p.name) },
     { slug: 'custom-caps', name: 'Caps', match: (p) => p.cls === 'cap' && !/beanie|knit|trucker|mesh|dad|unstructured|relaxed/i.test(p.name) },
   ] },
-  { slug: 'custom-tote-bags', name: 'Bags & Totes', order: 6, match: (p) => p.cls === 'bag' },
+  { slug: 'custom-tote-bags', name: 'Bags & Totes', order: 7, match: (p) => p.cls === 'bag' },
   /* Signs keep their own categories, moved under one group; filed by hand. */
-  { slug: 'custom-signs-displays', name: 'Signs & Displays', order: 7, manual: true,
+  { slug: 'custom-signs-displays', name: 'Signs & Displays', order: 8, manual: true,
     adopt: ['custom-banners', 'custom-yard-rigid-signs', 'custom-window-wall-floor-graphics', 'custom-vehicle-graphics-magnets', 'custom-photo-panels-canvas', 'custom-big-head-cutouts'] },
 ];

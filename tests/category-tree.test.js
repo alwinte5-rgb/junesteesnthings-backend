@@ -18,7 +18,7 @@ test('a tee is filed under T-Shirts and each of its kinds', () => {
 
 test('hoodies split by pullover, zip, crew and quarter-zip', () => {
   assert.deepStrictEqual(f('Gildan 18500 Heavy Blend Hooded Sweatshirt'), ['hoodies-sweatshirts', 'pullover-hoodies']);
-  assert.deepStrictEqual(f("Comfort Colors 1570L Women's Garment-Dyed Full-Zip Hoodie"), ['hoodies-sweatshirts', 'zip-hoodies']);
+  assert.deepStrictEqual(f('Port & Company PC78ZH Core Fleece Full-Zip Hooded Sweatshirt'), ['hoodies-sweatshirts', 'zip-hoodies']);
   assert.deepStrictEqual(f('Comfort Colors 1566 Unisex Garment-Dyed Crewneck Sweatshirt'), ['hoodies-sweatshirts', 'crewneck-sweatshirts']);
   assert.deepStrictEqual(f('Gildan 18810 Heavy Blend Quarter Zip'), ['hoodies-sweatshirts', 'quarter-zips']);
 });
@@ -39,4 +39,13 @@ test('slugs are unique, and existing slugs keep their categories (old links keep
   assert.strictEqual(new Set(all).size, all.length);
   for (const s of ['custom-t-shirts', 'custom-hoodies-sweatshirts', 'custom-tank-tops', 'custom-kids-youth-apparel',
     'custom-baby-onesies', 'custom-hats-caps', 'custom-tote-bags', 'custom-business-apparel']) assert.ok(all.includes(s), s);
+});
+
+/* Owner, 2026-10-20: "create a womens category". */
+test("women's and ladies' cuts are under Women's too; girls' sizes are not", () => {
+  assert.deepStrictEqual(f("Gildan 5000L Women's Heavy Cotton Tee"), ['t-shirts', 'short-sleeve-tees', 'womens-apparel', 'womens-tees']);
+  assert.deepStrictEqual(f("Comfort Colors 1570L Women's Garment-Dyed Full-Zip Hoodie"), ['hoodies-sweatshirts', 'zip-hoodies', 'womens-apparel', 'womens-hoodies']);
+  assert.deepStrictEqual(f("Sport-Tek LST350 Ladies' Competitor Tee"), ['t-shirts', 'short-sleeve-tees', 'womens-apparel', 'womens-tees']);
+  assert.ok(!f("Gildan 5000B Youth Girls' Tee").includes('womens-apparel'));
+  assert.ok(!f('Gildan 5000 Unisex Heavy Cotton Tee').includes('womens-apparel'));
 });
