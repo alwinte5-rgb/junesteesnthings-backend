@@ -39,7 +39,15 @@ test('an adult colour is judged on S-XL, not a sold-out XS (Bella 3001 White, 20
   assert.strictEqual(st.Youth.minCore, 50, 'youth sizes still count when there are no adult ones');
 });
 
-test('the add tool leaves out discontinued colours too', () => {
+
+test('a colour with no core sizes is judged on the sizes it has (code review)', () => {
+  const st = colourStock([sku('Big', '2XL', 900, true), sku('Big', '3XL', 800, true)]);
+  assert.strictEqual(st.Big.minCore, 800);
+  assert.deepStrictEqual(closedColours([{ title: 'Big' }], st), []);
+});
+
+test('the add tool filters discontinued colours before sizing (code review)', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
-  assert.match(src, /closedColours\(\[\.\.\.colours\.keys\(\)\]/);
+  const at = src.indexOf('rows = rows.filter((r) => !closed.has(r.colorName))');
+  assert.ok(at > 0 && at < src.indexOf('const bySize = costBySize(rows)'), 'rows filtered before costing');
 });

@@ -130,9 +130,10 @@ function colourStock(rows) {
   const out = {};
   for (const r of rows || []) {
     const c = r.colorName; if (!c) continue;
-    const o = out[c] || (out[c] = { closeout: false, core: {} });
+    const o = out[c] || (out[c] = { closeout: false, core: {}, all: {} });
     let q = 0;
     for (const w of r.warehouses || []) { q += Number(w.qty) || 0; if (w.closeout) o.closeout = true; }
+    if (r.sizeName) o.all[r.sizeName] = (o.all[r.sizeName] || 0) + q;
     if (CORE_SIZES.includes(r.sizeName)) o.core[r.sizeName] = (o.core[r.sizeName] || 0) + q;
   }
   for (const o of Object.values(out)) {
@@ -140,9 +141,11 @@ function colourStock(rows) {
        one-size names, and Bella 3001 White read as empty off a sold-out XS
        while S-XL had 4,000 each. Youth, caps and bags keep their own sizes. */
     const adult = ['S', 'M', 'L', 'XL'].filter((z) => z in o.core);
-    const qs = adult.length ? adult.map((z) => o.core[z]) : Object.values(o.core);
+    /* No core size at all (a 2XL-and-up style): judged on the sizes it has, so
+       a well-stocked colour is never read as empty (code review). */
+    const qs = adult.length ? adult.map((z) => o.core[z]) : Object.keys(o.core).length ? Object.values(o.core) : Object.values(o.all);
     o.minCore = qs.length ? Math.min(...qs) : 0;
-    delete o.core;
+    delete o.core; delete o.all;
   }
   return out;
 }

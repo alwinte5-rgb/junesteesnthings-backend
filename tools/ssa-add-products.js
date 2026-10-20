@@ -284,12 +284,6 @@ function buildAttributes(rows, baseCost) {
       colours.set(r.colorName, '#' + String(r.color1 || '000000').replace(/^#/, ''));
     }
   }
-  /* A colour S&S is clearing out and nearly out of is never added (owner,
-     2026-10-20): the daily sync would only drop it again. A style with none
-     left is not added at all. */
-  const closed = closedColours([...colours.keys()].map((title) => ({ title })), colourStock(rows));
-  for (const t of closed) colours.delete(t);
-  if (closed.length && !colours.size) return null;
   const sizes = Object.keys(sizeCost).sort((a, b) => order[a] - order[b]);
   if (!sizes.length) return null;
 
@@ -361,12 +355,9 @@ function buildAttributes(rows, baseCost) {
  * thumbnail is the colourway the product opens on rather than a different one.
  */
 function defaultColourImage(rows) {
-  /* Never a colour buildAttributes() leaves out as discontinued. */
-  const names = [...new Set(rows.map((r) => r.colorName).filter(Boolean))];
-  const closed = new Set(closedColours(names.map((title) => ({ title })), colourStock(rows)));
   for (const r of rows) {
     const c = pieceCost(r);
-    if (!r.sizeName || !c || !r.colorName || closed.has(r.colorName)) continue;
+    if (!r.sizeName || !c || !r.colorName) continue;
     if (r.colorFrontImage) return 'https://cdn.ssactivewear.com/' + r.colorFrontImage;
   }
   return '';
@@ -477,6 +468,16 @@ async function run(env) {
     }
     if (!Array.isArray(rows) || !rows.length) {
       console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) + 'no live pricing — skipped');
+      skipped++; continue;
+    }
+
+    /* Discontinued colours are left out before anything is costed or sized
+       (owner, 2026-10-20), so a size only a dropped colour carried is never
+       offered. A style with nothing left is not added. */
+    const closed = new Set(closedColours([...new Set(rows.map((r) => r.colorName).filter(Boolean))].map((title) => ({ title })), colourStock(rows)));
+    rows = rows.filter((r) => !closed.has(r.colorName));
+    if (!rows.length) {
+      console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) + 'discontinued at S&S — skipped');
       skipped++; continue;
     }
 
