@@ -39,7 +39,11 @@ const CROPPED_RE = /\bcrop(ped)?\b/i;
 /* A crewneck has no drawing of its own: the long-sleeve crew, not a hood
    (owner, 2026-10-20, Bayside 4025). A tank of any class — a youth tank is
    'kids' — is drawn as a tank, not a sleeved tee (Shaka Wear SHKTT). */
+/* A cropped zip hoodie: the zip hoodie drawing with the torso shortened,
+   sleeves kept (lumise-designer core/raws/products/cropped_hoodie_*). */
+const ZIP_RE = /\b(full.?zip|zip)\b/i;
 const drawingFor = (cls, name) => (cls === 'tee' && CROPPED_RE.test(name) ? 'cropped_tshirt'
+  : cls === 'hoodie' && CROPPED_RE.test(name) && ZIP_RE.test(name) ? 'cropped_hoodie'
   : isCrew(name) ? 'long_sleeve' : TANK_RE.test(name) ? 'tank_tops' : DRAWING[cls]);
 
 const argv = process.argv.slice(2);
@@ -149,8 +153,11 @@ if (require.main === module) {
  *  colourway S&S has no back photo of — or null when the garment has no
  *  drawing (polos, quarter-zips). `like` is a stage of the product to copy
  *  the canvas size from. */
+/* Backs only: a polo's back is the polo drawing's, and a quarter-zip's back is
+   plain, like a crew's. Their fronts have no drawing (placket, zip). */
+const BACK_DRAWING = { polo: 'polo_softstyle', qzip: 'long_sleeve' };
 function drawnBack(name, like) {
-  const cls = classify(name), want = drawingFor(cls, name), set = placementSet(name);
+  const cls = classify(name), want = drawingFor(cls, name) || BACK_DRAWING[cls], set = placementSet(name);
   if (!want || !set) return null;
   const url = 'products/' + want + '_back.png';
   if (!fs.existsSync(path.join(RAWS, url))) return null;

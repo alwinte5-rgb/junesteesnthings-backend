@@ -192,7 +192,9 @@ function localChecks(p, { roleIds = {}, cats = null, treeSlugs = null, subId = n
     : v.verdict === 'borrowed' ? 'drawn as ' + v.sub.looks
     : v.real ? 'ok'
     : pat ? 'drawing cannot show its pattern (' + pat + ')'
-    : DRAWN_FIT.test(p.name) ? 'generic drawing for a ' + p.name.match(DRAWN_FIT)[0] + ' garment'
+    /* A cropped cut on a cropped drawing (cropped_tshirt, cropped_hoodie) is its own garment. */
+    : DRAWN_FIT.test(p.name) && !(/\bcrop/i.test(p.name.match(DRAWN_FIT)[0]) && /cropped_/.test(Object.values(decodeStages(p.stages) || {}).map((s) => String((s && s.url) || '')).join(' ')))
+      ? 'generic drawing for a ' + p.name.match(DRAWN_FIT)[0] + ' garment'
     : 'drawing (no real photo)';
   /* category: filed exactly where the tree says. */
   if (cats && treeSlugs) {
