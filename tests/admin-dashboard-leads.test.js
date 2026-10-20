@@ -220,7 +220,7 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '' };   // the email box is tested elsewhere
   vm.createContext(sandbox);
   vm.runInContext([
-    grab('const LEAD_SOURCES = {', '};'),
+    grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
     lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('leadCardHtml'),
   ].join('\n'), sandbox);
   const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
@@ -279,4 +279,28 @@ test('the webhook keeps a chat once however often tawk sends it, and says so whe
 test('embroidery requests say what they are, and old ones are back-filled', () => {
   assert.match(src, /VALUES \(\$1,\$2,\$3,\$4,\$5,\$6,'embroidery'(,\$7)?\)/);
   assert.match(src, /SET source = 'embroidery'\s+WHERE source = 'form' AND description LIKE 'EMBROIDERY REQUEST:%'/);
+});
+
+test("a long message is never cut off on the lead card", () => {
+  /* Cards showed the first 300 characters with no mark, so a customer's order
+     (Yazmin, 2026-10-20) stopped mid-word and the rest could not be read. */
+  const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '' };
+  vm.createContext(sandbox);
+  vm.runInContext([
+    grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('leadCardHtml'),
+  ].join('\n'), sandbox);
+  assert.match(src, /const LEAD_PREVIEW_MAX = 300;/);
+  const base = { id: 7, created_at: new Date().toISOString(), source: 'form', name: 'Y', email: 'y@x.co', phone: '' };
+
+  const tail = 'and possibly some zip-up hoodies <with> the logo, needed by Nov 3';
+  const long = 'x'.repeat(320) + ' ' + tail;
+  const html = sandbox.leadCardHtml({ ...base, description: long });
+  assert.match(html, /<details class="lead-msg"/);
+  assert.match(html, /Read the full message/);
+  assert.ok(html.includes(tail.replace('<with>', '&lt;with&gt;')), 'the end of the message is on the card, escaped');
+
+  const short = sandbox.leadCardHtml({ ...base, description: 'Need 10 shirts' });
+  assert.doesNotMatch(short, /Read the full message/);
+  assert.match(short, /Need 10 shirts<\/div>/);
 });
