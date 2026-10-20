@@ -113,4 +113,48 @@ function sizeOptions(values, bySize, base) {
   return out;
 }
 
-module.exports = { SALE_BUFFER_DAYS, pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions };
+/* Discontinued colours (owner, 2026-10-20: "if they become discontinued they
+ * need to drop from the catalog"; "low" = below 100).
+ *
+ * S&S has no discontinued flag on a style. What it has is `closeout` on each
+ * warehouse row of a SKU: the colour is being cleared out (all of Bella+Canvas
+ * after SanMar bought it, the whole ComfortWash line, odd colours of Gildan
+ * 5000). A closeout colour is kept while there is stock to fill an order and
+ * dropped once any CORE size (S-XL) of it, across every warehouse, falls below
+ * CLOSEOUT_MIN. A colour that is not closeout is never dropped here: an
+ * ordinary stock-out restocks. */
+const CLOSEOUT_MIN = 100;
+
+/** { colourName: { closeout, minCore } } from S&S product rows. */
+function colourStock(rows) {
+  const out = {};
+  for (const r of rows || []) {
+    const c = r.colorName; if (!c) continue;
+    const o = out[c] || (out[c] = { closeout: false, core: {} });
+    let q = 0;
+    for (const w of r.warehouses || []) { q += Number(w.qty) || 0; if (w.closeout) o.closeout = true; }
+    if (CORE_SIZES.includes(r.sizeName)) o.core[r.sizeName] = (o.core[r.sizeName] || 0) + q;
+  }
+  for (const o of Object.values(out)) {
+    /* An adult garment is judged on S-XL only: CORE_SIZES also holds youth and
+       one-size names, and Bella 3001 White read as empty off a sold-out XS
+       while S-XL had 4,000 each. Youth, caps and bags keep their own sizes. */
+    const adult = ['S', 'M', 'L', 'XL'].filter((z) => z in o.core);
+    const qs = adult.length ? adult.map((z) => o.core[z]) : Object.values(o.core);
+    o.minCore = qs.length ? Math.min(...qs) : 0;
+    delete o.core;
+  }
+  return out;
+}
+
+/** Which of a product's colour options to drop: closeout at S&S and under
+ *  CLOSEOUT_MIN in a core size. A colour S&S does not list under that name is
+ *  left alone (reported by the caller), never guessed at. */
+function closedColours(options, stock, min = CLOSEOUT_MIN) {
+  return (options || []).filter((o) => {
+    const s = stock[o.title];
+    return s && s.closeout && s.minCore < min;
+  }).map((o) => o.title);
+}
+
+module.exports = { SALE_BUFFER_DAYS, CLOSEOUT_MIN, pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours };

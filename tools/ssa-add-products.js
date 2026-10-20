@@ -257,7 +257,7 @@ const SUBLIMATION_RE = /^sublimation/i;
 /* ── S&S ── tools/lib/ssa-client.js (shared with publish-staged.js). */
 const { makeClient } = require('./lib/ssa-client');
 
-const { pieceCost, costBySize, baseCostOf, sizeOptions } = require('./lib/ssa-costs');
+const { pieceCost, costBySize, baseCostOf, sizeOptions, colourStock, closedColours } = require('./lib/ssa-costs');
 
 function buildStages(type) {
   const t = TYPES[type];
@@ -284,6 +284,12 @@ function buildAttributes(rows, baseCost) {
       colours.set(r.colorName, '#' + String(r.color1 || '000000').replace(/^#/, ''));
     }
   }
+  /* A colour S&S is clearing out and nearly out of is never added (owner,
+     2026-10-20): the daily sync would only drop it again. A style with none
+     left is not added at all. */
+  const closed = closedColours([...colours.keys()].map((title) => ({ title })), colourStock(rows));
+  for (const t of closed) colours.delete(t);
+  if (closed.length && !colours.size) return null;
   const sizes = Object.keys(sizeCost).sort((a, b) => order[a] - order[b]);
   if (!sizes.length) return null;
 
@@ -355,9 +361,12 @@ function buildAttributes(rows, baseCost) {
  * thumbnail is the colourway the product opens on rather than a different one.
  */
 function defaultColourImage(rows) {
+  /* Never a colour buildAttributes() leaves out as discontinued. */
+  const names = [...new Set(rows.map((r) => r.colorName).filter(Boolean))];
+  const closed = new Set(closedColours(names.map((title) => ({ title })), colourStock(rows)));
   for (const r of rows) {
     const c = pieceCost(r);
-    if (!r.sizeName || !c || !r.colorName) continue;
+    if (!r.sizeName || !c || !r.colorName || closed.has(r.colorName)) continue;
     if (r.colorFrontImage) return 'https://cdn.ssactivewear.com/' + r.colorFrontImage;
   }
   return '';
