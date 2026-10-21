@@ -189,6 +189,16 @@ test('the built-in $25 design is charged once per order, even across several run
   }
 });
 
+test('every page photo is on disk, sized as written, and records its free-licence source', () => {
+  for (const p of pages) for (const ph of p.print.photos || []) {
+    const file = path.join(PUBLIC, 'assets', 'images', 'print', ph.file + '.jpg');
+    assert.ok(fs.existsSync(file), `${p.path}: ${ph.file}.jpg`);
+    assert.match(ph.source || '', /^https:\/\/unsplash\.com\/photos\//, `${p.path}: ${ph.file} needs its source`);
+    assert.ok(ph.alt && !/june/i.test(ph.alt), `${p.path}: ${ph.file} alt must not claim it as the shop's work`);
+    assert.match(read(p.path), new RegExp(`/assets/images/print/${ph.file}\\.jpg" alt="[^"]+" width="${ph.w}" height="${ph.h}"`));
+  }
+});
+
 test('the copy never says we print these in our shop, or names the supplier', () => {
   for (const p of pages) {
     const text = read(p.path).replace(/<[^>]+>/g, ' ');

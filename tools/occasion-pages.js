@@ -133,6 +133,17 @@ function designBox(page) {
     </div>`;
 }
 
+/* Photos on a printed-product page (owner, 2026-10-20: "each page needs to
+   have photos, they could be stock photos"). Stock photos are licensed free
+   for commercial use (Unsplash); `source` in the data records where each came
+   from. They are never captioned as the shop's own work. */
+function photoStrip(page) {
+  const photos = page.print.photos || [];
+  if (!photos.length) return '';
+  return `<div class="pp-photos">${photos.map((ph, i) => `<img src="/assets/images/print/${esc(ph.file)}.jpg" alt="${esc(ph.alt)}" width="${ph.w}" height="${ph.h}"${ph.pos && /^[a-z0-9% ]{1,30}$/.test(ph.pos) ? ` style="object-position:${ph.pos}"` : ''}${i ? ' loading="lazy"' : ' fetchpriority="high"'} />`).join('')}</div>`;
+}
+const photoUrl = (page) => (page.print && (page.print.photos || [])[0] ? `${SITE}/assets/images/print/${page.print.photos[0].file}.jpg` : null);
+
 function pricesSection(page, fams, sum) {
   const tables = fams.map((fm) => `<div class="pp-fam">
       <h3>${esc(fm.f.label)}</h3>
@@ -148,6 +159,7 @@ function pricesSection(page, fams, sum) {
     </div>`).join('\n    ');
   return `<section class="pp-prices" id="prices">
   <div class="container">
+    ${photoStrip(page)}
     <div class="section-tag">Prices</div>
     <h2>${esc(page.print.prices_h2)}</h2>
     <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop for pickup; we can also ship your order straight to you or your event, quoted with your order. Sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
@@ -169,6 +181,8 @@ const PRINT_STYLE = `<style>
     .pp-table td b{color:var(--navy);}.pp-table td span{display:block;font-size:.78rem;color:var(--muted);}
     .pp-note{font-size:.85rem;color:var(--muted);margin:.6rem 0 0;max-width:720px;}
     .pp-call{border:1px solid var(--border);}
+    .pp-photos{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:0 0 2rem;}
+    .pp-photos img{width:100%;height:260px;object-fit:cover;border-radius:var(--radius);display:block;}
     .pp-design{border:2px solid var(--gold);border-radius:var(--radius);padding:1rem 1.25rem;margin:1.5rem 0;max-width:720px;background:#fff;}
     .pp-design h3{margin:0 0 .4rem;}.pp-design p{font-size:.92rem;margin:.3rem 0;}.pp-design ul{margin:.4rem 0 .4rem 1.2rem;font-size:.95rem;}
     @media(max-width:768px){.container{padding:0 16px;}}
@@ -179,7 +193,7 @@ function render(page, style, business, now) {
   const print = page.kind === 'print';
   const fams = print ? printFamilies(page) : null;
   const sum = print ? printSummary(fams) : null;
-  const ogImage = page.hero ? `${SITE}/assets/images/work/${esc(page.hero)}.jpg` : `${SITE}/assets/images/social-share.jpg`;
+  const ogImage = page.hero ? `${SITE}/assets/images/work/${esc(page.hero)}.jpg` : esc((print && photoUrl(page)) || `${SITE}/assets/images/social-share.jpg`);
   const title = page.title;
   const crumbs = { '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [
     { '@type': 'ListItem', position: 1, name: 'Home', item: SITE },
@@ -190,7 +204,7 @@ function render(page, style, business, now) {
   const service = { '@context': 'https://schema.org', '@type': 'Service', serviceType: strip(page.h1).replace(/ in Chicago$/, ''),
     provider: { '@type': 'LocalBusiness', '@id': `${SITE}/#business`, name: "June's Tees & Things" }, areaServed: { '@type': 'City', name: 'Chicago' }, url };
   const product = print ? { '@context': 'https://schema.org', '@type': 'Product', name: page.print.product, description: page.meta, url,
-    ...(page.hero ? { image: `${SITE}/assets/images/work/${page.hero}.jpg` } : {}),
+    ...(page.hero ? { image: `${SITE}/assets/images/work/${page.hero}.jpg` } : photoUrl(page) ? { image: photoUrl(page) } : {}),
     brand: { '@type': 'Brand', name: "June's Tees & Things" },
     offers: { '@type': 'AggregateOffer', priceCurrency: 'USD', lowPrice: sum.low.each.toFixed(2), highPrice: sum.high.toFixed(2), offerCount: sum.offers,
       seller: { '@type': 'LocalBusiness', '@id': `${SITE}/#business`, name: "June's Tees & Things" } } } : null;

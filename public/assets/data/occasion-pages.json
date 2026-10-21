@@ -1699,7 +1699,24 @@
      "roll_label"
     ],
     "product": "Custom Stickers and Roll Labels",
-    "prices_h2": "Sticker and label prices"
+    "prices_h2": "Sticker and label prices",
+    "photos": [
+     {
+      "file": "stickers-laptop",
+      "alt": "A laptop covered in die-cut stickers",
+      "w": 1200,
+      "h": 800,
+      "source": "https://unsplash.com/photos/Rh9gGrrwfJs"
+     },
+     {
+      "file": "labels-jar",
+      "alt": "A jar with a blank white product label",
+      "w": 918,
+      "h": 1200,
+      "pos": "center 75%",
+      "source": "https://unsplash.com/photos/shV9ZRKOrmE"
+     }
+    ]
    },
    "sections": [
     {
@@ -1835,7 +1852,23 @@
      }
     ],
     "design_h3": "Designing your brochure is a separate fee",
-    "design_note": "Brochures cannot be designed online on our site: send us a print-ready file, or we design it for you."
+    "design_note": "Brochures cannot be designed online on our site: send us a print-ready file, or we design it for you.",
+    "photos": [
+     {
+      "file": "brochures-trifold-standing",
+      "alt": "A printed trifold brochure standing open",
+      "w": 1200,
+      "h": 800,
+      "source": "https://unsplash.com/photos/FaIwAogR7eE"
+     },
+     {
+      "file": "brochures-rack",
+      "alt": "A rack of printed brochures",
+      "w": 1200,
+      "h": 675,
+      "source": "https://unsplash.com/photos/kWxr1Em0MuY"
+     }
+    ]
    },
    "sections": [
     {
