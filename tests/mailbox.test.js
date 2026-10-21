@@ -131,7 +131,7 @@ test('a helper in a conversation the owner started about an order may open that 
   assert.match(tagged, /t\.created_by = 'owner'/);
 });
 
-test('mailbox emails ride on the chat alerts: one per conversation until read, the same off switch', () => {
+test('mailbox emails ride on the chat alerts: a few a day listing what is unread, the same off switch', () => {
   /* The unread conversations are worked out once, for the alert emails and the bell alike. */
   const unread = src.slice(src.indexOf('async function unreadConversations('), src.indexOf('\n}\n', src.indexOf('async function unreadConversations(')));
   const alerts = unread + src.slice(src.indexOf('async function sendChatAlerts('), src.indexOf('\n}\n', src.indexOf('async function sendChatAlerts(')));

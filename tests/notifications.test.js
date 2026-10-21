@@ -32,8 +32,8 @@ function fn(name) {
 test('kinds: known ones only; the owner and a helper each get their own set', () => {
   assert.strictEqual(NOTIFY.kindOf('lead'), 'lead');
   assert.strictEqual(NOTIFY.kindOf('not-a-kind'), null);
-  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'chat', 'late', 'lead', 'mail', 'payment', 'review']);
-  assert.deepStrictEqual(NOTIFY.kindsFor('staff:4').sort(), ['chat', 'decided', 'lead', 'mail']);
+  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'chat', 'late', 'lead', 'mail', 'payment', 'review', 'task']);
+  assert.deepStrictEqual(NOTIFY.kindsFor('staff:4').sort(), ['chat', 'decided', 'lead', 'mail', 'task']);
 });
 
 test('a title is one line, capped', () => {
@@ -110,8 +110,73 @@ test('emails are claimed before sending, and messages are never emailed twice', 
 test('the sweep runs on a timer and, at most every 30 seconds, from a page load, never twice at once', () => {
   assert.match(src, /setInterval\(\(\) => step\('notifications', notifySweep\), 2 \* 60 \* 1000\)/);
   assert.match(fn('function notifySoon('), /Date\.now\(\) - notifyLastAt < 30 \* 1000/);
-  assert.match(fn('async function notifySweep('), /if \(notifyRunning\) return '';/);
-  assert.match(route("app.get('/admin/nav-counts', requireAdmin"), /notifySoon\(\);[\s\S]*notifyUnread\(me\)\.then\(\(n\) => \{ out\.notify = n; \}\)/);
+  /* A sweep asked for while one runs (a task just given out) runs straight after it. */
+  const sweep = fn('async function notifySweep(');
+  assert.match(sweep, /if \(notifyRunning\) \{ notifyAgain = true; return ''; \}/);
+  assert.match(sweep, /if \(notifyAgain\) \{ notifyAgain = false; notifyNow\(\); \}/);
+  const counts = route("app.get('/admin/nav-counts', requireAdmin");
+  assert.match(counts, /notifyUnread\(me\)\.then\(\(n\) => \{ out\.notify = n; \}\)/);
+  /* The full counts start a sweep; the 30-second live poll does not, and is answered before the heavy counts. */
+  assert.ok(counts.indexOf('if (live)') < counts.indexOf('notifySoon();'), 'live poll returns before notifySoon');
+  assert.ok(counts.indexOf('return res.json(out);') < counts.indexOf('liveJobs()'), 'live poll skips the heavy counts');
+});
+
+test('tasks on the bell: a helper hears of a task waiting for them, the owner of one finished', () => {
+  const t = fn('async function taskNotices(');
+  assert.match(t, /done_at IS NULL AND started_at IS NULL/, 'only tasks not yet started');
+  assert.match(t, /t\.assigned_to == null \? \[\.\.\.active\.keys\(\)\]/, 'a task for anyone goes to every active helper');
+  assert.match(t, /Number\(t\.created_by\) === id\) continue/, 'a helper is not told of the task they added');
+  assert.match(t, /notifyClearResolved\(`staff:\$\{id\}`, 'task', refs\)/, 'started, done or moved clears it');
+  assert.match(t, /recipient: 'owner', kind: 'task', ref: `done:\$\{t\.id\}`/);
+  assert.match(t, /done_by IS NOT NULL/, 'the owner closing a task herself is no news to her');
+  assert.match(fn('async function notifySweep('), /notifyPart\('tasks', taskNotices\(roster\)\)/);
+  /* Giving out a task, or a helper finishing one, rings at once rather than at the next 2-minute sweep. */
+  assert.match(route("app.post('/admin/tasks', requireAdmin"), /notifyNow\(\);\s*return back\(res, backTo, 'ok', 'Task added\.'\)/);
+  assert.match(route("app.post('/admin/tasks/:id/done', requireAdmin"), /if \(staffId\) notifyNow\(\);/);
+});
+
+test('the ding: quiet on the first look, once per new thing, once across tabs', () => {
+  const first = NOTIFY.dingFor(null, { id: 9, msgs: 2 });
+  assert.deepStrictEqual(first, { ding: false, why: '', next: { id: 9, msgs: 2 } });
+  assert.strictEqual(NOTIFY.dingFor({ id: 9, msgs: 2 }, { id: 9, msgs: 2 }).ding, false);
+  assert.deepStrictEqual(NOTIFY.dingFor({ id: 9, msgs: 2 }, { id: 10, msgs: 2 }), { ding: true, why: 'notify', next: { id: 10, msgs: 2 } });
+  assert.deepStrictEqual(NOTIFY.dingFor({ id: 9, msgs: 2 }, { id: 9, msgs: 3 }), { ding: true, why: 'msgs', next: { id: 9, msgs: 3 } });
+  /* Reading messages lowers the count; the next new one dings again. */
+  const read = NOTIFY.dingFor({ id: 9, msgs: 3 }, { id: 9, msgs: 0 });
+  assert.strictEqual(read.ding, false);
+  assert.strictEqual(NOTIFY.dingFor(read.next, { id: 9, msgs: 1 }).ding, true);
+  /* Reading the newest notification leaves an older one newest: no ding, and the id never goes back. */
+  assert.deepStrictEqual(NOTIFY.dingFor({ id: 10, msgs: 0 }, { id: 7, msgs: 0 }), { ding: false, why: '', next: { id: 10, msgs: 0 } });
+  /* Rubbish in storage is a first look, never a throw. */
+  assert.strictEqual(NOTIFY.dingFor('junk', { id: 3, msgs: 0 }).ding, false);
+  assert.strictEqual(NOTIFY.dingFor({ id: 'x' }, {}).ding, false);
+});
+
+test('the ding and pop-up switches: on until turned off, kept apart from email kinds', () => {
+  assert.strictEqual(NOTIFY.uiOn('sound', {}), true);
+  assert.strictEqual(NOTIFY.uiOn('popup', null), true);
+  assert.strictEqual(NOTIFY.uiOn('sound', { 'ui:sound': false }), false);
+  assert.strictEqual(NOTIFY.uiOn('nope', {}), false);
+  for (const k of Object.values(NOTIFY.UI_PREFS)) assert.strictEqual(NOTIFY.kindOf(k), null, `${k} is never a notification kind`);
+  const save = route("app.post('/admin/notifications/settings', requireAdmin");
+  assert.match(save, /Object\.entries\(NOTIFY\.UI_PREFS\)/);
+  assert.match(save, /\[reader, kind, String\(b\[`ui_\$\{which\}`\] \|\| ''\) === '1'\]/);
+  assert.match(route("app.get('/admin/notifications/settings', requireAdmin"), /box\('ui_sound'[\s\S]*box\('ui_popup'/);
+});
+
+test('the page script: polls, dings with the shared rule, pops up only with permission, opens only back-office links', () => {
+  const at = src.indexOf('const ADMIN_BADGE_JS = `');
+  const js = src.slice(at, src.indexOf('`;\n', at));
+  assert.match(js, /var DING=\$\{NOTIFY\.dingFor\.toString\(\)\}/, 'the tested rule is the one the page runs');
+  assert.match(js, /\/admin\/nav-counts'\+\(live\?'\?live=1':''\)/);
+  assert.match(js, /setInterval\(function\(\)\{if\(document\.hidden&&Date\.now\(\)-last<55000\)return;get\(true\);\},30000\)/);
+  assert.match(js, /Notification\.permission==='granted'/);
+  assert.match(js, /if\(c\.sound!==false\)chime\(\)/);
+  assert.match(js, /localStorage\.setItem\('jt:ding'/);
+  /* The pop-up's link is the notification's own, which the server passed through safeLink. */
+  assert.match(fn('async function notifyLatest('), /link: NOTIFY\.safeLink\(r\.link\)/);
+  /* The rule must stay plain JavaScript the browser can run inside the page script. */
+  assert.doesNotThrow(() => new Function(`var DING=${NOTIFY.dingFor.toString()};`));
 });
 
 test('every notification route is the caller\'s own: reads and writes keyed on their reader', () => {

@@ -1,7 +1,7 @@
 'use strict';
 
 /* Notifications (owner, 2026-10-18 back-office plan, PR 4): a bell in the menu
-   for messages, approvals, leads, late jobs, payments and reviews.
+   for messages, approvals, leads, late jobs, payments, reviews and tasks.
 
    Every notification is DERIVED from records the shop already keeps (leads,
    approvals, payments, reviews, the job schedule, chat and the mailbox) by a
@@ -31,7 +31,40 @@ const KINDS = {
   late:     { label: 'Jobs running late',            email: false, who: 'owner' },
   payment:  { label: 'Payments received',            email: false, who: 'owner' },
   review:   { label: 'Reviews to approve',           email: false, who: 'owner' },
+  task:     { label: 'Tasks: new for you, or finished', email: false, who: 'any' },
 };
+
+/* The ding and the browser pop-up (owner, 2026-10-21: "the notifications
+   should come with a ding (for all)"). Each is on until the person turns it
+   off on Notification emails, and is kept in notification_prefs under these
+   kinds, which no notification uses, with `email` meaning "on". */
+const UI_PREFS = { sound: 'ui:sound', popup: 'ui:popup' };
+
+/** Is the ding (or the pop-up) on for this reader? `prefs` maps kind → boolean
+ *  as notification_prefs holds it. */
+function uiOn(which, prefs) {
+  const k = UI_PREFS[which];
+  if (!k) return false;
+  return prefs && Object.prototype.hasOwnProperty.call(prefs, k) ? !!prefs[k] : true;
+}
+
+/** Whether the page should ding, and what it remembers next. `seen` is what
+ *  this browser last saw ({ id, msgs }, or null the first time); `now` is the
+ *  newest unread notification's id and the unread message count. The first
+ *  look only remembers: a page opened onto old news is quiet. A new
+ *  notification, or more unread messages than last time, dings once; the
+ *  memory is shared by the person's tabs, so two tabs ding once between them.
+ *  Runs in the browser as well (its source is put into the page), so it uses
+ *  nothing but plain JavaScript. */
+function dingFor(seen, now) {
+  var id = Number(now && now.id) || 0;
+  var msgs = Number(now && now.msgs) || 0;
+  if (!seen || typeof seen !== 'object') return { ding: false, why: '', next: { id: id, msgs: msgs } };
+  var lastId = Number(seen.id) || 0;
+  var lastMsgs = Number(seen.msgs) || 0;
+  var why = id > lastId ? 'notify' : (msgs > lastMsgs ? 'msgs' : '');
+  return { ding: !!why, why: why, next: { id: Math.max(id, lastId), msgs: msgs } };
+}
 const KIND_KEYS = Object.keys(KINDS);
 const TITLE_MAX = 160;
 const PAGE = 50;
@@ -86,6 +119,6 @@ function messageTitle(n, where) {
 }
 
 module.exports = {
-  KINDS, KIND_KEYS, TITLE_MAX, PAGE,
-  kindOf, kindsFor, cleanTitle, safeLink, emailOn, messageRef, convoOfRef, messageTitle,
+  KINDS, KIND_KEYS, TITLE_MAX, PAGE, UI_PREFS,
+  kindOf, kindsFor, cleanTitle, safeLink, emailOn, uiOn, dingFor, messageRef, convoOfRef, messageTitle,
 };

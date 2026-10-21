@@ -52,7 +52,7 @@ function route(signature) {
 /* The shell, rendered: the menu, the document and both page shells. */
 function shell() {
   const sandbox = { FINANCES_PATH: '/admin/finances', QUOTE_CSS: '', REVIEW_CSS: '', process: { env: {} },
-    PARTNERS: require('../tools/lib/partners') };
+    PARTNERS: require('../tools/lib/partners'), NOTIFY: require('../tools/lib/notifications') };
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const ADMIN_NAV = [', '];'),
@@ -95,7 +95,8 @@ test('the badges start hidden and are filled in after the page loads', () => {
   for (const b of ['leads', 'late', 'reviews']) {
     assert.ok(html.includes(`<span class="adm-badge" data-badge="${b}" hidden></span>`), `${b} badge`);
   }
-  assert.match(html, /fetch\('\/admin\/nav-counts',\{credentials:'same-origin',cache:'no-store'\}\)/);
+  assert.match(html, /fetch\('\/admin\/nav-counts'\+\(live\?'\?live=1':''\),\{credentials:'same-origin',cache:'no-store'\}\)/);
+  assert.match(html, /get\(false\);/, 'the full counts once on load, then the live poll');
   assert.match(html, /\.catch\(function\(\)\{\}\)/, 'a failed count shows no badge, never an error');
 });
 
@@ -147,8 +148,8 @@ test('the dashboard, the Leads page and the menu counts are admin only', () => {
 
 test('each count fails on its own, to zero', () => {
   const r = route("app.get('/admin/nav-counts', requireAdmin");
-  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 11,
-    'notifications, leads, reviews, late jobs, certificates, approvals waiting, unread team chat, unread mailbox, orders to ship, art not yet Got it and job messages not yet addressed');
+  assert.strictEqual((r.match(/\.catch\(\(\) => \{\}\)/g) || []).length, 13,
+    'notifications, the newest notification, the ding and pop-up switches, leads, reviews, late jobs, certificates, approvals waiting, unread team chat, unread mailbox, orders to ship, art not yet Got it and job messages not yet addressed');
 });
 
 test('/admin lands the owner on the dashboard and a helper on My Day', () => {
