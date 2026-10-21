@@ -27,7 +27,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { mysqlUrlFrom, mysql, enjson, dejson, sq } = require('./lib/db');
+const { mysqlUrlFrom, mysql, enjson, dejson, sq, encodePrintings } = require('./lib/db');
 const { sellPrice } = require('./lib/markup');
 
 const argv = process.argv.slice(2);
@@ -45,15 +45,19 @@ const METHOD_DESC = 'Full-color DTF printed on a fitted 6 ft table cover: one si
   'on the front panel (up to 252 sq in); two sides adds the back panel. Includes delivery of the ' +
   'blank cover to our shop, once an order.';
 const PRODUCT = 'Fitted Table Cover — 6 ft';
+/* supplier 'ycc': the designer's catalogue feed (jt-catalog.php) publishes
+   inactive rows only for the suppliers it lists, so 'ycc' must be listed
+   there BEFORE --apply, or the cover never reaches the quote form. */
 const PRODUCT_DESC = 'Fitted polyester table cover for a 6 ft table (72" x 30"), closed on all four sides. ' +
-  'Choose from 30 colors. Printed in our shop with DTF on one side (front) or two sides (front and back).';
+  'Tell us the color on the quote (30 to choose from). Printed in our shop with DTF on one side (front) or two sides (front and back).';
 
 const row = (id) => mysql(url, 'SELECT id, title, calculate FROM lumise_printings WHERE id=' + id + ';', { rows: true })[0];
 const std = row(1), big = row(64);
 const cStd = std && dejson(std.calculate), cBig = big && dejson(big.calculate);
 const mainKey = 'id', addKey = 'mr8a5dlx';
 for (const [n, c] of [['#1', cStd], ['#64', cBig]]) {
-  if (!c || !c.values || !c.values[mainKey] || !c.values[addKey]) {
+  /* Exactly the two stages: a third would be dropped here and read as free. */
+  if (!c || !c.values || !c.values[mainKey] || !c.values[addKey] || Object.keys(c.values).length !== 2) {
     console.error('method ' + n + ' is not the two-stage DTF table (id + mr8a5dlx) this tool expects — refusing');
     process.exit(1);
   }
@@ -110,7 +114,7 @@ if (existingM.length) {
     sq(METHOD) + ',1,' + sq(enjson(newCalc)) + ",'',''," + sq(METHOD_DESC) + ',' + sq(author) + ',NOW(),NOW());');
   mid = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(METHOD) + ';', { rows: true })[0].id;
 }
-const printings = encodeURIComponent(JSON.stringify({ ['_' + mid]: 'A3' }));
+const printings = encodePrintings([mid]);
 if (existingP.length) {
   mysql(url, 'UPDATE lumise_products SET price=' + sq(blank.toFixed(2)) + ', supplier_cost=' + sq(BLANK_COST.toFixed(2)) +
     ', description=' + sq(PRODUCT_DESC) + ', printings=' + sq(printings) + ', updated=NOW() WHERE id=' + Number(existingP[0].id) + ';');

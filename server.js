@@ -13142,7 +13142,7 @@ ${quotePricingSource()}
               if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
               /* A typed price is all-in, like the price the form shows. */
               if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L) || String(u.value || '').trim() !== '')) return;
-              if (a.code === 'tablecover_ship' && String(u.value || '').trim() !== '') return;
+              if (a.code === 'tablecover_ship' && (String(u.value || '').trim() !== '' || addons.some(function(x){ return x.code === 'own_blanks'; }))) return;
               if (addons.some(function(x){ return x.code === a.code; })) return;
               addons.push(a);
             });
@@ -13227,7 +13227,7 @@ ${quotePricingSource()}
                staff as well as the customer (the owner, 2026-10-06: a 36in pack
                is $170, no extra step). Only a Saturday or large-format rate,
                ticked on purpose, is listed. */
-            var listed = r.addonLines.filter(function(a){ return a.code !== 'cutout_ship'; });
+            var listed = r.addonLines.filter(function(a){ return a.code !== 'cutout_ship' && a.code !== 'tablecover_ship'; });
             aoNote.innerHTML = listed.length
               ? listed.map(function(a){ return a.label + ' ' + m2(a.total); }).join(' &middot; ')
               : '';
@@ -14292,7 +14292,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
         /* A typed price is all-in, like the price the form shows. */
         if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i) || priceTyped)) continue;
-        if (a.code === 'tablecover_ship' && priceTyped) continue;
+        /* No YCC shipment when the customer brings the cover (code review). */
+        if (a.code === 'tablecover_ship' && (priceTyped || lineAddons.some((x) => x.code === 'own_blanks'))) continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
 

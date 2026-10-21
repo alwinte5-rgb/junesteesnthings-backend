@@ -30,9 +30,15 @@ test('the delivery charge in server.js is the tool\'s, and attaches to the tool\
   assert.ok(!re.test('DTF Printing') && !re.test('DTF Printing — Oversized (up to 252 sq in)'), 'never on shirt DTF');
 });
 
-test('a typed price is all-in: the delivery is skipped on both the form and the save', () => {
-  assert.match(src, /if \(a\.code === 'tablecover_ship' && String\(u\.value \|\| ''\)\.trim\(\) !== ''\) return;/);
-  assert.match(src, /if \(a\.code === 'tablecover_ship' && priceTyped\) continue;/);
+test('a typed price or the customer’s own cover: no delivery, on the form and the save', () => {
+  assert.match(src, /if \(a\.code === 'tablecover_ship' && \(String\(u\.value \|\| ''\)\.trim\(\) !== '' \|\| addons\.some\(function\(x\)\{ return x\.code === 'own_blanks'; \}\)\)\) return;/);
+  assert.match(src, /if \(a\.code === 'tablecover_ship' && \(priceTyped \|\| lineAddons\.some\(\(x\) => x\.code === 'own_blanks'\)\)\) continue;/);
+  assert.match(src, /a\.code !== 'cutout_ship' && a\.code !== 'tablecover_ship'/, 'shown inside the price for staff too');
+});
+
+test('job costs book the delivery as shipping and the front as an oversized print', () => {
+  const JC = require('../tools/lib/job-costs');
+  assert.strictEqual(JC.addonCosts([{ code: 'tablecover_ship', total: 11.99 }]).shipping, 11.99);
 });
 
 test('the tool refuses a band without a price and is dry-run by default', () => {

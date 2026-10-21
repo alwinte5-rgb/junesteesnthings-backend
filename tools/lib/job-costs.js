@@ -120,7 +120,10 @@ function decorationEach(method, stage, colours, bandQty, sellEach) {
   }
   if (kind === 'dtf') {
     const row = rowAt(DTF, Math.max(1, bandQty));
-    return { each: row[1] + (locs === 2 ? row[3] : 0), basis: 'Anchorfish DTF' };
+    /* An oversized print (method #64, and the table cover's front, which is
+       priced from it) costs the 252 sq in column, not the standard 132. */
+    const big = /oversized|table cover/i.test(String(method.title || ''));
+    return { each: row[big ? 2 : 1] + (locs === 2 ? row[3] : 0), basis: big ? 'Anchorfish DTF, 252 sq in' : 'Anchorfish DTF' };
   }
   if (kind === 'embroidery') {
     const row = rowAt(EMBROIDERY, Math.max(1, bandQty));
@@ -214,7 +217,7 @@ function addonCosts(addons) {
       }
       case 'digitizing': case 'unbagging': outsourced += total; break;
       case 'specialty_ink': perLine += total / SHOP_MARKUP; break;
-      case 'cutout_ship': case 'cutout_ship_sat': case 'cutout_ship_large': shipping += total; break;
+      case 'cutout_ship': case 'cutout_ship_sat': case 'cutout_ship_large': case 'tablecover_ship': shipping += total; break;
       default: break;   // design work and puff/hoop are handled as labour or with the embroidery
     }
   }
