@@ -228,8 +228,14 @@
     <priority>0.7</priority>
   </url>
   <url>
+    <loc>https://www.jtees.net/print/table-covers.html</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://www.jtees.net/print/stickers-labels.html</loc>
-    <lastmod>2026-10-20</lastmod>
+    <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>

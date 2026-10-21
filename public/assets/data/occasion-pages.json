@@ -1668,6 +1668,147 @@
    "heading": "",
    "related": [
     {
+     "href": "/print/x-frame-banners.html",
+     "label": "X-frame banners for your booth"
+    },
+    {
+     "href": "/services/dtf-transfers.html",
+     "label": "How DTF printing works"
+    },
+    {
+     "href": "/contact",
+     "label": "Request a free quote"
+    }
+   ],
+   "path": "print/table-covers.html",
+   "keyword": "custom table covers",
+   "eyebrow": "Table Covers · Chicago, IL",
+   "title": "Custom Table Covers Chicago | June's Tees & Things",
+   "meta": "Custom fitted 6 ft table covers in Chicago: your logo printed in full color on the front, or front and back, in about 30 cover colors. From one cover.",
+   "h1": "Custom <em>Table Covers</em> in Chicago",
+   "pitch": "A fitted cover for a 6 foot table with your logo printed in full color on the front, or on the front and back, in the cover color you choose. From one cover, priced below.",
+   "badges": [
+    "🎪 Fits a 6 ft Table",
+    "🎨 About 30 Cover Colors",
+    "🚚 Shipped to You or Pickup"
+   ],
+   "print": {
+    "pick": "table_cover",
+    "families": [
+     "table_cover_inhouse"
+    ],
+    "product": "Custom Fitted Table Cover",
+    "prices_h2": "Table cover prices",
+    "colors": "table_cover",
+    "design_fees": [
+     {
+      "label": "New table cover design",
+      "service": "Table Cover Design — New"
+     },
+     {
+      "label": "Changes to a table cover design you already have",
+      "service": "Table Cover Design — Revision"
+     }
+    ]
+   },
+   "sections": [
+    {
+     "h2": "Custom table covers that make a booth look finished",
+     "p": [
+      "Custom table covers turn a plain folding table into a branded booth in a minute. At a vendor market, a trade show, a church fair or a school night, your logo on the front of the table tells people who you are from across the room, and the cover hides boxes and stock underneath. We print your logo in full color on a fitted cover for a standard 6 foot table, from a single cover."
+     ]
+    },
+    {
+     "h2": "A fitted cover, printed in our shop",
+     "p": [
+      "The cover is fitted polyester made for a 6 foot table (72 by 30 inches), closed on all four sides, so it sits neat and tight with no draping or pinning. We print your design on it in our own Lakeview shop with DTF, a full-color heat transfer that handles fine detail, gradients and bright colors on any cover color."
+     ]
+    },
+    {
+     "h2": "One side or two sides",
+     "p": [
+      "One side puts your design on the front panel, the side people see as they walk up. Two sides adds a second print on the back panel, for a table people see from both sides, such as one in the middle of a room or at a check-in desk. The price table above lists both."
+     ]
+    },
+    {
+     "h2": "Who uses printed table covers",
+     "p": [
+      "Small businesses selling at markets and pop-ups, food vendors, artists, authors at book signings, nonprofits at resource fairs, churches at community days, schools and sports teams at registration nights, recruiters at career fairs and companies at trade shows. A table cover is reused at every event, so one cover pays for itself many times over."
+     ]
+    },
+    {
+     "h2": "Getting the design right",
+     "p": [
+      "A table cover is seen from a few steps away, so big, simple designs work best: your logo, your name, one short line and your website or social handle. Pick a cover color that makes your logo stand out, such as a light logo on a black or navy cover. Send your logo as a vector file or a large, sharp image. If you would like us to design it, design is a separate fee, shown on your quote before work starts, and nothing is printed until you approve the proof."
+     ]
+    },
+    {
+     "h2": "Choosing a cover color",
+     "p": [
+      "Most booths choose a cover in their brand color or a dark neutral. Black and navy covers hide spills and scuffs and make a light or bright logo pop. White and ivory look clean and suit weddings, showers and church events, and a bold color such as red, royal blue or purple matches a team or school. Tell us your logo colors on the quote form and we suggest a cover color that keeps the logo easy to read from across the room."
+     ]
+    },
+    {
+     "h2": "Pairing a cover with a banner",
+     "p": [
+      "Many booths pair a table cover with an X-frame banner standing beside the table, so people can read your name above the crowd as well as on the table. Tick both on the quote form below and tell us about your event, and we quote them together."
+     ]
+    },
+    {
+     "h2": "How ordering works",
+     "p": [
+      "Tell us how many covers you need, one side or two, the cover color and your event date, and we reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your covers are printed and ready at our shop in the number of business days shown above the price table. Pick them up by appointment, or we can ship them straight to you or your event, quoted with your order."
+     ]
+    }
+   ],
+   "faq": [
+    {
+     "q": "What size table does it fit?",
+     "a": "A standard 6 foot rectangular folding table, 72 by 30 inches. The cover is fitted and closed on all four sides."
+    },
+    {
+     "q": "What is printed?",
+     "a": "Your design, in full color, on the front panel. Choose two sides and we print the back panel too."
+    },
+    {
+     "q": "What colors can the cover be?",
+     "a": "The covers come in about 30 colors. Tell us the color on the quote form and we confirm it is in stock."
+    },
+    {
+     "q": "Can I order just one?",
+     "a": "Yes, from one cover. The price each comes down from 3 covers, as the table above shows."
+    },
+    {
+     "q": "Can you design it for me?",
+     "a": "Yes. Send your logo and what you want it to say and we design it and send a proof. Design is a separate fee shown on your quote."
+    },
+    {
+     "q": "What file should I send for my logo?",
+     "a": "A vector file such as AI, EPS, SVG or PDF is best. A large PNG or JPG can work too, and we tell you before printing if it is too small to print sharply."
+    },
+    {
+     "q": "Can I wash it?",
+     "a": "Yes. Wash it cold, inside out, on a gentle cycle, and hang it to dry. Do not iron over the print."
+    },
+    {
+     "q": "Do the prices include tax and shipping?",
+     "a": "Every price includes the cover and its delivery to our Lakeview shop for pickup. We can also ship your order straight to you or your event, quoted with your order. Sales tax is added to your quote."
+    }
+   ],
+   "cta": {
+    "h2": "Ready for your next event?",
+    "p": "Tell us how many covers, one side or two, the cover color and your event date."
+   }
+  },
+  {
+   "calendar": null,
+   "kind": "print",
+   "hero": null,
+   "work": [],
+   "products": [],
+   "heading": "",
+   "related": [
+    {
      "href": "/services/graphic-design.html",
      "label": "Graphic design for print"
     },
@@ -1681,33 +1822,25 @@
     }
    ],
    "path": "print/stickers-labels.html",
-   "keyword": "custom stickers and labels",
-   "eyebrow": "Stickers &amp; Labels · Chicago, IL",
-   "title": "Custom Stickers & Labels Chicago | June's Tees & Things",
-   "meta": "Custom stickers and roll labels in Chicago: cut-to-shape white vinyl stickers from 10, and gloss laminated roll labels from 25, in circles and rectangles.",
-   "h1": "Custom <em>Stickers &amp; Labels</em> in Chicago",
-   "pitch": "Cut-to-shape vinyl stickers from 10 and gloss laminated roll labels from 25, in circles and rectangles, for products, packaging, giveaways and events.",
+   "keyword": "custom roll labels",
+   "eyebrow": "Roll Labels · Chicago, IL",
+   "title": "Custom Roll Labels Chicago | June's Tees & Things",
+   "meta": "Custom product labels on a roll in Chicago: waterproof white gloss BOPP, gloss laminated, full color, in circles and rectangles, from 500.",
+   "h1": "Custom <em>Roll Labels</em> in Chicago",
+   "pitch": "Custom roll labels: waterproof, gloss laminated product labels in circles and rectangles, for jars, bottles, candles, coffee bags and boxes. From 500 labels.",
    "badges": [
-    "🏷️ Stickers: Minimum 10",
-    "🧻 Roll Labels: Minimum 25",
+    "🧻 Roll Labels: Minimum 500",
+    "💧 Waterproof BOPP, Gloss Laminated",
     "🚚 Shipped to You or Pickup"
    ],
    "print": {
     "pick": "stickers",
     "families": [
-     "sticker",
      "roll_label"
     ],
-    "product": "Custom Stickers and Roll Labels",
-    "prices_h2": "Sticker and label prices",
+    "product": "Custom Roll Labels",
+    "prices_h2": "Roll label prices",
     "photos": [
-     {
-      "file": "stickers-laptop",
-      "alt": "A laptop covered in die-cut stickers",
-      "w": 1200,
-      "h": 800,
-      "source": "https://unsplash.com/photos/Rh9gGrrwfJs"
-     },
      {
       "file": "labels-jar",
       "alt": "A jar with a blank white product label",
@@ -1721,21 +1854,15 @@
    },
    "sections": [
     {
-     "h2": "Custom stickers and labels for your brand",
+     "h2": "Custom labels for your products",
      "p": [
-      "Custom stickers and labels put your name on everything you sell and give away. A logo sticker on a bag, a box or a laptop is advertising that travels, and a clean product label makes a homemade candle, hot sauce or soap look ready for a store shelf. We print two kinds: cut-to-shape stickers on white permanent vinyl, made one by one for handing out, and gloss laminated roll labels on a roll, made for putting on products quickly and neatly."
-     ]
-    },
-    {
-     "h2": "Cut-to-shape stickers",
-     "p": [
-      "Our stickers are printed in full color on white vinyl with a permanent adhesive and cut to shape. They come in 2 inch and 3 inch circles and 2 by 3 inch and 3 by 4 inch rectangles, from 10 stickers. They are made for handing out at events, tucking into orders, sealing bags and boxes, decorating water bottles and laptops, and for team, school and church giveaways."
+      "Custom roll labels make a homemade candle, hot sauce or soap look ready for a store shelf, and put your name on everything you sell. We print them on a roll, made for putting on products quickly and neatly."
      ]
     },
     {
      "h2": "Roll labels for products and packaging",
      "p": [
-      "Roll labels are printed on white gloss BOPP, a plastic film that holds up to moisture and handling better than paper, with a gloss laminate on top. They come on a roll so you can peel and apply them fast, by hand or with a label dispenser, in the same circle and rectangle sizes as the stickers, from 25 labels. They suit jars, bottles, candles, cosmetics, coffee bags, boxes and mailers."
+      "Roll labels are printed on white gloss BOPP, a plastic film that holds up to moisture and handling better than paper, with a gloss laminate on top. They come on a roll so you can peel and apply them fast, by hand or with a label dispenser, in 2 inch and 3 inch circles and 2 by 3 inch and 3 by 4 inch rectangles, from 500 labels. They suit jars, bottles, candles, cosmetics, coffee bags, boxes and mailers."
      ]
     },
     {
@@ -1745,9 +1872,9 @@
      ]
     },
     {
-     "h2": "Stickers, labels and the rest of your order",
+     "h2": "Labels and the rest of your order",
      "p": [
-      "Many customers order stickers or labels alongside shirts, tote bags, pouches or table covers, so a market booth or a product launch has one look from the table to the bag. Tick everything you need on the quote form below, with a quantity for each, and we will quote it all together on one written quote."
+      "Many customers order labels alongside shirts, tote bags, pouches or table covers, so a market booth or a product launch has one look from the table to the bag. Tick everything you need on the quote form below, with a quantity for each, and we will quote it all together on one written quote."
      ]
     },
     {
@@ -1759,22 +1886,22 @@
     {
      "h2": "How ordering works",
      "p": [
-      "Choose a size and a quantity, tell us whether you want stickers or roll labels, and send your artwork or ask for design. We reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your order goes to print and is ready at our shop in the number of business days shown above the price table. We can ship your order straight to you or your event, or have it delivered to our Lakeview shop for you to pick up by appointment. Put the ship-to address in your message and shipping is added to your quote."
+      "Choose a size and a quantity, and send your artwork or ask for design. We reply with a written quote, usually within one business day. Once the quote is paid and the proof approved, your order goes to print and is ready at our shop in the number of business days shown above the price table. We can ship your order straight to you or your event, or have it delivered to our Lakeview shop for you to pick up by appointment. Put the ship-to address in your message and shipping is added to your quote."
      ]
     }
    ],
    "faq": [
     {
-     "q": "What is the difference between stickers and roll labels?",
-     "a": "Stickers are cut one by one on white vinyl, for handing out and decorating. Roll labels come on a roll, laminated, for putting on products and packaging quickly."
+     "q": "Why labels on a roll?",
+     "a": "Roll labels come on a roll, laminated, so you can peel and apply them quickly and neatly by hand or with a label dispenser, and every label lines up the same way."
     },
     {
      "q": "What sizes do you offer?",
-     "a": "2 inch and 3 inch circles, and 2 by 3 inch and 3 by 4 inch rectangles, for both stickers and roll labels."
+     "a": "2 inch and 3 inch circles, and 2 by 3 inch and 3 by 4 inch rectangles."
     },
     {
      "q": "What is the smallest order?",
-     "a": "10 stickers or 25 roll labels. Larger orders cost less each, as the price tables above show."
+     "a": "500 roll labels. 1,000 cost less each, as the price table above shows."
     },
     {
      "q": "Are the labels waterproof?",
@@ -1786,7 +1913,7 @@
     },
     {
      "q": "Which size should I choose?",
-     "a": "Measure the flat area where the sticker or label will go and tell us on the quote form. We recommend the size that fits before anything is printed."
+     "a": "Measure the flat area where the label will go and tell us on the quote form. We recommend the size that fits before anything is printed."
     },
     {
      "q": "Can you ship it straight to me?",
@@ -1799,7 +1926,7 @@
    ],
    "cta": {
     "h2": "Ready to label your brand?",
-    "p": "Tell us the size, how many and whether you need stickers or roll labels."
+    "p": "Tell us the size, how many labels and what they go on."
    }
   },
   {
@@ -1827,11 +1954,11 @@
    "keyword": "trifold brochures",
    "eyebrow": "Brochures · Chicago, IL",
    "title": "Trifold Brochure Printing Chicago | June's Tees & Things",
-   "meta": "Trifold brochures printed in full color in Chicago: 8.5 x 11 on 100 lb gloss, scored and folded, one or both sides, from 25 brochures. Prices online.",
+   "meta": "Trifold brochures printed in full color in Chicago: 8.5 x 11 on 100 lb gloss, scored and folded, one or both sides, from 250 brochures. Prices online.",
    "h1": "<em>Trifold Brochures</em> Printed in Chicago",
-   "pitch": "Full-color 8.5 by 11 inch trifold brochures on 100 lb gloss paper, scored and folded and ready to hand out, from 25 brochures. Every price is listed below.",
+   "pitch": "Full-color 8.5 by 11 inch trifold brochures on 100 lb gloss paper, scored and folded and ready to hand out, from 250 brochures. Every price is listed below.",
    "badges": [
-    "📄 Minimum 25 Brochures",
+    "📄 Minimum 250 Brochures",
     "📐 Scored &amp; Folded",
     "🚚 Shipped to You or Pickup"
    ],
@@ -1926,7 +2053,7 @@
     },
     {
      "q": "What is the smallest order?",
-     "a": "25 brochures. Brochures are printed in the set runs listed in the price table; another quantity is made up from those runs at the lowest total."
+     "a": "250 brochures. Brochures are printed in the set runs listed in the price table; another quantity is made up from those runs at the lowest total."
     },
     {
      "q": "Do you print other brochure folds or sizes?",

@@ -38,7 +38,7 @@ test('only known items are read, in list order, with sane quantities', () => {
 test('the picks read as one plain line', () => {
   assert.strictEqual(QP.picksLine([]), '');
   assert.strictEqual(QP.picksLine(QP.parsePicks({ pick_stickers: '1', pick_stickers_qty: '1500', pick_drinkware: '1' })),
-    'Items: Mugs & tumblers, Stickers & labels (1,500)');
+    'Items: Mugs & tumblers, Roll labels (1,500)');
 });
 
 test('/submit puts the picks first in the description, inside the length the form allows', () => {

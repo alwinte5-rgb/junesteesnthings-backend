@@ -19,7 +19,7 @@ const PICKS = [
   { key: 'embroidery',  label: 'Embroidery' },
   { key: 'signs',       label: 'Banners & signs' },
   { key: 'drinkware',   label: 'Mugs & tumblers' },
-  { key: 'stickers',    label: 'Stickers & labels' },
+  { key: 'stickers',    label: 'Roll labels' },
   { key: 'table_cover', label: 'Table covers' },
   { key: 'xframe',      label: 'X-frame banners' },
   { key: 'brochure',    label: 'Brochures & flyers' },

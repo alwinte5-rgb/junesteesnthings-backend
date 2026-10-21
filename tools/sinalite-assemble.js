@@ -25,6 +25,9 @@ const META = {
        row still under one keeps pricing until it is renamed (owner, 2026-10-15). */
     aliases: ['Trifold Brochures — 8.5x11, folded'],
     design: 'brochure', online: false,
+    /* Smallest run offered (owner, 2026-10-21: nothing overpriced): 25 cost
+       $185 ($7.40 each); 250 is under $1 each. */
+    sell_from: 250,
     url: 'https://sinalite.com/en_us/print-products/brochures/100lb-gloss-text.html',
     note: '100lb gloss text, full color, scored and tri-folded (scoring stops the fold cracking). Opens to 8.5" x 11".',
     materials: [{ key: '1s', label: 'Printed one side' }, { key: '2s', label: 'Printed both sides' }],
@@ -67,6 +70,11 @@ const META = {
   sticker: {
     name: 'Cut-to-Shape Stickers — white vinyl', label: 'Cut-to-Shape Stickers', group: 'Labels, Stickers & Packaging',
     design: 'label', online: true,
+    /* Off the website and the quote picker (owner, 2026-10-21: $11.64 each for
+       10 "does not make sense"); online sticker shops sell 100 3" stickers
+       for about $52-$125, SinaLite's 100 here is $192-$245. Staff can still
+       quote 250, the only run near market. */
+    sell_from: 250,
     url: 'https://sinalite.com/en_us/decals/cut-to-shape/white-vinyl-permanent.html',
     note: 'Permanent white vinyl stickers, full color, cut to the shape.',
     materials: [{ key: 'white_perm', label: 'White vinyl, permanent' }],
@@ -76,6 +84,8 @@ const META = {
   roll_label: {
     name: 'Roll Labels — white gloss BOPP', label: 'Roll Labels', group: 'Labels, Stickers & Packaging',
     design: 'label', online: false,
+    /* 25 labels cost $280; 500 is $300-$350 and 1,000 $320-$420. */
+    sell_from: 500,
     url: 'https://sinalite.com/en_us/packaging/roll-labels/bopp-labels.html',
     note: 'Waterproof white gloss BOPP product labels on a roll, gloss laminated, full color.',
     materials: [{ key: 'white_bopp', label: 'White gloss BOPP, gloss laminated' }],

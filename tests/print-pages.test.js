@@ -22,20 +22,28 @@ const path = require('node:path');
 const O = require('../tools/occasion-pages');
 const SL = require('../tools/lib/sinalite');
 const { PICKS } = require('../tools/lib/quote-picks');
+const TC = require('../tools/lib/table-cover');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const pages = O.load().pages.filter((p) => p.kind === 'print');
 const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
 const money = (s) => Number(s.replace(/[$,]/g, ''));
+/* The table cover page prices the in-house cover (tools/lib/table-cover.js),
+   not a SinaLite family; its own test is below. */
+const INHOUSE = 'table_cover_inhouse';
+const slOnly = (p) => p.print.families.filter((k) => k !== INHOUSE);
 
 test('there is a page for each SinaLite family sold on its own, except the ones switched off', () => {
   const covered = new Set(pages.flatMap((p) => p.print.families));
   /* Off on purpose (owner, 2026-10-20): calendars until there is a way to
      design one; pouches (500 minimum) until a smaller-run source is found;
-     table covers while a DTF-printed cover on a wholesale blank replaces the
-     $300 all-over one. Mugs and tumblers: the shop sublimates its own
-     (services/custom-glassware.html) for far less than the resold ones. */
-  const OFF = new Set(['calendar', 'pouch', 'table_cover', 'mug', 'tumbler']);
+     table covers: the page sells the DTF-printed cover on a wholesale blank
+     instead of the $300 all-over one. Mugs and tumblers: the shop sublimates
+     its own (services/custom-glassware.html) for far less than the resold
+     ones. Stickers (owner, 2026-10-21: "do not add values that are not cost
+     effective or overpriced"): SinaLite's cost above online sticker shops'
+     prices at every run. */
+  const OFF = new Set(['calendar', 'pouch', 'table_cover', 'mug', 'tumbler', 'sticker']);
   for (const k of Object.keys(SL.table().families)) {
     if (OFF.has(k)) assert.ok(!covered.has(k), `${k} is switched off but has a page`);
     else assert.ok(covered.has(k), `no page sells ${k}`);
@@ -60,7 +68,7 @@ test('a page that names design fees shows the quote form\'s own prices', () => {
 test('set runs say they are the only quantities sold, and shipping to the customer is offered', () => {
   for (const p of pages) {
     const html = read(p.path);
-    if (p.print.families.some((k) => !SL.table().families[k].any_qty)) assert.match(html, /We only sell in these quantities\./, p.path);
+    if (slOnly(p).some((k) => !SL.table().families[k].any_qty)) assert.match(html, /We only sell in these quantities\./, p.path);
     assert.match(html, /ship your order straight to you/, p.path);
   }
 });
@@ -72,6 +80,7 @@ test('every price on a page is the staff quote price for that quantity', () => {
     const tables = [...html.matchAll(/<table class="pp-table">([\s\S]*?)<\/table>/g)].map((m) => m[1]);
     assert.strictEqual(tables.length, p.print.families.length, p.path);
     p.print.families.forEach((k, i) => {
+      if (k === INHOUSE) return;
       const f = fams[k];
       const ladders = [];
       for (const m of f.materials) for (const z of f.sizes) ladders.push(f.prices[m.key][z.key]['']);
@@ -108,7 +117,7 @@ test('the "from" line is the lowest price on the page, at its quantity', () => {
 test('the minimum a page promises is the real one', () => {
   const fams = SL.table().families;
   for (const p of pages) {
-    const mins = p.print.families.map((k) => fams[k].min);
+    const mins = p.print.families.map((k) => (k === INHOUSE ? 1 : fams[k].min));
     for (const b of p.badges) {
       const m = b.match(/Minimum ([\d,]+)\b/);
       if (m) assert.ok(mins.includes(Number(m[1].replace(/,/g, ''))), `${p.path}: badge "${b}" vs minimums ${mins}`);
@@ -146,18 +155,54 @@ test('Product schema parses and agrees with the page', () => {
 
 test('a column that starts above the smallest run shows a dash, not a broken page', () => {
   const t = SL.table();
-  const f = JSON.parse(JSON.stringify(t.families.sticker));
+  const f = JSON.parse(JSON.stringify(t.families.roll_label));
   const m = f.materials[0].key, z = f.sizes[0].key;
-  f.prices[m][z][''] = f.prices[m][z][''].filter(([q]) => q >= 50);
+  f.prices[m][z][''] = f.prices[m][z][''].filter(([q]) => q >= 1000);
   const orig = SL.table;
-  SL.table = () => ({ ...t, families: { ...t.families, sticker: f } });
+  SL.table = () => ({ ...t, families: { ...t.families, roll_label: f } });
   try {
-    const p = pages.find((x) => x.print.families.includes('sticker'));
+    const p = pages.find((x) => x.print.families.includes('roll_label'));
     const fams = O.printFamilies(p);
-    const st = fams.find((x) => x.key === 'sticker');
+    const st = fams.find((x) => x.key === 'roll_label');
     assert.strictEqual(st.rows[0].cells[0], null);
     assert.match(O.render(p, '<style></style>', '', new Date()), /not sold at this quantity/);
   } finally { SL.table = orig; }
+});
+
+test('the smallest run sold is the cost-effective one (owner, 2026-10-21: nothing overpriced)', () => {
+  const fams = SL.table().families;
+  /* Brochures from 250 (25 were $185), roll labels from 500 (25 were $280),
+     stickers off the site and from 250 for staff. */
+  for (const [k, from] of [['brochure', 250], ['roll_label', 500], ['sticker', 250]]) {
+    assert.strictEqual(fams[k].min, from, k);
+    assert.strictEqual(fams[k].runs[0], from, k);
+  }
+  const html = read('print/stickers-labels.html');
+  assert.doesNotMatch(html.replace(/<[^>]+>/g, ' '), /\bstickers?\b(?!-labels)/i, 'the labels page sells no stickers');
+  for (const p of pages) {
+    for (const k of slOnly(p)) {
+      const rows = [...read(p.path).matchAll(/<tr><th scope="row">([\d,]+)<\/th>/g)].map((r) => Number(r[1].replace(/,/g, '')));
+      assert.ok(rows.every((q) => q >= fams[k].min), `${p.path}: a run under ${fams[k].min}`);
+    }
+  }
+});
+
+test('the table cover page prints the in-house prices the quote engine charges', () => {
+  const p = pages.find((x) => x.path === 'print/table-covers.html');
+  assert.deepStrictEqual(p.print.families, [INHOUSE]);
+  const html = read(p.path);
+  const rows = [...html.matchAll(/<tr><th scope="row">([\d,]+)<\/th>([\s\S]*?)<\/tr>/g)];
+  assert.deepStrictEqual(rows.map((r) => Number(r[1])), [1, 2, 3]);
+  for (const r of rows) {
+    const q = Number(r[1]);
+    const each = [...r[2].matchAll(/<b>(\$[\d,.]+)<\/b> each/g)].map((m) => money(m[1]));
+    assert.deepStrictEqual(each, [TC.priceEach(q, 1), TC.priceEach(q, 2)], `${q} covers`);
+  }
+  /* The owner's figures, 2026-10-21. */
+  assert.deepStrictEqual([1, 2, 3, 10].map((q) => TC.priceEach(q, 2)), [110, 95, 80, 80]);
+  assert.deepStrictEqual([1, 2, 3, 10].map((q) => TC.priceEach(q, 1)), [75, 75, 65, 65]);
+  assert.match(html, /class="pp-colors"/, 'the cover colors are on the page');
+  assert.match(html, /Table Cover Design — New: <b>\$95\.00<\/b>|New table cover design: <b>\$95\.00<\/b>/);
 });
 
 test('stickers and labels: setup is free and no design charge is in their prices (owner, 2026-10-20)', () => {
@@ -192,6 +237,9 @@ test('every page photo is on disk, sized as written, and records its free-licenc
 test('the copy never says we print these in our shop, or names the supplier', () => {
   for (const p of pages) {
     const text = read(p.path).replace(/<[^>]+>/g, ' ');
+    /* The table cover IS printed in our shop (owner, 2026-10-21); it still
+       never names a supplier. */
+    if (p.print.families.includes(INHOUSE)) { assert.doesNotMatch(text, /sinalite|ycc|your ?chair ?covers/i, p.path); continue; }
     assert.doesNotMatch(text, /printed (in|at) our|in-house|sinalite/i, p.path);
   }
 });

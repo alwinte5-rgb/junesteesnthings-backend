@@ -176,6 +176,11 @@ const stale = (now) => ageDays(now) === null;
 function familyOf(key, p) {
   const prices = {};
   let min = Infinity;
+  /* sell_from: the smallest run the shop offers (owner, 2026-10-21: "do not
+     add values that are not cost effective or overpriced"). Smaller runs stay
+     in the ladder, so eachFor prices exactly as before and a line saved at
+     one re-saves unchanged; they are just not offered (runs, min). */
+  const sellFrom = Number(p.sell_from) || 0;
   const runs = new Set();
   for (const mat of p.materials) {
     prices[mat.key] = {};
@@ -185,7 +190,7 @@ function familyOf(key, p) {
       if (!lad.length) continue;
       prices[mat.key][size.key] = { '': lad };
       min = Math.min(min, lad[0][0]);
-      for (const [q] of lad) runs.add(q);
+      for (const [q] of lad) if (q >= sellFrom) runs.add(q);
     }
   }
   return {
@@ -198,7 +203,8 @@ function familyOf(key, p) {
        so that is never under cost). false: set runs only (eachFor). */
     any_qty: !!p.any_qty,
     turnaround: p.turnaround || null, url: p.url || null,
-    min: Number.isFinite(min) ? min : null,
+    min: Number.isFinite(min) ? Math.max(min, sellFrom) : null,
+    sell_from: sellFrom || null,
     /* Every quantity SinaLite sells (or prices) this item at, for the sizer. */
     runs: [...runs].sort((a, b) => a - b),
     markup: MARKUP, freight: 0, freight_by_size: {},

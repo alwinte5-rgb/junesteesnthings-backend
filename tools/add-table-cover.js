@@ -4,9 +4,7 @@
  *   node tools/add-table-cover.js --vars=<(jtees-env)            # dry run
  *   node tools/add-table-cover.js --vars=<(jtees-env) --apply    # write
  *
- * THE OWNER'S PRICES (2026-10-21), each, shipping included:
- *   1 side:  $75 for 1-2 covers, $65 each from 3.
- *   2 sides: $90 for 1 cover,    $80 each from 2.
+ * THE OWNER'S PRICES: tools/lib/table-cover.js (each, shipping included).
  *
  * WHAT IT WRITES
  *   1. A decoration method, "DTF Printing — Table Cover", that carries the
@@ -34,7 +32,6 @@ const env = varsFile ? JSON.parse(fs.readFileSync(varsFile, 'utf8')) : process.e
 const url = mysqlUrlFrom(env);
 if (!url) { console.error('usage: add-table-cover.js --vars=<(jtees-env) [--apply]'); process.exit(2); }
 
-const BLANK_COST = 12.99;   // YCC Linens 6 ft fitted polyester, 1-19 (2026-10-20), for job costs
 const METHOD = 'DTF Printing — Table Cover';
 const METHOD_DESC = 'Full-color DTF printed on a fitted 6 ft table cover: one side is a large print ' +
   'on the front panel; two sides adds the back panel. The price includes the cover and its delivery.';
@@ -44,10 +41,10 @@ const PRODUCT = 'Fitted Table Cover — 6 ft';
 const PRODUCT_DESC = 'Fitted polyester table cover for a 6 ft table (72" x 30"), closed on all four sides. ' +
   'Tell us the color on the quote (30 to choose from). Printed in our shop with DTF on one side (front) or two sides (front and back).';
 
-/* Band ceilings -> price each. ONE_SIDE is the main stage; BACK is what the
-   second side adds: 2 sides = 90 (1), 80 (2), 80 (3+). */
-const ONE_SIDE = { 1: 75, 2: 75, 7000: 65 };
-const TWO_SIDES = { 1: 90, 2: 80, 7000: 80 };
+/* Band ceilings -> price each, from tools/lib/table-cover.js (the page
+   prints the same table). ONE_SIDE is the main stage; BACK is what the
+   second side adds. */
+const { ONE_SIDE, TWO_SIDES, BLANK_COST } = require('./lib/table-cover');
 const BACK = Object.fromEntries(Object.keys(ONE_SIDE).map((c) => [c, TWO_SIDES[c] - ONE_SIDE[c]]));
 const mainKey = 'id', addKey = 'mr8a5dlx';
 const ceilings = Object.keys(ONE_SIDE).map(Number).sort((a, b) => a - b);
