@@ -55,11 +55,21 @@ test('a calendar under its minimum of 25 is refused in words; 25 is priced', () 
   assert.strictEqual(at.each, SL.priceEach(120, 20, 25));
   assert.strictEqual(at.freight, 0, 'shipping is inside a SinaLite price, never charged again');
   const between = QS.priceSign('calendar', spec, 70, true);
-  /* 70 is not a SinaLite run: it is bought as runs (50 + 25, or 100),
-     never at the 50-run each (Codex on #293). */
+  /* 70 is not a SinaLite run. Staff quote only the runs (owner, 2026-10-20),
+     so it is refused, naming the runs either side, never priced. */
+  assert.strictEqual(between.ok, false);
+  assert.match(between.error, /sold only in these quantities: 25, 50, 100/);
+  assert.match(between.error, /use 50 or 100/);
+  assert.ok(QS.priceSign('calendar', spec, 100, true).ok, 'a listed run is priced');
+  assert.deepStrictEqual(between.use, [50, 100], 'the form offers the runs either side');
+  /* A line saved at 70 before the rule still re-saves unchanged. */
+  const old = QS.priceSign('calendar', spec, 70, true, { grandfather: true });
+  assert.ok(old.ok);
   const lad = SL.table().families.calendar.prices['28pg']['8.5x11'][''];
-  assert.strictEqual(between.each, SL.eachFor(lad, 70));
-  assert.ok(between.each * 70 >= Math.min(50 * lad[1][1] + 25 * lad[0][1], 100 * lad[2][1]) - 0.7, '70 costs at least the runs that cover it');
+  assert.strictEqual(old.each, SL.eachFor(lad, 70));
+  const over = QS.priceSign('calendar', spec, 5000, true);
+  assert.strictEqual(over.ok, false);
+  assert.match(over.error, /quote the extra runs by hand/);
   const opts = QS.sizerOptions().calendar;
   assert.strictEqual(opts.min, 25, 'the form can say "min 25" before a quantity is typed');
   assert.strictEqual(opts.supplier, 'sinalite');

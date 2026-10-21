@@ -24,7 +24,7 @@ const SERVICES = [
     description: 'A new menu or promo design for one TV screen.' },
   { name: 'TV Screen Design — Revision (per screen)', price: '40.00',
     description: 'Updating an existing TV screen design, per screen.' },
-  /* Design work for the SinaLite items (owner's prices, 2026-10-15). Mugs,
+  /* Design work for the SinaLite items (owner's prices, 2026-10-15; labels and stickers $25 flat, owner 2026-10-20). Mugs,
      tumblers, bottles, canvas and X-frames take the general design tiers on
      the quote form (tweak / setup / commission) instead of a service of
      their own. */
@@ -32,9 +32,9 @@ const SERVICES = [
     description: 'A new wall calendar laid out from your photos and dates: cover plus twelve months.' },
   { name: 'Calendar Design — Revision', price: '75.00',
     description: 'Updating an existing calendar: new year, dates, photos or wording.' },
-  { name: 'Label or Sticker Design — New', price: '95.00',
+  { name: 'Label or Sticker Design — New', price: '25.00',
     description: 'A new product label or sticker design, set up for the cut shape.' },
-  { name: 'Label or Sticker Design — Revision', price: '45.00',
+  { name: 'Label or Sticker Design — Revision', price: '25.00',
     description: 'Updating an existing label or sticker.' },
   { name: 'Pouch Design — New', price: '150.00',
     description: 'A new stand-up or lay-flat pouch design, front and back, laid out on the printer\'s template.' },
