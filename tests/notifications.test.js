@@ -68,7 +68,9 @@ test('a message notification is one per conversation per unread spell', () => {
 test('one notification per thing: UNIQUE (recipient, kind, ref), and adding does nothing on a repeat', () => {
   assert.match(src, /CREATE TABLE IF NOT EXISTS notifications \([\s\S]*?UNIQUE \(recipient, kind, ref\)/);
   const add = fn('async function notifyAdd(');
-  assert.match(add, /ON CONFLICT \(recipient, kind, ref\) DO NOTHING/);
+  /* A repeat adds nothing; only a caller asking to refresh updates an unread title. */
+  assert.match(add, /ON CONFLICT \(recipient, kind, ref\) DO \$\{refresh \? 'UPDATE SET title = EXCLUDED\.title WHERE notifications\.read_at IS NULL' : 'NOTHING'\}/);
+  assert.match(add, /\{ refresh = false \} = \{\}/, 'off unless asked');
   assert.match(add, /NOTIFY\.safeLink\(n\.link\)/, 'every stored link is checked');
 });
 

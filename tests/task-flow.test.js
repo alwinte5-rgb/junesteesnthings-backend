@@ -108,6 +108,8 @@ test('the routine: once a day per person, not again while the last one is open',
   assert.match(r, /NOT EXISTS \(SELECT 1 FROM staff_tasks WHERE template_id = \$7 AND assigned_to = \$2 AND done_at IS NULL\)/);
   assert.match(r, /ON CONFLICT DO NOTHING/);
   assert.match(r, /SHIFTS\.staffZoneOf\(helper\.time_zone\)/, 'their day, in their own time zone');
+  /* A schedule that does not run this week falls back to Monday to Friday. */
+  assert.match(r, /FLOW\.isWorkday\(weekday, shiftDays, shiftDays\.length > 0\)/);
 });
 
 test('the designer gets each season\'s asset kit once, from the marketing calendar', () => {
@@ -124,8 +126,13 @@ test('the designer gets each season\'s asset kit once, from the marketing calend
 });
 
 test('finishing a task or opening My Day hands out the next one at once', () => {
-  assert.match(route("app.post('/admin/tasks/:id/done', requireAdmin"), /if \(staffId\) await taskFlowFor\(staffId\)/);
+  /* Whoever closes it (the helper or the owner), the lane of the person it was for refills. */
+  const done = route("app.post('/admin/tasks/:id/done', requireAdmin");
+  assert.match(done, /RETURNING assigned_to/);
+  assert.match(done, /if \(doneFor\) await taskFlowFor\(doneFor, \{ now: true \}\)/);
   assert.match(route("app.get('/admin/my-day', requireAdmin"), /if \(me\) await taskFlowFor\(me\)/);
+  /* My Day refills at most once a minute per helper. */
+  assert.match(fn('async function taskFlowFor('), /if \(!now && Date\.now\(\) - \(taskFlowAt\.get\(helperId\) \|\| 0\) < 60 \* 1000\) return 0;/);
   assert.match(src, /setInterval\(\(\) => step\('task flow', taskFlowSweep\), 10 \* 60 \* 1000\)/);
   assert.match(fn('async function taskFlowFor('), /WHERE id = \$1 AND active AND archived_at IS NULL/, 'never for a disabled helper');
 });
@@ -152,6 +159,34 @@ test('the owner hears when a lane runs low, once a week, cleared when refilled',
   const b = fn('async function backlogNotices(');
   assert.match(b, /ref: `\$\{l\.track\}:\$\{l\.lane\}:\$\{week\}`/);
   assert.match(b, /notifyClearResolved\('owner', 'backlog'/);
-  assert.match(b, /DO UPDATE SET title = EXCLUDED\.title WHERE notifications\.read_at IS NULL/, 'the count stays current while unread');
+  assert.match(fn('async function notifyAdd('), /UPDATE SET title = EXCLUDED\.title WHERE notifications\.read_at IS NULL/, 'the count stays current while unread');
   assert.match(fn('async function notifySweep('), /notifyPart\('backlog', backlogNotices\(roster\)\)/);
 });
+
+test('a season kit is due when its ads start, or a week out once they have', () => {
+  const at = src.indexOf('function flowDueOn(');
+  const body = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  const flowDueOn = new Function(`${body}; return flowDueOn;`)();
+  const now = new Date(Date.UTC(2026, 9, 21));
+  assert.strictEqual(flowDueOn(new Date(Date.UTC(2026, 9, 24)), now), '2026-10-24', 'ads in 3 days: due then, not later');
+  assert.strictEqual(flowDueOn(new Date(Date.UTC(2026, 8, 20)), now), '2026-10-28', 'ads already running: a week from now');
+});
+
+test('a disabled helper\'s unstarted backlog work goes back to the backlog', () => {
+  const sweep = fn('async function taskFlowSweep(');
+  assert.match(sweep, /NOT s\.active OR s\.archived_at IS NOT NULL/);
+  assert.match(sweep, /t\.started_at IS NULL AND t\.template_id IS NOT NULL/, 'started work stays for the owner to settle');
+  assert.match(sweep, /UPDATE task_templates SET used_at = NULL, used_by = NULL WHERE id IN \(SELECT template_id FROM gone\) AND repeat = 'none'/);
+});
+
+test('the owner is not told of every routine task finished; a cleared role stops nagging', () => {
+  assert.match(fn('async function taskNotices('), /lane IS DISTINCT FROM 'daily'/);
+  assert.match(fn('async function backlogNotices('), /SELECT DISTINCT track FROM task_templates WHERE active AND track = ANY/);
+  assert.match(fn('async function backlogNotices('), /notifyAdd\(out, \{ refresh: true \}\)/, 'one insert path for every notification');
+});
+
+test('a backlog change refills only that role, at once', () => {
+  assert.match(route("app.post('/admin/tasks/templates', requireAdmin"), /taskFlowForTrack\(t\.track\)/);
+  assert.match(route("app.post('/admin/tasks/templates/starters', requireAdmin"), /taskFlowForTrack\(track\)/);
+});
+

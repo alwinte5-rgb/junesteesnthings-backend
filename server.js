@@ -33836,13 +33836,16 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
     const picked = CHATFILES.pickTaskFiles(req.body && req.body.files, QPHOTOS.cloudName());
     if (picked.error) return back(res, backTo, 'err', 'A file did not upload properly. Pick it again.');
     const added = picked.files.map((f) => ({ ...f, by: staffId, at: new Date().toISOString() }));
-    const { rowCount } = await pool.query(
+    const { rowCount, rows: closed } = await pool.query(
       `UPDATE staff_tasks SET done_at = NOW(), done_by = $2, done_note = $3, files = files || $4::jsonb
-        WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR (assigned_to = $2 AND started_at IS NOT NULL))`,
+        WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR (assigned_to = $2 AND started_at IS NOT NULL))
+        RETURNING assigned_to`,
       [id, staffId, note || null, JSON.stringify(added)]);
     if (!rowCount) return back(res, backTo, 'err', staffId ? 'Press Start on the task first, then Done.' : 'That task is already closed.');
-    /* Finishing one task is starting the next: the lane refills now. */
-    if (staffId) await taskFlowFor(staffId).catch((e) => console.error('task flow after done failed:', e.message));
+    /* Finishing one task is starting the next: the lane of whoever it was
+       for refills now, whether they closed it or the owner did. */
+    const doneFor = closed[0] && closed[0].assigned_to;
+    if (doneFor) await taskFlowFor(doneFor, { now: true }).catch((e) => console.error('task flow after done failed:', e.message));
     if (staffId) notifyNow();
     return res.redirect(backTo);
   } catch (err) {
@@ -34219,11 +34222,13 @@ async function makeRecurringTasks(helper, shifts, templates, now = new Date()) {
   if (!mine.length) return 0;
   const zone = SHIFTS.staffZoneOf(helper.time_zone);
   const today = SHIFTS.dateIn(now, zone);
-  const weekday = ((new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7) + 1;
+  const weekday = SHIFTS.weekdayOfDate(today);
   const own = shifts.filter((x) => x.staff_id === helper.id);
+  /* Shifts that run this week decide; with none this week (a schedule that
+     ended, or starts later) it is Monday to Friday. */
   const shiftDays = SHIFTS.weekOccurrences(own, SHIFTS.mondayOf(now, zone), zone)
-    .map((o) => ((new Date(`${SHIFTS.dateIn(o.start, zone)}T12:00:00Z`).getUTCDay() + 6) % 7) + 1);
-  const workday = FLOW.isWorkday(weekday, shiftDays, own.length > 0);
+    .map((o) => SHIFTS.weekdayOfDate(SHIFTS.dateIn(o.start, zone)));
+  const workday = FLOW.isWorkday(weekday, shiftDays, shiftDays.length > 0);
   let made = 0;
   for (const t of mine) {
     if (!FLOW.recurringDue(t, weekday, workday)) continue;
@@ -34242,7 +34247,7 @@ async function makeRecurringTasks(helper, shifts, templates, now = new Date()) {
  *  when that day has already come (a kit is never late the day it arrives). */
 function flowDueOn(ads, now) {
   const week = new Date(now.getTime() + 7 * 86400000);
-  return (ads > week ? ads : week).toISOString().slice(0, 10);
+  return (ads > now ? ads : week).toISOString().slice(0, 10);
 }
 
 /** Work the shop makes by itself: the marketing calendar's prep for each
@@ -34287,14 +34292,28 @@ async function taskFlowSweep() {
       console.error(`task flow for staff ${h.id} failed:`, e.message);
     }
   }
+  /* Backlog work a disabled or archived helper never started goes back to
+     the backlog for the next person on the role. */
+  await pool.query(
+    `WITH gone AS (
+       DELETE FROM staff_tasks t USING staff s
+        WHERE s.id = t.assigned_to AND (NOT s.active OR s.archived_at IS NOT NULL)
+          AND t.done_at IS NULL AND t.started_at IS NULL AND t.template_id IS NOT NULL AND t.lane = ANY($1::text[])
+       RETURNING t.template_id)
+     UPDATE task_templates SET used_at = NULL, used_by = NULL WHERE id IN (SELECT template_id FROM gone) AND repeat = 'none'`,
+    [FLOW.LANE_KEYS]).catch((e) => console.error('backlog return failed:', e.message));
   made += await makeAutoTasks(helpers).catch((e) => { console.error('auto tasks failed:', e.message); return 0; });
   if (made) notifyNow();
   return made ? `${made} handed out` : '';
 }
 
 /** The same for one helper, when they open My Day or finish a task: their
- *  next work is there without waiting for the sweep. */
-async function taskFlowFor(helperId) {
+ *  next work is there without waiting for the sweep. From My Day at most once
+ *  a minute per helper (the sweep and Done cover the rest); `now` skips that. */
+const taskFlowAt = new Map();
+async function taskFlowFor(helperId, { now = false } = {}) {
+  if (!now && Date.now() - (taskFlowAt.get(helperId) || 0) < 60 * 1000) return 0;
+  taskFlowAt.set(helperId, Date.now());
   const { rows: [h] } = await pool.query(
     'SELECT id, training_track, time_zone FROM staff WHERE id = $1 AND active AND archived_at IS NULL', [helperId]);
   if (!h) return 0;
@@ -34305,12 +34324,18 @@ async function taskFlowFor(helperId) {
   return made;
 }
 
+/** Everyone on one role, after the owner changes its backlog. */
+async function taskFlowForTrack(track) {
+  const { rows } = await pool.query('SELECT id FROM staff WHERE active AND archived_at IS NULL AND training_track = $1', [track]);
+  for (const r of rows) await taskFlowFor(r.id, { now: true });
+}
+
 /** The owner's "backlog running low" notices: one per role and lane a week,
  *  for roles someone works in and the owner has started a backlog for. */
 async function backlogNotices(roster) {
   const tracks = [...new Set(roster.filter((r) => r.active && !r.archived_at).map((r) => r.training_track))];
   const [{ rows: started }, { rows: waiting }] = await Promise.all([
-    pool.query('SELECT DISTINCT track FROM task_templates WHERE track = ANY($1::text[])', [tracks]),
+    pool.query('SELECT DISTINCT track FROM task_templates WHERE active AND track = ANY($1::text[])', [tracks]),
     pool.query(`SELECT track, lane, COUNT(*)::int AS n FROM task_templates
                  WHERE active AND used_at IS NULL AND repeat = 'none' GROUP BY track, lane`),
   ]);
@@ -34320,15 +34345,8 @@ async function backlogNotices(roster) {
     recipient: 'owner', kind: 'backlog', ref: `${l.track}:${l.lane}:${week}`, link: `/admin/tasks?backlog=${encodeURIComponent(l.track)}#backlog`,
     title: NOTIFY.cleanTitle(`Backlog running low: ${(JOB_TRACKS[l.track] || {}).label || l.track}, ${FLOW.LANES[l.lane].label} (${l.n} left)`),
   }));
-  /* Written here rather than through notifyAdd, so an unread one keeps its
-     count current ("2 left" becoming "0 left") instead of the first it said. */
-  if (out.length) {
-    await pool.query(
-      `INSERT INTO notifications (recipient, kind, title, link, ref)
-       SELECT 'owner', 'backlog', * FROM unnest($1::text[], $2::text[], $3::text[])
-       ON CONFLICT (recipient, kind, ref) DO UPDATE SET title = EXCLUDED.title WHERE notifications.read_at IS NULL`,
-      [out.map((n) => n.title), out.map((n) => NOTIFY.safeLink(n.link)), out.map((n) => n.ref)]);
-  }
+  /* An unread one keeps its count current ("2 left" becoming "0 left"). */
+  await notifyAdd(out, { refresh: true });
   await notifyClearResolved('owner', 'backlog', out.map((n) => n.ref));
   return [];
 }
@@ -34346,7 +34364,7 @@ app.post('/admin/tasks/templates', requireAdmin, async (req, res) => {
        SELECT $1, $2, $3, $4, $5, $6, $7, $8, COALESCE((SELECT MAX(sort) + 1 FROM task_templates WHERE track = $1), 0)
         WHERE NOT EXISTS (SELECT 1 FROM task_templates WHERE track = $1 AND title = $5 AND active AND created_at > NOW() - interval '10 seconds')`,
       [t.track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to, t.goal]);
-    if (rowCount) taskFlowSweep().catch((e) => console.error('task flow after backlog add failed:', e.message));
+    if (rowCount) taskFlowForTrack(t.track).catch((e) => console.error('task flow after backlog add failed:', e.message));
     return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Added to the backlog.' : 'That was added a moment ago.');
   } catch (err) {
     console.error('backlog add failed:', err.message);
@@ -34373,7 +34391,7 @@ app.post('/admin/tasks/templates/starters', requireAdmin, async (req, res) => {
         [track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to || null, t.goal, sort++]);
     }
     await client.query('COMMIT');
-    taskFlowSweep().catch((e) => console.error('task flow after starters failed:', e.message));
+    taskFlowForTrack(track).catch((e) => console.error('task flow after starters failed:', e.message));
     return back(res, backTo, 'ok', `${list.length} starter tasks added. Each helper on this role gets their first ones now.`);
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -36830,14 +36848,14 @@ let notifyLastAt = 0;
 let notifyLateAt = 0;
 
 /** Add notifications; one already there (same person, kind and ref) is left
- *  as it is. */
-async function notifyAdd(list) {
+ *  as it is, or with `refresh` has its title brought up to date while unread. */
+async function notifyAdd(list, { refresh = false } = {}) {
   const rows = list.filter((n) => n && n.recipient && NOTIFY.kindOf(n.kind) && n.ref);
   if (!rows.length) return 0;
   const { rowCount } = await pool.query(
     `INSERT INTO notifications (recipient, kind, title, link, ref)
      SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
-     ON CONFLICT (recipient, kind, ref) DO NOTHING`,
+     ON CONFLICT (recipient, kind, ref) DO ${refresh ? 'UPDATE SET title = EXCLUDED.title WHERE notifications.read_at IS NULL' : 'NOTHING'}`,
     [rows.map((n) => n.recipient), rows.map((n) => n.kind), rows.map((n) => NOTIFY.cleanTitle(n.title) || 'Something new'),
       rows.map((n) => NOTIFY.safeLink(n.link)), rows.map((n) => String(n.ref).slice(0, 200))]);
   return rowCount;
@@ -37025,7 +37043,8 @@ async function taskNotices(roster) {
         WHERE done_at IS NULL AND started_at IS NULL ORDER BY id DESC`)),
     notifyPart('tasks done', pool.query(
       `SELECT id, title, done_by FROM staff_tasks
-        WHERE done_by IS NOT NULL AND done_at > GREATEST(NOW() - make_interval(days => $1), $2::timestamptz) ORDER BY id DESC LIMIT 200`,
+        WHERE done_by IS NOT NULL AND lane IS DISTINCT FROM 'daily'
+          AND done_at > GREATEST(NOW() - make_interval(days => $1), $2::timestamptz) ORDER BY id DESC LIMIT 200`,
       [NOTIFY_LOOKBACK_DAYS, TASK_NOTICES_SINCE])),
   ]);
   if (waiting) {
