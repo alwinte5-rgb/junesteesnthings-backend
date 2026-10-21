@@ -9082,6 +9082,12 @@ const ADDONS = [
   { code: 'cutout_ship', label: 'Supplier delivery to our shop', appliesTo: SIGNS365_FREIGHT_RE,
     kind: 'once', rate: 10, orderShared: true, inItemPrice: true, auto: 'method',
     note: 'What our supplier charges to get the printed cutouts to us, so we can mount and finish them. Charged once for your whole order, however many sizes are on it — this is not a delivery to you.' },
+  /* The blank table cover's delivery from YCC Linens to the shop (owner,
+     2026-10-20: "add shipping cost to the table pricing"). At cost, once an
+     order, inside the item's price. tools/add-table-cover.js SHIP. */
+  { code: 'tablecover_ship', label: 'Table cover delivery to our shop', appliesTo: /^DTF Printing — Table Cover/i,
+    kind: 'once', rate: 11.99, orderShared: true, inItemPrice: true, auto: 'method',
+    note: 'What our supplier charges to get the blank table cover to us. Charged once for your whole order.' },
   { code: 'cutout_ship_sat', label: 'Supplier shipping — Saturday rush', appliesTo: SIGNS365_FREIGHT_RE,
     kind: 'once', rate: 50, orderShared: true, inItemPrice: true,
     note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },
@@ -13136,6 +13142,7 @@ ${quotePricingSource()}
               if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
               /* A typed price is all-in, like the price the form shows. */
               if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L) || String(u.value || '').trim() !== '')) return;
+              if (a.code === 'tablecover_ship' && String(u.value || '').trim() !== '') return;
               if (addons.some(function(x){ return x.code === a.code; })) return;
               addons.push(a);
             });
@@ -14285,6 +14292,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
         /* A typed price is all-in, like the price the form shows. */
         if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i) || priceTyped)) continue;
+        if (a.code === 'tablecover_ship' && priceTyped) continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
 
