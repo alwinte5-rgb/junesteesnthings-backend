@@ -11075,14 +11075,54 @@ details.fold[open] > summary::after{transform:rotate(-135deg)}
 /* The menu's counts arrive after the page has loaded, from /admin/nav-counts,
    so a slow count never holds a page up and a failed one shows no badge rather
    than a wrong one. A section's badge is the sum of its pages' badges, so a
-   count is never hidden inside a closed section. */
-const ADMIN_BADGE_JS = `(function(){try{fetch('/admin/nav-counts',{credentials:'same-origin',cache:'no-store'})
-.then(function(r){return r.ok?r.json():null}).then(function(c){if(!c)return;
-document.querySelectorAll('[data-badge]').forEach(function(el){var n=Number(c[el.getAttribute('data-badge')])||0;
-if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});
+   count is never hidden inside a closed section.
+
+   While the page is open it asks again every 30 seconds (a minute when the tab
+   is in the background) for the bell and messages, and dings when something
+   new arrives (owner, 2026-10-21: notifications "should come with a ding (for
+   all)"): a short chime, and a browser pop-up when the tab is not in front and
+   the person has allowed pop-ups. NOTIFY.dingFor decides, from what this
+   browser last saw, so a page opened onto old news is quiet and two tabs ding
+   once. Browsers play sound only after the person has clicked or typed on the
+   page, so the chime is unlocked on the first one; a tab that cannot play yet
+   leaves the news unspent for a tab that can, and pops it up only once itself.
+   The memory is per person (`who`), so people sharing a computer stay apart. window.jtDing plays it on
+   demand (the "Turn on sound" button and the settings page's test). */
+const ADMIN_BADGE_JS = `(function(){try{
+var DING=${NOTIFY.dingFor.toString()};
+var all={},base=document.title,ctx=null,last=0;
+function show(el,n){if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}else{el.hidden=true;}}
+function paint(c){for(var k in c)all[k]=c[k];
+document.querySelectorAll('[data-badge]').forEach(function(el){var k=el.getAttribute('data-badge');if(k in all)show(el,Number(all[k])||0);});
 document.querySelectorAll('[data-badge-group]').forEach(function(el){var n=0;
-el.getAttribute('data-badge-group').split(',').forEach(function(k){n+=Number(c[k])||0;});
-if(n>0){el.textContent=n>99?'99+':String(n);el.hidden=false;}});}).catch(function(){});}catch(e){}})();
+el.getAttribute('data-badge-group').split(',').forEach(function(k){n+=Number(all[k])||0;});show(el,n);});
+var n=Number(all.notify)||0;document.title=n>0?'('+(n>99?'99+':n)+') '+base:base;}
+function unlock(){try{if(!ctx){var A=window.AudioContext||window.webkitAudioContext;if(A)ctx=new A();}if(ctx&&ctx.state==='suspended')ctx.resume();}catch(e){}}
+document.addEventListener('pointerdown',unlock,{once:true});document.addEventListener('keydown',unlock,{once:true});
+function chime(){try{unlock();if(!ctx||ctx.state!=='running')return;var t=ctx.currentTime;
+[[880,0],[1318.5,0.16]].forEach(function(p){var o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=p[0];
+g.gain.setValueAtTime(0.0001,t+p[1]);g.gain.exponentialRampToValueAtTime(0.25,t+p[1]+0.02);g.gain.exponentialRampToValueAtTime(0.0001,t+p[1]+0.45);
+o.connect(g);g.connect(ctx.destination);o.start(t+p[1]);o.stop(t+p[1]+0.5);});}catch(e){}}
+window.jtDing=chime;
+function key(c){return 'jt:ding:'+String(c.who||'');}
+function seen(c){try{return JSON.parse(localStorage.getItem(key(c)));}catch(e){return null;}}
+function alertFor(c){var l=c.latest&&c.latest.id?c.latest:null;
+var r=DING(seen(c),{id:l?l.id:0,msgs:(Number(c.chat)||0)+(Number(c.mail)||0)});
+var mute=c.sound===false;unlock();var can=mute||(ctx&&ctx.state==='running');
+var mine=JSON.stringify(r.next),told=false;try{told=sessionStorage.getItem('jt:told')===mine;}catch(e){}
+if(!r.ding){try{localStorage.setItem(key(c),mine);}catch(e){}return;}
+if(told)return;
+if(can){try{localStorage.setItem(key(c),mine);}catch(e){}if(!mute)chime();}
+else{try{sessionStorage.setItem('jt:told',mine);}catch(e){}}
+if(c.popup!==false&&window.Notification&&Notification.permission==='granted'&&(document.hidden||!document.hasFocus())){try{
+var msg=r.why==='notify'&&l?l.title:'You have a new message.';var go=r.why==='notify'&&l?l.link:'/admin/notifications';
+var p=new Notification("June's Tees",{body:msg,tag:'jt-alert'});p.onclick=function(){try{window.focus();location.href=go;}catch(e){}p.close();};}catch(e){}}}
+function get(live){return fetch('/admin/nav-counts'+(live?'?live=1':''),{credentials:'same-origin',cache:'no-store'})
+.then(function(r){return r.ok?r.json():null}).then(function(c){if(!c)return;last=Date.now();paint(c);alertFor(c);}).catch(function(){});}
+get(false);
+setInterval(function(){if(document.hidden&&Date.now()-last<55000)return;get(true);},30000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&Date.now()-last>25000)get(true);});
+}catch(e){}})();
 (function(){try{var t=document.querySelector('.sec-tabs .is-active');if(t&&t.parentNode.scrollWidth>t.parentNode.clientWidth)
 t.parentNode.scrollLeft=t.offsetLeft-t.parentNode.offsetLeft-24;}catch(e){}})();`;
 
@@ -26378,16 +26418,42 @@ const REVIEWS_WAITING_SQL = `SELECT COUNT(*)::int AS n FROM reviews
   WHERE submitted_at IS NOT NULL AND deleted_at IS NULL AND moderated_at IS NULL AND approved IS NOT TRUE`;
 
 /* The menu's badges. Each count fails on its own, to zero, so one broken query
-   costs a badge rather than the lot. */
-app.get('/admin/nav-counts', requireAdmin, async (_req, res) => {
+   costs a badge rather than the lot. `?live=1` is the open page asking every
+   30 seconds for what can ding (the bell and messages), and nothing heavier:
+   the other badges stay as the page loaded them. Every answer also carries
+   the newest unread notification, for the pop-up, and the person's ding and
+   pop-up switches. */
+app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
-  const out = { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, mail: 0, notify: 0, design: 0, jobnotes: 0, pinned: 0 };
   const me = currentActor() || OWNER_ACTOR;
-  notifySoon();
-  await Promise.all([
+  const live = req.query.live === '1';
+  /* `who` keys the browser's ding memory, so two people on one computer never
+     compare against each other's notifications. */
+  const who = CHAN.readerKey(me);
+  const out = live ? { notify: 0, chat: 0, mail: 0, latest: null, sound: true, popup: true, who }
+    : { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, mail: 0, notify: 0, design: 0, jobnotes: 0, pinned: 0,
+      latest: null, sound: true, popup: true, who };
+  const alerts = () => Promise.all([
     notifyUnread(me).then((n) => { out.notify = n; }).catch(() => {}),
     teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
     mailUnreadCount(me).then((n) => { out.mail = n; }).catch(() => {}),
+    notifyLatest(me).then((l) => { out.latest = l; }).catch(() => {}),
+    pool.query('SELECT kind, email FROM notification_prefs WHERE reader = $1 AND kind = ANY($2::text[])',
+      [CHAN.readerKey(me), Object.values(NOTIFY.UI_PREFS)]).then(({ rows }) => {
+      const prefs = Object.fromEntries(rows.map((r) => [r.kind, r.email]));
+      out.sound = NOTIFY.uiOn('sound', prefs);
+      out.popup = NOTIFY.uiOn('popup', prefs);
+    }).catch(() => {}),
+  ]);
+  /* Either way the page asks for a sweep (at most one every 30 seconds for
+     everyone), so a new lead or approval reaches the bell within a poll. */
+  notifySoon();
+  if (live) {
+    await alerts();
+    return res.json(out);
+  }
+  await Promise.all([
+    alerts(),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
@@ -33665,8 +33731,10 @@ app.post('/admin/tasks', requireAdmin, async (req, res) => {
     }
     if (!rowCount) return back(res, backTo, 'err', `"${title.slice(0, 80)}" was added a moment ago, so it was not added twice.`);
     if (codeRefused) {
+      notifyNow();
       return back(res, backTo, 'err', `Task added, but WITHOUT an order: there is no order ${codeRefused} you can open. Codes are 6 or 10 letters and numbers.`);
     }
+    notifyNow();
     return back(res, backTo, 'ok', 'Task added.');
   } catch (err) {
     console.error('task add failed:', err.message);
@@ -33686,6 +33754,8 @@ app.post('/admin/tasks/:id/start', requireAdmin, async (req, res) => {
     const { rowCount } = await pool.query(
       `UPDATE staff_tasks SET started_at = NOW(), started_by = $2, assigned_to = COALESCE(assigned_to, $2)
         WHERE id = $1 AND done_at IS NULL AND started_at IS NULL AND (assigned_to = $2 OR assigned_to IS NULL)`, [id, actor.id]);
+    /* A task for anyone, once taken, leaves the other helpers' bells now. */
+    if (rowCount) notifyNow();
     return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Started: the task is yours.' : 'That task is someone else\'s, or already started.');
   } catch (err) {
     console.error('task start failed:', err.message);
@@ -33715,6 +33785,7 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
         WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR (assigned_to = $2 AND started_at IS NOT NULL))`,
       [id, staffId, note || null, JSON.stringify(added)]);
     if (!rowCount) return back(res, backTo, 'err', staffId ? 'Press Start on the task first, then Done.' : 'That task is already closed.');
+    if (staffId) notifyNow();
     return res.redirect(backTo);
   } catch (err) {
     console.error('task done failed:', err.message);
@@ -35276,7 +35347,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
         <div class="tc-filestat muted" data-tcfilestat hidden></div>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
       </div>
       <details class="card" id="alerts"><summary><b>Email alerts</b> <span class="muted">${alertsOn ? 'on' : 'off'}</span></summary>
-        <p class="muted">When a message waits ${CHAN.ALERT_AFTER_MIN} minutes without you reading it, you get one email for that conversation. No more for it until you have read it.</p>
+        <p class="muted">When a message waits ${CHAN.ALERT_AFTER_MIN} minutes without you reading it, you get an email listing what is waiting: at most ${CHAT_ALERTS_PER_DAY} emails a day. A conversation is not emailed again until you have read it. The ding and pop-ups are under <a href="/admin/notifications/settings">Notification settings</a>.</p>
         <form method="post" action="/admin/team-chat/alerts" style="margin:0">
           <input type="hidden" name="on" value="${alertsOn ? '0' : '1'}">
           <button type="submit" class="btn btn-ghost">${alertsOn ? 'Turn email alerts off' : 'Turn email alerts on'}</button></form></details>
@@ -36381,6 +36452,7 @@ async function sendChatAlerts() {
 const NOTIFY_LOOKBACK_DAYS = 3;
 const APPROVAL_WORDS = { quote: 'a quote', message: 'a message to a customer', lead_email: 'an email to a lead', kb: 'a playbook change' };
 let notifyRunning = false;
+let notifyAgain = false;
 let notifyLastAt = 0;
 let notifyLateAt = 0;
 
@@ -36560,6 +36632,52 @@ async function staffNotices(roster, leads) {
   return out;
 }
 
+/** Tasks on the bell (owner, 2026-10-21: "the tasks list has to notify"). A
+ *  helper hears of each recent task waiting for them to Start, theirs or one
+ *  for anyone, and it clears once started, done or given to someone else. The
+ *  owner hears when a helper finishes one; those clear when read. */
+/* Tasks are on the bell from this start of the server on: older tasks were
+   given out before there was a bell for them, and announcing them all at once
+   on the first sweep would be old news ringing as new (code review). A task is
+   told at once (notifyNow) when it is given out or finished, so a later restart
+   leaves nothing untold. */
+const TASK_NOTICES_SINCE = new Date();
+
+async function taskNotices(roster) {
+  const out = [];
+  const active = new Map(roster.filter((r) => r.active && !r.archived_at).map((r) => [r.id, r]));
+  const [waiting, done] = await Promise.all([
+    notifyPart('tasks waiting', pool.query(
+      `SELECT id, title, due_on, assigned_to, created_by, created_at FROM staff_tasks
+        WHERE done_at IS NULL AND started_at IS NULL ORDER BY id DESC`)),
+    notifyPart('tasks done', pool.query(
+      `SELECT id, title, done_by FROM staff_tasks
+        WHERE done_by IS NOT NULL AND done_at > GREATEST(NOW() - make_interval(days => $1), $2::timestamptz) ORDER BY id DESC LIMIT 200`,
+      [NOTIFY_LOOKBACK_DAYS, TASK_NOTICES_SINCE])),
+  ]);
+  if (waiting) {
+    const since = Math.max(Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000, TASK_NOTICES_SINCE.getTime());
+    const theirs = new Map([...active.keys()].map((id) => [id, []]));
+    for (const t of waiting.rows) {
+      const to = t.assigned_to == null ? [...active.keys()] : (active.has(Number(t.assigned_to)) ? [Number(t.assigned_to)] : []);
+      for (const id of to) {
+        /* A helper's own task (they added it) is no news to them. */
+        if (t.created_by != null && Number(t.created_by) === id) continue;
+        theirs.get(id).push(String(t.id));
+        if (new Date(t.created_at).getTime() < since) continue;
+        out.push({ recipient: `staff:${id}`, kind: 'task', ref: String(t.id), link: '/admin/my-day',
+          title: `New task${t.assigned_to == null ? ' for anyone' : ''}: ${t.title}${t.due_on ? ` (due ${fmtDate(t.due_on)})` : ''}` });
+      }
+    }
+    for (const [id, refs] of theirs) await notifyClearResolved(`staff:${id}`, 'task', refs);
+  }
+  for (const t of done ? done.rows : []) {
+    out.push({ recipient: 'owner', kind: 'task', ref: `done:${t.id}`, link: '/admin/tasks',
+      title: `${nameOf(roster, t.done_by)} finished: ${t.title}` });
+  }
+  return out;
+}
+
 /** One message notification per conversation with something unread, for
  *  every reader; and the ones whose conversation has since been read are
  *  marked read, so the bell clears itself. A reader whose read fails is
@@ -36592,7 +36710,7 @@ async function messageNotices(roster) {
 /** Bring everyone's notifications up to date. One at a time; a part that
  *  fails is logged and the rest still run. */
 async function notifySweep() {
-  if (notifyRunning) return '';
+  if (notifyRunning) { notifyAgain = true; return ''; }
   notifyRunning = true;
   notifyLastAt = Date.now();
   try {
@@ -36601,6 +36719,7 @@ async function notifySweep() {
     const parts = await Promise.all([
       notifyPart('owner', ownerNotices(roster, leads)),
       notifyPart('helpers', staffNotices(roster, leads)),
+      notifyPart('tasks', taskNotices(roster)),
     ]);
     const added = await notifyAdd(parts.flat().filter(Boolean));
     await notifyPart('messages', messageNotices(roster));
@@ -36608,6 +36727,7 @@ async function notifySweep() {
     return added ? `${added} new${emailed ? `, ${emailed} emailed` : ''}` : '';
   } finally {
     notifyRunning = false;
+    if (notifyAgain) { notifyAgain = false; notifyNow(); }
   }
 }
 
@@ -36615,6 +36735,23 @@ async function notifySweep() {
 function notifySoon() {
   if (notifyRunning || Date.now() - notifyLastAt < 30 * 1000) return;
   notifySweep().catch((e) => console.error('notification sweep failed:', e.message));
+}
+
+/** Something the bell should hear of at once (a task given out or finished):
+ *  a sweep now, or straight after the one already running, never waited on. */
+function notifyNow() {
+  notifySweep().catch((e) => console.error('notification sweep failed:', e.message));
+}
+
+/** The newest unread notification for this person, for the ding and the
+ *  browser pop-up: { id, title, link }, or null. Message ones are left out:
+ *  a new message dings from the unread count at once, and its bell row, made
+ *  by a later sweep, must not ding for it a second time (code review). */
+async function notifyLatest(actor) {
+  const { rows: [r] } = await pool.query(
+    `SELECT id, title, link FROM notifications WHERE recipient = $1 AND read_at IS NULL AND kind NOT IN ('chat', 'mail')
+      ORDER BY id DESC LIMIT 1`, [CHAN.readerKey(actor)]);
+  return r ? { id: Number(r.id), title: r.title, link: NOTIFY.safeLink(r.link) } : null;
 }
 
 /** How many unread notifications this person has: the bell. */
@@ -36705,6 +36842,32 @@ app.post('/admin/notifications/read-all', requireAdmin, async (_req, res) => {
 
 /* Which kinds also send an email. Message emails are Team chat's alert switch,
    shown here too so there is one place to look. */
+const ALERTS_HELP = 'The ding plays on whichever back-office page is open. Keep one tab of the back office open while you work, and click anywhere on it once: browsers stay silent until you do.';
+
+/** The "Turn on sound and pop-ups" bar: a button that asks the browser for
+ *  pop-ups and plays the ding once, which also unlocks sound. On My Day it
+ *  shows only until pop-ups are allowed or refused, or the person closes it;
+ *  `always` keeps it (with a plain Test button) on the settings page. */
+function alertsBar(always) {
+  return `<div class="card" id="jt-alerts" ${always ? '' : 'hidden '}style="border-left:4px solid #1848B8;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <span style="flex:1 1 240px"><b>Hear new work arrive.</b> <span id="jt-alerts-say">Turn on the ding and pop-ups so a new task or message gets your attention.</span></span>
+    <button type="button" class="btn" id="jt-alerts-on">${always ? 'Test the ding' : 'Turn on sound and pop-ups'}</button>
+    ${always ? '' : '<button type="button" class="btn btn-ghost" id="jt-alerts-x">Not now</button>'}</div>
+  <script>(function(){try{var bar=document.getElementById('jt-alerts'),say=document.getElementById('jt-alerts-say');if(!bar)return;
+  var N=window.Notification;var always=${always ? 'true' : 'false'};
+  function asked(){return !N||N.permission!=='default';}
+  var off=false;try{off=localStorage.getItem('jt:alerts-bar')==='0';}catch(e){}
+  if(!always&&!asked()&&!off)bar.hidden=false;
+  if(always&&N)say.textContent=N.permission==='granted'?'Pop-ups are allowed in this browser.':(N.permission==='denied'
+    ?'Pop-ups are blocked in this browser. Allow them for this site in the browser settings (the lock by the address).':'Pop-ups are not allowed yet: press Test to be asked.');
+  document.getElementById('jt-alerts-on').addEventListener('click',function(){if(window.jtDing)window.jtDing();
+    if(N&&N.permission==='default'){try{N.requestPermission().then(function(p){say.textContent=p==='granted'?'Done: you will hear and see new work.':'Sound is on. Pop-ups were not allowed.';
+      if(!always)setTimeout(function(){bar.hidden=true;},2500);});}catch(e){}}
+    else if(!always){bar.hidden=true;}});
+  var x=document.getElementById('jt-alerts-x');if(x)x.addEventListener('click',function(){bar.hidden=true;try{localStorage.setItem('jt:alerts-bar','0');}catch(e){}});
+  }catch(e){}})();</script>`;
+}
+
 app.get('/admin/notifications/settings', requireAdmin, async (req, res) => {
   const reader = CHAN.readerKey(currentActor() || OWNER_ACTOR);
   try {
@@ -36717,18 +36880,23 @@ app.get('/admin/notifications/settings', requireAdmin, async (req, res) => {
     const box = (name, label, on) => `<label style="display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600;margin:0 0 10px">
         <input type="checkbox" name="${name}" value="1"${on ? ' checked' : ''} style="width:auto;margin:0">${escEmail(label)}</label>`;
     res.set('Cache-Control', 'no-store');
-    res.send(adminPage('Notification emails', `
-      ${pageHeader('Notification emails', 'Everything shows on the bell. Tick the ones you also want by email.',
+    res.send(adminPage('Notification settings', `
+      ${pageHeader('Notification settings', 'Everything shows on the bell. Choose the ding and pop-ups, and the ones you also want by email.',
         '<a class="btn btn-ghost" href="/admin/notifications">Notifications</a>')}
       ${flash(req.query)}
       <form method="post" action="/admin/notifications/settings" class="card" data-once>
-        ${box('chat', 'Team chat and Mailbox messages (one email per conversation until you read it)', !chat || chat.email_alerts)}
+        <h2 class="card-title">Ding and pop-ups <span class="muted" style="font-weight:400">(on every computer and phone you sign in on)</span></h2>
+        ${box('ui_sound', 'Ding when something new comes in', NOTIFY.uiOn('sound', prefs))}
+        ${box('ui_popup', 'Pop-up from the browser when the back office is not the tab in front', NOTIFY.uiOn('popup', prefs))}
+        <p class="muted" style="margin:0 0 14px">${ALERTS_HELP}</p>
+        <h2 class="card-title">By email</h2>
+        ${box('chat', `Team chat and Mailbox messages (at most ${CHAT_ALERTS_PER_DAY} emails a day, each listing what is still unread)`, !chat || chat.email_alerts)}
         ${kinds.map((k) => box(k, NOTIFY.KINDS[k].label, NOTIFY.emailOn(k, prefs))).join('')}
         <button type="submit" style="margin-top:6px">Save</button>
-      </form>${SHIP_ONCE_JS}`, 'notifications'));
+      </form>${alertsBar(true)}${SHIP_ONCE_JS}`, 'notifications'));
   } catch (err) {
     console.error('notification settings failed:', err.message);
-    res.status(500).send(adminPage('Notification emails', '<div class="card"><div class="warn">Could not load your settings. Refresh to try again.</div></div>', 'notifications'));
+    res.status(500).send(adminPage('Notification settings', '<div class="card"><div class="warn">Could not load your settings. Refresh to try again.</div></div>', 'notifications'));
   }
 });
 
@@ -36744,6 +36912,11 @@ app.post('/admin/notifications/settings', requireAdmin, async (req, res) => {
       await client.query(
         `INSERT INTO notification_prefs (reader, kind, email) VALUES ($1, $2, $3)
          ON CONFLICT (reader, kind) DO UPDATE SET email = EXCLUDED.email`, [reader, k, String(b[k] || '') === '1']);
+    }
+    for (const [which, kind] of Object.entries(NOTIFY.UI_PREFS)) {
+      await client.query(
+        `INSERT INTO notification_prefs (reader, kind, email) VALUES ($1, $2, $3)
+         ON CONFLICT (reader, kind) DO UPDATE SET email = EXCLUDED.email`, [reader, kind, String(b[`ui_${which}`] || '') === '1']);
     }
     await client.query(
       `INSERT INTO team_chat_prefs (reader, email_alerts) VALUES ($1, $2)
@@ -36841,6 +37014,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
         '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
       ${flash(req.query)}
+      ${alertsBar(false)}
       ${pins}
       ${shiftsCard}
       ${(() => {

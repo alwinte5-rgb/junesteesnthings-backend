@@ -118,7 +118,7 @@ test('the board, the Leads page, the dashboard and the menu badge share one defi
   const leadsPage = src.slice(src.indexOf("app.get('/admin/leads', requireAdmin"));
   assert.match(leadsPage.slice(0, 2000), /await leadsWithStatus\(\)/, 'the Leads page');
   const counts = src.slice(src.indexOf("app.get('/admin/nav-counts', requireAdmin"));
-  assert.match(counts.slice(0, 800), /unansweredLeads\(\)/, 'the menu badge');
+  assert.match(counts.slice(0, 2500), /unansweredLeads\(\)/, 'the menu badge');
   const dash = src.slice(src.indexOf("app.get('/admin/dashboard', requireAdmin"));
   assert.match(dash.slice(0, 4000), /leadsWithStatus\(\)/, 'the dashboard');
   /* Other reads of submissions (a returning-customer lookup, a rep's counts)
