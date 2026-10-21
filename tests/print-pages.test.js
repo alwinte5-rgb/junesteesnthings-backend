@@ -175,6 +175,20 @@ test('stickers and labels say design is included, and their prices carry the $25
   }
 });
 
+test('the built-in $25 design is charged once per order, even across several runs', () => {
+  for (const [k, q] of [['sticker', 500], ['sticker', 2000], ['roll_label', 2000]]) {
+    const f = SL.table().families[k];
+    const m = f.materials[0].key, z = f.sizes[0].key;
+    const lad = f.prices[m][z][''];
+    const designFree = lad.map(([n, e]) => [n, (n * e - 25) / n]);
+    const withDesign = SL.eachFor(lad, q, false, 25) * q;
+    const without = SL.eachFor(designFree, q, false) * q;
+    /* Each price rounds up to the cent, so the totals can differ by up to a
+       cent a piece; once per run would add $25 for every extra run. */
+    assert.ok(Math.abs(withDesign - without - 25) <= q * 0.01 + 0.01, `${k} ${q}: design ${withDesign - without}`);
+  }
+});
+
 test('the copy never says we print these in our shop, or names the supplier', () => {
   for (const p of pages) {
     const text = read(p.path).replace(/<[^>]+>/g, ' ');

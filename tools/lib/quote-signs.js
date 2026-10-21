@@ -140,7 +140,7 @@ function priceSign(kind, spec, qty, takeFreight, opts = {}) {
        cheapest mix of runs that covers it; an any-quantity item never costs
        more than the next run's total (sinalite.js eachFor). Signs365 stock
        ladders are bands. */
-    const base = fam.supplier === 'sinalite' ? SL.eachFor(ladder, q, fam.any_qty) : ladderPrice(ladder, q);
+    const base = fam.supplier === 'sinalite' ? SL.eachFor(ladder, q, fam.any_qty, fam.design_in) : ladderPrice(ladder, q);
     /* Never arithmetic on a missing price: null is "cannot price", not $0
        (Codex on #293: a quantity past the run cap priced free). */
     if (!(base > 0)) return { ok: false, error: `${size.label} ${fam.label.toLowerCase()} cannot be priced at ${q.toLocaleString('en-US')}; quote it by hand.` };

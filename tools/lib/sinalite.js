@@ -89,10 +89,14 @@ function ladderFrom(rows, where = 'sinalite', designIn = 0) {
  * the cheapest set of runs that covers the quantity, each run carrying its
  * own shipping (never under-charges). Null under the minimum or with no ladder.
  */
-function eachFor(ladder, qty, anyQty) {
+function eachFor(ladder, qty, anyQty, designIn) {
   /* Self-contained: the public quote page runs this same function (sent with
      toString()) for a customer's quantity estimate. */
   const ceil2 = (n) => Math.ceil(n * 100 - 1e-9) / 100;
+  /* designIn: a flat design charge inside every run's price (stickers, $25).
+     Charged once per order, never once per run (code review): taken out of
+     each run before runs are combined, and added back once. */
+  const d = Number(designIn) || 0;
   const q = Math.floor(Number(qty));
   /* 100,000: the same ceiling /admin/api/sign-price refuses above, so the
      preview and the save can never price one quantity two ways. */
@@ -106,7 +110,7 @@ function eachFor(ladder, qty, anyQty) {
     const t = Math.min(below[1] * q, above ? above[0] * above[1] : Infinity);
     return ceil2(t / q);
   }
-  const runs = ladder.map(([n, each]) => [n, n * each]);
+  const runs = ladder.map(([n, each]) => [n, n * each - d]);
   /* Iterative over every remainder (Codex on #293: the recursive version ran
      out of stack near the cap). best[x] = cheapest runs covering x pieces. */
   const best = new Float64Array(q + 1);
@@ -115,7 +119,7 @@ function eachFor(ladder, qty, anyQty) {
     for (const [n, total] of runs) { const t = total + best[x > n ? x - n : 0]; if (t < m) m = t; }
     best[x] = m;
   }
-  return ceil2(best[q] / q);
+  return ceil2((best[q] + d) / q);
 }
 
 let cache = null, cacheMtime = null, loadError = null;

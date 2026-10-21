@@ -84,7 +84,7 @@ function printFamilies(page) {
     /* f.runs is every run any option sells; an option whose own minimum is
        higher has no price at the smaller runs, shown as a dash (null). The
        first row must price somewhere, or the page would say nothing. */
-    const rows = f.runs.map((q) => ({ q, cells: cols.map((c) => SL.eachFor(c.ladder, q, f.any_qty)) }));
+    const rows = f.runs.map((q) => ({ q, cells: cols.map((c) => SL.eachFor(c.ladder, q, f.any_qty, f.design_in)) }));
     if (!rows.length || !rows[0].cells.some((e) => e > 0)) throw new Error(`${page.path}: ${k} has no price at its smallest run`);
     return { key: k, f, cols, rows, lead: SL.leadDays(k) };
   });
@@ -110,8 +110,9 @@ function printSummary(fams) {
   return { low, start, high, offers, lead };
 }
 
-/* Design is never in the print price (owner, 2026-10-20: "make sure that the
-   customer is aware that if they need to design ... they will have a design
+/* Design is in the print price only where the family carries it (stickers
+   and labels, design_in, owner 2026-10-20); everywhere else it is not
+   (owner, 2026-10-20: "make sure that the customer is aware that if they need to design ... they will have a design
    fee"). The fees a page names come from tools/lib/services.js, the list the
    quote form charges, so the two cannot disagree. */
 function designBox(page) {

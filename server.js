@@ -14611,6 +14611,15 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const backToForm = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
       ? `/admin/quote/${String(req.params.code).toUpperCase()}/edit` : '/admin/quote/new';
 
+    /* Stickers and roll labels carry their design inside every price
+       (sinalite.js design_in): a separate label design line beside them would
+       charge it twice (code review). */
+    {
+      const inPrice = items.filter((it) => it.sign && (SINALITE.table().families[it.sign.kind] || {}).design_in > 0);
+      const extra = inPrice.length ? items.filter((it) => /^label or sticker design\b/i.test(String(it.description || '').trim())) : [];
+      if (extra.length) signErrors.push({ line: items.indexOf(extra[0]) + 1, what: extra[0].description,
+        error: 'Sticker and label prices already include the $25 design. Remove this design line, or the customer pays for design twice.' });
+    }
     if (signErrors.length) {
       return res.status(400).send(quotePage('A sign size cannot be made', `
         <div class="card">
@@ -15444,6 +15453,8 @@ function designFeesToAsk(items, catalog) {
   const out = new Map();
   for (const it of list) {
     const k = it.sign && it.sign.kind;
+    /* Design already inside the price (sinalite.js design_in): never offered again. */
+    if (k && (SINALITE.table().families[k] || {}).design_in > 0) continue;
     for (const name of (k && DESIGN_FEE_FOR[k]) || []) {
       if (out.has(name)) continue;
       const prod = ((catalog && catalog.products) || []).find((p) => p.name === name) || null;
@@ -15466,7 +15477,7 @@ function sinaliteRunsOf(it) {
   /* `qty`: the quantity it was priced at. At that quantity the saved price
      stands, even if SinaLite's table has moved since (Codex on #293). */
   return Array.isArray(lad) && lad.length
-    ? { ladder: lad, any: !!fam.any_qty, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
+    ? { ladder: lad, any: !!fam.any_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -16424,7 +16435,7 @@ ${quotePricingSource()}
         if (qty === L.runs.qty) return L.runs.saved != null ? L.runs.saved : L.unitOverride;
         var lad = L.runs.ladder, min = lad[0][0], next = slNext(L, qty);
         if (next) return Math.ceil(next[0] * next[1] / qty * 100) / 100;
-        return qty >= min ? eachFor(lad, qty, L.runs.any) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
+        return qty >= min ? eachFor(lad, qty, L.runs.any, L.runs.design) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
       }
       function estimate(){
         var moved = false, sub = 0, sharedSeen = {};
