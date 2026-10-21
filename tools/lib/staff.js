@@ -391,6 +391,11 @@ const ROUTES = {
   'GET /admin/work-schedule': 'any',
   'POST /admin/work-schedule': 'owner',
   'POST /admin/tasks/:id/start': 'any',
+  /* The backlogs (owner, 2026-10-21): only the owner fills and orders them. */
+  'POST /admin/tasks/templates': 'owner',
+  'POST /admin/tasks/templates/starters': 'owner',
+  'POST /admin/tasks/templates/:id/top': 'owner',
+  'POST /admin/tasks/templates/:id/archive': 'owner',
   /* The tools the team works in: everyone reads the list; only the owner edits it. */
   'GET /admin/resources': 'any',
   'POST /admin/resources': 'owner',

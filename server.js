@@ -108,6 +108,7 @@ const RUSH = require('./tools/lib/rush');
 const CHAN = require('./tools/lib/team-channels');
 const MB = require('./tools/lib/mailbox');
 const NOTIFY = require('./tools/lib/notifications');
+const FLOW = require('./tools/lib/task-flow');
 const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
 const CHATFILES = require('./tools/lib/team-chat-files');
 const JOBNOTES = require('./tools/lib/job-notes');
@@ -1277,6 +1278,37 @@ async function initStaffTables() {
                      "files JSONB NOT NULL DEFAULT '[]'::jsonb", 'done_note TEXT']) {
     await pool.query(`ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS ${col}`);
   }
+  /* The task flow (tools/lib/task-flow.js, owner 2026-10-21): the lane a task
+     sits in (short / medium / long, 'daily' for the routine, empty for one
+     handed out by hand), the backlog row it came from, and for a task the shop
+     made by itself the thing it is about (auto_ref), so it is made once. A
+     recurring task is made once per person per day: the unique index below
+     (NULLs count as different, so it never touches the other tasks). */
+  for (const col of ['lane TEXT', 'template_id INTEGER', 'goal TEXT', 'auto_ref TEXT']) {
+    await pool.query(`ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS ${col}`);
+  }
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS staff_tasks_recurring_idx ON staff_tasks (template_id, assigned_to, due_on)');
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS staff_tasks_auto_idx ON staff_tasks (auto_ref)');
+  /* Each role's backlog. A one-off row is handed out once (used_at); a daily
+     or weekly row makes a task on each work day it comes round. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_templates (
+      id           SERIAL PRIMARY KEY,
+      track        TEXT NOT NULL,
+      lane         TEXT NOT NULL,
+      repeat       TEXT NOT NULL DEFAULT 'none',
+      weekday      SMALLINT,
+      title        TEXT NOT NULL,
+      description  TEXT,
+      how_to       TEXT,
+      goal         TEXT NOT NULL,
+      sort         INTEGER NOT NULL DEFAULT 0,
+      active       BOOLEAN NOT NULL DEFAULT TRUE,
+      used_at      TIMESTAMPTZ,
+      used_by      INTEGER,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS task_templates_waiting_idx ON task_templates (track, lane, sort, id) WHERE active AND used_at IS NULL');
   /* The tools the team works in (/admin/resources): links and how to get in,
      never a password. Started with what the playbook already names. */
   /* Seeded only by the run that creates the table: seeding whenever it was
@@ -30809,6 +30841,9 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
   /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
   setTimeout(() => step('notifications', notifySweep), 20 * 1000);
   setInterval(() => step('notifications', notifySweep), 2 * 60 * 1000);
+  /* The task flow: everyone's routine and empty lanes, every 10 minutes. */
+  setTimeout(() => step('task flow', taskFlowSweep), 40 * 1000);
+  setInterval(() => step('task flow', taskFlowSweep), 10 * 60 * 1000);
 }
 
 /* Grad ordering ended, and its old price list (a $25 big head single among
@@ -33685,6 +33720,27 @@ function addLeadForm() {
 
 /* ── Tasks ────────────────────────────────────────────────────────────────── */
 
+/* Tasks handed out by hand first (they are why June stepped in), then the
+   routine, then the lanes from shortest to longest. */
+const TASK_LANE_ORDER = `CASE WHEN lane IS NULL THEN 0 WHEN lane = 'daily' THEN 1 WHEN lane = 'short' THEN 2
+  WHEN lane = 'medium' THEN 3 WHEN lane = 'long' THEN 4 ELSE 5 END`;
+const TASK_GROUPS = [[null, 'Handed to you'], [FLOW.DAILY, 'Every day'],
+  ...FLOW.LANE_KEYS.map((k) => [k, `${FLOW.LANES[k].label} <span class="muted" style="font-weight:400">· ${FLOW.LANES[k].hint}</span>`])];
+
+/** The lane and the result a task moves, as small pills. */
+function taskLanePills(t) {
+  const lane = t.lane === FLOW.DAILY ? 'every day' : FLOW.LANES[t.lane] ? FLOW.LANES[t.lane].label.toLowerCase() : '';
+  return `${lane ? pill(lane, 'blue') : ''}${FLOW.GOALS[t.goal] ? ` <span class="muted" style="font-size:12px">${escEmail(FLOW.GOALS[t.goal])}</span>` : ''}`;
+}
+
+/** Tasks in their groups, each under its heading; a group with none is left out. */
+function taskGroups(rows, rowFn) {
+  return TASK_GROUPS.map(([lane, head]) => {
+    const list = rows.filter((t) => (t.lane || null) === lane || (lane === null && t.lane && t.lane !== FLOW.DAILY && !FLOW.LANES[t.lane]));
+    return list.length ? `<h3 class="task-lane">${head}</h3>${list.map(rowFn).join('')}` : '';
+  }).join('');
+}
+
 app.post('/admin/tasks', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const actor = currentActor();
@@ -33785,6 +33841,8 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
         WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR (assigned_to = $2 AND started_at IS NOT NULL))`,
       [id, staffId, note || null, JSON.stringify(added)]);
     if (!rowCount) return back(res, backTo, 'err', staffId ? 'Press Start on the task first, then Done.' : 'That task is already closed.');
+    /* Finishing one task is starting the next: the lane refills now. */
+    if (staffId) await taskFlowFor(staffId).catch((e) => console.error('task flow after done failed:', e.message));
     if (staffId) notifyNow();
     return res.redirect(backTo);
   } catch (err) {
@@ -33944,6 +34002,15 @@ function taskDoneForm(t, backTo, helper) {
 
 const TASK_CSS = `<style>
 .task-form{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.task-lane{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#0B1F4B;margin:14px 0 2px}
+.task-lane:first-child{margin-top:0}
+.bl-lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.bl-lane{border:1px solid #eef1f8;border-radius:10px;padding:10px 12px}
+.bl-item{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;border-top:1px solid #eef1f8;padding:8px 0}
+.bl-item:first-of-type{border-top:0}
+.bl-item .bl-t{flex:1 1 100%;min-width:0;overflow-wrap:anywhere}
+.bl-item .row-sub{white-space:normal}
+.bl-item form{margin:0}
 .task-form textarea,.task-form input[name=title]{width:100%}
 .tu-file{font-size:13px;margin-top:4px}
 .task-done summary{list-style:none;display:inline-block;cursor:pointer}
@@ -34035,10 +34102,316 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
         ${open.length ? `<div class="rows">${open.map(row).join('')}</div>` : emptyState('Nothing open.')}</div>
       <div class="card"><h2 class="card-title">Completed in the last 30 days <span class="muted">${done.length || ''}</span></h2>
         ${done.length ? `<div class="rows">${done.map(row).join('')}</div>` : emptyState('Nothing completed in the last 30 days.')}</div>
+      ${await backlogSection(roster, String(req.query.backlog || ''))}
       ${TASK_UPLOAD_JS}`, 'tasks'));
   } catch (err) {
     console.error('tasks page failed:', err.message);
     res.status(500).send(adminPage('Tasks', '<div class="card"><div class="warn">Could not load the tasks.</div></div>', 'tasks'));
+  }
+});
+
+/* ── Task flow (tools/lib/task-flow.js, owner 2026-10-21) ───────────────────
+   Every helper always has real work: one task in each lane (Now, This week,
+   Big project) handed from their role's backlog the moment the lane is empty,
+   the daily routine made each work day, and the marketing calendar's prep
+   work given to the designer when a season comes up. The owner fills the
+   backlogs on Tasks → Backlog and hears when one runs low. */
+
+const FLOW_TRACKS = Object.keys(JOB_TRACKS);
+
+/** Tasks → Backlog: each role's waiting tasks by lane, its routine, and a
+ *  form to add more. Shown for the roles someone works in, plus Design and
+ *  Sales; `pick` is the role open. */
+async function backlogSection(roster, pick) {
+  const working = roster.filter((r) => r.active && !r.archived_at).map((r) => r.training_track);
+  const tracks = FLOW_TRACKS.filter((k) => ['design', 'sales'].includes(k) || working.includes(k));
+  const track = tracks.includes(pick) ? pick : tracks[0];
+  const { rows } = await pool.query(
+    `SELECT * FROM task_templates WHERE track = $1 AND active AND (repeat <> 'none' OR used_at IS NULL) ORDER BY sort, id`, [track]);
+  const { rows: [{ n: ever }] } = await pool.query('SELECT COUNT(*)::int AS n FROM task_templates WHERE track = $1', [track]);
+  const back = `/admin/tasks?backlog=${encodeURIComponent(track)}#backlog`;
+  const item = (t) => `<div class="bl-item"><span class="bl-t"><b>${escEmail(t.title)}</b>
+      <div class="row-sub">${escEmail(FLOW.GOALS[t.goal] || '')}${t.repeat === 'weekly' ? ` &middot; every ${escEmail(SHIFTS.DAYS[t.weekday - 1] || '')}` : ''}${
+        t.repeat === 'daily' ? ' &middot; every work day' : ''}</div>
+      ${t.description ? `<details><summary class="muted">Details</summary><div style="white-space:pre-wrap">${escEmail(t.description)}</div>${
+        t.how_to ? `<div style="white-space:pre-wrap;margin-top:6px"><b>How:</b> ${escEmail(t.how_to)}</div>` : ''}</details>` : ''}</span>
+    ${t.repeat === 'none' ? `<form method="post" action="/admin/tasks/templates/${Number(t.id)}/top"><input type="hidden" name="back" value="${escEmail(back)}">
+      <button type="submit" class="btn btn-ghost" title="Hand this out next">Next</button></form>` : ''}
+    <form method="post" action="/admin/tasks/templates/${Number(t.id)}/archive" data-once><input type="hidden" name="back" value="${escEmail(back)}">
+      <button type="submit" class="btn btn-ghost" title="Take it off the backlog">Remove</button></form></div>`;
+  const lanes = FLOW.LANE_KEYS.map((k) => {
+    const list = rows.filter((t) => t.repeat === 'none' && t.lane === k);
+    return `<div class="bl-lane"><b>${escEmail(FLOW.LANES[k].label)}</b> <span class="muted">${escEmail(FLOW.LANES[k].hint)} &middot; ${list.length} waiting</span>
+      ${list.length < FLOW.LOW ? `<div class="warn" style="margin:6px 0">Running low: add ${FLOW.LOW - list.length} or more.</div>` : ''}
+      ${list.map(item).join('')}</div>`;
+  }).join('');
+  const routine = rows.filter((t) => t.repeat !== 'none');
+  const opt = (v, label, on) => `<option value="${escEmail(v)}"${on ? ' selected' : ''}>${escEmail(label)}</option>`;
+  const chips = tracks.map((k) => ({ label: JOB_TRACKS[k].label, href: `/admin/tasks?backlog=${encodeURIComponent(k)}#backlog`, on: k === track }));
+  return `<div class="card" id="backlog"><h2 class="card-title">Backlog <span class="muted">what each role does next, without asking</span></h2>
+    <p class="muted" style="margin-top:0">Each helper holds one task in each lane. When they finish one, the next in that lane is handed to them at once. The routine comes every work day.</p>
+    ${filterChips(chips)}
+    ${!ever && FLOW.STARTERS[track] ? `<form method="post" action="/admin/tasks/templates/starters" data-once style="margin:10px 0">
+      <input type="hidden" name="track" value="${escEmail(track)}"><input type="hidden" name="back" value="${escEmail(back)}">
+      <button type="submit">Add the ${FLOW.STARTERS[track].length} starter tasks for ${escEmail(JOB_TRACKS[track].label)}</button>
+      <span class="muted">You can remove or reorder any of them after.</span></form>` : ''}
+    <div class="bl-lanes">${lanes}</div>
+    <h3 class="task-lane" style="margin-top:16px">Routine</h3>
+    ${routine.length ? routine.map(item).join('') : emptyState('No routine yet. Add a daily or weekly task below.')}
+    <details style="margin-top:12px"><summary><b>Add to the backlog</b></summary>
+      <form method="post" action="/admin/tasks/templates" class="task-form" data-once>
+        <input type="hidden" name="back" value="${escEmail(back)}"><input type="hidden" name="track" value="${escEmail(track)}">
+        <label>Title<input name="title" maxlength="${FLOW.TITLE_MAX}" required></label>
+        <label>Comes round<select name="repeat">${opt('none', 'Once, in a lane', true)}${opt('daily', 'Every work day', false)}${opt('weekly', 'Once a week', false)}</select></label>
+        <label>Lane (for "once")<select name="lane">${FLOW.LANE_KEYS.map((k) => opt(k, `${FLOW.LANES[k].label} (${FLOW.LANES[k].hint})`, k === 'short')).join('')}</select></label>
+        <label>Day (for "once a week")<select name="weekday">${SHIFTS.DAYS.map((d, i) => opt(String(i + 1), d, i === 0)).join('')}</select></label>
+        <label>What it moves<select name="goal" required>${opt('', 'Pick one', true)}${Object.entries(FLOW.GOALS).map(([k, v]) => opt(k, v, false)).join('')}</select></label>
+        <label>What to do<textarea name="description" maxlength="${FLOW.TEXT_MAX}"></textarea></label>
+        <label>How (steps)<textarea name="how_to" maxlength="${FLOW.TEXT_MAX}"></textarea></label>
+        <button type="submit">Add</button>
+      </form></details></div>${SHIP_ONCE_JS}`;
+}
+/* The business a role's tasks belong to: the software agent sells the apps. */
+const flowBusiness = (track) => (track === 'software' ? 'cos' : 'jtees');
+
+/** Hand a helper the next backlog task in each lane they have room in. One
+ *  run per helper at a time (a lock), and each backlog row goes to one person
+ *  only (SKIP LOCKED + used_at). Returns how many were handed out. */
+async function fillTaskLanes(helper) {
+  if (!helper || !FLOW_TRACKS.includes(helper.training_track)) return 0;
+  const client = await pool.connect();
+  let made = 0;
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`task_flow:${helper.id}`]);
+    const { rows } = await client.query(
+      'SELECT DISTINCT lane FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL AND lane = ANY($2::text[])', [helper.id, FLOW.LANE_KEYS]);
+    for (const lane of FLOW.lanesToFill(rows.map((r) => r.lane))) {
+      const { rows: [tpl] } = await client.query(
+        `UPDATE task_templates SET used_at = NOW(), used_by = $3
+          WHERE id = (SELECT id FROM task_templates
+                       WHERE track = $1 AND lane = $2 AND repeat = 'none' AND active AND used_at IS NULL
+                       ORDER BY sort, id LIMIT 1 FOR UPDATE SKIP LOCKED)
+          RETURNING id, title, description, how_to, goal`, [helper.training_track, lane, helper.id]);
+      if (!tpl) continue;
+      await client.query(
+        `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, lane, template_id, goal)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [tpl.title, helper.id, flowBusiness(helper.training_track), tpl.description, tpl.how_to, lane, tpl.id, tpl.goal]);
+      made++;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  return made;
+}
+
+/** Today's routine for a helper: each daily or weekly backlog row of their
+ *  role that comes round today, in their own time zone, on a day they work.
+ *  Made once a day (the unique index), and not again while yesterday's is
+ *  still open, so a missed routine shows as overdue rather than piling up. */
+async function makeRecurringTasks(helper, shifts, templates, now = new Date()) {
+  const mine = templates.filter((t) => t.track === helper.training_track && t.repeat !== 'none');
+  if (!mine.length) return 0;
+  const zone = SHIFTS.staffZoneOf(helper.time_zone);
+  const today = SHIFTS.dateIn(now, zone);
+  const weekday = ((new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7) + 1;
+  const own = shifts.filter((x) => x.staff_id === helper.id);
+  const shiftDays = SHIFTS.weekOccurrences(own, SHIFTS.mondayOf(now, zone), zone)
+    .map((o) => ((new Date(`${SHIFTS.dateIn(o.start, zone)}T12:00:00Z`).getUTCDay() + 6) % 7) + 1);
+  const workday = FLOW.isWorkday(weekday, shiftDays, own.length > 0);
+  let made = 0;
+  for (const t of mine) {
+    if (!FLOW.recurringDue(t, weekday, workday)) continue;
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, lane, template_id, goal, due_on)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9::date
+        WHERE NOT EXISTS (SELECT 1 FROM staff_tasks WHERE template_id = $7 AND assigned_to = $2 AND done_at IS NULL)
+       ON CONFLICT DO NOTHING`,
+      [t.title, helper.id, flowBusiness(helper.training_track), t.description, t.how_to, FLOW.DAILY, t.id, t.goal, today]);
+    made += rowCount;
+  }
+  return made;
+}
+
+/** When a season's kit is due: the day its ads start, or a week from now
+ *  when that day has already come (a kit is never late the day it arrives). */
+function flowDueOn(ads, now) {
+  const week = new Date(now.getTime() + 7 * 86400000);
+  return (ads > week ? ads : week).toISOString().slice(0, 10);
+}
+
+/** Work the shop makes by itself: the marketing calendar's prep for each
+ *  coming season goes to the designer (the first active one on the design
+ *  role), once per season, due the day its ads start. One season at a time,
+ *  soonest first: the next comes when the last is finished, so four seasons in
+ *  prep never land on the designer at once. */
+async function makeAutoTasks(roster, now = new Date()) {
+  const designer = roster.filter((r) => r.active && !r.archived_at && r.training_track === 'design').sort((a, b) => a.id - b.id)[0];
+  if (!designer) return 0;
+  const { rows: busy } = await pool.query(
+    `SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL AND auto_ref LIKE 'mcal:%' LIMIT 1`, [designer.id]);
+  if (busy.length) return 0;
+  const { rows: made0 } = await pool.query(`SELECT auto_ref FROM staff_tasks WHERE auto_ref LIKE 'mcal:%'`);
+  const had = new Set(made0.map((r) => r.auto_ref));
+  const e = MKT_CAL.dueNow(now).sort((a, b) => a.ads - b.ads).find((x) => !had.has(`mcal:${x.id}:${x.year}`));
+  if (!e) return 0;
+  const { rowCount } = await pool.query(
+      `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, goal, auto_ref, due_on)
+       VALUES ($1, $2, 'jtees', $3, $4, 'sales', $5, $6::date) ON CONFLICT DO NOTHING`,
+      [`Asset kit: ${e.name} ${e.year}`, designer.id,
+        `The ${e.name} season opens ${MKT_CAL.longDate(e.season)}. Ads and emails start ${MKT_CAL.longDate(e.ads)}, and the last day to order is ${MKT_CAL.longDate(e.orderBy)}. Everything to sell it must be ready before the ads start.`,
+        '1. Mockups for the holiday page.\n2. Three social posts.\n3. One email header.\n4. Attach the files here and say what you made.',
+        `mcal:${e.id}:${e.year}`, flowDueOn(e.ads, now)]);
+  return rowCount;
+}
+
+/** One pass for everyone: routines, empty lanes, the shop's own tasks. A
+ *  helper that fails is logged and the others still run. Rings the bell at
+ *  once when anything was handed out. */
+async function taskFlowSweep() {
+  const roster = await staffRoster({ activeOnly: true });
+  const helpers = roster.filter((r) => !r.archived_at);
+  const [shifts, { rows: templates }] = await Promise.all([
+    shiftRows(), pool.query(`SELECT * FROM task_templates WHERE active AND repeat <> 'none'`)]);
+  let made = 0;
+  for (const h of helpers) {
+    try {
+      made += await makeRecurringTasks(h, shifts, templates);
+      made += await fillTaskLanes(h);
+    } catch (e) {
+      console.error(`task flow for staff ${h.id} failed:`, e.message);
+    }
+  }
+  made += await makeAutoTasks(helpers).catch((e) => { console.error('auto tasks failed:', e.message); return 0; });
+  if (made) notifyNow();
+  return made ? `${made} handed out` : '';
+}
+
+/** The same for one helper, when they open My Day or finish a task: their
+ *  next work is there without waiting for the sweep. */
+async function taskFlowFor(helperId) {
+  const { rows: [h] } = await pool.query(
+    'SELECT id, training_track, time_zone FROM staff WHERE id = $1 AND active AND archived_at IS NULL', [helperId]);
+  if (!h) return 0;
+  const [shifts, { rows: templates }] = await Promise.all([
+    shiftRows(h.id), pool.query(`SELECT * FROM task_templates WHERE active AND repeat <> 'none' AND track = $1`, [h.training_track])]);
+  const made = (await makeRecurringTasks(h, shifts, templates)) + (await fillTaskLanes(h));
+  if (made) notifyNow();
+  return made;
+}
+
+/** The owner's "backlog running low" notices: one per role and lane a week,
+ *  for roles someone works in and the owner has started a backlog for. */
+async function backlogNotices(roster) {
+  const tracks = [...new Set(roster.filter((r) => r.active && !r.archived_at).map((r) => r.training_track))];
+  const [{ rows: started }, { rows: waiting }] = await Promise.all([
+    pool.query('SELECT DISTINCT track FROM task_templates WHERE track = ANY($1::text[])', [tracks]),
+    pool.query(`SELECT track, lane, COUNT(*)::int AS n FROM task_templates
+                 WHERE active AND used_at IS NULL AND repeat = 'none' GROUP BY track, lane`),
+  ]);
+  const counts = Object.fromEntries(waiting.map((w) => [`${w.track}:${w.lane}`, w.n]));
+  const week = FLOW.isoWeek(new Date());
+  const out = FLOW.lowLanes(counts, started.map((r) => r.track)).map((l) => ({
+    recipient: 'owner', kind: 'backlog', ref: `${l.track}:${l.lane}:${week}`, link: `/admin/tasks?backlog=${encodeURIComponent(l.track)}#backlog`,
+    title: NOTIFY.cleanTitle(`Backlog running low: ${(JOB_TRACKS[l.track] || {}).label || l.track}, ${FLOW.LANES[l.lane].label} (${l.n} left)`),
+  }));
+  /* Written here rather than through notifyAdd, so an unread one keeps its
+     count current ("2 left" becoming "0 left") instead of the first it said. */
+  if (out.length) {
+    await pool.query(
+      `INSERT INTO notifications (recipient, kind, title, link, ref)
+       SELECT 'owner', 'backlog', * FROM unnest($1::text[], $2::text[], $3::text[])
+       ON CONFLICT (recipient, kind, ref) DO UPDATE SET title = EXCLUDED.title WHERE notifications.read_at IS NULL`,
+      [out.map((n) => n.title), out.map((n) => NOTIFY.safeLink(n.link)), out.map((n) => n.ref)]);
+  }
+  await notifyClearResolved('owner', 'backlog', out.map((n) => n.ref));
+  return [];
+}
+
+/* The backlog, owner only (STAFF.ROUTES). Each change goes back to the
+   role's backlog it came from, and a new task may be handed out at once. */
+app.post('/admin/tasks/templates', requireAdmin, async (req, res) => {
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const c = FLOW.cleanTemplate(req.body, FLOW_TRACKS);
+  if (c.error) return back(res, backTo, 'err', c.error);
+  const t = c.template;
+  try {
+    const { rowCount } = await pool.query(
+      `INSERT INTO task_templates (track, lane, repeat, weekday, title, description, how_to, goal, sort)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, COALESCE((SELECT MAX(sort) + 1 FROM task_templates WHERE track = $1), 0)
+        WHERE NOT EXISTS (SELECT 1 FROM task_templates WHERE track = $1 AND title = $5 AND active AND created_at > NOW() - interval '10 seconds')`,
+      [t.track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to, t.goal]);
+    if (rowCount) taskFlowSweep().catch((e) => console.error('task flow after backlog add failed:', e.message));
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Added to the backlog.' : 'That was added a moment ago.');
+  } catch (err) {
+    console.error('backlog add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add it. Try again.');
+  }
+});
+
+/* The first backlog for a role, once: only while the role has none at all. */
+app.post('/admin/tasks/templates/starters', requireAdmin, async (req, res) => {
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const track = String((req.body && req.body.track) || '');
+  const list = FLOW_TRACKS.includes(track) && FLOW.STARTERS[track];
+  if (!list) return back(res, backTo, 'err', 'There are no starter tasks for that role.');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`task_starters:${track}`]);
+    const { rows: [{ n }] } = await client.query('SELECT COUNT(*)::int AS n FROM task_templates WHERE track = $1', [track]);
+    if (n) { await client.query('ROLLBACK'); return back(res, backTo, 'err', 'This role already has a backlog.'); }
+    let sort = 0;
+    for (const t of list) {
+      await client.query(
+        `INSERT INTO task_templates (track, lane, repeat, weekday, title, description, how_to, goal, sort) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to || null, t.goal, sort++]);
+    }
+    await client.query('COMMIT');
+    taskFlowSweep().catch((e) => console.error('task flow after starters failed:', e.message));
+    return back(res, backTo, 'ok', `${list.length} starter tasks added. Each helper on this role gets their first ones now.`);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('backlog starters failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add them. Try again.');
+  } finally {
+    client.release();
+  }
+});
+
+/* "Next": this task is handed out before the others in its lane. */
+app.post('/admin/tasks/templates/:id/top', requireAdmin, async (req, res) => {
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const id = intIn(req.params.id);
+  if (!id) return res.redirect(backTo);
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE task_templates t SET sort = (SELECT COALESCE(MIN(sort), 0) - 1 FROM task_templates WHERE track = t.track)
+        WHERE id = $1 AND active AND used_at IS NULL`, [id]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'It goes out next.' : 'That task has already been handed out.');
+  } catch (err) {
+    console.error('backlog reorder failed:', err.message);
+    return back(res, backTo, 'err', 'Could not move it. Try again.');
+  }
+});
+
+/* Remove from the backlog. Kept (inactive) so tasks already handed out still
+   say where they came from. */
+app.post('/admin/tasks/templates/:id/archive', requireAdmin, async (req, res) => {
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const id = intIn(req.params.id);
+  if (!id) return res.redirect(backTo);
+  try {
+    const { rowCount } = await pool.query('UPDATE task_templates SET active = FALSE WHERE id = $1 AND active', [id]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Removed from the backlog.' : 'It was already removed.');
+  } catch (err) {
+    console.error('backlog remove failed:', err.message);
+    return back(res, backTo, 'err', 'Could not remove it. Try again.');
   }
 });
 
@@ -36720,6 +37093,7 @@ async function notifySweep() {
       notifyPart('owner', ownerNotices(roster, leads)),
       notifyPart('helpers', staffNotices(roster, leads)),
       notifyPart('tasks', taskNotices(roster)),
+      notifyPart('backlog', backlogNotices(roster)),
     ]);
     const added = await notifyAdd(parts.flat().filter(Boolean));
     await notifyPart('messages', messageNotices(roster));
@@ -36940,10 +37314,12 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const me = actor.kind === 'staff' ? actor.id : null;
     const can = (k) => actorLevel(k) !== 'off';
     const roster = await staffRoster();
+    /* A helper's next work is handed out before the page is read. */
+    if (me) await taskFlowFor(me).catch((e) => console.error('task flow on My Day failed:', e.message));
     const [leads, tasks, mine, released, liveList] = await Promise.all([
       can('leads.view') ? unansweredLeads() : Promise.resolve([]),
       pool.query(`SELECT * FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
-                   ORDER BY due_on NULLS LAST, created_at LIMIT 100`, [me]),
+                   ORDER BY ${TASK_LANE_ORDER}, due_on NULLS LAST, created_at LIMIT 100`, [me]),
       me ? pool.query(`SELECT * FROM staff_approvals WHERE requested_by = $1
                         AND (status = 'pending' OR (status = 'rejected' AND decided_at > NOW() - interval '7 days'))
                         ORDER BY created_at DESC`, [me]) : Promise.resolve({ rows: [] }),
@@ -36995,7 +37371,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const startedBy = (t) => nameOf(roster, t.started_by);
     const taskStatus = (t) => (t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : pill('not started', 'neutral'));
     const taskRow = (t) => `
-        <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${taskStatus(t)}
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${taskStatus(t)} ${taskLanePills(t)}
           <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${t.due_on ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
             t.assigned_to == null ? ' &middot; anyone' : me == null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ''}${
             t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}${me == null ? ` by ${escEmail(startedBy(t))}` : ''}` : ''}${
@@ -37045,7 +37421,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('') },
-          { title: `Tasks (${tasks.rows.length})`, short: 'Tasks', n: tasks.rows.length, show: true, inner: () => tasks.rows.map(taskRow).join('') },
+          { title: `Tasks (${tasks.rows.length})`, short: 'Tasks', n: tasks.rows.length, show: true, inner: () => taskGroups(tasks.rows, taskRow) },
           { title: 'Jobs with a next step', short: 'Jobs', n: nextSteps.length, show: can('quotes.view'), inner: () => nextSteps.map(({ q, cl }) => `
         <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
           <div class="row-sub">${escEmail(cl.next.label)}${cl.next.hint ? ` — ${escEmail(cl.next.hint)}` : ''}</div></span>

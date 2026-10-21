@@ -32,7 +32,7 @@ function fn(name) {
 test('kinds: known ones only; the owner and a helper each get their own set', () => {
   assert.strictEqual(NOTIFY.kindOf('lead'), 'lead');
   assert.strictEqual(NOTIFY.kindOf('not-a-kind'), null);
-  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'chat', 'late', 'lead', 'mail', 'payment', 'review', 'task']);
+  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'backlog', 'chat', 'late', 'lead', 'mail', 'payment', 'review', 'task']);
   assert.deepStrictEqual(NOTIFY.kindsFor('staff:4').sort(), ['chat', 'decided', 'lead', 'mail', 'task']);
 });
 
