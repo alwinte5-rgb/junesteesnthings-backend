@@ -160,33 +160,23 @@ test('a column that starts above the smallest run shows a dash, not a broken pag
   } finally { SL.table = orig; }
 });
 
-test('stickers and labels say design is included, and their prices carry the $25', () => {
+test('stickers and labels: setup is free and no design charge is in their prices (owner, 2026-10-20)', () => {
   const html = read('print/stickers-labels.html');
-  assert.match(html, /<h3>Design is included<\/h3>/);
+  assert.match(html, /<h3>Setup is free<\/h3>/);
   for (const k of ['sticker', 'roll_label']) {
     const f = SL.table().families[k];
-    assert.strictEqual(f.design_in, 25, k);
-    const d = JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8')).products[k];
-    const r = d.rows[0];
-    const lad = f.prices[r.mat][r.size][''];
-    const at = lad.find(([q]) => q === r.qty);
-    assert.strictEqual(at[1], SL.priceEach(r.cost, r.ship, r.qty, 25), `${k}: the run price includes the $25`);
-    assert.ok(at[1] > SL.priceEach(r.cost, r.ship, r.qty), k);
+    assert.strictEqual(f.design_in, 0, k);
+    const r = JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8')).products[k].rows[0];
+    assert.strictEqual(f.prices[r.mat][r.size][''].find(([q]) => q === r.qty)[1], SL.priceEach(r.cost, r.ship, r.qty), k);
   }
 });
 
-test('the built-in $25 design is charged once per order, even across several runs', () => {
-  for (const [k, q] of [['sticker', 500], ['sticker', 2000], ['roll_label', 2000]]) {
-    const f = SL.table().families[k];
-    const m = f.materials[0].key, z = f.sizes[0].key;
-    const lad = f.prices[m][z][''];
-    const designFree = lad.map(([n, e]) => [n, (n * e - 25) / n]);
-    const withDesign = SL.eachFor(lad, q, false, 25) * q;
-    const without = SL.eachFor(designFree, q, false) * q;
-    /* Each price rounds up to the cent, so the totals can differ by up to a
-       cent a piece; once per run would add $25 for every extra run. */
-    assert.ok(Math.abs(withDesign - without - 25) <= q * 0.01 + 0.01, `${k} ${q}: design ${withDesign - without}`);
-  }
+test('a design charge carried inside run prices is counted once per order', () => {
+  const lad = [[250, 1.11], [100, 2.17]].sort((a, b) => a[0] - b[0]);
+  const designFree = lad.map(([n, e]) => [n, (n * e - 25) / n]);
+  const q = 2000;
+  const diff = SL.eachFor(lad, q, false, 25) * q - SL.eachFor(designFree, q, false) * q;
+  assert.ok(Math.abs(diff - 25) <= q * 0.01 + 0.01, String(diff));
 });
 
 test('every page photo is on disk, sized as written, and records its free-licence source', () => {
