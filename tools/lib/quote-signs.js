@@ -74,7 +74,7 @@ function ladderPrice(ladder, qty) {
  *   takeFreight: whether this line carries the order's standard delivery
  * Returns { ok: true, each, piece, freight, text, spec } or { ok: false, error }.
  */
-function priceSign(kind, spec, qty, takeFreight) {
+function priceSign(kind, spec, qty, takeFreight, opts = {}) {
   const q = Math.max(1, parseInt(qty, 10) || 1);
   /* One ceiling for every sized item, here where the save prices it, and the
      same one /admin/api/sign-price refuses above (Codex on #293). */
@@ -125,13 +125,16 @@ function priceSign(kind, spec, qty, takeFreight) {
        numbers given"). A quantity between SinaLite's runs is refused, naming
        the runs either side, rather than bought as a mix of runs. Any-quantity
        items (typed box on SinaLite) still take any number. */
-    if (fam.supplier === 'sinalite' && !fam.any_qty && !ladder.some(([rq]) => rq === q)) {
+    /* opts.grandfather: a line already saved at this quantity before the
+       rule, re-saved unchanged, keeps its run-mix price (code review). */
+    if (fam.supplier === 'sinalite' && !fam.any_qty && !opts.grandfather && !ladder.some(([rq]) => rq === q)) {
       const n = (x) => x.toLocaleString('en-US');
       const below = ladder.filter(([rq]) => rq < q).pop();
       const above = ladder.find(([rq]) => rq > q);
-      const near = [below, above].filter(Boolean).map(([rq]) => n(rq));
-      return { ok: false, runs: ladder.map(([rq]) => rq),
-        error: `${fam.label} are sold only in these quantities: ${ladder.map(([rq]) => n(rq)).join(', ')}. ${n(q)} is not one${near.length ? `; use ${near.join(' or ')}` : ''}.` };
+      const near = [below, above].filter(Boolean).map(([rq]) => rq);
+      return { ok: false, runs: ladder.map(([rq]) => rq), use: near,
+        error: `${fam.label} are sold only in these quantities: ${ladder.map(([rq]) => n(rq)).join(', ')}. ${n(q)} is not one` +
+          (above ? `; use ${near.map(n).join(' or ')}.` : `; for more than ${n(below[0])}, quote the extra runs by hand.`) };
     }
     /* SinaLite sells set runs only: a quantity between runs is bought as the
        cheapest mix of runs that covers it; an any-quantity item never costs

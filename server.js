@@ -12468,7 +12468,7 @@ ${quotePricingSource()}
             (o.supplier === 'sinalite' && o.runs && o.runs.length ? '<div class="slruns" style="font-size:12px;color:#3f4a5f;margin:4px 0 0">' +
               (o.any_qty ? 'Any quantity from ' + o.min.toLocaleString() + '. SinaLite prices: ' : 'SinaLite runs: ') +
               o.runs.map(function(q){ return q.toLocaleString(); }).join(' · ') +
-              (o.any_qty ? ' (in between, never more than the next one up)' : ' (other quantities are priced as the cheapest mix of runs)') +
+              (o.any_qty ? ' (in between, never more than the next one up)' : ' (only these quantities can be quoted)') +
               '. Shipping to the shop is included in the price.</div>' : '') +
             /* No SinaLite table, or one that cannot be read: said where the
                price is made, not only in the morning email. Prices are fixed,
@@ -12547,7 +12547,16 @@ ${quotePricingSource()}
               }); });
             } else {
               delete L.dataset.signEach;
-              note.innerHTML = '<b style="color:#b45309">' + String((r && r.error) || 'Could not price this size.').replace(/[<>&]/g, '') + '</b>';
+              note.innerHTML = '<b style="color:#b45309">' + String((r && r.error) || 'Could not price this size.').replace(/[<>&]/g, '') + '</b>' +
+                /* Not a SinaLite run: one tap to the run either side. */
+                (r && Array.isArray(r.use) && r.use.length && !L.querySelector('.q').readOnly ? r.use.map(function(u){
+                  var n = parseInt(u, 10) || 0;
+                  return ' <button type="button" class="kbtn" data-useqty="' + n + '" style="font-size:12px;margin-left:4px">Use ' + n.toLocaleString('en-US') + '</button>';
+                }).join('') : '');
+              note.querySelectorAll('[data-useqty]').forEach(function(use){ use.addEventListener('click', function(){
+                var qb = L.querySelector('.q'); qb.value = use.getAttribute('data-useqty');
+                qb.dispatchEvent(new Event('input', { bubbles: true })); qb.dispatchEvent(new Event('change', { bubbles: true }));
+              }); });
             }
             calc();
           };
@@ -13476,10 +13485,13 @@ ${quotePricingSource()}
         var want = '';
         try { want = new URLSearchParams(location.search).get('design') || ''; } catch (e) { want = ''; }
         if (!/^[0-9]{1,9}$/.test(want)) return;
+        /* Once: a reload must not add the fee again. */
+        try { var u = new URL(location.href); u.searchParams.delete('design'); history.replaceState(null, '', u.toString()); } catch (e) {}
+        var first = document.querySelector('#lines .p');
+        if (!first || !first.querySelector('option[value="' + want + '"]')) return;
         addLine();
         var L = document.getElementById('lines').lastElementChild;
         var sel = L.querySelector('.p');
-        if (!sel || !sel.querySelector('option[value="' + want + '"]')) return;
         sel.value = want;
         sel.dispatchEvent(new Event('change', { bubbles: true }));
         var q = L.querySelector('.q');
@@ -14018,6 +14030,17 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        optional sign carries its own only when no required one does. */
     const signErrors = [];
     let signFreightTaken = false;
+    /* SinaLite lines this quote was already saved with (kind|qty): one priced
+       between runs before staff quotes took only the listed runs (owner,
+       2026-10-20) still saves unchanged, so fixing a typo never forces the
+       customer's agreed quantity to move (code review). */
+    const priorSizedQty = new Set();
+    if (QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())) {
+      const { rows: [pq] } = await pool.query('SELECT items FROM quotes WHERE code = $1', [String(req.params.code).toUpperCase()]);
+      for (const it of (pq && Array.isArray(pq.items) ? pq.items : [])) {
+        if (it && it.sign && it.sign.kind) priorSizedQty.add(it.sign.kind + '|' + (Number(it.qty) || 0));
+      }
+    }
     /* Every price a person typed on this save, for the helper price lock
        (quotes.price) checked once the quote as it stands has been read. */
     const typedPrices = [];
@@ -14177,7 +14200,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           w: one(b['sgw' + i]), h: one(b['sgh' + i]), size: String(one(b['sgsize' + i]) || '').slice(0, 20),
           mat: String(one(b['sgm' + i]) || '').slice(0, 30), hang: String(one(b['sghang' + i]) || '').slice(0, 30),
           up: String(one(b['sgup' + i]) || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 10),
-        }, q, !signFreightTaken);
+        }, q, !signFreightTaken, { grandfather: priorSizedQty.has(signKind + '|' + q) });
         if (!r.ok) signErrors.push({ line: i + 1, what: desc || prod.name, error: r.error });
         else {
           sign = r;
@@ -15123,7 +15146,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const textForm = (cls) => textByShop ? `<form method="POST" action="/admin/quote/${code}/text" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
             <button type="submit"${cls} style="width:100%">Text it to ${escEmail(q.phone)}</button></form>` : '';
     /* Asked first, before any way to send shows (designFeesToAsk). */
-    const askDesign = !q.sent_to_customer_at ? designFeesToAsk(q.items, await getCatalog().catch(() => null)) : [];
+    const ask = !q.sent_to_customer_at ? designFeesToAsk(q.items, await getCatalog().catch(() => null)) : { fees: [] };
+    const askDesign = ask.fees;
 
     res.send(quotePage('Quote ready', `
       <h1>Quote ${escEmail(code)}${q.revision > 1 ? ` <span class="muted" style="font-size:14px">rev ${q.revision}</span>` : ''}</h1>
@@ -15136,12 +15160,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       ${askDesign.length ? `<div class="card" id="design-ask" style="border-color:#E0107A;background:#fff7fb">
           <b>Does the customer need this designed?</b>
           <p class="muted" style="margin:4px 0 10px">The price is for printing their finished file. There is no design fee on this quote.</p>
+          ${ask.catalogFailed ? `<p class="warn">The catalogue could not be loaded just now, so these cannot be added with one tap. Add the fee by hand on the quote.</p>` : ''}
           ${askDesign.map((f) => f.id
-            ? `<a class="btn" style="display:block;text-align:center;margin-bottom:8px" href="/admin/quote/${code}/edit?design=${f.id}">Yes: add ${escEmail(f.name)} (${money(f.price)})</a>`
-            : `<p class="warn">${escEmail(f.name)} (${money(f.price)}) is not in the catalogue yet; add it by hand.</p>`).join('')}
-          <button type="button" class="btn-ghost" style="width:100%" onclick="document.getElementById('design-ask').style.display='none';document.getElementById('send-ask').style.display=''">No, they are sending a print-ready file</button>
+            ? `<a class="btn${/Revision/.test(f.name) ? ' btn-ghost' : ''}" style="display:block;text-align:center;margin-bottom:8px" href="/admin/quote/${code}/edit?design=${f.id}">Yes: add ${escEmail(f.name)} (${money(f.price)})</a>`
+            : `<p class="muted">${escEmail(f.name)} (${money(f.price)})${ask.catalogFailed ? '' : ' is not in the catalogue yet; add it by hand'}.</p>`).join('')}
+          <button type="button" class="btn-ghost" style="width:100%" onclick="document.getElementById('design-ask').style.display='none';document.querySelectorAll('[data-after-design]').forEach(function(x){x.style.display=''})">No, they are sending a print-ready file</button>
         </div>` : ''}
-      ${!q.sent_to_customer_at ? `<div class="card" id="send-ask" style="border-color:#c7d7fb;background:#f7faff${askDesign.length ? ';display:none' : ''}">
+      ${!q.sent_to_customer_at ? `<div class="card" id="send-ask" data-after-design style="border-color:#c7d7fb;background:#f7faff${askDesign.length ? ';display:none' : ''}">
           <b>Send it to the customer?</b>
           <p class="muted" style="margin:4px 0 10px">Nothing has gone to them yet. Choose how, or leave it and send it
             later from the job page.</p>
@@ -15156,7 +15181,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         </div>` : (q.email || textByShop || smsHref) ? `<div class="card">${q.email ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px">
           <button type="submit" class="btn btn-ghost" style="width:100%">Email ${existingQuote ? 'the updated quote' : 'it'} to ${escEmail(q.email)}</button>
         </form>` : ''}${textForm(' class="btn-ghost"')}${!textByShop && smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center" href="${escEmail(smsHref)}">Text ${existingQuote ? 'the updated quote' : 'it'} (opens Messages)</a>` : ''}</div>` : ''}
-      <div class="card">
+      <div class="card" data-after-design${askDesign.length ? ' style="display:none"' : ''}>
         <div class="msg" id="m">${escEmail(msgs.initial)}</div>
         <div class="row">
           <button type="button" onclick="cp()">Copy message</button>
@@ -15384,30 +15409,44 @@ function sizedKindOf(prod) {
    offers that item's own fee (tools/lib/services.js). X-frames, mugs and
    tumblers take the general design tiers on the line instead. */
 const DESIGN_FEE_FOR = {
-  brochure: 'Brochure Design — Trifold, New',
-  calendar: 'Calendar Design — New (13 pages)',
-  sticker: 'Label or Sticker Design — New',
-  roll_label: 'Label or Sticker Design — New',
-  pouch: 'Pouch Design — New',
-  table_cover: 'Table Cover Design — New',
+  brochure: ['Brochure Design — Trifold, New', 'Brochure Design — Revision'],
+  calendar: ['Calendar Design — New (13 pages)', 'Calendar Design — Revision'],
+  sticker: ['Label or Sticker Design — New', 'Label or Sticker Design — Revision'],
+  roll_label: ['Label or Sticker Design — New', 'Label or Sticker Design — Revision'],
+  pouch: ['Pouch Design — New', 'Pouch Design — Revision'],
+  table_cover: ['Table Cover Design — New', 'Table Cover Design — Revision'],
 };
-/** [{ name, what, id, price }] the send step should ask about; [] when the
- *  quote already carries design work (a design service line or a design tier). */
+/* Every design service by name, lower-cased: a line carrying one is design work. */
+const DESIGN_SERVICE_NAMES = SERVICES.SERVICES.filter((x) => /\bDesign\b/.test(x.name)).map((x) => x.name.toLowerCase());
+/** A line that is design work: a design service, a design tier on the line,
+ *  or a typed line with no product that says "design". A product whose name
+ *  merely contains the word ("Custom Design Tee") is not (code review). */
+function isDesignLine(it) {
+  const d = String(it.description || '').trim().toLowerCase();
+  return DESIGN_SERVICE_NAMES.some((n) => d.startsWith(n))
+    || (it.addons || []).some((a) => /^design_/.test(String(a.code || '')))
+    || (!it.product_id && /\bdesign\b/.test(d));
+}
+/** { fees: [{ name, what, id, price }], catalogFailed } for the send step;
+ *  no fees when the quote already carries design work. Optional lines do not
+ *  count: the customer may never pick them. Each item offers its New and its
+ *  Revision fee. */
 function designFeesToAsk(items, catalog) {
-  const list = (Array.isArray(items) ? items : []).filter(Boolean);
-  if (list.some((it) => /\bDesign\b/.test(String(it.description || ''))
-      || (it.addons || []).some((a) => /^design_/.test(String(a.code || ''))))) return [];
+  const list = (Array.isArray(items) ? items : []).filter((it) => it && !it.optional);
+  const catalogFailed = !catalog || !!catalog.failed;
+  if (list.some(isDesignLine)) return { fees: [], catalogFailed };
   const out = new Map();
   for (const it of list) {
     const k = it.sign && it.sign.kind;
-    const name = k && DESIGN_FEE_FOR[k];
-    if (!name || out.has(name)) continue;
-    const prod = ((catalog && catalog.products) || []).find((p) => p.name === name) || null;
-    const fam = SINALITE.table().families[k];
-    out.set(name, { name, what: fam ? fam.label : k, id: prod ? Number(prod.id) : null,
-      price: prod ? Number(prod.price) : Number(SERVICES.service(name).price) });
+    for (const name of (k && DESIGN_FEE_FOR[k]) || []) {
+      if (out.has(name)) continue;
+      const prod = ((catalog && catalog.products) || []).find((p) => p.name === name) || null;
+      const fam = SINALITE.table().families[k];
+      out.set(name, { name, what: fam ? fam.label : k, id: prod ? Number(prod.id) : null,
+        price: prod ? Number(prod.price) : Number(SERVICES.service(name).price) });
+    }
   }
-  return [...out.values()];
+  return { fees: [...out.values()], catalogFailed };
 }
 
 /** The SinaLite [runQty, each] ladder a saved line was priced from, or null. */
@@ -16362,12 +16401,23 @@ ${quotePricingSource()}
          says "Minimum 25" instead of an each-price, and prices the minimum
          run (what they would have to buy). */
       function slUnder(L, qty){ return !!(L.runs && qty > 0 && qty < L.runs.ladder[0][0]); }
+      /* Between SinaLite runs: the shop quotes only the runs (owner,
+         2026-10-20), so the estimate names the next run up and prices it,
+         as it does the minimum. The saved quantity keeps its saved price. */
+      function slNext(L, qty){
+        if (!L.runs || L.runs.any || !(qty > 0) || qty === L.runs.qty || slUnder(L, qty)) return null;
+        var lad = L.runs.ladder;
+        for (var i = 0; i < lad.length; i++) if (lad[i][0] === qty) return null;
+        for (var j = 0; j < lad.length; j++) if (lad[j][0] > qty) return lad[j];
+        return null;
+      }
       function slUnit(L, qty){
         if (!L.runs || !(qty > 0)) return L.unitOverride;
         /* Untouched: the price it was saved at (a server price is not a typed
            one, so unitOverride is null here and would fall to the $0 row). */
         if (qty === L.runs.qty) return L.runs.saved != null ? L.runs.saved : L.unitOverride;
-        var lad = L.runs.ladder, min = lad[0][0];
+        var lad = L.runs.ladder, min = lad[0][0], next = slNext(L, qty);
+        if (next) return Math.ceil(next[0] * next[1] / qty * 100) / 100;
         return qty >= min ? eachFor(lad, qty, L.runs.any) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
       }
       function estimate(){
@@ -16412,6 +16462,7 @@ ${quotePricingSource()}
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
               (L.precise ? mEach(QITEMS[ix].unit_price) : m2(QITEMS[ix].unit_price)) + '</span><br><b style="color:#b45309">' +
               (slUnder(L, qty) ? 'Minimum ' + L.runs.ladder[0][0]
+                : slNext(L, qty) ? 'Sold in runs: ' + slNext(L, qty)[0].toLocaleString('en-US')
                 : L.precise ? mEach(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0, qty, r.lineTotal - shownExtras(r))
                 : m2(qty > 0 ? (r.lineTotal - shownExtras(r)) / qty : 0)) + '</b>';
           /* The Amount column is the SHIRTS, matching the split rows below it —

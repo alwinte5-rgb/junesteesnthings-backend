@@ -61,6 +61,15 @@ test('a calendar under its minimum of 25 is refused in words; 25 is priced', () 
   assert.match(between.error, /sold only in these quantities: 25, 50, 100/);
   assert.match(between.error, /use 50 or 100/);
   assert.ok(QS.priceSign('calendar', spec, 100, true).ok, 'a listed run is priced');
+  assert.deepStrictEqual(between.use, [50, 100], 'the form offers the runs either side');
+  /* A line saved at 70 before the rule still re-saves unchanged. */
+  const old = QS.priceSign('calendar', spec, 70, true, { grandfather: true });
+  assert.ok(old.ok);
+  const lad = SL.table().families.calendar.prices['28pg']['8.5x11'][''];
+  assert.strictEqual(old.each, SL.eachFor(lad, 70));
+  const over = QS.priceSign('calendar', spec, 5000, true);
+  assert.strictEqual(over.ok, false);
+  assert.match(over.error, /quote the extra runs by hand/);
   const opts = QS.sizerOptions().calendar;
   assert.strictEqual(opts.min, 25, 'the form can say "min 25" before a quantity is typed');
   assert.strictEqual(opts.supplier, 'sinalite');
