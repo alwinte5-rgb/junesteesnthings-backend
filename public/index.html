@@ -1363,14 +1363,19 @@
     .reviews-grid .review-card{height:100%;}
     .review-hidden{display:none;}
 
+    /* Square, so a tall phone photo keeps its print: a 170px-high strip cut
+       the top and bottom off every portrait shot (owner, 2026-10-20). */
     .review-photo {
       width: 100%;
-      height: 170px;
+      aspect-ratio: 1 / 1;
+      height: auto;
       object-fit: cover;
       border-radius: 10px;
       margin: 0.4rem 0 0.9rem;
       display: block;
     }
+
+    .review-photo--wide { aspect-ratio: 4 / 3; }
 
     .review-text {
       font-size: 0.875rem;
@@ -2401,7 +2406,7 @@
               </div></div>
         <div class="review-cell"><div class="review-card">
                 <div class="review-quote">"</div>
-                <img class="review-photo" src="/assets/images/reviews/review-5.jpg" alt="Custom orange team shirts order by June's Tees" loading="lazy" />
+                <img class="review-photo review-photo--wide" src="/assets/images/reviews/review-5.jpg" alt="Custom orange team shirts order by June's Tees" loading="lazy" />
                 <p class="review-text">Went there for an order of 30 shirts. First thing I noticed was her friendly smile. She helped with the design and the shirts came out perfect! Highly recommended! Quality AND friendly!</p>
                 <div class="review-header">
                   <div class="review-avatar"></div>
