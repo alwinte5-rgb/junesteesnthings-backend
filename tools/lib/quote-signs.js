@@ -125,6 +125,9 @@ function priceSign(kind, spec, qty, takeFreight, opts = {}) {
     const minQ = opts.grandfather ? ladder[0][0] : Math.max(ladder[0][0], fam.sell_from || 0);
     if (q < minQ) return { ok: false, min: minQ, error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${minQ.toLocaleString('en-US')}.` };
     const offered = ladder.filter(([rq]) => rq >= minQ);
+    /* No run of this size at or above the smallest sold (a re-capture that
+       capped it lower): say so rather than fall through to undefined. */
+    if (!offered.length) return { ok: false, error: `${size.label} ${fam.label.toLowerCase()} are not sold right now; quote it by hand.` };
     /* Set runs only (owner, 2026-10-20: "staff quote should only select the
        numbers given"). A quantity between SinaLite's runs is refused, naming
        the runs either side, rather than bought as a mix of runs. Any-quantity

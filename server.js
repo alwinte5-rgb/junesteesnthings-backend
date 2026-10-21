@@ -15481,8 +15481,14 @@ function sinaliteRunsOf(it) {
   const lad = ((fam.prices[sg.mat] || {})[sg.size] || {})[''];
   /* `qty`: the quantity it was priced at. At that quantity the saved price
      stands, even if SinaLite's table has moved since (Codex on #293). */
-  return Array.isArray(lad) && lad.length
-    ? { ladder: lad, any: !!fam.any_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
+  /* Only the runs the shop sells (sinalite.js sell_from), so the estimate
+     says "Minimum 500" where the save would refuse a smaller run. A line saved
+     below it before the cut keeps the full ladder: its saved quantity still
+     prices (code review). */
+  const from = Number(fam.sell_from) || 0;
+  const sells = Array.isArray(lad) && !(Number(it.qty) < from) ? lad.filter(([q]) => q >= from) : lad;
+  return Array.isArray(sells) && sells.length
+    ? { ladder: sells, any: !!fam.any_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
 }
 
 app.get('/q/:code', async (req, res) => {

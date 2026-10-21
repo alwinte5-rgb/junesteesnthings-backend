@@ -243,3 +243,36 @@ test('the copy never says we print these in our shop, or names the supplier', ()
     assert.doesNotMatch(text, /printed (in|at) our|in-house|sinalite/i, p.path);
   }
 });
+
+test('a size with no run at or above the smallest sold is refused in words, not a crash (code review)', () => {
+  const QS = require('../tools/lib/quote-signs');
+  const t = SL.table();
+  const f = JSON.parse(JSON.stringify(t.families.roll_label));
+  const m = f.materials[0].key, z = f.sizes[0].key;
+  f.prices[m][z][''] = f.prices[m][z][''].filter(([q]) => q < 500);
+  const orig = SL.table;
+  SL.table = () => ({ ...t, families: { ...t.families, roll_label: f } });
+  try {
+    const r = QS.priceSign('roll_label', { mat: m, size: z }, 600, false);
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /not sold right now/);
+  } finally { SL.table = orig; }
+});
+
+test('the customer quote page offers only the runs the shop sells (code review)', () => {
+  const vm = require('node:vm');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const start = src.indexOf('function sinaliteRunsOf(');
+  let depth = 0, end = -1;
+  for (let i = src.indexOf('{', start); i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) { end = i + 1; break; }
+  }
+  const fn = vm.runInThisContext('(function(SINALITE){ return ' + src.slice(start, end) + '; })')(SL);
+  const f = SL.table().families.roll_label;
+  const sign = { kind: 'roll_label', mat: f.materials[0].key, size: f.sizes[0].key };
+  const now = fn({ sign_priced: true, sign, qty: 500, unit_price: 1 });
+  assert.strictEqual(now.ladder[0][0], 500, 'a new line starts at 500');
+  const old = fn({ sign_priced: true, sign, qty: 25, unit_price: 1 });
+  assert.strictEqual(old.ladder[0][0], 25, 'a line saved at 25 before the cut keeps its price');
+});
