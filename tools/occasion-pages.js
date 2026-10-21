@@ -115,6 +115,14 @@ function printSummary(fams) {
    fee"). The fees a page names come from tools/lib/services.js, the list the
    quote form charges, so the two cannot disagree. */
 function designBox(page) {
+  /* Design already inside every price on the page (sinalite.js design_in). */
+  const inside = page.print.families.map((k) => (SL.table().families[k] || {}).design_in || 0);
+  if (inside.length && inside.every((x) => x > 0)) {
+    return `<div class="pp-design">
+      <h3>Design is included</h3>
+      <p>Every price above includes ${money(Math.max(...inside))} of design work: we set up your logo or artwork on the shape and size you pick and send a proof. There is no separate design fee, and nothing prints until you approve the proof.</p>
+    </div>`;
+  }
   const fees = (page.print.design_fees || []).map((f) => ({ label: f.label, price: Number(SERVICES.service(f.service).price) }));
   return `<div class="pp-design">
       <h3>${esc(page.print.design_h3 || 'Need it designed? That is a separate fee')}</h3>

@@ -594,6 +594,7 @@
       "group": "Labels, Stickers & Packaging",
       "design": "label",
       "online": true,
+      "design_in": 25,
       "url": "https://sinalite.com/en_us/decals/cut-to-shape/white-vinyl-permanent.html",
       "note": "Permanent white vinyl stickers, full color, cut to the shape.",
       "materials": [
@@ -791,6 +792,7 @@
       "group": "Labels, Stickers & Packaging",
       "design": "label",
       "online": false,
+      "design_in": 25,
       "url": "https://sinalite.com/en_us/packaging/roll-labels/bopp-labels.html",
       "note": "Waterproof white gloss BOPP product labels on a roll, gloss laminated, full color.",
       "materials": [

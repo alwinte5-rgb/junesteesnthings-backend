@@ -160,6 +160,21 @@ test('a column that starts above the smallest run shows a dash, not a broken pag
   } finally { SL.table = orig; }
 });
 
+test('stickers and labels say design is included, and their prices carry the $25', () => {
+  const html = read('print/stickers-labels.html');
+  assert.match(html, /<h3>Design is included<\/h3>/);
+  for (const k of ['sticker', 'roll_label']) {
+    const f = SL.table().families[k];
+    assert.strictEqual(f.design_in, 25, k);
+    const d = JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8')).products[k];
+    const r = d.rows[0];
+    const lad = f.prices[r.mat][r.size][''];
+    const at = lad.find(([q]) => q === r.qty);
+    assert.strictEqual(at[1], SL.priceEach(r.cost, r.ship, r.qty, 25), `${k}: the run price includes the $25`);
+    assert.ok(at[1] > SL.priceEach(r.cost, r.ship, r.qty), k);
+  }
+});
+
 test('the copy never says we print these in our shop, or names the supplier', () => {
   for (const p of pages) {
     const text = read(p.path).replace(/<[^>]+>/g, ' ');

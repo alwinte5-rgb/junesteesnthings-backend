@@ -48,9 +48,8 @@ test('a brochure with no design line offers the new and the revision fee', () =>
   assert.deepStrictEqual(fees([brochure]).map((f) => [f.id, f.price]), [[519, 350], [520, 150]]);
 });
 
-test('stickers and roll labels offer the $25 fees once', () => {
-  const r = fees([{ sign: { kind: 'sticker' } }, { sign: { kind: 'roll_label' } }]);
-  assert.deepStrictEqual(r.map((f) => f.price), [25, 25]);
+test('stickers and roll labels ask nothing: their $25 design is inside the price', () => {
+  assert.deepStrictEqual(fees([{ sign: { kind: 'sticker' } }, { sign: { kind: 'roll_label' } }]), []);
 });
 
 test('a quote that already has design work asks nothing', () => {

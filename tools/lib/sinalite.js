@@ -44,11 +44,13 @@ const ceil5 = (n) => Math.ceil(n / 5 - 1e-9) * 5;
 /** Shipping as the rule bills it: cost + $25, rounded up to the next $5. */
 const shipBilled = (ship) => ceil5((Number(ship) || 0) + SHIP_HANDLING);
 
-/** The price EACH at one SinaLite tier, by the owner rule. */
-function priceEach(cost, ship, qty) {
+/** The price EACH at one SinaLite tier, by the owner rule. `designIn` is a
+ *  flat design charge carried inside the run's price (labels and stickers,
+ *  $25, owner 2026-10-20), so it is never a separate line. */
+function priceEach(cost, ship, qty, designIn = 0) {
   const c = Number(cost), q = Number(qty);
   if (!(c > 0) || !(q > 0)) return null;
-  return ceil2((c * MARKUP + shipBilled(ship)) / q);
+  return ceil2((c * MARKUP + shipBilled(ship) + (Number(designIn) || 0)) / q);
 }
 
 /**
@@ -58,7 +60,7 @@ function priceEach(cost, ship, qty) {
  * SinaLite's own table sometimes charges more per piece at a bigger tier; the
  * ladder keeps that tier's real price rather than undercutting its cost.
  */
-function ladderFrom(rows, where = 'sinalite') {
+function ladderFrom(rows, where = 'sinalite', designIn = 0) {
   /* A row that cannot be priced is SAID, never skipped quietly: a missing tier
      reads as a gap nobody sees until a job is quoted from the wrong one. */
   const ok = [];
@@ -70,7 +72,7 @@ function ladderFrom(rows, where = 'sinalite') {
     else console.error('[sinalite] ' + where + ': unpriceable row skipped ' + JSON.stringify(r));
   }
   return ok.sort((a, b) => a.qty - b.qty)
-    .map((r) => [Number(r.qty), priceEach(r.cost, r.ship, r.qty)]);
+    .map((r) => [Number(r.qty), priceEach(r.cost, r.ship, r.qty, designIn)]);
 }
 
 /* Re-read when the file changes, so a fresh capture reaches the next quote
@@ -175,7 +177,7 @@ function familyOf(key, p) {
     prices[mat.key] = {};
     for (const size of p.sizes) {
       const rows = (p.rows || []).filter((r) => r.mat === mat.key && r.size === size.key);
-      const lad = ladderFrom(rows, key + ' ' + mat.key + '/' + size.key);
+      const lad = ladderFrom(rows, key + ' ' + mat.key + '/' + size.key, p.design_in);
       if (!lad.length) continue;
       prices[mat.key][size.key] = { '': lad };
       min = Math.min(min, lad[0][0]);
@@ -185,6 +187,8 @@ function familyOf(key, p) {
   return {
     label: p.label, note: p.note || '', sizing: 'stock', supplier: 'sinalite',
     group: p.group, design: p.design || null, online: !!p.online,
+    /* Design charge already inside every run price (priceEach). */
+    design_in: Number(p.design_in) || 0,
     /* true: SinaLite takes any quantity (typed box), so a quantity between
        captured tiers pays the tier below's each (each falls as the run grows,
        so that is never under cost). false: set runs only (eachFor). */

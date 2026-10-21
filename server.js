@@ -15417,8 +15417,8 @@ function sizedKindOf(prod) {
 const DESIGN_FEE_FOR = {
   brochure: ['Brochure Design — Trifold, New', 'Brochure Design — Revision'],
   calendar: ['Calendar Design — New (13 pages)', 'Calendar Design — Revision'],
-  sticker: ['Label or Sticker Design — New', 'Label or Sticker Design — Revision'],
-  roll_label: ['Label or Sticker Design — New', 'Label or Sticker Design — Revision'],
+  /* Stickers and roll labels carry their $25 design inside every run price
+     (sinalite.js design_in, owner 2026-10-20), so nothing is asked. */
   pouch: ['Pouch Design — New', 'Pouch Design — Revision'],
   table_cover: ['Table Cover Design — New', 'Table Cover Design — Revision'],
 };

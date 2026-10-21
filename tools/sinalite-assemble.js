@@ -67,6 +67,9 @@ const META = {
   sticker: {
     name: 'Cut-to-Shape Stickers — white vinyl', label: 'Cut-to-Shape Stickers', group: 'Labels, Stickers & Packaging',
     design: 'label', online: true,
+    /* The $25 label design is in every run's price, never a separate line
+       (owner, 2026-10-20). tools/lib/sinalite.js adds it to each run total. */
+    design_in: 25,
     url: 'https://sinalite.com/en_us/decals/cut-to-shape/white-vinyl-permanent.html',
     note: 'Permanent white vinyl stickers, full color, cut to the shape.',
     materials: [{ key: 'white_perm', label: 'White vinyl, permanent' }],
@@ -76,6 +79,7 @@ const META = {
   roll_label: {
     name: 'Roll Labels — white gloss BOPP', label: 'Roll Labels', group: 'Labels, Stickers & Packaging',
     design: 'label', online: false,
+    design_in: 25,
     url: 'https://sinalite.com/en_us/packaging/roll-labels/bopp-labels.html',
     note: 'Waterproof white gloss BOPP product labels on a roll, gloss laminated, full color.',
     materials: [{ key: 'white_bopp', label: 'White gloss BOPP, gloss laminated' }],
