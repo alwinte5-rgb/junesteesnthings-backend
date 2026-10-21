@@ -11084,7 +11084,9 @@ details.fold[open] > summary::after{transform:rotate(-135deg)}
    the person has allowed pop-ups. NOTIFY.dingFor decides, from what this
    browser last saw, so a page opened onto old news is quiet and two tabs ding
    once. Browsers play sound only after the person has clicked or typed on the
-   page, so the chime is unlocked on the first one. window.jtDing plays it on
+   page, so the chime is unlocked on the first one; a tab that cannot play yet
+   leaves the news unspent for a tab that can, and pops it up only once itself.
+   The memory is per person (`who`), so people sharing a computer stay apart. window.jtDing plays it on
    demand (the "Turn on sound" button and the settings page's test). */
 const ADMIN_BADGE_JS = `(function(){try{
 var DING=${NOTIFY.dingFor.toString()};
@@ -11102,11 +11104,16 @@ function chime(){try{unlock();if(!ctx||ctx.state!=='running')return;var t=ctx.cu
 g.gain.setValueAtTime(0.0001,t+p[1]);g.gain.exponentialRampToValueAtTime(0.25,t+p[1]+0.02);g.gain.exponentialRampToValueAtTime(0.0001,t+p[1]+0.45);
 o.connect(g);g.connect(ctx.destination);o.start(t+p[1]);o.stop(t+p[1]+0.5);});}catch(e){}}
 window.jtDing=chime;
-function seen(){try{return JSON.parse(localStorage.getItem('jt:ding'));}catch(e){return null;}}
+function key(c){return 'jt:ding:'+String(c.who||'');}
+function seen(c){try{return JSON.parse(localStorage.getItem(key(c)));}catch(e){return null;}}
 function alertFor(c){var l=c.latest&&c.latest.id?c.latest:null;
-var r=DING(seen(),{id:l?l.id:0,msgs:(Number(c.chat)||0)+(Number(c.mail)||0)});
-try{localStorage.setItem('jt:ding',JSON.stringify(r.next));}catch(e){}
-if(!r.ding)return;if(c.sound!==false)chime();
+var r=DING(seen(c),{id:l?l.id:0,msgs:(Number(c.chat)||0)+(Number(c.mail)||0)});
+var mute=c.sound===false;unlock();var can=mute||(ctx&&ctx.state==='running');
+var mine=JSON.stringify(r.next),told=false;try{told=sessionStorage.getItem('jt:told')===mine;}catch(e){}
+if(!r.ding){try{localStorage.setItem(key(c),mine);}catch(e){}return;}
+if(told)return;
+if(can){try{localStorage.setItem(key(c),mine);}catch(e){}if(!mute)chime();}
+else{try{sessionStorage.setItem('jt:told',mine);}catch(e){}}
 if(c.popup!==false&&window.Notification&&Notification.permission==='granted'&&(document.hidden||!document.hasFocus())){try{
 var msg=r.why==='notify'&&l?l.title:'You have a new message.';var go=r.why==='notify'&&l?l.link:'/admin/notifications';
 var p=new Notification("June's Tees",{body:msg,tag:'jt-alert'});p.onclick=function(){try{window.focus();location.href=go;}catch(e){}p.close();};}catch(e){}}}
@@ -26420,9 +26427,12 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const me = currentActor() || OWNER_ACTOR;
   const live = req.query.live === '1';
-  const out = live ? { notify: 0, chat: 0, mail: 0, latest: null, sound: true, popup: true }
+  /* `who` keys the browser's ding memory, so two people on one computer never
+     compare against each other's notifications. */
+  const who = CHAN.readerKey(me);
+  const out = live ? { notify: 0, chat: 0, mail: 0, latest: null, sound: true, popup: true, who }
     : { leads: 0, reviews: 0, late: 0, certificates: 0, approvals: 0, chat: 0, mail: 0, notify: 0, design: 0, jobnotes: 0, pinned: 0,
-      latest: null, sound: true, popup: true };
+      latest: null, sound: true, popup: true, who };
   const alerts = () => Promise.all([
     notifyUnread(me).then((n) => { out.notify = n; }).catch(() => {}),
     teamChatUnread().then((n) => { out.chat = n; }).catch(() => {}),
@@ -26435,11 +26445,13 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
       out.popup = NOTIFY.uiOn('popup', prefs);
     }).catch(() => {}),
   ]);
+  /* Either way the page asks for a sweep (at most one every 30 seconds for
+     everyone), so a new lead or approval reaches the bell within a poll. */
+  notifySoon();
   if (live) {
     await alerts();
     return res.json(out);
   }
-  notifySoon();
   await Promise.all([
     alerts(),
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
@@ -33742,6 +33754,8 @@ app.post('/admin/tasks/:id/start', requireAdmin, async (req, res) => {
     const { rowCount } = await pool.query(
       `UPDATE staff_tasks SET started_at = NOW(), started_by = $2, assigned_to = COALESCE(assigned_to, $2)
         WHERE id = $1 AND done_at IS NULL AND started_at IS NULL AND (assigned_to = $2 OR assigned_to IS NULL)`, [id, actor.id]);
+    /* A task for anyone, once taken, leaves the other helpers' bells now. */
+    if (rowCount) notifyNow();
     return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Started: the task is yours.' : 'That task is someone else\'s, or already started.');
   } catch (err) {
     console.error('task start failed:', err.message);
@@ -36622,19 +36636,27 @@ async function staffNotices(roster, leads) {
  *  helper hears of each recent task waiting for them to Start, theirs or one
  *  for anyone, and it clears once started, done or given to someone else. The
  *  owner hears when a helper finishes one; those clear when read. */
+/* Tasks are on the bell from this start of the server on: older tasks were
+   given out before there was a bell for them, and announcing them all at once
+   on the first sweep would be old news ringing as new (code review). A task is
+   told at once (notifyNow) when it is given out or finished, so a later restart
+   leaves nothing untold. */
+const TASK_NOTICES_SINCE = new Date();
+
 async function taskNotices(roster) {
   const out = [];
   const active = new Map(roster.filter((r) => r.active && !r.archived_at).map((r) => [r.id, r]));
   const [waiting, done] = await Promise.all([
     notifyPart('tasks waiting', pool.query(
       `SELECT id, title, due_on, assigned_to, created_by, created_at FROM staff_tasks
-        WHERE done_at IS NULL AND started_at IS NULL ORDER BY id DESC LIMIT 500`)),
+        WHERE done_at IS NULL AND started_at IS NULL ORDER BY id DESC`)),
     notifyPart('tasks done', pool.query(
       `SELECT id, title, done_by FROM staff_tasks
-        WHERE done_by IS NOT NULL AND done_at > NOW() - make_interval(days => $1) ORDER BY id DESC LIMIT 200`, [NOTIFY_LOOKBACK_DAYS])),
+        WHERE done_by IS NOT NULL AND done_at > GREATEST(NOW() - make_interval(days => $1), $2::timestamptz) ORDER BY id DESC LIMIT 200`,
+      [NOTIFY_LOOKBACK_DAYS, TASK_NOTICES_SINCE])),
   ]);
   if (waiting) {
-    const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
+    const since = Math.max(Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000, TASK_NOTICES_SINCE.getTime());
     const theirs = new Map([...active.keys()].map((id) => [id, []]));
     for (const t of waiting.rows) {
       const to = t.assigned_to == null ? [...active.keys()] : (active.has(Number(t.assigned_to)) ? [Number(t.assigned_to)] : []);
@@ -36721,11 +36743,14 @@ function notifyNow() {
   notifySweep().catch((e) => console.error('notification sweep failed:', e.message));
 }
 
-/** The newest unread notification for this person, for the browser pop-up:
- *  { id, title, link }, or null. */
+/** The newest unread notification for this person, for the ding and the
+ *  browser pop-up: { id, title, link }, or null. Message ones are left out:
+ *  a new message dings from the unread count at once, and its bell row, made
+ *  by a later sweep, must not ding for it a second time (code review). */
 async function notifyLatest(actor) {
   const { rows: [r] } = await pool.query(
-    `SELECT id, title, link FROM notifications WHERE recipient = $1 AND read_at IS NULL ORDER BY id DESC LIMIT 1`, [CHAN.readerKey(actor)]);
+    `SELECT id, title, link FROM notifications WHERE recipient = $1 AND read_at IS NULL AND kind NOT IN ('chat', 'mail')
+      ORDER BY id DESC LIMIT 1`, [CHAN.readerKey(actor)]);
   return r ? { id: Number(r.id), title: r.title, link: NOTIFY.safeLink(r.link) } : null;
 }
 
@@ -36860,7 +36885,7 @@ app.get('/admin/notifications/settings', requireAdmin, async (req, res) => {
         '<a class="btn btn-ghost" href="/admin/notifications">Notifications</a>')}
       ${flash(req.query)}
       <form method="post" action="/admin/notifications/settings" class="card" data-once>
-        <h2 class="card-title">On this computer</h2>
+        <h2 class="card-title">Ding and pop-ups <span class="muted" style="font-weight:400">(on every computer and phone you sign in on)</span></h2>
         ${box('ui_sound', 'Ding when something new comes in', NOTIFY.uiOn('sound', prefs))}
         ${box('ui_popup', 'Pop-up from the browser when the back office is not the tab in front', NOTIFY.uiOn('popup', prefs))}
         <p class="muted" style="margin:0 0 14px">${ALERTS_HELP}</p>

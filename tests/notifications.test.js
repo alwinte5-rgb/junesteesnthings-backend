@@ -116,8 +116,8 @@ test('the sweep runs on a timer and, at most every 30 seconds, from a page load,
   assert.match(sweep, /if \(notifyAgain\) \{ notifyAgain = false; notifyNow\(\); \}/);
   const counts = route("app.get('/admin/nav-counts', requireAdmin");
   assert.match(counts, /notifyUnread\(me\)\.then\(\(n\) => \{ out\.notify = n; \}\)/);
-  /* The full counts start a sweep; the 30-second live poll does not, and is answered before the heavy counts. */
-  assert.ok(counts.indexOf('if (live)') < counts.indexOf('notifySoon();'), 'live poll returns before notifySoon');
+  /* Both ask for a (throttled) sweep; the live poll is answered before the heavy counts. */
+  assert.ok(counts.indexOf('notifySoon();') < counts.indexOf('if (live)'), 'the live poll also keeps the bell fresh');
   assert.ok(counts.indexOf('return res.json(out);') < counts.indexOf('liveJobs()'), 'live poll skips the heavy counts');
 });
 
@@ -133,6 +133,10 @@ test('tasks on the bell: a helper hears of a task waiting for them, the owner of
   /* Giving out a task, or a helper finishing one, rings at once rather than at the next 2-minute sweep. */
   assert.match(route("app.post('/admin/tasks', requireAdmin"), /notifyNow\(\);\s*return back\(res, backTo, 'ok', 'Task added\.'\)/);
   assert.match(route("app.post('/admin/tasks/:id/done', requireAdmin"), /if \(staffId\) notifyNow\(\);/);
+  assert.match(route("app.post('/admin/tasks/:id/start', requireAdmin"), /if \(rowCount\) notifyNow\(\);/);
+  /* Clearing needs every waiting task, never a capped list; old tasks are not announced as new. */
+  assert.doesNotMatch(t.slice(0, t.indexOf('tasks done')), /LIMIT/);
+  assert.match(t, /TASK_NOTICES_SINCE/);
 });
 
 test('the ding: quiet on the first look, once per new thing, once across tabs', () => {
@@ -171,8 +175,10 @@ test('the page script: polls, dings with the shared rule, pops up only with perm
   assert.match(js, /\/admin\/nav-counts'\+\(live\?'\?live=1':''\)/);
   assert.match(js, /setInterval\(function\(\)\{if\(document\.hidden&&Date\.now\(\)-last<55000\)return;get\(true\);\},30000\)/);
   assert.match(js, /Notification\.permission==='granted'/);
-  assert.match(js, /if\(c\.sound!==false\)chime\(\)/);
-  assert.match(js, /localStorage\.setItem\('jt:ding'/);
+  assert.match(js, /var mute=c\.sound===false;/);
+  assert.match(js, /function key\(c\)\{return 'jt:ding:'\+String\(c\.who\|\|''\);\}/, 'the memory is per person');
+  assert.match(js, /if\(can\)\{try\{localStorage\.setItem\(key\(c\),mine\);/, 'only a tab that can play spends the news');
+  assert.match(fn('async function notifyLatest('), /kind NOT IN \('chat', 'mail'\)/, 'a message dings once, from the count');
   /* The pop-up's link is the notification's own, which the server passed through safeLink. */
   assert.match(fn('async function notifyLatest('), /link: NOTIFY\.safeLink\(r\.link\)/);
   /* The rule must stay plain JavaScript the browser can run inside the page script. */
