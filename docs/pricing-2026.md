@@ -130,6 +130,35 @@ location is the standard one. Adult garments only (lib/garments.js decorationsFo
   Customer-supplied blanks: the `own_blanks` add-on ($1.50 a piece) drops the
   blank and its size upcharges, so the line is printing plus handling.
 
+DTF Printing — Chest logo (up to 16 sq in), added 2026-10-21 by
+tools/add-dtf-chest-logo.js. A 4" x 4" chest logo on its own. Owner's rule:
+Anchorfish's 16 sq in cost at the same markup the full front carries in each
+band, rounded to 5c; 50-99 set by hand to $7.25 because Anchorfish's 16 sq in
+cost rises from 25-49 to 50-99. Typed in tools/lib/dtf-chest-logo.js, not
+derived. Quote form only (linked to no product). Beside a full front, back or
+oversized print it is the additional location, wherever it sits. On the quote
+form and the customer's page a DTF front reads "Full front" or "Chest logo".
+
+  stage                   1-4       5-11      12-24      25-35      36-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
+  -------------------------------------------------------------------------------------------------------------------------------------------
+  chest logo main      $14.75     $13.35      $9.60      $8.45      $7.45      $7.25      $5.15      $4.30      $3.65      $3.05      $2.50
+  add. location         $5.95      $5.50      $5.25      $5.00      $4.80      $4.60      $4.20      $3.50      $3.10      $2.75      $2.55
+
+CONTRACT PRICING (2026-10-21), tools/lib/contracts.js. A signed price sheet for
+one customer, picked on the quote form ("Contract pricing") and refused on any
+other customer's email. Ink Theory: DTF on their own blanks, all-in per piece
+(the $1.50 own-blanks fee is inside it), 24 pieces minimum per design:
+
+  last month       standard 24-49 / 50+    oversized 24-49 / 50+
+  200+ pieces      $12 / $11               $14 / $13
+  100-199          $14 / $13               $16 / $15
+  under 100        $16 / $15               $18 / $17
+
+Two print places are in the price. A single print pays the contract price for
+its size; a chest logo alone pays its own lower list price. A third place adds
+its list additional-location price. A $0.50 a piece credit in months over 400 is given by hand (the quote's
+credit or discount), not by the form.
+
   Every stitch count from 0 to 25k now has a price. The 14k-22k band is flat $60,
   which also covers the 18k-20k gap Anchorfish leaves unpriced on their own sheet.
   Above 25k stitches there is still no rate — Anchorfish quotes those separately.

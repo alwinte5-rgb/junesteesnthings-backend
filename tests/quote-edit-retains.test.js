@@ -23,7 +23,7 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
 test('the option builders mark the saved choice selected', () => {
   const prod = src.match(/const prodOpts = \(sel, cutSel\) =>[\s\S]*?\.join\(''\);/);
-  const meth = src.match(/const decoOpts = \(sel\) =>[\s\S]*?\.join\(''\);/);
+  const meth = src.match(/const decoOpts = \(sel, loc\) =>[\s\S]*?\.join\(''\);/);
   assert.ok(prod, 'prodOpts is not per-line — a shared string cannot mark a selection');
   assert.ok(meth, 'decoOpts is not per-line');
   for (const [name, m] of [['product', prod], ['method', meth]]) {
@@ -37,7 +37,7 @@ test('the option builders mark the saved choice selected', () => {
 test('the line passes the saved ids in', () => {
   assert.match(src, /\$\{prodOpts\(it && it\.product_id, isCut \? it\.method_id : null\)\}/, 'product_id is not passed to the options');
   /* Each print location's method comes from the line's own prints. */
-  assert.match(src, /\$\{decoOpts\(p && p\.method \? p\.method\.id : null\)\}/, 'a location\'s method is not passed to the options');
+  assert.match(src, /\$\{decoOpts\(p && p\.method \? p\.method\.id : null, loc\)\}/, 'a location\'s method is not passed to the options');
   assert.match(src, /for \(const p of itemPrints\(it, catalog\)\)/, 'the form does not read the line\'s print locations');
 });
 
@@ -63,7 +63,7 @@ test('every field the save writes is read back by the form', () => {
   /* Written as a constant on every save, so there is nothing to restore:
      garment_dark is always true since the white base went on every garment
      (2026-10-07) and the form lost its "Dark garment" box. */
-  const CONSTANT = new Set(['garment_dark']);
+  const CONSTANT = new Set(['garment_dark', 'named_front']);
   const viaPrints = form.includes('itemPrints(it, catalog)');
   const missing = saved.filter((k) => !DERIVED.has(k) && !CONSTANT.has(k) && !(viaPrints && VIA_PRINTS.has(k)) && !form.includes('it.' + k));
   assert.deepStrictEqual(missing, [],
