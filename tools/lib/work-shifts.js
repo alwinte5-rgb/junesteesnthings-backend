@@ -54,6 +54,11 @@ function mondayOf(now, zone) {
   return dt.toISOString().slice(0, 10);
 }
 
+/** The weekday of a calendar date "YYYY-MM-DD": 1 (Mon) to 7 (Sun). */
+function weekdayOfDate(date) {
+  return ((new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7) + 1;
+}
+
 function addDays(date, n) {
   const [y, mo, d] = String(date).split('-').map(Number);
   return new Date(Date.UTC(y, mo - 1, d + n)).toISOString().slice(0, 10);
@@ -189,4 +194,4 @@ function daySegments(o, zone) {
 
 function cleanNote(n) { return String(n || '').replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, NOTE_MAX); }
 
-module.exports = { STAFF_ZONES, DEFAULT_STAFF_ZONE, staffZoneOf, staffZoneLabel, weekdayIn, inRange, weeksFrom, ZONES, DAYS, NOTE_MAX, localMinutes, daySegments, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };
+module.exports = { weekdayOfDate, STAFF_ZONES, DEFAULT_STAFF_ZONE, staffZoneOf, staffZoneLabel, weekdayIn, inRange, weeksFrom, ZONES, DAYS, NOTE_MAX, localMinutes, daySegments, minutesOf, offsetAt, instantOf, mondayOf, addDays, occurrences, dateIn, weekOccurrences, validDate, when, clock, span, hoursOf, cleanNote };
