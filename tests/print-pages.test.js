@@ -28,13 +28,40 @@ const pages = O.load().pages.filter((p) => p.kind === 'print');
 const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
 const money = (s) => Number(s.replace(/[$,]/g, ''));
 
-test('there is a page for each SinaLite family sold on its own', () => {
+test('there is a page for each SinaLite family sold on its own, except the ones switched off', () => {
   const covered = new Set(pages.flatMap((p) => p.print.families));
-  /* Mugs and tumblers have no page: the shop sublimates its own in house
+  /* Off on purpose (owner, 2026-10-20): calendars until there is a way to
+     design one; pouches (500 minimum) until a smaller-run source is found;
+     table covers while a DTF-printed cover on a wholesale blank replaces the
+     $300 all-over one. Mugs and tumblers: the shop sublimates its own
      (services/custom-glassware.html) for far less than the resold ones. */
+  const OFF = new Set(['calendar', 'pouch', 'table_cover', 'mug', 'tumbler']);
   for (const k of Object.keys(SL.table().families)) {
-    if (k === 'mug' || k === 'tumbler') continue;
-    assert.ok(covered.has(k), `no page sells ${k}`);
+    if (OFF.has(k)) assert.ok(!covered.has(k), `${k} is switched off but has a page`);
+    else assert.ok(covered.has(k), `no page sells ${k}`);
+  }
+});
+
+test('a page that names design fees shows the quote form\'s own prices', () => {
+  const { service } = require('../tools/lib/services');
+  const { escHtml } = require('../tools/lib/html-escape');
+  const brochure = pages.find((p) => p.path === 'print/brochures.html');
+  assert.ok((brochure.print.design_fees || []).length, 'the brochure page must state its design fee');
+  for (const p of pages) {
+    const html = read(p.path);
+    assert.match(html, /class="pp-design"/, `${p.path}: design fee box`);
+    for (const f of p.print.design_fees || []) {
+      const price = '$' + Number(service(f.service).price).toFixed(2);
+      assert.ok(html.includes(`${escHtml(f.label)}: <b>${price}</b>`), `${p.path}: ${f.label} ${price}`);
+    }
+  }
+});
+
+test('set runs say they are the only quantities sold, and shipping to the customer is offered', () => {
+  for (const p of pages) {
+    const html = read(p.path);
+    if (p.print.families.some((k) => !SL.table().families[k].any_qty)) assert.match(html, /We only sell in these quantities\./, p.path);
+    assert.match(html, /ship your order straight to you/, p.path);
   }
 });
 
@@ -131,16 +158,6 @@ test('a column that starts above the smallest run shows a dash, not a broken pag
     assert.strictEqual(st.rows[0].cells[0], null);
     assert.match(O.render(p, '<style></style>', '', new Date()), /not sold at this quantity/);
   } finally { SL.table = orig; }
-});
-
-test('the run note never gives a run as its example', () => {
-  for (const p of pages) {
-    const html = read(p.path);
-    for (const m of html.matchAll(/: ([\d,]+), for example, is priced/g)) {
-      const q = Number(m[1].replace(/,/g, ''));
-      for (const k of p.print.families) assert.ok(!SL.table().families[k].runs.includes(q), `${p.path}: ${q} is a run`);
-    }
-  }
 });
 
 test('the copy never says we print these in our shop, or names the supplier', () => {

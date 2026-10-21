@@ -24,6 +24,7 @@ const path = require('node:path');
 const { escHtml: esc } = require('./lib/html-escape');
 const CAL = require('./lib/marketing-calendar');
 const SL = require('./lib/sinalite');
+const SERVICES = require('./lib/services');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const DATA = path.join(PUBLIC, 'assets', 'data', 'occasion-pages.json');
@@ -109,11 +110,18 @@ function printSummary(fams) {
   return { low, start, high, offers, lead };
 }
 
-/* The smallest quantity between two runs, for the note's example. */
-function notRun(rows) {
-  const runs = new Set(rows.map((r) => r.q));
-  for (let q = rows[0].q + 1; q < rows[rows.length - 1].q; q++) if (!runs.has(q)) return q;
-  return null;
+/* Design is never in the print price (owner, 2026-10-20: "make sure that the
+   customer is aware that if they need to design ... they will have a design
+   fee"). The fees a page names come from tools/lib/services.js, the list the
+   quote form charges, so the two cannot disagree. */
+function designBox(page) {
+  const fees = (page.print.design_fees || []).map((f) => ({ label: f.label, price: Number(SERVICES.service(f.service).price) }));
+  return `<div class="pp-design">
+      <h3>${esc(page.print.design_h3 || 'Need it designed? That is a separate fee')}</h3>
+      <p>The prices above are for printing your finished file. ${page.print.design_note ? esc(page.print.design_note) + ' ' : ''}If you need us to design it, a design fee is added to your quote${fees.length ? ':' : ', and you see it before any work starts.'}</p>
+      ${fees.length ? `<ul>${fees.map((f) => `<li>${esc(f.label)}: <b>${money(f.price)}</b></li>`).join('')}</ul>
+      <p>You see the fee on your quote before any work starts, and nothing prints until you approve the proof.</p>` : ''}
+    </div>`;
 }
 
 function pricesSection(page, fams, sum) {
@@ -127,15 +135,15 @@ function pricesSection(page, fams, sum) {
       </table></div>
       <p class="pp-note">${fm.f.any_qty
         ? `Any quantity from ${count(fm.rows[0].q)}. A quantity between two rows pays the lower row's price each, or the next row's total if that is less.`
-        : `Sold in these runs. Another quantity is made up from the runs above at the lowest total${notRun(fm.rows) ? `: ${count(notRun(fm.rows))}, for example, is priced as the cheapest set of runs that covers it` : ''}.`}</p>
+        : 'We only sell in these quantities.'}</p>
     </div>`).join('\n    ');
   return `<section class="pp-prices" id="prices">
   <div class="container">
     <div class="section-tag">Prices</div>
     <h2>${esc(page.print.prices_h2)}</h2>
-    <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop; sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
+    <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop for pickup; we can also ship your order straight to you or your event, quoted with your order. Sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
     ${tables}
-    <p class="pp-note">Design is not included. Send a print-ready file, or ask us to design it for a separate design fee, shown on your quote before anything is made.</p>
+    ${designBox(page)}
     <div class="hero-btns"><a href="#get-quote" class="btn btn-gold">Get a Free Quote</a><a href="tel:+17739004592" class="btn btn-outline-white pp-call">📞 Call Us</a></div>
   </div>
 </section>`;
@@ -152,6 +160,8 @@ const PRINT_STYLE = `<style>
     .pp-table td b{color:var(--navy);}.pp-table td span{display:block;font-size:.78rem;color:var(--muted);}
     .pp-note{font-size:.85rem;color:var(--muted);margin:.6rem 0 0;max-width:720px;}
     .pp-call{border:1px solid var(--border);}
+    .pp-design{border:2px solid var(--gold);border-radius:var(--radius);padding:1rem 1.25rem;margin:1.5rem 0;max-width:720px;background:#fff;}
+    .pp-design h3{margin:0 0 .4rem;}.pp-design p{font-size:.92rem;margin:.3rem 0;}.pp-design ul{margin:.4rem 0 .4rem 1.2rem;font-size:.95rem;}
     @media(max-width:768px){.container{padding:0 16px;}}
   </style>`;
 
