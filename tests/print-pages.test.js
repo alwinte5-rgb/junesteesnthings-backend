@@ -202,6 +202,8 @@ test('the table cover page prints the in-house prices the quote engine charges',
   assert.deepStrictEqual([1, 2, 3, 10].map((q) => TC.priceEach(q, 2)), [110, 95, 80, 80]);
   assert.deepStrictEqual([1, 2, 3, 10].map((q) => TC.priceEach(q, 1)), [75, 75, 65, 65]);
   assert.match(html, /class="pp-colors"/, 'the cover colors are on the page');
+  assert.strictEqual(TC.COLORS.length, 30);
+  for (const c of TC.COLORS) assert.ok(html.includes(`<li>${c}</li>`), c);
   assert.match(html, /Table Cover Design — New: <b>\$95\.00<\/b>|New table cover design: <b>\$95\.00<\/b>/);
 });
 

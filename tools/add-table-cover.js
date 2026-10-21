@@ -39,7 +39,7 @@ const PRODUCT = 'Fitted Table Cover — 6 ft';
 /* supplier 'ycc': the designer's catalogue feed (jt-catalog.php) publishes
    inactive rows only for the suppliers it lists ('ycc' since designer #147). */
 const PRODUCT_DESC = 'Fitted polyester table cover for a 6 ft table (72" x 30"), closed on all four sides. ' +
-  'Tell us the color on the quote (30 to choose from). Printed in our shop with DTF on one side (front) or two sides (front and back).';
+  'Tell us the color on the quote (30 to choose from; we confirm stock). Printed in our shop with DTF on one side (front) or two sides (front and back).';
 
 /* Band ceilings -> price each, from tools/lib/table-cover.js (the page
    prints the same table). ONE_SIDE is the main stage; BACK is what the

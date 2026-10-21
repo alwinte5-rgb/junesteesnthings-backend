@@ -16,11 +16,15 @@ const TWO_SIDES = { 1: 110, 2: 95, 7000: 80 };
 
 const BLANK_COST = 12.99;   // YCC Linens 6 ft fitted polyester, 1-19 (2026-10-20), for job costs
 
-/* The cover colors YCC Linens stocks for the 6 ft fitted cover, as its own
- * product page names them. Empty until read from that page (its site refuses
- * scripted reads; read in Chrome), and the page then says "ask us". Never
- * guessed: a color we list and cannot buy is a promise we break. */
-const COLORS = [];
+/* The cover colors YCC Linens sells the 6 ft fitted cover in, exactly as its
+ * product page's color picker names them (read in Chrome 2026-10-21,
+ * ycclinens.com/6-ft-fitted-polyester-tablecloth-rectangular-canary-yellow).
+ * Stock moves (Black was out that day), so the page says we confirm stock.
+ * Re-read if YCC adds or drops a color. */
+const COLORS = ['White', 'Black', 'Navy Blue', 'Gray', 'Red', 'Blush', 'Champagne', 'Hunter Green',
+  'Ivory', 'Pastel Yellow', 'Royal Blue', 'Burgundy', 'Eggplant', 'Gold', 'Lavender', 'Orange',
+  'Purple', 'Teal', 'Tiffany', 'Light Blue', 'Fuchsia', 'Canary Yellow', 'Chocolate Brown', 'Sage',
+  'Dusty Blue', 'Dusty Rose', 'Mint', 'Emerald Green', 'Terracotta', 'Olive Green'];
 
 /** Price each for `qty` covers printed on `sides` (1 or 2), or null. */
 function priceEach(qty, sides) {

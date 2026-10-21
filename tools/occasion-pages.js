@@ -181,7 +181,7 @@ function colorsBox(page) {
   return `<div class="pp-colors">
       <h3>Cover colors</h3>
       ${list.length
-        ? `<p>Pick your cover color and tell us on the quote form:</p>
+        ? `<p>${list.length} cover colors. Tell us the one you want on the quote form and we confirm it is in stock:</p>
       <ul>${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`
         : '<p>The covers come in about 30 colors, from black, white and navy to bright and pastel shades. Tell us the color you want on the quote form and we confirm it is in stock.</p>'}
     </div>`;
