@@ -139,6 +139,11 @@ function designBox(page) {
    from. They are never captioned as the shop's own work. */
 function photoStrip(page) {
   const photos = page.print.photos || [];
+  for (const ph of photos) {
+    if (!/^[a-z0-9-]{1,60}$/.test(String(ph.file)) || !(Number.isInteger(ph.w) && ph.w > 0) || !(Number.isInteger(ph.h) && ph.h > 0)) {
+      throw new Error(`${page.path}: photo ${JSON.stringify(ph.file)} needs a plain file name and whole-number w/h`);
+    }
+  }
   if (!photos.length) return '';
   return `<div class="pp-photos">${photos.map((ph, i) => `<img src="/assets/images/print/${esc(ph.file)}.jpg" alt="${esc(ph.alt)}" width="${ph.w}" height="${ph.h}"${ph.pos && /^[a-z0-9% ]{1,30}$/.test(ph.pos) ? ` style="object-position:${ph.pos}"` : ''}${i ? ' loading="lazy"' : ' fetchpriority="high"'} />`).join('')}</div>`;
 }
