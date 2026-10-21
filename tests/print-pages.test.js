@@ -230,7 +230,8 @@ test('every page photo is on disk, sized as written, and records its free-licenc
   for (const p of pages) for (const ph of p.print.photos || []) {
     const file = path.join(PUBLIC, 'assets', 'images', 'print', ph.file + '.jpg');
     assert.ok(fs.existsSync(file), `${p.path}: ${ph.file}.jpg`);
-    assert.match(ph.source || '', /^https:\/\/unsplash\.com\/photos\//, `${p.path}: ${ph.file} needs its source`);
+    if (ph.own === true) assert.strictEqual(ph.source, undefined, `${p.path}: ${ph.file} is ours or stock, not both`);
+    else assert.match(ph.source || '', /^https:\/\/unsplash\.com\/photos\//, `${p.path}: ${ph.file} needs its source`);
     assert.ok(ph.alt && !/june/i.test(ph.alt), `${p.path}: ${ph.file} alt must not claim it as the shop's work`);
     assert.match(read(p.path), new RegExp(`/assets/images/print/${ph.file}\\.jpg" alt="[^"]+" width="${ph.w}" height="${ph.h}"`));
   }

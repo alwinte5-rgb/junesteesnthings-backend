@@ -1700,6 +1700,29 @@
     "product": "Custom Fitted Table Cover",
     "prices_h2": "Table cover prices",
     "colors": "table_cover",
+    "photos": [
+     {
+      "file": "table-cover-mainstream",
+      "alt": "A black table cover with a customer's purple and gold logo printed on the front",
+      "w": 1200,
+      "h": 900,
+      "own": true
+     },
+     {
+      "file": "table-cover-car-show",
+      "alt": "A black table cover with a large white logo printed on the front, under a tent at a car show",
+      "w": 801,
+      "h": 1200,
+      "source": "https://unsplash.com/photos/HUL7QpS05MU"
+     },
+     {
+      "file": "table-cover-logo-front",
+      "alt": "A black table cover with a white logo printed across the front",
+      "w": 1200,
+      "h": 900,
+      "source": "https://unsplash.com/photos/K6cp5GJOets"
+     }
+    ],
     "design_fees": [
      {
       "label": "New table cover design",
@@ -1848,6 +1871,13 @@
       "h": 1200,
       "pos": "center 75%",
       "source": "https://unsplash.com/photos/shV9ZRKOrmE"
+     },
+     {
+      "file": "labels-honey-jars",
+      "alt": "Honey jars with round printed labels",
+      "w": 1200,
+      "h": 795,
+      "source": "https://unsplash.com/photos/9HajXdvKpIk"
      }
     ],
     "setup_free": true

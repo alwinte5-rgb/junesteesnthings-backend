@@ -159,7 +159,9 @@ function designBox(page) {
 /* Photos on a printed-product page (owner, 2026-10-20: "each page needs to
    have photos, they could be stock photos"). Stock photos are licensed free
    for commercial use (Unsplash); `source` in the data records where each came
-   from. They are never captioned as the shop's own work. */
+   from. They are never captioned as the shop's own work. A photo of the
+   shop's own work carries `own: true` instead of a source (owner,
+   2026-10-21: "make sure the table cover image I have is presented"). */
 function photoStrip(page) {
   const photos = page.print.photos || [];
   for (const ph of photos) {
