@@ -1,48 +1,44 @@
 'use strict';
 
-/* The 6 ft table cover (owner, 2026-10-20): DTF printed in house on one or two
- * sides of a YCC Linens blank, with the blank's delivery inside the price.
- * tools/add-table-cover.js writes the method and product; server.js carries
- * the delivery as the tablecover_ship add-on. The two must agree. */
+/* The 6 ft table cover (owner, 2026-10-21): DTF printed in house on one or two
+ * sides of a YCC Linens blank, at the owner's all-in prices, shipping included:
+ *   1 side  $75 for 1-2, $65 each from 3;  2 sides $90 for 1, $80 each from 2.
+ * tools/add-table-cover.js writes them as one decoration method whose main
+ * stage is the 1-side price and whose second stage is what the back adds. */
 
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-table-cover.js'), 'utf8');
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+const grab = (name) => vm.runInThisContext('(' + (tool.match(new RegExp('const ' + name + ' = (\\{[^}]*\\});')) || [])[1] + ')');
+const ONE = grab('ONE_SIDE'), TWO = grab('TWO_SIDES');
+/* The engine's band rule: the first ceiling at or above the quantity. */
+const at = (t, q) => t[Object.keys(t).map(Number).sort((a, b) => a - b).find((c) => q <= c)];
 
-test('the delivery charge in server.js is the tool\'s, and attaches to the tool\'s method', () => {
-  const ship = Number((tool.match(/const SHIP = ([\d.]+);/) || [])[1]);
-  const method = (tool.match(/const METHOD = '([^']+)';/) || [])[1];
-  assert.ok(ship > 0 && method, 'SHIP and METHOD in the tool');
-  const a = src.indexOf("code: 'tablecover_ship'");
-  assert.ok(a !== -1, 'tablecover_ship add-on');
-  const block = src.slice(a, src.indexOf('},', a));
-  assert.match(block, new RegExp(`rate: ${ship.toString().replace('.', '\\.')},`));
-  assert.match(block, /kind: 'once'/);
-  assert.match(block, /orderShared: true/);
-  assert.match(block, /inItemPrice: true/);
-  assert.match(block, /auto: 'method'/);
-  const re = new RegExp((block.match(/appliesTo: \/(.+?)\/i,/) || [])[1], 'i');
-  assert.ok(re.test(method), 'the add-on matches the method title');
-  assert.ok(!re.test('DTF Printing') && !re.test('DTF Printing — Oversized (up to 252 sq in)'), 'never on shirt DTF');
+test('the owner\'s prices, each, at every quantity', () => {
+  for (const [q, one, two] of [[1, 75, 90], [2, 75, 80], [3, 65, 80], [10, 65, 80], [500, 65, 80]]) {
+    assert.strictEqual(at(ONE, q), one, `1 side at ${q}`);
+    assert.strictEqual(at(TWO, q), two, `2 sides at ${q}`);
+    assert.ok(at(TWO, q) - at(ONE, q) > 0, `the back adds something at ${q}`);
+  }
 });
 
-test('a typed price or the customer’s own cover: no delivery, on the form and the save', () => {
-  assert.match(src, /if \(a\.code === 'tablecover_ship' && \(String\(u\.value \|\| ''\)\.trim\(\) !== '' \|\| addons\.some\(function\(x\)\{ return x\.code === 'own_blanks'; \}\)\)\) return;/);
-  assert.match(src, /if \(a\.code === 'tablecover_ship' && \(priceTyped \|\| lineAddons\.some\(\(x\) => x\.code === 'own_blanks'\)\)\) continue;/);
-  assert.match(src, /a\.code !== 'cutout_ship' && a\.code !== 'tablecover_ship'/, 'shown inside the price for staff too');
+test('nothing is added on top: no product price, no delivery charge', () => {
+  assert.match(tool, /const blank = 0;/);
+  assert.doesNotMatch(src, /tablecover_ship/, 'shipping is inside the owner\'s price');
 });
 
-test('job costs book the delivery as shipping and the front as an oversized print', () => {
-  const JC = require('../tools/lib/job-costs');
-  assert.strictEqual(JC.addonCosts([{ code: 'tablecover_ship', total: 11.99 }]).shipping, 11.99);
-});
-
-test('the tool refuses a band without a price and is dry-run by default', () => {
+test('the tool refuses a missing or rising price and is dry-run by default', () => {
   assert.match(tool, /no price for the <=' \+ c \+ ' band — refusing/);
+  assert.match(tool, /1-side price RISES at/);
   assert.match(tool, /const APPLY = argv\.includes\('--apply'\)/);
-  assert.match(tool, /sellPrice\(BLANK_COST\)/, 'the blank follows the garment markup');
+});
+
+test('job costs cost the front as an oversized print', () => {
+  const JC = require('../tools/lib/job-costs');
+  assert.ok(JC.DTF[1][2] > JC.DTF[1][1]);
 });

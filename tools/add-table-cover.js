@@ -1,34 +1,30 @@
 #!/usr/bin/env node
-/* Fitted 6 ft table cover, DTF printed in house on one or two sides
- * (owner, 2026-10-20: "we're only carrying 6ft for 1-2 sides"; "add shipping
- * cost to the table pricing on 6ft").
+/* Fitted 6 ft table cover, DTF printed in house on one or two sides.
  *
  *   node tools/add-table-cover.js --vars=<(jtees-env)            # dry run
  *   node tools/add-table-cover.js --vars=<(jtees-env) --apply    # write
  *
- * WHAT IT WRITES
- *   1. A decoration method, "DTF Printing — Table Cover". Its main print is the
- *      LIVE oversized DTF ladder (method #64, itself derived from #1), because a
- *      logo on a table's front panel is a big print; its second stage is #1's
- *      additional-location ladder, so "2 sides" (front and back panels) is the
- *      main print plus one ordinary second location, exactly as on a tee.
- *      server.js gives this method its own once-an-order supplier delivery
- *      charge (tablecover_ship, $11.99, YCC Linens ground for one cover), shown
- *      inside the item's price. It is a separate method for that reason only:
- *      add-ons attach by method title, and DTF on a shirt has no such charge.
- *   2. The product, "Fitted Table Cover — 6 ft", quote-only (active=0, like
- *      the staff services), priced as the blank: YCC Linens' $12.99 x the
- *      garment markup (tools/lib/markup.js). Offered with that method only.
+ * THE OWNER'S PRICES (2026-10-21), each, shipping included:
+ *   1 side:  $75 for 1-2 covers, $65 each from 3.
+ *   2 sides: $90 for 1 cover,    $80 each from 2.
  *
- * Re-run after every DTF price change (tools/add-dtf-oversized.js first): the
- * method's prices are copied from #64 and #1, and a re-run re-prices it in
- * place without touching its on/off switch.
+ * WHAT IT WRITES
+ *   1. A decoration method, "DTF Printing — Table Cover", that carries the
+ *      whole price (the 3in-button pattern, tools/add-buttons.js): the main
+ *      stage is the 1-side price, and the second stage is what the back adds,
+ *      so 1 side + back = the 2-side price at every quantity. The engine reads
+ *      the main table for the first side printed and the second-stage table
+ *      for the other (server.js priceLine keyOf). Keys are band CEILINGS.
+ *   2. The product, "Fitted Table Cover — 6 ft", quote-only (active=0,
+ *      supplier 'ycc', published to the quote form by the designer's
+ *      jt-catalog.php), price 0 so nothing is added on top: the blank and its
+ *      delivery from YCC Linens are inside the owner's price. supplier_cost
+ *      keeps the blank's cost for the margin report.
  */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { mysqlUrlFrom, mysql, enjson, dejson, sq, encodePrintings } = require('./lib/db');
-const { sellPrice } = require('./lib/markup');
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -38,56 +34,43 @@ const env = varsFile ? JSON.parse(fs.readFileSync(varsFile, 'utf8')) : process.e
 const url = mysqlUrlFrom(env);
 if (!url) { console.error('usage: add-table-cover.js --vars=<(jtees-env) [--apply]'); process.exit(2); }
 
-const BLANK_COST = 12.99;   // YCC Linens 6 ft fitted polyester, 1-19 (2026-10-20)
-const SHIP = 11.99;         // YCC to 60657, one cover, cheapest option (2026-10-20); server.js tablecover_ship
+const BLANK_COST = 12.99;   // YCC Linens 6 ft fitted polyester, 1-19 (2026-10-20), for job costs
 const METHOD = 'DTF Printing — Table Cover';
 const METHOD_DESC = 'Full-color DTF printed on a fitted 6 ft table cover: one side is a large print ' +
-  'on the front panel (up to 252 sq in); two sides adds the back panel. Includes delivery of the ' +
-  'blank cover to our shop, once an order.';
+  'on the front panel; two sides adds the back panel. The price includes the cover and its delivery.';
 const PRODUCT = 'Fitted Table Cover — 6 ft';
 /* supplier 'ycc': the designer's catalogue feed (jt-catalog.php) publishes
-   inactive rows only for the suppliers it lists, so 'ycc' must be listed
-   there BEFORE --apply, or the cover never reaches the quote form. */
+   inactive rows only for the suppliers it lists ('ycc' since designer #147). */
 const PRODUCT_DESC = 'Fitted polyester table cover for a 6 ft table (72" x 30"), closed on all four sides. ' +
   'Tell us the color on the quote (30 to choose from). Printed in our shop with DTF on one side (front) or two sides (front and back).';
 
-const row = (id) => mysql(url, 'SELECT id, title, calculate FROM lumise_printings WHERE id=' + id + ';', { rows: true })[0];
-const std = row(1), big = row(64);
-const cStd = std && dejson(std.calculate), cBig = big && dejson(big.calculate);
+/* Band ceilings -> price each. ONE_SIDE is the main stage; BACK is what the
+   second side adds: 2 sides = 90 (1), 80 (2), 80 (3+). */
+const ONE_SIDE = { 1: 75, 2: 75, 7000: 65 };
+const TWO_SIDES = { 1: 90, 2: 80, 7000: 80 };
+const BACK = Object.fromEntries(Object.keys(ONE_SIDE).map((c) => [c, TWO_SIDES[c] - ONE_SIDE[c]]));
 const mainKey = 'id', addKey = 'mr8a5dlx';
-for (const [n, c] of [['#1', cStd], ['#64', cBig]]) {
-  /* Exactly the two stages: a third would be dropped here and read as free. */
-  if (!c || !c.values || !c.values[mainKey] || !c.values[addKey] || Object.keys(c.values).length !== 2) {
-    console.error('method ' + n + ' is not the two-stage DTF table (id + mr8a5dlx) this tool expects — refusing');
-    process.exit(1);
-  }
-}
-const flat = (c, g) => Object.fromEntries(Object.entries(c.values[g]).map(([q, v]) => [q, v && v.price]));
-const main = flat(cBig, mainKey);
-const additional = flat(cStd, addKey);
-const ceilings = Object.keys(main).map(Number).sort((a, b) => a - b);
-if (JSON.stringify(ceilings) !== JSON.stringify(Object.keys(additional).map(Number).sort((a, b) => a - b))) {
-  console.error('#64 and #1 have different quantity bands — refusing'); process.exit(1);
-}
+const ceilings = Object.keys(ONE_SIDE).map(Number).sort((a, b) => a - b);
 
-const blank = sellPrice(BLANK_COST);
 console.log((APPLY ? 'APPLYING' : 'DRY RUN') + '\n');
-console.log('  ' + PRODUCT + ': blank $' + BLANK_COST.toFixed(2) + ' -> $' + blank.toFixed(2) + ' (markup), plus $' + SHIP + ' delivery once an order\n');
-console.log('  band        front    back     1 side each*   2 sides each*   (*for 1 cover, delivery included)');
+console.log('  up to      1 side   back adds   2 sides   (each, shipping included)');
+let prev = Infinity;
 for (const c of ceilings) {
-  const m = parseFloat(main[c]), a = parseFloat(additional[c]);
-  /* A missing price reads as FREE in every engine: refused, never written. */
-  if (!(m > 0) || !(a > 0)) { console.error('  !! no price for the <=' + c + ' band — refusing'); process.exit(1); }
-  const one = blank + m + SHIP, two = one + a;
-  console.log('  <=' + String(c).padEnd(9) + ('$' + main[c]).padStart(7) + ('$' + additional[c]).padStart(8) +
-    ('$' + one.toFixed(2)).padStart(15) + ('$' + two.toFixed(2)).padStart(16));
+  if (!(ONE_SIDE[c] > 0) || !(BACK[c] > 0)) { console.error('  !! no price for the <=' + c + ' band — refusing'); process.exit(1); }
+  if (ONE_SIDE[c] > prev) { console.error('  !! 1-side price RISES at ' + c + ' — refusing'); process.exit(1); }
+  prev = ONE_SIDE[c];
+  console.log('  <=' + String(c).padEnd(8) + ('$' + ONE_SIDE[c].toFixed(2)).padStart(8) + ('$' + BACK[c].toFixed(2)).padStart(12) + ('$' + TWO_SIDES[c].toFixed(2)).padStart(10));
 }
+const cStd = mysql(url, 'SELECT calculate FROM lumise_printings WHERE id=1;', { rows: true })[0];
+const std = cStd && dejson(cStd.calculate);
+if (!std) { console.error('method #1 unreadable — refusing'); process.exit(1); }
+const blank = 0;
 
 const newCalc = {
-  multi: true, type: cStd.type || 'fixed', show_detail: cStd.show_detail || '1',
+  multi: true, type: std.type || 'fixed', show_detail: std.show_detail || '1',
   values: {
-    [mainKey]: Object.fromEntries(ceilings.map((c) => [String(c), { price: main[c] }])),
-    [addKey]: Object.fromEntries(ceilings.map((c) => [String(c), { price: additional[c] }])),
+    [mainKey]: Object.fromEntries(ceilings.map((c) => [String(c), { price: ONE_SIDE[c].toFixed(2) }])),
+    [addKey]: Object.fromEntries(ceilings.map((c) => [String(c), { price: BACK[c].toFixed(2) }])),
   },
 };
 
@@ -119,9 +102,12 @@ if (existingP.length) {
   mysql(url, 'UPDATE lumise_products SET price=' + sq(blank.toFixed(2)) + ', supplier_cost=' + sq(BLANK_COST.toFixed(2)) +
     ', description=' + sq(PRODUCT_DESC) + ', printings=' + sq(printings) + ', updated=NOW() WHERE id=' + Number(existingP[0].id) + ';');
 } else {
-  mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,printings,active,created,updated) VALUES (' +
+  /* The same columns tools/add-services.js writes for a quote-only row. */
+  const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
+  mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +
+    'printings,thumbnail_url,active,`order`,author,created,updated) VALUES (' +
     sq(PRODUCT) + ',' + sq(PRODUCT_DESC) + ',' + sq(blank.toFixed(2)) + ',' + sq(BLANK_COST.toFixed(2)) + ",'ycc'," +
-    sq(enjson({})) + ',' + sq(enjson({})) + ',' + sq(printings) + ',0,NOW(),NOW());');
+    sq(enjson({})) + ',' + sq(enjson({})) + ',' + sq(printings) + ",'',0,999," + sq(author) + ',NOW(),NOW());');
 }
 
 const vm = mysql(url, 'SELECT id, active, calculate FROM lumise_printings WHERE id=' + Number(mid) + ';', { rows: true })[0];
