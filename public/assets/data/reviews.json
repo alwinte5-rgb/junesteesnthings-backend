@@ -1,5 +1,5 @@
 {
-  "_about": "The shop's Google reviews, shown on quote pages (server.js reviewStrip) and at the bottom of every site page (assets/js/review-strip.js). One list, so they can never disagree. photo is optional. text is the customer's own words as Google shows them (… where Google cuts it short); photo only where it is on that person's Google review.",
+  "_about": "The shop's Google reviews, shown on quote pages (server.js reviewStrip) and at the bottom of every site page (assets/js/review-strip.js). One list, so they can never disagree. photo is optional. text is the customer's own words as Google shows them (… where Google cuts it short); photo only where it is on that person's Google review. stars is that review's own rating (5 when left out).",
   "rating": 4.8,
   "count_on_google": 23,
   "google_url": "/#reviews",
@@ -19,7 +19,8 @@
       "title": "Great job on the hats",
       "text": "Great job on the hats!! We loved them!",
       "who": "Diane Alarcon · Google Review",
-      "photo": "/assets/images/reviews/review-3.jpg"
+      "photo": "/assets/images/reviews/review-3.jpg",
+      "stars": 4
     },
     {
       "title": "A very precious memorial sweatshirt",

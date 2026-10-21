@@ -32,7 +32,8 @@
           img.src = r.photo; img.alt = 'Customer photo from this Google review'; img.loading = 'lazy';
           c.appendChild(img);
         }
-        c.appendChild(el('div', 'stars', '★★★★★'));
+        var k = Math.round(Number(r.stars)); if (!(k >= 1 && k <= 5)) k = 5;   // that review's own rating (reviews.json stars)
+        c.appendChild(el('div', 'stars', new Array(k + 1).join('★') + new Array(6 - k).join('☆')));
         c.appendChild(el('div', 'rv-t', r.title));
         c.appendChild(el('div', 'rv-x', r.text));
         c.appendChild(el('div', 'rv-w', r.who));

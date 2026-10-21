@@ -289,12 +289,15 @@ function pickThree(index, n) {
   return new Set(COMBOS.get(n)[index % combos.length]);
 }
 
+/** A review's own rating, 1-5 (reviews.json `stars`, 5 when left out). */
+function rvStars(r) { const n = Math.round(Number(r.stars)); return n >= 1 && n <= 5 ? n : 5; }
+
 function reviewsBlock(reviews, index) {
   const [s, e] = mark('pb-reviews');
   const show = pickThree(index, reviews.reviews.length);
   const items = reviews.reviews.map((r, i) => `<figure class="pb-rv"${show.has(i) ? '' : ' hidden'}>
       ${r.photo ? `<img src="${esc(r.photo)}" alt="Customer photo from this Google review" loading="lazy" width="320" height="220" />` : ''}
-      <figcaption><div class="pb-stars" aria-label="5 stars">★★★★★</div><b>${esc(r.title)}</b><p>${esc(r.text)}</p><span>${esc(r.who)}</span></figcaption>
+      <figcaption><div class="pb-stars" aria-label="${rvStars(r)} stars">${'★'.repeat(rvStars(r))}${'☆'.repeat(5 - rvStars(r))}</div><b>${esc(r.title)}</b><p>${esc(r.text)}</p><span>${esc(r.who)}</span></figcaption>
     </figure>`).join('\n    ');
   return `${s}
 <section class="pb-reviews" aria-labelledby="pb-reviews-h">
