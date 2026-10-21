@@ -78,3 +78,15 @@ test('the page says what the each-price covers', () => {
   assert.match(src, /Screens, setup and design work are charged once\s*\n?\s*for the job, so they have their own rows/,
     'it should name the charges that are billed once rather than per piece');
 });
+
+test('a DTF front says chest logo or full front (owner, 2026-10-21)', () => {
+  const CHEST = { id: 70, title: 'DTF Printing — Chest logo (up to 16 sq in)', type: 'fixed' };
+  const cat = { methods: [DTF, CHEST] };
+  assert.deepStrictEqual(fn({ prints: [{ loc: 'front', method_id: 70 }] }, cat), ['DTF Printing — chest logo']);
+  assert.deepStrictEqual(fn({ prints: [{ loc: 'front', method_id: 70 }, { loc: 'back', method_id: 1 }] }, cat),
+    ['DTF Printing — chest logo', 'DTF Printing — back']);
+  /* "full front" only on a line saved since the choice existed: an older
+     method #1 front may be a chest logo. */
+  assert.deepStrictEqual(fn({ prints: [{ loc: 'front', method_id: 1 }], named_front: true }, cat), ['DTF Printing — full front']);
+  assert.deepStrictEqual(fn({ prints: [{ loc: 'front', method_id: 1 }] }, cat), ['DTF Printing — front']);
+});

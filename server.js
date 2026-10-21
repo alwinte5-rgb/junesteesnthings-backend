@@ -105,6 +105,7 @@ const TIMECLOCK = require('./tools/lib/timeclock');
 const TRAINING = require('./tools/lib/training');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
+const CONTRACTS = require('./tools/lib/contracts');
 const CHAN = require('./tools/lib/team-channels');
 const MB = require('./tools/lib/mailbox');
 const NOTIFY = require('./tools/lib/notifications');
@@ -9536,6 +9537,52 @@ function quotePricingSource() {
         return Math.max(q, parseInt(totals[g], 10) || 0);
       }
 
+      /* Which DTF print a method is: 'chest' (up to 16 sq in, a 4" x 4"
+         chest logo), 'oversized' (up to 252 sq in), 'standard', or '' for
+         anything that is not DTF. The table cover is not: its tables are the
+         cover's all-in price. */
+      function dtfKind(m) {
+        var t = String((m && m.title) || '').toLowerCase();
+        if (t.indexOf('dtf') !== 0 || t.indexOf('table cover') !== -1) return '';
+        return t.indexOf('chest logo') !== -1 ? 'chest' : t.indexOf('oversized') !== -1 ? 'oversized' : 'standard';
+      }
+      /* What a DTF print on the FRONT is called: 'chest logo', 'full front',
+         or '' for anything that is not DTF. One rule for the form and the
+         customer's page. */
+      function dtfFrontWord(m) {
+        var k = dtfKind(m);
+        return k === 'chest' ? 'chest logo' : k ? 'full front' : '';
+      }
+      /* How big a print is, for which one takes the main table. */
+      function dtfRank(m) {
+        var k = dtfKind(m);
+        return k === 'oversized' ? 2 : k === 'chest' ? 0 : 1;
+      }
+
+      /* A picked contract's price for one line (tools/lib/contracts.js), or
+         why it does not apply. Only a DTF line on the customer's own garments
+         at or over the contract's minimum: anything else prices from the list,
+         and says why, so a contract quote never silently charges list. */
+      function contractPrice(c, prints, ownBlanks, bandQty) {
+        if (!prints.length) return { miss: '' };
+        for (var i = 0; i < prints.length; i++) if (!dtfKind(prints[i].method)) return { miss: 'DTF prints only' };
+        if (!ownBlanks) return { miss: 'tick Customer supplies the blanks' };
+        if (bandQty < c.min) return { miss: c.min + ' pieces minimum per design' };
+        var big = false;
+        for (i = 0; i < prints.length; i++) if (dtfKind(prints[i].method) === 'oversized') big = true;
+        var pair = big ? c.oversized : c.standard;
+        var unit = Number(pair[bandQty >= c.big ? 1 : 0]);
+        /* Two places are in the price; each further one (prints run front,
+           back, sleeves, so it is a sleeve) adds its own additional-location
+           price from the list. */
+        var extra = 0;
+        for (i = 2; i < prints.length; i++) {
+          var pk = Object.keys(prints[i].method.positions || {});
+          extra += Number(tierAt(prints[i].method.positions, bandQty, pk[1] || pk[0], prints[i].c));
+        }
+        return { unit: Math.round((unit + extra) * 100) / 100, size: big ? 'oversized' : 'standard' };
+      }
+
       function priceLine(o) {
         var qty = parseInt(o.qty, 10) || 0;
         /* The white base goes on every garment; only a line saved before
@@ -9608,13 +9655,17 @@ function quotePricingSource() {
           var t = String(m.title || '').toLowerCase();
           /* The table cover's method is its own family: its tables are the
              cover's all-in price, not DTF transfer prices (code review). */
-          return t.indexOf('dtf') === 0 && t.indexOf('table cover') === -1 ? 'dtf' : 'm' + String(m.id);
+          return dtfKind(m) ? 'dtf' : 'm' + String(m.id);
         }
+        /* The chest logo (2026-10-21) is the SMALLEST DTF print: on its own it
+           takes its own main table, and beside a full front or back it is the
+           additional location, wherever it sits. So the main print goes to the
+           biggest print on the shirt: oversized, then standard, then chest. */
         var familyMain = {};
         for (var fi = 0; fi < prints.length; fi++) {
           var fam = familyOf(prints[fi].method);
-          var big = String(prints[fi].method.title || '').toLowerCase().indexOf('oversized') !== -1;
-          if (!(fam in familyMain) || (big && !familyMain[fam].big)) familyMain[fam] = { i: fi, big: big };
+          var rank = dtfRank(prints[fi].method);
+          if (!(fam in familyMain) || rank > familyMain[fam].rank) familyMain[fam] = { i: fi, rank: rank };
         }
         var seenMethod = {};
         function keyOf(p) {
@@ -9772,7 +9823,22 @@ function quotePricingSource() {
         var listUnit = Math.round((blank + decoTotal) * 100) / 100;
         var hasOverride = o.unitOverride !== null && o.unitOverride !== undefined &&
                           o.unitOverride !== '' && isFinite(parseFloat(o.unitOverride));
-        var unit = hasOverride ? parseFloat(o.unitOverride) : listUnit;
+        /* A picked contract replaces the list price; a typed price still wins,
+           as it does over the list. Lines saved before print locations never
+           carry one. */
+        var cp = (o.contract && !hasOverride)
+          ? (legacy ? { miss: 'older line: tick its print places again' } : contractPrice(o.contract, prints, ownBlanks, bandQty))
+          : null;
+        var onContract = !!(cp && cp.unit > 0);
+        /* A single print pays the contract price for its size (owner,
+           2026-10-21), except a chest logo alone: its own list price, blanks
+           handling included, is lower, and the contract never costs more. */
+        if (onContract && prints.length === 1 && dtfKind(prints[0].method) === 'chest') {
+          var obRate = 0;
+          for (var oi = 0; oi < (o.addons || []).length; oi++) if (o.addons[oi] && o.addons[oi].code === 'own_blanks') obRate = Number(o.addons[oi].rate) || 0;
+          if (listUnit + obRate <= cp.unit) { onContract = false; cp = { miss: 'chest logo alone: its normal price is lower' }; }
+        }
+        var unit = hasOverride ? parseFloat(o.unitOverride) : onContract ? cp.unit : listUnit;
 
         var decorationSubtotal = primaryDeco * qty;
         var decoration = decoTotal;
@@ -9793,6 +9859,14 @@ function quotePricingSource() {
           /* A run's shared charges ride on its primary line only — the screens
              it burns and the artwork it is drawn from. */
           if (a.runShared && !runPrimary) continue;
+          /* The contract price is all-in: the own-blanks handling is in it.
+             Kept on the line at $0, because the line still IS the customer's
+             garments: reopening the quote, the customer's page and the blanks
+             schedule all read the code (quoteOwnBlanks). */
+          if (onContract && a.code === 'own_blanks') {
+            addonLines.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate, count: null, total: 0 });
+            continue;
+          }
           var amt = Math.round(addonAmount(a, qty, colours, decorationSubtotal, screens) * 100) / 100;
           if (!amt) continue;
           /* \`count\` rides along so a surface can print "4 x $35" without
@@ -9837,6 +9911,8 @@ function quotePricingSource() {
           blank: blank, decoration: decoration, sizeUpcharge: sizeUpcharge,
           addonLines: addonLines, addonTotal: Math.round(addonTotal * 100) / 100,
           unit: unit, listUnit: listUnit, manual: hasOverride,
+          /* On a picked contract: whether it priced this line, and if not, why. */
+          contract: onContract, contractMiss: (cp && !onContract) ? cp.miss : '',
           /* Returned so a surface can SHOW the count it is charging for —
              "4 screens x $35" is checkable by the customer, "$140 setup" is
              not — without re-deriving it and drifting. */
@@ -9855,11 +9931,11 @@ function quotePricingSource() {
 /* The same source, executed here, so Node prices a line with the identical
    code the browser runs. */
 const { priceLine, addonAmount, colourCount, screenCount, runGroupTotals, bandQtyFor,
-        legacyPrints, PRINT_LOCS } = (function () {
+        legacyPrints, PRINT_LOCS, dtfKind, dtfFrontWord } = (function () {
   const sandbox = {};
   vm.runInNewContext(quotePricingSource() +
     '\nthis.priceLine = priceLine; this.addonAmount = addonAmount;' +
-    '\nthis.legacyPrints = legacyPrints; this.PRINT_LOCS = PRINT_LOCS;' +
+    '\nthis.legacyPrints = legacyPrints; this.PRINT_LOCS = PRINT_LOCS; this.dtfKind = dtfKind; this.dtfFrontWord = dtfFrontWord;' +
     '\nthis.runGroupTotals = runGroupTotals; this.bandQtyFor = bandQtyFor;' +
     '\nthis.colourCount = colourCount; this.screenCount = screenCount;', sandbox);
   return sandbox;
@@ -11437,6 +11513,29 @@ async function quoteFormFromCustomer(query) {
 
 /* The form June opens on her phone. Also serves /admin/quote/:code/edit, pre-filled,
    so editing is the same screen rather than a second thing to maintain. */
+/** The quote form's Contract pricing choice (tools/lib/contracts.js): one for
+ *  the whole quote, reopened from the lines it was saved on. A helper without
+ *  quotes.price sees it but cannot change it; the saved choice still posts, so
+ *  re-saving their edit keeps the owner's contract. */
+function contractPicker(eItems, canPrice) {
+  const val = (v) => escEmail(String(v == null ? '' : v));
+  const savedContract = (eItems.find((it) => it && it.contract) || {}).contract || '';
+  const contractChoices = CONTRACTS.contractChoices();
+  const contractPickHtml = contractChoices.length ? `
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px">
+          <label for="contractpick" style="margin:0">Contract pricing</label>
+          <select name="contract" id="contractpick" style="width:auto;padding:5px 7px;font-size:13px"${
+            canPrice ? '' : ' disabled title="Only the owner can pick a contract price"'}>
+            <option value="">None — price list</option>
+            ${contractChoices.map((c) => `<option value="${val(c.key)}" data-emails="${val(c.emails.join(','))}"${
+              c.key === savedContract ? ' selected' : ''}>${escEmail(c.label)}</option>`).join('')}
+          </select>${canPrice ? '' : `
+          <input type="hidden" name="contract" value="${val(savedContract)}">`}
+          <span id="contractwarn" style="font-size:12.5px;color:#b45309"></span>
+        </div>` : '';
+  return { savedContract, contractChoices, contractPickHtml };
+}
+
 app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (req, res) => {
   let catalog = { products: [], methods: [], failed: true };
   try { catalog = await getCatalog(); } catch (e) { /* form still works manually */ }
@@ -11650,13 +11749,13 @@ function productGroupOf(name) {
   /* The decorations a print location can take: everything quotable except
      cutout packs. A line already saved with a method since retired keeps it
      selectable, so re-saving an old quote never silently drops its printing. */
-  const decoOpts = (sel) => {
+  const decoOpts = (sel, loc) => {
     const list = quotable.filter((m) => !SUPPLIER_PRODUCT_RE.test(m.title || ''));
     const kept = sel != null && sel !== '' && !list.some((m) => String(m.id) === String(sel))
       ? catalog.methods.find((m) => String(m.id) === String(sel)) : null;
     return (kept ? [kept] : []).concat(list)
       .map((m) => `<option value="${m.id}"${String(m.id) === String(sel) ? ' selected' : ''}>` +
-        `${escEmail(m.title)}${m === kept ? ' (retired)' : ''}</option>`).join('');
+        `${escEmail(decoLabel(m, loc))}${m === kept ? ' (retired)' : ''}</option>`).join('');
   };
 
   /* Embroidery run rates are excluded on purpose (the shop prices embroidery
@@ -11703,6 +11802,7 @@ function productGroupOf(name) {
      only with quotes.price (owner, 2026-10-08). The save route enforces it —
      this only stops the boxes inviting a number that would be refused. */
   const canPrice = actorLevel('quotes.price') === 'on';
+  const CP = contractPicker(eItems, canPrice);
   const lineHtml = (n, it) => {
     const hasExtras = it && ((it.details && it.details.length) ||
                              (it.images && it.images.length) || it.size_mix);
@@ -11714,7 +11814,7 @@ function productGroupOf(name) {
        a rate change reaches an edited quote instead of being frozen here.
        Consumed once, by the first rebuild — see the `.addons` block in calc(). */
     const savedAddons = (it && Array.isArray(it.addons) ? it.addons : [])
-      .filter((a) => a && a.code && Number(a.total) > 0)
+      .filter((a) => a && a.code && (Number(a.total) > 0 || a.code === 'own_blanks'))
       .map((a) => String(a.code));
 
     /* What this line prints where, for the location rows. A cutout pack is
@@ -11739,7 +11839,7 @@ function productGroupOf(name) {
             <label class="ploc-name"><input type="checkbox" class="pon" name="pr_on_${loc}${n}" value="1"${p ? ' checked' : ''}>
               ${LOC_LABEL[loc]}</label>
             <select class="pm" name="pr_m_${loc}${n}" aria-label="${LOC_LABEL[loc]} decoration"${p ? '' : ' style="display:none"'}>
-              <option value="">Choose decoration</option>${decoOpts(p && p.method ? p.method.id : null)}</select>
+              <option value="">Choose decoration</option>${decoOpts(p && p.method ? p.method.id : null, loc)}</select>
             <select class="pc" name="pr_c_${loc}${n}" aria-label="${LOC_LABEL[loc]} ink colors" style="display:none"
                     data-v="${p && p.colours ? val(p.colours) : ''}"></select>
           </div>${loc === 'back' && backCheck ? `
@@ -12000,6 +12100,7 @@ function productGroupOf(name) {
       <div class="card">
         <label style="margin-top:0">Items</label>
         ${catalogNote}
+        ${CP.contractPickHtml}
         <div id="lines">${eItems.map((it, ix) => lineHtml(ix, it)).join('')}</div>
         <button type="button" class="btn btn-ghost" style="padding:9px 18px;font-size:14px" onclick="addLine()">+ Add another item</button>
         <table style="width:100%;margin-top:14px;border-top:1px solid #e3e8f2;padding-top:10px">
@@ -12112,6 +12213,24 @@ function productGroupOf(name) {
     <p style="margin-top:14px"><a class="muted" href="/admin/quotes">View all quotes →</a></p>
     <script>
       var CAT = ${JSON.stringify(actorLevel('finances') === 'on' ? catalog : catalogWithoutCosts(catalog))};
+      /* Contract prices by choice (tools/lib/contracts.js), and the one picked
+         now. Says on the form when the quote's email is not the contract's,
+         because the save refuses it. */
+      var CONTRACT_TERMS = ${JSON.stringify(Object.fromEntries(CP.contractChoices.map((c) => [c.key, c.terms])))};
+      function contractNow(){
+        var el = document.getElementById('contractpick');
+        var key = el ? el.value : '';
+        var t = key && Object.prototype.hasOwnProperty.call(CONTRACT_TERMS, key) ? CONTRACT_TERMS[key] : null;
+        var warn = document.getElementById('contractwarn');
+        if (warn) {
+          var opt = el.options[el.selectedIndex];
+          var emails = opt && opt.dataset.emails ? opt.dataset.emails.split(',') : [];
+          var em = ((document.querySelector('#qf input[name="email"]') || {}).value || '').trim().toLowerCase();
+          warn.textContent = t && emails.indexOf(em) < 0
+            ? 'Only for ' + emails.join(', ') + ': put that email on the quote, or it will not save.' : '';
+        }
+        return t;
+      }
       /* What a product IS decides what the item asks for. A sign is matched by
          the same rule that files it under Signs in the product list, so the
          two cannot disagree. A banner (not a banner stand) also gets the sizer. */
@@ -12881,6 +13000,7 @@ ${quotePricingSource()}
         pcatSyncAll();
         if (window.__etaReady) etaSync();
         var sub = 0;
+        var CTR = contractNow();
         /* Screens across every line, so the totals can show them on their own
            row. Counted from the addon line's own count field rather than
            dividing the total by a rate — the division would lie the moment the
@@ -13256,6 +13376,7 @@ ${quotePricingSource()}
             blankOverride: bpEl ? bpEl.value : '',
             /* A sign with no typed price is priced by the server (signSizer). */
             unitOverride: u.value || (signKind && L.dataset.signEach) || '',
+            contract: CTR || undefined,
             noBase: !!L.querySelector('input.nb')
           };
           var r = priceLine(plArgs);
@@ -13275,7 +13396,7 @@ ${quotePricingSource()}
             }
           }
 
-          if (prod) u.placeholder = r.listUnit.toFixed(2);
+          if (prod) u.placeholder = (r.contract ? r.unit : r.listUnit).toFixed(2);
           var lt = r.lineTotal;
           /* A supplier item shows its price with the delivery in it ($170 for
              a 36in pack), so the figure staff see is the one they would type. */
@@ -13298,10 +13419,20 @@ ${quotePricingSource()}
                is $170, no extra step). Only a Saturday or large-format rate,
                ticked on purpose, is listed. */
             var listed = r.addonLines.filter(function(a){ return a.code !== 'cutout_ship'; });
-            aoNote.innerHTML = listed.length
-              ? listed.map(function(a){ return a.label + ' ' + m2(a.total); }).join(' &middot; ')
-              : '';
-            aoNote.style.display = listed.length ? 'block' : 'none';
+            /* A $0 extra (own blanks inside a contract price) is not listed. */
+            var bits = listed.filter(function(a){ return a.total > 0; }).map(function(a){ return a.label + ' ' + m2(a.total); });
+            /* Whether the picked contract priced this item, and if not, why:
+               a contract quote must never charge list without saying so. */
+            if (r.contract) {
+              /* The list figure as the list would bill it: own-blanks handling
+                 is inside the contract price, but on top of the list one. */
+              var obl = r.addonLines.filter(function(a){ return a.code === 'own_blanks'; })[0];
+              bits.unshift('<span style="color:#166534">Contract price ' + m2(r.unit) + ' each, blanks handling included (list ' +
+                m2(r.listUnit + (obl ? Number(obl.rate) || 0 : 0)) + ')</span>');
+            }
+            else if (r.contractMiss && qty > 0) bits.unshift('<span style="color:#b45309">Not on the contract (' + r.contractMiss + '): list price</span>');
+            aoNote.innerHTML = bits.join(' &middot; ');
+            aoNote.style.display = bits.length ? 'block' : 'none';
           }
 
           /* Garment vs decoration, per piece and for the line. The unit price is
@@ -13352,6 +13483,7 @@ ${quotePricingSource()}
                  what the job COSTS to build, not what is being charged. Say so
                  rather than showing two sets of numbers that do not reconcile. */
               if (r.manual) parts.push('override in use — line bills ' + m2(lt));
+              else if (r.contract) parts.push('list split; contract bills ' + m2(lt));
               costNote.innerHTML = '<b>Internal:</b> ' + parts.join(' &nbsp;&middot;&nbsp; ') +
                 (makeIt ? '<br>' + makeIt : '');
               costNote.style.display = 'block';
@@ -14124,6 +14256,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         if (it && it.sign && it.sign.kind) priorSizedQty.add(it.sign.kind + '|' + (Number(it.qty) || 0));
       }
     }
+    /* CONTRACT PRICING (tools/lib/contracts.js). One choice for the whole
+       quote; anything that is not a real contract and step is no contract.
+       Whether this customer may have it is checked once the lines are read,
+       and a helper may not pick one (the price lock below). */
+    const contractPicked = CONTRACTS.contractTerms(String(one(b.contract) || '').trim());
+    const contractKey = contractPicked ? contractPicked.key : '';
     /* Every price a person typed on this save, for the helper price lock
        (quotes.price) checked once the quote as it stands has been read. */
     const typedPrices = [];
@@ -14439,6 +14577,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         runPrimary: !runGroup || runPrimaryIdx[runGroup] === i,
         stage, addons: lineAddons, blankTiers: BLANK_TIERS,
         blankOverride, unitOverride: rawUnit,
+        contract: contractPicked || undefined,
         /* Only on a quote made before 2026-10-07, so the marker cannot price a
            new line without the base. */
         noBase: legacyBaseQuote && String(one(b['nobase' + i]) || '') === '1',
@@ -14446,8 +14585,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const priced = priceLine(priceArgs);
       if (measureForStaff) {
         const typedUnit = rawUnit != null && String(rawUnit).trim() !== '' && Number.isFinite(Number(rawUnit));
+        /* A contract line is that customer's price list, which only the owner
+           picks: its own catalogue figure, not a helper's discount. */
         const ownBlanks = lineAddons.some((a) => a.code === 'own_blanks');
-        if (prod && (blankOverride != null || typedUnit || ownBlanks)) {
+        if (priced.contract) catalogueSum += priced.lineTotal;
+        else if (prod && (blankOverride != null || typedUnit || ownBlanks)) {
           catalogueSum += priceLine({ ...priceArgs, blankOverride: null, unitOverride: null,
             addons: lineAddons.filter((a) => a.code !== 'own_blanks') }).lineTotal;
         } else {
@@ -14633,6 +14775,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
            twice — and again on the next save, and the next. See typedUnitOf(). */
         unit_override: manual ? round2(unit) : null,
         line_total: lineTotal,
+        /* The contract the quote was priced on (on every line, so reopening
+           the quote picks it again), and whether it priced THIS line. */
+        ...(contractKey ? { contract: contractKey, on_contract: !!priced.contract } : {}),
+        /* Saved since a DTF front is picked as "Full front" or "Chest logo"
+           (2026-10-21): only then does a standard DTF front MEAN a full front.
+           Before it, method #1 on the front was every size, chest logos too. */
+        ...(usePrints ? { named_front: true } : {}),
         /* Design or sourcing work, not goods (designOnly). */
         ...(isUntaxedService(prod) ? { untaxed: true } : {}),
         size_mix: mix,
@@ -14687,6 +14836,18 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
     const backToForm = QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())
       ? `/admin/quote/${String(req.params.code).toUpperCase()}/edit` : '/admin/quote/new';
+
+    /* A contract is one customer's prices: refused on anybody else's quote,
+       so it can never become a discount on another job. */
+    if (contractKey && !CONTRACTS.contractAllowed(contractKey, email)) {
+      return res.status(400).send(quotePage('That contract is for another customer', `
+        <div class="card">
+          <div class="warn">Nothing was saved. The ${escEmail(contractPicked.name)} contract price is only for
+            ${escEmail(contractPicked.name)}'s email, and this quote's email is ${email ? escEmail(email) : 'empty'}.</div>
+          <p>Put the customer's email on the quote, or set Contract pricing back to None.</p>
+          <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p>
+        </div>`));
+    }
 
     /* Stickers and roll labels carry their design inside every price
        (sinalite.js design_in): a separate label design line beside them would
@@ -14853,17 +15014,23 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         if (it.blank_price != null) had.blank.add(round2(Number(it.blank_price)));
       }
       const changed = typedPrices.filter((t) => !had[t.kind].has(t.value));
+      /* Picking or changing a contract is a price change; keeping the one the
+         owner set is not, and dropping it only takes the quote back to list. */
+      const priorContract = (priorItems.find((it) => it && it.contract) || {}).contract || '';
+      const contractChanged = !!contractKey && contractKey !== priorContract;
       const priorDiscount = prior ? round2(Number(prior.discount_value || 0)) : 0;
       const discountChanged = round2(Number(discountValue) || 0) > 0 &&
         (round2(Number(discountValue) || 0) !== priorDiscount || String(discountKind) !== String((prior && prior.discount_kind) || discountKind));
-      if (changed.length || discountChanged) {
+      if (changed.length || discountChanged || contractChanged) {
         logActivity(saver, 'price change refused', { type: 'quote', id: priorCode || null },
-          { prices: changed, discount: discountChanged ? { kind: discountKind, value: discountValue } : null });
+          { prices: changed, discount: discountChanged ? { kind: discountKind, value: discountValue } : null,
+            contract: contractChanged ? contractKey : null });
         return res.status(403).send(adminPage('Prices are set by the owner', `
           ${pageHeader('Only the owner can change prices', '')}
           <div class="card"><div class="warn">Nothing was saved. ${changed.length
             ? `You typed a price on ${escEmail(changed.map((c) => c.what).join(', '))}.` : ''}${
-            discountChanged ? ' You added a discount.' : ''}</div>
+            discountChanged ? ' You added a discount.' : ''}${
+            contractChanged ? ' You picked a contract price.' : ''}</div>
             <p>Leave the price boxes empty and the quote prices itself from the price list. If it needs a
                different price, save it without one and leave a note on the job for the owner.</p>
             <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p></div>`, 'quotes'));
@@ -15381,6 +15548,16 @@ function orderedSizeKeys(item, catalog) {
  * two positions ('both') really is two print locations; one with a single
  * table is still two passes, which is why the wording does not distinguish.
  */
+/** A decoration as the quote form lists it. On the front, DTF says what size
+ *  of print it is — "Full front" or "Chest logo" (owner, 2026-10-21) — since
+ *  the two are priced apart; every other place keeps the method's own name. */
+function decoLabel(m, loc) {
+  const w = dtfFrontWord(m);
+  if (w === 'chest logo') return 'DTF Printing — Chest logo (up to 4" x 4")';
+  if (w && dtfKind(m) === 'standard' && loc === 'front') return 'DTF Printing — Full front (up to 12" x 12")';
+  return String((m && m.title) || '');
+}
+
 function decorationSummary(item, catalog) {
   /* Read through itemPrints(), so an old line and a new one are described
      from the same list the price came from. One phrase per method, places in
@@ -15393,19 +15570,28 @@ function decorationSummary(item, catalog) {
     g.places.push(p);
   }
   const word = { front: 'front', back: 'back', left: 'left sleeve', right: 'right sleeve' };
+  /* A DTF front says which print it is: a chest logo or a full front. */
+  /* A standard DTF front says "full front" only on a line saved since the
+     choice existed (named_front): before it, a chest logo was method #1 too. */
+  const placeWord = (m, loc) => {
+    const w = loc === 'front' ? dtfFrontWord(m) : '';
+    if (w === 'chest logo' || (w && item.named_front)) return w;
+    return word[loc];
+  };
   const cw = (n) => (n === 1 ? '1 color' : n + ' colors');
   return groups.map(({ method: m, places: ps }) => {
     /* Only for a method whose price actually turns on the color count —
        saying "1 color" about DTF would be meaningless and slightly wrong. */
     const byColour = m.type === 'color';
-    let places = ps.map((p) => ({ w: word[p.loc], c: parseInt(p.colours, 10), sleeve: p.loc === 'left' || p.loc === 'right' }));
+    let places = ps.map((p) => ({ w: placeWord(m, p.loc), c: parseInt(p.colours, 10), sleeve: p.loc === 'left' || p.loc === 'right' }));
     const L = places.find((x) => x.w === 'left sleeve'), R = places.find((x) => x.w === 'right sleeve');
     if (L && R && (!byColour || L.c === R.c)) {
       places = places.filter((x) => !x.sleeve).concat([{ w: 'both sleeves', c: L.c, sleeve: true }]);
     }
     const ws = places.map((x) => x.w);
     const where = ws.length <= 1 ? ws[0] : ws.slice(0, -1).join(', ') + ' and ' + ws[ws.length - 1];
-    const bits = [String(m.title || '').trim(), where];
+    /* The chest logo is DTF Printing to the customer; "chest logo" is in where. */
+    const bits = [dtfKind(m) === 'chest' ? 'DTF Printing' : String(m.title || '').trim(), where];
     const cs = places.map((x) => x.c);
     if (byColour && cs.every((c) => c > 0)) {
       bits.push(cs.every((c) => c === cs[0]) ? cw(cs[0])
@@ -15473,6 +15659,11 @@ function customerLinePricing(items, catalog) {
          so a customer nudging one line's quantity saw every OTHER hand-priced
          line silently inflate in the estimate total. */
       unitOverride: typedUnitOf(it),
+      /* The contract the line was saved on, so a customer changing a quantity
+         sees their contract price, not the price list. */
+      contract: it.contract ? CONTRACTS.contractTerms(it.contract) : null,
+      /* The run it shares a price band with, as the save route pools it. */
+      runGroup: it.run_group ? String(it.run_group) : null,
       /* A SinaLite line's runs ([qty, each], sell prices only): a customer
          moving 25 calendars to 100 must see the 100-run price, not the saved
          25-run each (Codex on #293). Re-priced by sinalite.js eachFor(). */
@@ -16514,22 +16705,32 @@ ${quotePricingSource()}
         if (next) return Math.ceil(next[0] * next[1] / qty * 100) / 100;
         return qty >= min ? eachFor(lad, qty, L.runs.any, L.runs.design) : Math.ceil(min * lad[0][1] / qty * 100) / 100;
       }
+      /* One line's quantity as the customer has it now, and its size mix. */
+      function lineQty(ix){
+        var mix = null, qty = 0;
+        document.querySelectorAll('.cq[data-line="' + ix + '"]').forEach(function(el){
+          var v = Math.max(0, parseInt(el.value, 10) || 0);
+          if (el.name.indexOf('sz_') === 0) {
+            /* The size is in the field name, which the server built from the
+               catalogue — not from anything typed here. */
+            var sz = el.name.slice(('sz_' + ix + '_').length);
+            mix = mix || {};
+            if (v > 0) mix[sz] = v;
+            qty += v;
+          } else { qty = v; }
+        });
+        return { qty: qty, mix: mix };
+      }
       function estimate(){
         var moved = false, sub = 0, sharedSeen = {};
+        /* Lines in one run share a price band, as the save route prices them
+           (and a contract's 24-piece minimum is per design, i.e. per run). */
+        var runQty = {};
         LINES.forEach(function(L, ix){
-          var boxes = document.querySelectorAll('.cq[data-line="' + ix + '"]');
-          var mix = null, qty = 0;
-          boxes.forEach(function(el){
-            var v = Math.max(0, parseInt(el.value, 10) || 0);
-            if (el.name.indexOf('sz_') === 0) {
-              /* The size is in the field name, which the server built from the
-                 catalogue — not from anything typed here. */
-              var sz = el.name.slice(('sz_' + ix + '_').length);
-              mix = mix || {};
-              if (v > 0) mix[sz] = v;
-              qty += v;
-            } else { qty = v; }
-          });
+          if (L.runGroup) runQty[L.runGroup] = (runQty[L.runGroup] || 0) + lineQty(ix).qty;
+        });
+        LINES.forEach(function(L, ix){
+          var lq = lineQty(ix), mix = lq.mix, qty = lq.qty;
           if (qty !== (QITEMS[ix] ? QITEMS[ix].qty : 0)) moved = true;
 
           var r = priceLine({
@@ -16540,6 +16741,8 @@ ${quotePricingSource()}
             noBase: L.noBase, colours: L.colours, addons: L.addons,
             sizeMix: mix, blankTiers: BLANK_TIERS,
             blankOverride: L.blankOverride, unitOverride: slUnit(L, qty),
+            contract: L.contract || undefined,
+            bandQty: L.runGroup ? runQty[L.runGroup] : 0,
           });
           if (counts(ix)) {
             sub += r.lineTotal;
