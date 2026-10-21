@@ -61,17 +61,20 @@ const have = new Map(rows.map((r) => [key(r.name), r]));
 
 /* A same-named product that is NOT a service is somebody's real product. */
 for (const r of rows) {
-  if (r.supplier !== 'service') {
+  if (r.supplier !== 'service' && r.supplier !== 'service-retired') {
     console.error('!! "' + r.name + '" exists as #' + r.id + ' and is not a service — refusing');
     process.exit(1);
   }
 }
 
 console.log((APPLY ? 'APPLYING' : 'DRY RUN') + '\n');
+/* A retired service keeps its row (saved quotes cite it by id) under a tag
+   the catalogue feed does not publish, so it leaves the quote form. */
+const tagOf = (s) => (s.retired ? 'service-retired' : 'service');
 for (const s of SERVICES) {
   const h = have.get(key(s.name));
-  console.log('  ' + (h ? 'update #' + h.id + ' ($' + h.price + ' -> $' + s.price + ')' : 'create') +
-    '  ' + s.name + '  $' + s.price);
+  console.log('  ' + (s.retired ? (h ? 'retire #' + h.id : 'skip (retired, never created)')
+    : h ? 'update #' + h.id + ' ($' + h.price + ' -> $' + s.price + ')' : 'create') + '  ' + s.name + '  $' + s.price);
 }
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
@@ -80,13 +83,13 @@ for (const s of SERVICES) {
   const h = have.get(key(s.name));
   if (h) {
     mysql(url, 'UPDATE lumise_products SET price=' + sq(s.price) + ', description=' + sq(s.description) +
-      ", active=0, supplier='service', updated=NOW() WHERE id=" + Number(h.id) + ';');
-  } else {
+      ', active=0, supplier=' + sq(tagOf(s)) + ', updated=NOW() WHERE id=' + Number(h.id) + ';');
+  } else if (!s.retired) {
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +
       'printings,thumbnail_url,active,`order`,author,created,updated) VALUES (' +
       sq(s.name) + ',' + sq(s.description) + ',' + sq(s.price) + ",0,'service'," + sq(enjson({})) + ',' +
       sq(enjson({})) + ",'','',0,999," + sq(author) + ',NOW(),NOW());');
   }
 }
-const after = mysql(url, "SELECT id,name,price,active,supplier FROM lumise_products WHERE supplier='service' ORDER BY id;", { rows: true });
-for (const a of after) console.log('  verified #' + a.id + '  active=' + a.active + '  $' + a.price + '  ' + a.name);
+const after = mysql(url, "SELECT id,name,price,active,supplier FROM lumise_products WHERE supplier IN ('service','service-retired') ORDER BY id;", { rows: true });
+for (const a of after) console.log('  verified #' + a.id + '  active=' + a.active + '  ' + a.supplier + '  $' + a.price + '  ' + a.name);

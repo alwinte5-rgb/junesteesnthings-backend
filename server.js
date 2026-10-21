@@ -9006,7 +9006,10 @@ const ADDONS = [
      counting and press-ready handling, and the risk of pressing a garment the
      shop cannot replace. Ticking it lowers the line, so a helper's quote
      with it needs the owner's sign-off like a typed price. */
-  { code: 'own_blanks', label: 'Customer supplies the blanks', appliesTo: GARMENT_METHOD_RE,
+  /* Not on the table cover: its price is all-in (blank and delivery inside
+     the decoration, tools/add-table-cover.js), so there is no blank to take
+     off (code review). */
+  { code: 'own_blanks', label: 'Customer supplies the blanks', appliesTo: new RegExp('^(?!.*table cover)(?:.*(?:' + GARMENT_METHOD_RE.source + '))', 'i'),
     kind: 'per_piece', rate: 1.50,
     note: 'You send the garments; the price is printing only. Send 3 extra per size for misprints — we cannot replace a garment we did not supply.' },
   { code: 'puff', label: 'Puff / 3D foam', appliesTo: EMBROIDERY_METHOD_RE,
@@ -9082,12 +9085,6 @@ const ADDONS = [
   { code: 'cutout_ship', label: 'Supplier delivery to our shop', appliesTo: SIGNS365_FREIGHT_RE,
     kind: 'once', rate: 10, orderShared: true, inItemPrice: true, auto: 'method',
     note: 'What our supplier charges to get the printed cutouts to us, so we can mount and finish them. Charged once for your whole order, however many sizes are on it — this is not a delivery to you.' },
-  /* The blank table cover's delivery from YCC Linens to the shop (owner,
-     2026-10-20: "add shipping cost to the table pricing"). At cost, once an
-     order, inside the item's price. tools/add-table-cover.js SHIP. */
-  { code: 'tablecover_ship', label: 'Table cover delivery to our shop', appliesTo: /^DTF Printing — Table Cover/i,
-    kind: 'once', rate: 11.99, orderShared: true, inItemPrice: true, auto: 'method',
-    note: 'What our supplier charges to get the blank table cover to us. Charged once for your whole order.' },
   { code: 'cutout_ship_sat', label: 'Supplier shipping — Saturday rush', appliesTo: SIGNS365_FREIGHT_RE,
     kind: 'once', rate: 50, orderShared: true, inItemPrice: true,
     note: 'Saturday delivery of the printed cutouts. Charged once for the order. Use instead of the weekday rate, not as well as it.' },
@@ -9577,7 +9574,9 @@ function quotePricingSource() {
            additional-location rate. Every other method is its own family. */
         function familyOf(m) {
           var t = String(m.title || '').toLowerCase();
-          return t.indexOf('dtf') === 0 ? 'dtf' : 'm' + String(m.id);
+          /* The table cover's method is its own family: its tables are the
+             cover's all-in price, not DTF transfer prices (code review). */
+          return t.indexOf('dtf') === 0 && t.indexOf('table cover') === -1 ? 'dtf' : 'm' + String(m.id);
         }
         var familyMain = {};
         for (var fi = 0; fi < prints.length; fi++) {
@@ -13142,7 +13141,6 @@ ${quotePricingSource()}
               if (a.code === 'screens' && !SCREEN_FEES_LIVE) return;
               /* A typed price is all-in, like the price the form shows. */
               if (a.code === 'cutout_ship' && (freightUpgraded || upgradedOn(L) || String(u.value || '').trim() !== '')) return;
-              if (a.code === 'tablecover_ship' && (String(u.value || '').trim() !== '' || addons.some(function(x){ return x.code === 'own_blanks'; }))) return;
               if (addons.some(function(x){ return x.code === a.code; })) return;
               addons.push(a);
             });
@@ -13227,7 +13225,7 @@ ${quotePricingSource()}
                staff as well as the customer (the owner, 2026-10-06: a 36in pack
                is $170, no extra step). Only a Saturday or large-format rate,
                ticked on purpose, is listed. */
-            var listed = r.addonLines.filter(function(a){ return a.code !== 'cutout_ship' && a.code !== 'tablecover_ship'; });
+            var listed = r.addonLines.filter(function(a){ return a.code !== 'cutout_ship'; });
             aoNote.innerHTML = listed.length
               ? listed.map(function(a){ return a.label + ' ' + m2(a.total); }).join(' &middot; ')
               : '';
@@ -14292,8 +14290,6 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         if (a.code === 'screens' && !SCREEN_FEES_LIVE) continue;
         /* A typed price is all-in, like the price the form shows. */
         if (a.code === 'cutout_ship' && (freightUpgraded || upgradedAt(i) || priceTyped)) continue;
-        /* No YCC shipment when the customer brings the cover (code review). */
-        if (a.code === 'tablecover_ship' && (priceTyped || lineAddons.some((x) => x.code === 'own_blanks'))) continue;
         lineAddons.push({ code: a.code, label: a.label, kind: a.kind, rate: a.rate });
       }
 

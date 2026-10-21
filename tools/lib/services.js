@@ -32,9 +32,9 @@ const SERVICES = [
     description: 'A new wall calendar laid out from your photos and dates: cover plus twelve months.' },
   { name: 'Calendar Design — Revision', price: '75.00',
     description: 'Updating an existing calendar: new year, dates, photos or wording.' },
-  { name: 'Label or Sticker Design — New', price: '25.00',
+  { name: 'Label or Sticker Design — New', price: '25.00', retired: true,
     description: 'A new product label or sticker design, set up for the cut shape.' },
-  { name: 'Label or Sticker Design — Revision', price: '25.00',
+  { name: 'Label or Sticker Design — Revision', price: '25.00', retired: true,
     description: 'Updating an existing label or sticker.' },
   { name: 'Pouch Design — New', price: '150.00',
     description: 'A new stand-up or lay-flat pouch design, front and back, laid out on the printer\'s template.' },
@@ -62,6 +62,11 @@ const SERVICES = [
       'fabric and fit details, colors, size charts and supplier pricing, on a spec sheet ' +
       'with photos. The $25 comes off your order if you order with us within 30 days.' },
 ];
+
+/* retired: off the quote form (owner, 2026-10-21: "you can remove the sticker
+   design fee" — stickers are easy setup). The row stays, retagged
+   supplier='service-retired', because saved quotes cite it by id; the
+   catalogue feed publishes inactive rows only for 'service'. */
 
 /** One service by its exact name, or an error naming it: a page that cites a
  *  fee that was renamed or removed must fail its build, not show $undefined. */
