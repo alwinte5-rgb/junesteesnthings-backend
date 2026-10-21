@@ -141,7 +141,7 @@ function pricesSection(page, fams, sum) {
   <div class="container">
     <div class="section-tag">Prices</div>
     <h2>${esc(page.print.prices_h2)}</h2>
-    <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop for pickup; we can also ship it straight to you or your event, quoted with your order. Sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
+    <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop for pickup; we can also ship your order straight to you or your event, quoted with your order. Sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
     ${tables}
     ${designBox(page)}
     <div class="hero-btns"><a href="#get-quote" class="btn btn-gold">Get a Free Quote</a><a href="tel:+17739004592" class="btn btn-outline-white pp-call">📞 Call Us</a></div>

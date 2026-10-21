@@ -222,13 +222,11 @@
     ['apparel', 'Shirts, hoodies & apparel'],
     ['embroidery', 'Embroidery'],
     ['signs', 'Banners & signs'],
-    ['calendar', 'Wall calendars'],
     ['drinkware', 'Mugs & tumblers'],
     ['stickers', 'Stickers & labels'],
     ['table_cover', 'Table covers'],
     ['xframe', 'X-frame banners'],
     ['brochure', 'Brochures & flyers'],
-    ['pouch', 'Stand-up pouches'],
     ['other', 'Something else']
   ];
   var PICK_STYLE = '' +

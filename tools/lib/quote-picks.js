@@ -12,17 +12,17 @@
  * The browser keeps its own copy of this list (it is a static file);
  * tests/quote-picks.test.js fails if the two differ. */
 
+/* Calendars and pouches are off for now (owner, 2026-10-20): no way to
+   design a calendar yet, and pouches start at 500. */
 const PICKS = [
   { key: 'apparel',     label: 'Shirts, hoodies & apparel' },
   { key: 'embroidery',  label: 'Embroidery' },
   { key: 'signs',       label: 'Banners & signs' },
-  { key: 'calendar',    label: 'Wall calendars' },
   { key: 'drinkware',   label: 'Mugs & tumblers' },
   { key: 'stickers',    label: 'Stickers & labels' },
   { key: 'table_cover', label: 'Table covers' },
   { key: 'xframe',      label: 'X-frame banners' },
   { key: 'brochure',    label: 'Brochures & flyers' },
-  { key: 'pouch',       label: 'Stand-up pouches' },
   { key: 'other',       label: 'Something else' },
 ];
 /* The most of one item anyone is quoted (tools/lib/sinalite.js MAX_QTY). */

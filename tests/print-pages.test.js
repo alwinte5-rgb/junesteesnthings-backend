@@ -44,6 +44,7 @@ test('there is a page for each SinaLite family sold on its own, except the ones 
 
 test('a page that names design fees shows the quote form\'s own prices', () => {
   const { service } = require('../tools/lib/services');
+  const { escHtml } = require('../tools/lib/html-escape');
   const brochure = pages.find((p) => p.path === 'print/brochures.html');
   assert.ok((brochure.print.design_fees || []).length, 'the brochure page must state its design fee');
   for (const p of pages) {
@@ -51,7 +52,7 @@ test('a page that names design fees shows the quote form\'s own prices', () => {
     assert.match(html, /class="pp-design"/, `${p.path}: design fee box`);
     for (const f of p.print.design_fees || []) {
       const price = '$' + Number(service(f.service).price).toFixed(2);
-      assert.ok(html.includes(`${f.label.replace(/&/g, '&amp;')}: <b>${price}</b>`), `${p.path}: ${f.label} ${price}`);
+      assert.ok(html.includes(`${escHtml(f.label)}: <b>${price}</b>`), `${p.path}: ${f.label} ${price}`);
     }
   }
 });
@@ -60,7 +61,7 @@ test('set runs say they are the only quantities sold, and shipping to the custom
   for (const p of pages) {
     const html = read(p.path);
     if (p.print.families.some((k) => !SL.table().families[k].any_qty)) assert.match(html, /We only sell in these quantities\./, p.path);
-    assert.match(html, /ship it straight to you/, p.path);
+    assert.match(html, /ship your order straight to you/, p.path);
   }
 });
 

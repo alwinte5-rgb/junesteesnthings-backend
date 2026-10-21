@@ -23,22 +23,22 @@ test('the browser\'s list is the server\'s list, key for key and word for word',
 test('only known items are read, in list order, with sane quantities', () => {
   const got = QP.parsePicks({
     pick_drinkware: '1', pick_drinkware_qty: '24',
-    pick_calendar: 'on', pick_calendar_qty: '1,500',
+    pick_stickers: 'on', pick_stickers_qty: '1,500',
     pick_signs: '1', pick_signs_qty: '-3',
     pick_other: '1', pick_other_qty: '999999999',
     pick_hacker: '1', pick_hacker_qty: '5',
     pick_brochure: '0', pick_brochure_qty: '100',
   });
   assert.deepStrictEqual(got.map((p) => [p.key, p.qty]),
-    [['signs', null], ['calendar', 1500], ['drinkware', 24], ['other', null]]);
+    [['signs', null], ['drinkware', 24], ['stickers', 1500], ['other', null]]);
   assert.deepStrictEqual(QP.parsePicks(null), []);
-  assert.deepStrictEqual(QP.parsePicks({ pick_calendar: ['1', '1'] }).length, 0, 'an array is not a tick');
+  assert.deepStrictEqual(QP.parsePicks({ pick_stickers: ['1', '1'] }).length, 0, 'an array is not a tick');
 });
 
 test('the picks read as one plain line', () => {
   assert.strictEqual(QP.picksLine([]), '');
-  assert.strictEqual(QP.picksLine(QP.parsePicks({ pick_calendar: '1', pick_calendar_qty: '1500', pick_drinkware: '1' })),
-    'Items: Wall calendars (1,500), Mugs & tumblers');
+  assert.strictEqual(QP.picksLine(QP.parsePicks({ pick_stickers: '1', pick_stickers_qty: '1500', pick_drinkware: '1' })),
+    'Items: Mugs & tumblers, Stickers & labels (1,500)');
 });
 
 test('/submit puts the picks first in the description, inside the length the form allows', () => {
