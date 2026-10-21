@@ -36,6 +36,7 @@ const SIGNAGE = require('./tools/lib/signage');
 const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
 const SINALITE = require('./tools/lib/sinalite');
+const SERVICES = require('./tools/lib/services');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const PARTNERS = require('./tools/lib/partners');
@@ -13469,6 +13470,22 @@ ${quotePricingSource()}
         bind();
         tpl.querySelector('.d').focus();
       }
+      /* "Yes: add the design fee" from the send step: a new item with that
+         service picked and quantity 1, ready to save. */
+      window.addEventListener('load', function(){
+        var want = '';
+        try { want = new URLSearchParams(location.search).get('design') || ''; } catch (e) { want = ''; }
+        if (!/^[0-9]{1,9}$/.test(want)) return;
+        addLine();
+        var L = document.getElementById('lines').lastElementChild;
+        var sel = L.querySelector('.p');
+        if (!sel || !sel.querySelector('option[value="' + want + '"]')) return;
+        sel.value = want;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        var q = L.querySelector('.q');
+        if (q && !q.value) { q.value = '1'; q.dispatchEvent(new Event('input', { bubbles: true })); }
+        L.scrollIntoView({ block: 'center' });
+      });
       var CLOUD = ${JSON.stringify(process.env.CLOUDINARY_NAME || '')};
       var CKEY  = ${JSON.stringify(process.env.CLOUDINARY_API_KEY || '')};
 
@@ -15105,6 +15122,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const textByShop = mayText && (await quoteTextWay(q).catch(() => '')) === 'shop';
     const textForm = (cls) => textByShop ? `<form method="POST" action="/admin/quote/${code}/text" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
             <button type="submit"${cls} style="width:100%">Text it to ${escEmail(q.phone)}</button></form>` : '';
+    /* Asked first, before any way to send shows (designFeesToAsk). */
+    const askDesign = !q.sent_to_customer_at ? designFeesToAsk(q.items, await getCatalog().catch(() => null)) : [];
 
     res.send(quotePage('Quote ready', `
       <h1>Quote ${escEmail(code)}${q.revision > 1 ? ` <span class="muted" style="font-size:14px">rev ${q.revision}</span>` : ''}</h1>
@@ -15114,7 +15133,15 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         ? `<div class="card"><div class="ok">Emailed to ${escEmail(emailed.to)}.</div></div>`
         : `<div class="card"><div class="warn">The email did not go: ${escEmail(emailed.error)}.
              Text them the message below instead.</div></div>`) : ''}
-      ${!q.sent_to_customer_at ? `<div class="card" style="border-color:#c7d7fb;background:#f7faff">
+      ${askDesign.length ? `<div class="card" id="design-ask" style="border-color:#E0107A;background:#fff7fb">
+          <b>Does the customer need this designed?</b>
+          <p class="muted" style="margin:4px 0 10px">The price is for printing their finished file. There is no design fee on this quote.</p>
+          ${askDesign.map((f) => f.id
+            ? `<a class="btn" style="display:block;text-align:center;margin-bottom:8px" href="/admin/quote/${code}/edit?design=${f.id}">Yes: add ${escEmail(f.name)} (${money(f.price)})</a>`
+            : `<p class="warn">${escEmail(f.name)} (${money(f.price)}) is not in the catalogue yet; add it by hand.</p>`).join('')}
+          <button type="button" class="btn-ghost" style="width:100%" onclick="document.getElementById('design-ask').style.display='none';document.getElementById('send-ask').style.display=''">No, they are sending a print-ready file</button>
+        </div>` : ''}
+      ${!q.sent_to_customer_at ? `<div class="card" id="send-ask" style="border-color:#c7d7fb;background:#f7faff${askDesign.length ? ';display:none' : ''}">
           <b>Send it to the customer?</b>
           <p class="muted" style="margin:4px 0 10px">Nothing has gone to them yet. Choose how, or leave it and send it
             later from the job page.</p>
@@ -15348,6 +15375,39 @@ function sizedKindOf(prod) {
   if (!prod) return null;
   if (prod.supplier === 'sinalite') return SINALITE.kindOf(prod.name, { aliases: true });
   return QSIGNS.signKindOf(prod.name);
+}
+
+/* DESIGN FEE, ASKED BEFORE SENDING (owner, 2026-10-20: "make sure they are
+   added to quote with a question before sending"). A printed item from the
+   print partner is priced for printing a finished file; when the quote has no
+   design line, the send step asks whether the customer needs it designed and
+   offers that item's own fee (tools/lib/services.js). X-frames, mugs and
+   tumblers take the general design tiers on the line instead. */
+const DESIGN_FEE_FOR = {
+  brochure: 'Brochure Design — Trifold, New',
+  calendar: 'Calendar Design — New (13 pages)',
+  sticker: 'Label or Sticker Design — New',
+  roll_label: 'Label or Sticker Design — New',
+  pouch: 'Pouch Design — New',
+  table_cover: 'Table Cover Design — New',
+};
+/** [{ name, what, id, price }] the send step should ask about; [] when the
+ *  quote already carries design work (a design service line or a design tier). */
+function designFeesToAsk(items, catalog) {
+  const list = (Array.isArray(items) ? items : []).filter(Boolean);
+  if (list.some((it) => /\bDesign\b/.test(String(it.description || ''))
+      || (it.addons || []).some((a) => /^design_/.test(String(a.code || ''))))) return [];
+  const out = new Map();
+  for (const it of list) {
+    const k = it.sign && it.sign.kind;
+    const name = k && DESIGN_FEE_FOR[k];
+    if (!name || out.has(name)) continue;
+    const prod = ((catalog && catalog.products) || []).find((p) => p.name === name) || null;
+    const fam = SINALITE.table().families[k];
+    out.set(name, { name, what: fam ? fam.label : k, id: prod ? Number(prod.id) : null,
+      price: prod ? Number(prod.price) : Number(SERVICES.service(name).price) });
+  }
+  return [...out.values()];
 }
 
 /** The SinaLite [runQty, each] ladder a saved line was priced from, or null. */

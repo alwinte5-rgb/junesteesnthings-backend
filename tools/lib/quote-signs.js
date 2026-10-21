@@ -121,6 +121,18 @@ function priceSign(kind, spec, qty, takeFreight) {
     const ladder = ((fam.prices[mat.key] || {})[size.key] || {})[combo];
     if (!ladder) return { ok: false, error: `${size.label} is not made in that material.` };
     if (q < ladder[0][0]) return { ok: false, min: ladder[0][0], error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${ladder[0][0]}.` };
+    /* Set runs only (owner, 2026-10-20: "staff quote should only select the
+       numbers given"). A quantity between SinaLite's runs is refused, naming
+       the runs either side, rather than bought as a mix of runs. Any-quantity
+       items (typed box on SinaLite) still take any number. */
+    if (fam.supplier === 'sinalite' && !fam.any_qty && !ladder.some(([rq]) => rq === q)) {
+      const n = (x) => x.toLocaleString('en-US');
+      const below = ladder.filter(([rq]) => rq < q).pop();
+      const above = ladder.find(([rq]) => rq > q);
+      const near = [below, above].filter(Boolean).map(([rq]) => n(rq));
+      return { ok: false, runs: ladder.map(([rq]) => rq),
+        error: `${fam.label} are sold only in these quantities: ${ladder.map(([rq]) => n(rq)).join(', ')}. ${n(q)} is not one${near.length ? `; use ${near.join(' or ')}` : ''}.` };
+    }
     /* SinaLite sells set runs only: a quantity between runs is bought as the
        cheapest mix of runs that covers it; an any-quantity item never costs
        more than the next run's total (sinalite.js eachFor). Signs365 stock
