@@ -1699,17 +1699,7 @@
      "roll_label"
     ],
     "product": "Custom Stickers and Roll Labels",
-    "prices_h2": "Sticker and label prices",
-    "design_fees": [
-     {
-      "label": "New sticker or label design",
-      "service": "Label or Sticker Design — New"
-     },
-     {
-      "label": "Updating a sticker or label you already have",
-      "service": "Label or Sticker Design — Revision"
-     }
-    ]
+    "prices_h2": "Sticker and label prices"
    },
    "sections": [
     {
@@ -1733,7 +1723,7 @@
     {
      "h2": "Designing a label that works",
      "p": [
-      "Keep text large enough to read at arm's length, leave a little space between the text and the edge, and use your brand colors. For a product label, include what it is, your brand, the size or weight and your website. If your label needs ingredients, warnings or other required wording, you are responsible for what it says; we print it exactly as approved. We check every file before printing, and we can design stickers or labels for you for a separate design fee shown on your quote."
+      "Keep text large enough to read at arm's length, leave a little space between the text and the edge, and use your brand colors. For a product label, include what it is, your brand, the size or weight and your website. If your label needs ingredients, warnings or other required wording, you are responsible for what it says; we print it exactly as approved. We check every file before printing, and design setup is included in every sticker and label price."
      ]
     },
     {
@@ -1774,7 +1764,7 @@
     },
     {
      "q": "Can you design my label?",
-     "a": "Yes. Send your logo and the wording and we design it and send a proof. Design is a separate fee shown on your quote."
+     "a": "Yes, and it is included. Every sticker and label price includes our design setup: send your logo and the wording and we lay it out and send a proof."
     },
     {
      "q": "Which size should I choose?",

@@ -84,7 +84,7 @@ function printFamilies(page) {
     /* f.runs is every run any option sells; an option whose own minimum is
        higher has no price at the smaller runs, shown as a dash (null). The
        first row must price somewhere, or the page would say nothing. */
-    const rows = f.runs.map((q) => ({ q, cells: cols.map((c) => SL.eachFor(c.ladder, q, f.any_qty)) }));
+    const rows = f.runs.map((q) => ({ q, cells: cols.map((c) => SL.eachFor(c.ladder, q, f.any_qty, f.design_in)) }));
     if (!rows.length || !rows[0].cells.some((e) => e > 0)) throw new Error(`${page.path}: ${k} has no price at its smallest run`);
     return { key: k, f, cols, rows, lead: SL.leadDays(k) };
   });
@@ -110,11 +110,20 @@ function printSummary(fams) {
   return { low, start, high, offers, lead };
 }
 
-/* Design is never in the print price (owner, 2026-10-20: "make sure that the
-   customer is aware that if they need to design ... they will have a design
+/* Design is in the print price only where the family carries it (stickers
+   and labels, design_in, owner 2026-10-20); everywhere else it is not
+   (owner, 2026-10-20: "make sure that the customer is aware that if they need to design ... they will have a design
    fee"). The fees a page names come from tools/lib/services.js, the list the
    quote form charges, so the two cannot disagree. */
 function designBox(page) {
+  /* Design already inside every price on the page (sinalite.js design_in). */
+  const inside = page.print.families.map((k) => (SL.table().families[k] || {}).design_in || 0);
+  if (inside.length && inside.every((x) => x > 0)) {
+    return `<div class="pp-design">
+      <h3>Design is included</h3>
+      <p>Every price above includes ${money(Math.max(...inside))} of design work: we set up your logo or artwork on the shape and size you pick and send a proof. There is no separate design fee, and nothing prints until you approve the proof.</p>
+    </div>`;
+  }
   const fees = (page.print.design_fees || []).map((f) => ({ label: f.label, price: Number(SERVICES.service(f.service).price) }));
   return `<div class="pp-design">
       <h3>${esc(page.print.design_h3 || 'Need it designed? That is a separate fee')}</h3>

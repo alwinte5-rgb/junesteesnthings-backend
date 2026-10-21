@@ -44,11 +44,13 @@ const ceil5 = (n) => Math.ceil(n / 5 - 1e-9) * 5;
 /** Shipping as the rule bills it: cost + $25, rounded up to the next $5. */
 const shipBilled = (ship) => ceil5((Number(ship) || 0) + SHIP_HANDLING);
 
-/** The price EACH at one SinaLite tier, by the owner rule. */
-function priceEach(cost, ship, qty) {
+/** The price EACH at one SinaLite tier, by the owner rule. `designIn` is a
+ *  flat design charge carried inside the run's price (labels and stickers,
+ *  $25, owner 2026-10-20), so it is never a separate line. */
+function priceEach(cost, ship, qty, designIn = 0) {
   const c = Number(cost), q = Number(qty);
   if (!(c > 0) || !(q > 0)) return null;
-  return ceil2((c * MARKUP + shipBilled(ship)) / q);
+  return ceil2((c * MARKUP + shipBilled(ship) + (Number(designIn) || 0)) / q);
 }
 
 /**
@@ -58,7 +60,7 @@ function priceEach(cost, ship, qty) {
  * SinaLite's own table sometimes charges more per piece at a bigger tier; the
  * ladder keeps that tier's real price rather than undercutting its cost.
  */
-function ladderFrom(rows, where = 'sinalite') {
+function ladderFrom(rows, where = 'sinalite', designIn = 0) {
   /* A row that cannot be priced is SAID, never skipped quietly: a missing tier
      reads as a gap nobody sees until a job is quoted from the wrong one. */
   const ok = [];
@@ -70,7 +72,7 @@ function ladderFrom(rows, where = 'sinalite') {
     else console.error('[sinalite] ' + where + ': unpriceable row skipped ' + JSON.stringify(r));
   }
   return ok.sort((a, b) => a.qty - b.qty)
-    .map((r) => [Number(r.qty), priceEach(r.cost, r.ship, r.qty)]);
+    .map((r) => [Number(r.qty), priceEach(r.cost, r.ship, r.qty, designIn)]);
 }
 
 /* Re-read when the file changes, so a fresh capture reaches the next quote
@@ -87,10 +89,14 @@ function ladderFrom(rows, where = 'sinalite') {
  * the cheapest set of runs that covers the quantity, each run carrying its
  * own shipping (never under-charges). Null under the minimum or with no ladder.
  */
-function eachFor(ladder, qty, anyQty) {
+function eachFor(ladder, qty, anyQty, designIn) {
   /* Self-contained: the public quote page runs this same function (sent with
      toString()) for a customer's quantity estimate. */
   const ceil2 = (n) => Math.ceil(n * 100 - 1e-9) / 100;
+  /* designIn: a flat design charge inside every run's price (stickers, $25).
+     Charged once per order, never once per run (code review): taken out of
+     each run before runs are combined, and added back once. */
+  const d = Number(designIn) || 0;
   const q = Math.floor(Number(qty));
   /* 100,000: the same ceiling /admin/api/sign-price refuses above, so the
      preview and the save can never price one quantity two ways. */
@@ -104,7 +110,7 @@ function eachFor(ladder, qty, anyQty) {
     const t = Math.min(below[1] * q, above ? above[0] * above[1] : Infinity);
     return ceil2(t / q);
   }
-  const runs = ladder.map(([n, each]) => [n, n * each]);
+  const runs = ladder.map(([n, each]) => [n, n * each - d]);
   /* Iterative over every remainder (Codex on #293: the recursive version ran
      out of stack near the cap). best[x] = cheapest runs covering x pieces. */
   const best = new Float64Array(q + 1);
@@ -113,7 +119,7 @@ function eachFor(ladder, qty, anyQty) {
     for (const [n, total] of runs) { const t = total + best[x > n ? x - n : 0]; if (t < m) m = t; }
     best[x] = m;
   }
-  return ceil2(best[q] / q);
+  return ceil2((best[q] + d) / q);
 }
 
 let cache = null, cacheMtime = null, loadError = null;
@@ -175,7 +181,7 @@ function familyOf(key, p) {
     prices[mat.key] = {};
     for (const size of p.sizes) {
       const rows = (p.rows || []).filter((r) => r.mat === mat.key && r.size === size.key);
-      const lad = ladderFrom(rows, key + ' ' + mat.key + '/' + size.key);
+      const lad = ladderFrom(rows, key + ' ' + mat.key + '/' + size.key, p.design_in);
       if (!lad.length) continue;
       prices[mat.key][size.key] = { '': lad };
       min = Math.min(min, lad[0][0]);
@@ -185,6 +191,8 @@ function familyOf(key, p) {
   return {
     label: p.label, note: p.note || '', sizing: 'stock', supplier: 'sinalite',
     group: p.group, design: p.design || null, online: !!p.online,
+    /* Design charge already inside every run price (priceEach). */
+    design_in: Number(p.design_in) || 0,
     /* true: SinaLite takes any quantity (typed box), so a quantity between
        captured tiers pays the tier below's each (each falls as the run grows,
        so that is never under cost). false: set runs only (eachFor). */

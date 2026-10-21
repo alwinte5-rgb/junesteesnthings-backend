@@ -160,6 +160,35 @@ test('a column that starts above the smallest run shows a dash, not a broken pag
   } finally { SL.table = orig; }
 });
 
+test('stickers and labels say design is included, and their prices carry the $25', () => {
+  const html = read('print/stickers-labels.html');
+  assert.match(html, /<h3>Design is included<\/h3>/);
+  for (const k of ['sticker', 'roll_label']) {
+    const f = SL.table().families[k];
+    assert.strictEqual(f.design_in, 25, k);
+    const d = JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8')).products[k];
+    const r = d.rows[0];
+    const lad = f.prices[r.mat][r.size][''];
+    const at = lad.find(([q]) => q === r.qty);
+    assert.strictEqual(at[1], SL.priceEach(r.cost, r.ship, r.qty, 25), `${k}: the run price includes the $25`);
+    assert.ok(at[1] > SL.priceEach(r.cost, r.ship, r.qty), k);
+  }
+});
+
+test('the built-in $25 design is charged once per order, even across several runs', () => {
+  for (const [k, q] of [['sticker', 500], ['sticker', 2000], ['roll_label', 2000]]) {
+    const f = SL.table().families[k];
+    const m = f.materials[0].key, z = f.sizes[0].key;
+    const lad = f.prices[m][z][''];
+    const designFree = lad.map(([n, e]) => [n, (n * e - 25) / n]);
+    const withDesign = SL.eachFor(lad, q, false, 25) * q;
+    const without = SL.eachFor(designFree, q, false) * q;
+    /* Each price rounds up to the cent, so the totals can differ by up to a
+       cent a piece; once per run would add $25 for every extra run. */
+    assert.ok(Math.abs(withDesign - without - 25) <= q * 0.01 + 0.01, `${k} ${q}: design ${withDesign - without}`);
+  }
+});
+
 test('the copy never says we print these in our shop, or names the supplier', () => {
   for (const p of pages) {
     const text = read(p.path).replace(/<[^>]+>/g, ' ');
