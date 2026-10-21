@@ -81,7 +81,9 @@ test('a service line is costed as a service, not as half-price blanks', () => {
 
 test('the garment sourcing fee is $25, says it is credited, and --only can add it alone (owner, 2026-10-20)', () => {
   const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-services.js'), 'utf8');
-  assert.match(tool, /name: 'Garment Sourcing — options \+ spec sheet', price: '25\.00'/);
-  assert.match(tool, /comes off your order if you order with us within 30 days/);
+  // The list itself lives in tools/lib/services.js (shared with the print pages).
+  const fee = require('../tools/lib/services').service('Garment Sourcing — options + spec sheet');
+  assert.strictEqual(fee.price, '25.00');
+  assert.match(fee.description, /comes off your order if you order with us within 30 days/);
   assert.match(tool, /--only matched no service/);
 });
