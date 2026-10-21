@@ -205,6 +205,10 @@ function placesCost(places, bandQty, decoSellEach, dark = false) {
 }
 
 /* What add-ons cost us, split by where the books keep it. */
+/* The table cover blank's delivery to the shop, one YCC Linens ground
+   shipment (2026-10-20), inside the cover's all-in price. */
+const INBOUND_SHIP = 11.99;
+
 function addonCosts(addons) {
   let outsourced = 0, shipping = 0, perLine = 0;
   for (const a of addons || []) {
@@ -217,7 +221,7 @@ function addonCosts(addons) {
       }
       case 'digitizing': case 'unbagging': outsourced += total; break;
       case 'specialty_ink': perLine += total / SHOP_MARKUP; break;
-      case 'cutout_ship': case 'cutout_ship_sat': case 'cutout_ship_large': case 'tablecover_ship': shipping += total; break;
+      case 'cutout_ship': case 'cutout_ship_sat': case 'cutout_ship_large': shipping += total; break;
       default: break;   // design work and puff/hoop are handled as labour or with the embroidery
     }
   }
@@ -376,6 +380,12 @@ function estimateJob(items, catalog) {
       garmentSellEach = (num(it.blank_price) > 0 ? num(it.blank_price) : num(prod.price)) + num(it.size_upcharge) / qty;
       garmentEach = garmentSellEach * ratio;
       basis.push(num(prod.cost) > 0 ? 'S&S cost' : 'garment at half price');
+    } else if (prod && !(num(prod.price) > 0) && num(prod.cost) > 0) {
+      /* A blank sold inside its decoration's all-in price (the table cover,
+         tools/add-table-cover.js): its cost, and its delivery spread over the
+         line, are still costs. */
+      garmentEach = num(prod.cost) + INBOUND_SHIP / qty;
+      basis.push('blank at cost + delivery');
     }
     /* What the decoration was billed at per piece: only the rough rule uses it. */
     const decoSellEach = Math.max(0, num(it.unit_price) - garmentSellEach);

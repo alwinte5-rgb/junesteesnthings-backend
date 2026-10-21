@@ -38,7 +38,8 @@ const line = (extra) => Object.assign({
 
 test('the add-on is offered on garment decoration only, at the rate the test assumes', () => {
   const row = src.slice(src.indexOf("{ code: 'own_blanks'"), src.indexOf("{ code: 'puff'"));
-  assert.match(row, /appliesTo: GARMENT_METHOD_RE/);
+  /* Garment decoration, except the table cover, whose price is all-in. */
+  assert.match(row, /appliesTo: new RegExp\('\^\(\?!\.\*table cover\)\(\?:\.\*\(\?:' \+ GARMENT_METHOD_RE\.source \+ '\)\)', 'i'\)/);
   assert.match(row, /kind: 'per_piece', rate: 1\.50/);
   const re = new RegExp(['screen\\s*print', '\\bdtf\\b', 'embroider'].join('|'), 'i');
   assert.match(src, /const GARMENT_METHOD_RE = new RegExp\(\[SCREEN_METHOD_RE\.source, '\\\\bdtf\\\\b', EMBROIDERY_METHOD_RE\.source\]/);

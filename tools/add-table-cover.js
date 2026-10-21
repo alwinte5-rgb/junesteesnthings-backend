@@ -61,13 +61,17 @@ for (const c of ceilings) {
   prev = ONE_SIDE[c];
   console.log('  <=' + String(c).padEnd(8) + ('$' + ONE_SIDE[c].toFixed(2)).padStart(8) + ('$' + BACK[c].toFixed(2)).padStart(12) + ('$' + TWO_SIDES[c].toFixed(2)).padStart(10));
 }
-const cStd = mysql(url, 'SELECT calculate FROM lumise_printings WHERE id=1;', { rows: true })[0];
-const std = cStd && dejson(cStd.calculate);
-if (!std) { console.error('method #1 unreadable — refusing'); process.exit(1); }
+/* 2 sides must not rise with quantity either (code review). */
+let prev2 = Infinity;
+for (const c of ceilings) { if (TWO_SIDES[c] > prev2) { console.error('  !! 2-sides price RISES at ' + c + ' — refusing'); process.exit(1); } prev2 = TWO_SIDES[c]; }
 const blank = 0;
+/* Read before anything is written, so a missing author cannot leave a method
+   with no product (code review). */
+const authorRow = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0];
+if (!authorRow) { console.error('no active product to take the author from — refusing'); process.exit(1); }
 
 const newCalc = {
-  multi: true, type: std.type || 'fixed', show_detail: std.show_detail || '1',
+  multi: true, type: 'fixed', show_detail: '1',
   values: {
     [mainKey]: Object.fromEntries(ceilings.map((c) => [String(c), { price: ONE_SIDE[c].toFixed(2) }])),
     [addKey]: Object.fromEntries(ceilings.map((c) => [String(c), { price: BACK[c].toFixed(2) }])),
@@ -92,7 +96,7 @@ if (existingM.length) {
   mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(enjson(newCalc)) + ', description=' + sq(METHOD_DESC) +
     ', updated=NOW() WHERE id=' + Number(mid) + ';');
 } else {
-  const author = mysql(url, 'SELECT author FROM lumise_printings WHERE id=1;', { rows: true })[0].author;
+  const author = authorRow.author;
   mysql(url, 'INSERT INTO lumise_printings (title,active,calculate,thumbnail,upload,description,author,created,updated) VALUES (' +
     sq(METHOD) + ',1,' + sq(enjson(newCalc)) + ",'',''," + sq(METHOD_DESC) + ',' + sq(author) + ',NOW(),NOW());');
   mid = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(METHOD) + ';', { rows: true })[0].id;
@@ -103,7 +107,7 @@ if (existingP.length) {
     ', description=' + sq(PRODUCT_DESC) + ', printings=' + sq(printings) + ', updated=NOW() WHERE id=' + Number(existingP[0].id) + ';');
 } else {
   /* The same columns tools/add-services.js writes for a quote-only row. */
-  const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0].author;
+  const author = authorRow.author;
   mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +
     'printings,thumbnail_url,active,`order`,author,created,updated) VALUES (' +
     sq(PRODUCT) + ',' + sq(PRODUCT_DESC) + ',' + sq(blank.toFixed(2)) + ',' + sq(BLANK_COST.toFixed(2)) + ",'ycc'," +

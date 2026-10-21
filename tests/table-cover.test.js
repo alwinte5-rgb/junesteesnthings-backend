@@ -16,15 +16,45 @@ const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-table-cove
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const grab = (name) => vm.runInThisContext('(' + (tool.match(new RegExp('const ' + name + ' = (\\{[^}]*\\});')) || [])[1] + ')');
 const ONE = grab('ONE_SIDE'), TWO = grab('TWO_SIDES');
-/* The engine's band rule: the first ceiling at or above the quantity. */
-const at = (t, q) => t[Object.keys(t).map(Number).sort((a, b) => a - b).find((c) => q <= c)];
-
-test('the owner\'s prices, each, at every quantity', () => {
-  for (const [q, one, two] of [[1, 75, 90], [2, 75, 80], [3, 65, 80], [10, 65, 80], [500, 65, 80]]) {
-    assert.strictEqual(at(ONE, q), one, `1 side at ${q}`);
-    assert.strictEqual(at(TWO, q), two, `2 sides at ${q}`);
-    assert.ok(at(TWO, q) - at(ONE, q) > 0, `the back adds something at ${q}`);
+/* The REAL quote engine (server.js quotePricingSource priceLine), given the
+   method exactly as the tool writes it. */
+function lift(name) {
+  const start = src.indexOf(`function ${name}(`);
+  let depth = 0;
+  for (let i = src.indexOf('{', start); i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
   }
+  throw new Error('unbalanced ' + name);
+}
+const { priceLine } = vm.runInThisContext(vm.runInThisContext(lift('quotePricingSource') + '\nquotePricingSource()') + '\n({ priceLine })');
+const ladder = (t) => Object.keys(t).map(Number).sort((a, b) => a - b).map((c) => ({ min_qty: c, price: t[c] }));
+const BACK = Object.fromEntries(Object.keys(ONE).map((c) => [c, TWO[c] - ONE[c]]));
+const COVER = { id: 900, title: 'DTF Printing — Table Cover', type: 'fixed', min_order_qty: 0,
+  positions: { id: ladder(ONE), mr8a5dlx: ladder(BACK) } };
+const BIG = { id: 64, title: 'DTF Printing — Oversized (up to 252 sq in)', type: 'fixed', min_order_qty: 0,
+  positions: { id: [{ min_qty: 7000, price: 14 }], mr8a5dlx: [{ min_qty: 7000, price: 4.95 }] } };
+const line = (qty, prints) => priceLine({ product: { price: 0, sizes: [] }, addons: [], blankTiers: [], noBase: true, qty, prints });
+const r2 = (n) => Math.round(n * 100) / 100;
+
+test('the owner\'s prices, each, at every quantity, from the real engine', () => {
+  for (const [q, one, two] of [[1, 75, 90], [2, 75, 80], [3, 65, 80], [10, 65, 80], [500, 65, 80]]) {
+    assert.strictEqual(r2(line(q, [{ loc: 'front', method: COVER }]).unit), one, `1 side at ${q}`);
+    assert.strictEqual(r2(line(q, [{ loc: 'front', method: COVER }, { loc: 'back', method: COVER }]).unit), two, `2 sides at ${q}`);
+    assert.strictEqual(r2(line(q, [{ loc: 'back', method: COVER }]).unit), one, `a back-only print is one side at ${q}`);
+  }
+});
+
+test('the cover is its own family: an oversized DTF print beside it does not take its main price', () => {
+  const r = line(1, [{ loc: 'front', method: COVER }, { loc: 'back', method: BIG }]);
+  assert.strictEqual(r2(r.decoration), 75 + 14);
+});
+
+test('the customer-supplies-the-blanks add-on is never offered on the cover', () => {
+  const a = src.indexOf("code: 'own_blanks'");
+  const re = eval(src.slice(src.indexOf('appliesTo: ', a) + 11, src.indexOf(",\n", a)).replace('GARMENT_METHOD_RE.source', JSON.stringify('\\bdtf\\b')));
+  assert.ok(!re.test('DTF Printing — Table Cover'));
+  assert.ok(re.test('DTF Printing'));
 });
 
 test('nothing is added on top: no product price, no delivery charge', () => {
@@ -38,7 +68,11 @@ test('the tool refuses a missing or rising price and is dry-run by default', () 
   assert.match(tool, /const APPLY = argv\.includes\('--apply'\)/);
 });
 
-test('job costs cost the front as an oversized print', () => {
+test('job costs: the cover blank and its delivery are costs, and the front is a 252 sq in print', () => {
   const JC = require('../tools/lib/job-costs');
-  assert.ok(JC.DTF[1][2] > JC.DTF[1][1]);
+  const catalog = { products: [{ id: 700, name: 'Fitted Table Cover — 6 ft', price: 0, cost: 12.99 }],
+    methods: [{ id: 900, title: 'DTF Printing — Table Cover' }] };
+  const est = JC.estimateJob([{ product_id: 700, method_id: 900, stage: '', qty: 1, unit_price: 75 }], catalog);
+  const c = est.lines[0].unit_cost;
+  assert.ok(c >= 12.99 + 11.99 + JC.DTF[1][2] - 0.01, `cost ${c}`);
 });

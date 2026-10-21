@@ -9006,7 +9006,10 @@ const ADDONS = [
      counting and press-ready handling, and the risk of pressing a garment the
      shop cannot replace. Ticking it lowers the line, so a helper's quote
      with it needs the owner's sign-off like a typed price. */
-  { code: 'own_blanks', label: 'Customer supplies the blanks', appliesTo: GARMENT_METHOD_RE,
+  /* Not on the table cover: its price is all-in (blank and delivery inside
+     the decoration, tools/add-table-cover.js), so there is no blank to take
+     off (code review). */
+  { code: 'own_blanks', label: 'Customer supplies the blanks', appliesTo: new RegExp('^(?!.*table cover)(?:.*(?:' + GARMENT_METHOD_RE.source + '))', 'i'),
     kind: 'per_piece', rate: 1.50,
     note: 'You send the garments; the price is printing only. Send 3 extra per size for misprints — we cannot replace a garment we did not supply.' },
   { code: 'puff', label: 'Puff / 3D foam', appliesTo: EMBROIDERY_METHOD_RE,
@@ -9571,7 +9574,9 @@ function quotePricingSource() {
            additional-location rate. Every other method is its own family. */
         function familyOf(m) {
           var t = String(m.title || '').toLowerCase();
-          return t.indexOf('dtf') === 0 ? 'dtf' : 'm' + String(m.id);
+          /* The table cover's method is its own family: its tables are the
+             cover's all-in price, not DTF transfer prices (code review). */
+          return t.indexOf('dtf') === 0 && t.indexOf('table cover') === -1 ? 'dtf' : 'm' + String(m.id);
         }
         var familyMain = {};
         for (var fi = 0; fi < prints.length; fi++) {
