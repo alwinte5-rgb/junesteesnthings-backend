@@ -7702,6 +7702,12 @@ app.post('/api/abandoned-cart-email', requireInternalKey, capPerRecipient('aband
 /* One list, also read by the site's review strip (assets/js/review-strip.js),
    so the quote page and the website can never show different reviews. */
 const SHOP_REVIEWS = require('./public/assets/data/reviews.json').reviews;
+/** A review's own rating as stars (reviews.json `stars`, 5 when left out). */
+function reviewStars(r) {
+  const n = Math.round(Number(r.stars));
+  const k = n >= 1 && n <= 5 ? n : 5;
+  return '★'.repeat(k) + '☆'.repeat(5 - k);
+}
 
 /** Auto-scrolling review strip. Pauses on hover/touch so it can be read, and
  *  degrades to a plain scrollable row if the animation is unsupported. */
@@ -7709,7 +7715,7 @@ function reviewStrip() {
   const cards = SHOP_REVIEWS.map(r => `
     <div class="rv">
       ${r.photo ? `<img src="${escEmail(r.photo)}" alt="Customer photo from this Google review" loading="lazy">` : ''}
-      <div class="stars">★★★★★</div>
+      <div class="stars">${reviewStars(r)}</div>
       <div class="rv-t">${escEmail(r.title)}</div>
       <div class="rv-x">${escEmail(r.text)}</div>
       <div class="rv-w">${escEmail(r.who)}</div>

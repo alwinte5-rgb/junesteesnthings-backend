@@ -254,3 +254,18 @@ test('a featured product that is not a product, has no photo, or a missing headi
   const bad = PB.validate({ ...data, featured: { 'services/sublimation.html': { products: ['c52'] } } });
   assert.ok(bad.some((b) => /c52 is not a product/.test(b)) && bad.some((b) => /needs a heading/.test(b)));
 });
+
+test('each review shows its own Google rating, and the reviews are the customers\' words', () => {
+  const fs = require('fs'), path = require('path');
+  const root = path.join(__dirname, '..', 'public');
+  const rv = JSON.parse(fs.readFileSync(path.join(root, 'assets', 'data', 'reviews.json'), 'utf8')).reviews;
+  const diane = rv.find((r) => r.who.startsWith('Diane Alarcon'));
+  assert.strictEqual(diane.stars, 4, 'Diane gave 4 stars on Google');
+  assert.ok(/aria-label="4 stars">★★★★☆</.test(fs.readFileSync(path.join(root, 'services', 'sublimation.html'), 'utf8')), 'a page strip draws 4 stars for her');
+  assert.ok(fs.readFileSync(path.join(root, 'assets', 'js', 'review-strip.js'), 'utf8').includes('r.stars'), 'the site strip reads the rating');
+  // A photo sits on the review it was posted with on Google (owner, 2026-10-20).
+  const photo = (who) => (rv.find((r) => r.who.startsWith(who)) || {}).photo;
+  assert.strictEqual(photo('Corvina Hollingsworth'), '/assets/images/reviews/review-2.jpg');
+  assert.strictEqual(photo('Monaya Ali'), '/assets/images/reviews/review-5.jpg');
+  assert.strictEqual(photo('Rob Simpson'), undefined);
+});
