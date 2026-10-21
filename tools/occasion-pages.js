@@ -124,6 +124,14 @@ function designBox(page) {
       <p>Every price above includes ${money(Math.max(...inside))} of design work: we set up your logo or artwork on the shape and size you pick and send a proof. There is no separate design fee, and nothing prints until you approve the proof.</p>
     </div>`;
   }
+  /* Setup at no charge (stickers and labels, owner 2026-10-20: "stickers
+     are easy setup. no $25"). */
+  if (page.print.setup_free) {
+    return `<div class="pp-design">
+      <h3>Setup is free</h3>
+      <p>Send your logo or artwork and we set it up on the shape and size you pick and send a proof, at no extra charge. Nothing prints until you approve the proof.</p>
+    </div>`;
+  }
   const fees = (page.print.design_fees || []).map((f) => ({ label: f.label, price: Number(SERVICES.service(f.service).price) }));
   return `<div class="pp-design">
       <h3>${esc(page.print.design_h3 || 'Need it designed? That is a separate fee')}</h3>
