@@ -70,6 +70,7 @@ const REPLYCOACH = require('./tools/lib/reply-coach');
 const LEADPRICES = require('./tools/lib/lead-prices');
 const FINDER = require('./tools/lib/lead-finder');
 const STARTERTASKS = require('./tools/lib/task-starters');
+const PROJECTS = require('./tools/lib/task-projects');
 const FOLLOWUPS = require('./tools/lib/followups');
 const INBOUND = require('./tools/lib/inbound-email');
 const RELAY = require('./tools/lib/text-relay');
@@ -1354,6 +1355,30 @@ async function initStaffTables() {
      backlog row and copied to each task made from it. */
   await pool.query('ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS brief JSONB');
   await pool.query('ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS brief JSONB');
+  /* Projects (tools/lib/task-projects.js; owner approved the schema
+     2026-10-22): a campaign split into steps of about two hours, each step a
+     staff_tasks row with its place (step_no) and its days (starts_on,
+     due_on). auto_ref marks the one the marketing calendar made for a season,
+     so it is made once; files are what the owner hands over for it. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_projects (
+      id           SERIAL PRIMARY KEY,
+      title        TEXT NOT NULL,
+      summary      TEXT,
+      guide_url    TEXT,
+      assigned_to  INTEGER,
+      key_date     DATE,
+      key_label    TEXT,
+      auto_ref     TEXT UNIQUE,
+      files        JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_by   INTEGER,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at  TIMESTAMPTZ
+    )`);
+  for (const col of ['project_id INTEGER', 'step_no SMALLINT', 'starts_on DATE']) {
+    await pool.query(`ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS ${col}`);
+  }
+  await pool.query('CREATE INDEX IF NOT EXISTS staff_tasks_project_idx ON staff_tasks (project_id, step_no) WHERE project_id IS NOT NULL');
   /* The tools the team works in (/admin/resources): links and how to get in,
      never a password. Started with what the playbook already names. */
   /* Seeded only by the run that creates the table: seeding whenever it was
@@ -27041,13 +27066,15 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       isOwner() ? safe(GOOGLE_ANALYTICS.overview(), null, 'google analytics') : Promise.resolve(undefined),
       many(UNANSWERED_REPLIES_SQL, 'customer replies'),
       /* The to-do list: the owner sees every open task, a helper theirs and anyone's. */
-      many(`SELECT * FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+      many(`SELECT *, ${TASK_PROJECT_COLS} FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+               AND ${TASK_STEP_NOW}
              ORDER BY due_on NULLS LAST, created_at LIMIT 50`, 'tasks', [me]),
       many(`SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '7 days'
                AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
              ORDER BY done_at DESC LIMIT 50`, 'tasks done', [me]),
       safe(staffRoster(), [], 'roster'),
     ]);
+  const projectsBoard = await safe(projectCards(me, roster), { html: '', open: 0 }, 'projects');
 
   const waiting = leads.filter((l) => l.lead_status === 'new');
   const lastLead = leads[0];
@@ -27158,6 +27185,9 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
         ${attention.length ? `<div class="rows">${attention.slice(0, 12).map(row).join('')}</div>`
           : emptyState('All clear. Nothing is late, waiting or disputed.')}
       </div>
+      ${projectsBoard.open ? `<div class="card" id="projects">${PROJECT_CSS}
+        <h2 class="card-title">Projects <span class="muted">${projectsBoard.open}</span> <a href="/admin/projects">all projects &rarr;</a></h2>
+        ${projectsBoard.html}</div>` : ''}
       <div class="card" id="todo">
         <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span>${me == null ? ' <a href="/admin/tasks">all tasks &rarr;</a>' : ''}</h2>
         ${tasks.length ? `<div class="rows">${tasks.map((t) => {
@@ -34308,6 +34338,14 @@ app.post('/admin/leads/find', requireAdmin, async (req, res) => {
    routine, then the lanes from shortest to longest. */
 const TASK_LANE_ORDER = `CASE WHEN lane IS NULL THEN 0 WHEN lane = 'daily' THEN 1 WHEN lane = 'short' THEN 2
   WHEN lane = 'medium' THEN 3 WHEN lane = 'long' THEN 4 ELSE 5 END`;
+/* A project's steps open one at a time (tools/lib/task-projects.js): task
+   lists show only its first step not yet completed, the rest wait on the
+   project page. With the project's title and step count for the row. */
+const TASK_STEP_NOW = `(staff_tasks.project_id IS NULL OR NOT EXISTS (SELECT 1 FROM staff_tasks e
+  WHERE e.project_id = staff_tasks.project_id AND e.done_at IS NULL
+    AND (e.step_no < staff_tasks.step_no OR (e.step_no = staff_tasks.step_no AND e.id < staff_tasks.id))))`;
+const TASK_PROJECT_COLS = `(SELECT tp.title FROM task_projects tp WHERE tp.id = staff_tasks.project_id) AS project_title,
+  (SELECT COUNT(*)::int FROM staff_tasks e WHERE staff_tasks.project_id IS NOT NULL AND e.project_id = staff_tasks.project_id) AS project_steps`;
 const TASK_GROUPS = [[null, 'Handed to you'], [FLOW.DAILY, 'Every day'],
   ...FLOW.LANE_KEYS.map((k) => [k, `${FLOW.LANES[k].label} <span class="muted" style="font-weight:400">· ${FLOW.LANES[k].hint}</span>`])];
 
@@ -34391,6 +34429,16 @@ app.post('/admin/tasks/:id/start', requireAdmin, async (req, res) => {
   if (!id) return res.redirect(backTo);
   if (!actor || actor.kind !== 'staff') return back(res, backTo, 'err', 'The person doing the task starts it.');
   try {
+    /* A project's steps open one at a time, like a course: only the first
+       step not yet completed can be started. */
+    const { rows: [pt] } = await pool.query('SELECT project_id FROM staff_tasks WHERE id = $1', [id]);
+    if (pt && pt.project_id) {
+      const steps = await projectSteps(pt.project_id);
+      if (!PROJECTS.canStart(steps, id)) {
+        const cur = PROJECTS.stepStates(steps).find((x) => x.state === 'current');
+        return back(res, backTo, 'err', cur ? `Finish step ${cur.step_no}, "${cur.title.slice(0, 80)}", first: the steps open one at a time.` : 'That step is already completed.');
+      }
+    }
     const { rowCount } = await pool.query(
       `UPDATE staff_tasks SET started_at = NOW(), started_by = $2, assigned_to = COALESCE(assigned_to, $2)
         WHERE id = $1 AND done_at IS NULL AND started_at IS NULL AND (assigned_to = $2 OR assigned_to IS NULL)`, [id, actor.id]);
@@ -34591,7 +34639,9 @@ function taskBriefHtml(t, actor, { folded = false } = {}) {
 function taskDetailsHtml(t, actor, roster, { folded = false } = {}) {
   const files = (Array.isArray(t.files) ? t.files : []).map((f, n) => ({ ...f, n }))
     .filter((f) => CHATFILES.fileUrlOk(f.url, QPHOTOS.cloudName(), CHATFILES.TASK_FOLDER));
-  return `${t.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(t.description)}</div>` : ''}
+  return `${t.project_id ? `<div class="row-sub">${pill(`step ${Number(t.step_no) || 1}${t.project_steps ? ` of ${Number(t.project_steps)}` : ''}`, 'blue')}
+      <a href="/admin/projects/${Number(t.project_id)}#step-${Number(t.id)}">${escEmail(t.project_title || 'The project')}: timeline and every step →</a></div>` : ''}
+    ${t.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(t.description)}</div>` : ''}
     ${taskBriefHtml(t, actor, { folded })}
     ${t.quote_code ? `<div class="row-sub">Order: <a href="${escEmail(jobLinkFor(actor, t.quote_code))}"><b>${escEmail(t.quote_code)}</b></a></div>` : ''}
     <div class="row-sub"><a href="/admin/mailbox/new?task=${Number(t.id)}">Message about this task →</a></div>
@@ -34735,12 +34785,14 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
       { label: 'Team now', href: '/admin/tasks', on: view === 'team' },
       { label: 'Backlog', href: '/admin/tasks?view=backlog', on: view === 'backlog' },
       { label: 'Done', href: '/admin/tasks?view=done', on: view === 'done' },
+      { label: 'Projects', href: '/admin/projects', on: false },
     ]);
     let body = '';
     if (view === 'team') {
       const backTo = '/admin/tasks';
       const [{ rows: open }, { rows: weekDone }] = await Promise.all([
-        pool.query('SELECT * FROM staff_tasks WHERE done_at IS NULL ORDER BY due_on NULLS LAST, created_at LIMIT 400'),
+        pool.query(`SELECT *, ${TASK_PROJECT_COLS} FROM staff_tasks WHERE done_at IS NULL AND ${TASK_STEP_NOW}
+                     ORDER BY due_on NULLS LAST, created_at LIMIT 400`),
         pool.query(`SELECT assigned_to, COUNT(*)::int AS n FROM staff_tasks WHERE done_at > NOW() - interval '7 days' GROUP BY assigned_to`),
       ]);
       /* One line per task; what it is, its brief and Close task one click down. */
@@ -34959,36 +35011,444 @@ async function makeRecurringTasks(helper, shifts, templates, now = new Date()) {
   return made;
 }
 
-/** When a season's kit is due: the day its ads start, or a week from now
- *  when that day has already come (a kit is never late the day it arrives). */
-function flowDueOn(ads, now) {
-  const week = new Date(now.getTime() + 7 * 86400000);
-  return (ads > now ? ads : week).toISOString().slice(0, 10);
+/* ── Projects (owner, 2026-10-22) ────────────────────────────────────────────
+   "Can we add [a timeline] in the task section so it can be seen for the tasks
+   and can be controlled and used... sort of like a course, walk them through
+   the task, broken up a couple hours of work at a time." A project is a
+   task_projects row and its steps are staff_tasks rows (tools/lib/
+   task-projects.js has the steps, the dates and the timeline). */
+
+const PROJECT_FILES_MAX = 30;
+const KIT_REPLACED = 'Replaced by its project: the same work, step by step, on the project page.';
+
+/** A project's steps in order. */
+async function projectSteps(projectId) {
+  const { rows } = await pool.query('SELECT * FROM staff_tasks WHERE project_id = $1 ORDER BY step_no, id', [projectId]);
+  return rows;
 }
 
-/** Work the shop makes by itself: the marketing calendar's prep for each
- *  coming season goes to the designer (the first active one on the design
- *  role), once per season, due the day its ads start. One season at a time,
- *  soonest first: the next comes when the last is finished, so four seasons in
- *  prep never land on the designer at once. */
+/** Save a project and all its steps, or nothing: null when a project with
+ *  the same auto_ref is already there (made once per season). */
+async function saveProject(p, { assignedTo = null, createdBy = null } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [proj] } = await client.query(
+      `INSERT INTO task_projects (title, summary, guide_url, assigned_to, key_date, key_label, auto_ref, created_by)
+       VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8) ON CONFLICT (auto_ref) DO NOTHING RETURNING id`,
+      [p.title, p.summary || null, p.guide_url || null, assignedTo, p.key_date || null, p.key_label || null, p.auto_ref || null, createdBy]);
+    if (!proj) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    for (const st of p.steps || []) {
+      await client.query(
+        `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, goal, brief, project_id, step_no, starts_on, due_on, created_by)
+         VALUES ($1, $2, 'jtees', $3, $4, 'sales', $5::jsonb, $6, $7, $8::date, $9::date, $10)`,
+        [st.title, assignedTo, st.description || null, st.how_to || null, st.brief ? JSON.stringify(FLOW.shapeBrief(st.brief)) : null,
+          proj.id, st.step_no, st.starts_on, st.due_on, createdBy]);
+    }
+    await client.query('COMMIT');
+    return proj.id;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Work the shop makes by itself: the marketing calendar's coming seasons go
+ *  to the designer (the first active one on the design role) as a project of
+ *  about seven two-hour steps, replacing the old single "Asset kit" task
+ *  (owner, 2026-10-22). One season at a time, soonest ads first: the next is
+ *  made once every step of the last is completed. A season whose old kit was
+ *  already finished is not made again, unless it has its own written steps
+ *  (Christmas 2026). An open old kit for the season is closed in its favour. */
 async function makeAutoTasks(roster, now = new Date()) {
   const designer = roster.filter((r) => r.active && !r.archived_at && r.training_track === 'design').sort((a, b) => a.id - b.id)[0];
   if (!designer) return 0;
   const { rows: busy } = await pool.query(
-    `SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL AND auto_ref LIKE 'mcal:%' LIMIT 1`, [designer.id]);
+    `SELECT 1 FROM task_projects p WHERE p.auto_ref LIKE 'mcal:%' AND p.archived_at IS NULL
+        AND EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id AND t.done_at IS NULL) LIMIT 1`);
   if (busy.length) return 0;
-  const { rows: made0 } = await pool.query(`SELECT auto_ref FROM staff_tasks WHERE auto_ref LIKE 'mcal:%'`);
+  const [{ rows: made0 }, { rows: kitsDone }] = await Promise.all([
+    pool.query(`SELECT auto_ref FROM task_projects WHERE auto_ref LIKE 'mcal:%'`),
+    pool.query(`SELECT auto_ref FROM staff_tasks WHERE auto_ref LIKE 'mcal:%' AND done_at IS NOT NULL AND done_note IS DISTINCT FROM $1`, [KIT_REPLACED]),
+  ]);
   const had = new Set(made0.map((r) => r.auto_ref));
-  const e = MKT_CAL.dueNow(now).sort((a, b) => a.ads - b.ads).find((x) => !had.has(`mcal:${x.id}:${x.year}`));
-  if (!e) return 0;
-  const kit = STARTERTASKS.assetKitBrief(e, { late: e.ads <= now, longDate: MKT_CAL.longDate });
-  const { rowCount } = await pool.query(
-      `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, goal, auto_ref, due_on, brief)
-       VALUES ($1, $2, 'jtees', $3, $4, 'sales', $5, $6::date, $7::jsonb) ON CONFLICT DO NOTHING`,
-      [`Asset kit: ${e.name} ${e.year}`, designer.id, kit.description, kit.how_to,
-        `mcal:${e.id}:${e.year}`, flowDueOn(e.ads, now), JSON.stringify(FLOW.shapeBrief(kit.brief))]);
-  return rowCount;
+  const finished = new Set(kitsDone.map((r) => r.auto_ref));
+  for (const e of MKT_CAL.dueNow(now).sort((a, b) => a.ads - b.ads)) {
+    const ref = `mcal:${e.id}:${e.year}`;
+    if (had.has(ref) || (finished.has(ref) && !PROJECTS.SEASON_PRESETS[`${e.id}:${e.year}`])) continue;
+    const p = PROJECTS.seasonProject(e, { now, longDate: MKT_CAL.longDate });
+    if (!p) continue;
+    const id = await saveProject(p, { assignedTo: designer.id });
+    if (!id) return 0;
+    await pool.query('UPDATE staff_tasks SET done_at = NOW(), done_note = $2 WHERE auto_ref = $1 AND done_at IS NULL', [ref, KIT_REPLACED]);
+    return p.steps.length;
+  }
+  return 0;
 }
+
+const PROJECT_CSS = `<style>
+.pj-card .pj-tl{margin:8px 0 2px;overflow:hidden}
+.pj-next{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-top:6px}
+.pj-step{scroll-margin-top:80px}
+.pj-step-h{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;justify-content:space-between}
+.pj-step-n{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#E0107A}
+.pj-step.is-locked{opacity:.72}
+.pj-step.is-current{border:2px solid #E0107A}
+.pj-legend{font-size:12.5px;color:#64748b;display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}
+.pj-dot{display:inline-block;width:10px;height:10px;border-radius:5px;margin-right:4px;vertical-align:-1px}
+.pj-rules ul{margin:4px 0 8px 18px;padding:0}
+.pj-rules li{margin:3px 0;line-height:1.45}
+.pj-form{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:8px}
+.pj-form label{margin:0}
+</style>`;
+
+/** May this person open the project? The owner any; a helper their own. */
+function projectVisibleTo(p, actor) {
+  return !!p && (!actor || actor.kind !== 'staff' || p.assigned_to === actor.id);
+}
+
+/** One project as a card: who, how far, the step to do now, a small timeline
+ *  and the way in. For the Projects list, My Day and the Dashboard. */
+function projectCard(p, steps, roster, { owner, today }) {
+  const states = PROJECTS.stepStates(steps);
+  const done = states.filter((s) => s.state === 'done').length;
+  const cur = states.find((s) => s.state === 'current');
+  const late = cur && PROJECTS.ymdOf(cur.due_on) && PROJECTS.ymdOf(cur.due_on) < today;
+  return `<div class="card pj-card"><div class="pj-step-h"><a href="/admin/projects/${Number(p.id)}"><b style="font-size:16px">${escEmail(p.title)}</b></a>
+      <span class="muted">${owner ? `${escEmail(p.assigned_to != null ? nameOf(roster, p.assigned_to) : 'Nobody yet')} &middot; ` : ''}${done} of ${states.length} steps done</span></div>
+    <div class="pj-tl">${PROJECTS.timelineSvg(p, steps, { today, compact: true })}</div>
+    <div class="pj-next"><span>${cur ? `<b>Step ${Number(cur.step_no)}:</b> ${escEmail(cur.title)} <span class="muted">&middot; due ${escEmail(PROJECTS.withDay(PROJECTS.ymdOf(cur.due_on)))}</span> ${late ? pill('overdue', 'red') : ''}`
+      : states.length ? pill('all steps completed', 'green') : '<span class="muted">No steps yet.</span>'}</span>
+      <a class="btn" href="/admin/projects/${Number(p.id)}${cur ? `#step-${Number(cur.id)}` : ''}">${!owner && cur ? 'Continue' : 'Open'} &rarr;</a></div></div>`;
+}
+
+/** The open projects for someone (null = everyone, for the owner), as cards. */
+async function projectCards(me, roster) {
+  const { rows: projects } = await pool.query(
+    `SELECT * FROM task_projects WHERE archived_at IS NULL AND ($1::int IS NULL OR assigned_to = $1) ORDER BY created_at DESC LIMIT 30`, [me]);
+  if (!projects.length) return { html: '', open: 0 };
+  const { rows: steps } = await pool.query('SELECT * FROM staff_tasks WHERE project_id = ANY($1::int[]) ORDER BY step_no, id', [projects.map((p) => p.id)]);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+  /* Open = a step still to do, or no steps yet (June is still adding them). */
+  const open = projects.filter((p) => { const mine = steps.filter((s) => s.project_id === p.id); return !mine.length || mine.some((s) => !s.done_at); });
+  return { html: open.map((p) => projectCard(p, steps.filter((s) => s.project_id === p.id), roster, { owner: me == null, today })).join(''), open: open.length };
+}
+
+/** The seasons a project can take its steps from: the calendar's next ones
+ *  whose last day to order is still ahead. */
+function projectSeasonOptions(now = new Date()) {
+  const today = MKT_CAL.ymd(now);
+  return MKT_CAL.upcoming(now).filter((e) => MKT_CAL.ymd(e.orderBy) >= today).slice(0, 12);
+}
+
+app.get('/admin/projects', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const me = actor.kind === 'staff' ? actor.id : null;
+    const roster = await staffRoster();
+    const { html } = await projectCards(me, roster);
+    const { rows: finished } = await pool.query(
+      `SELECT p.id, p.title, p.archived_at FROM task_projects p
+        WHERE ($1::int IS NULL OR p.assigned_to = $1)
+          AND (p.archived_at IS NOT NULL OR (EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id)
+                AND NOT EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id AND t.done_at IS NULL)))
+        ORDER BY p.created_at DESC LIMIT 20`, [me]);
+    const form = me == null ? `<details class="card" id="new"><summary><b>Start a project</b> <span class="muted">for one helper, from a season of the marketing calendar or from scratch</span></summary>
+      <form method="post" action="/admin/projects" class="pj-form">
+        <label style="flex:1 1 260px">Title <input name="title" maxlength="${PROJECTS.TITLE_MAX}" placeholder="Leave empty to use the season's"></label>
+        <label>For <select name="assigned_to" required><option value="">Pick a helper</option>${roster.filter((r) => r.active && !r.archived_at).map((r) =>
+          `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
+        <label>Steps from <select name="season"><option value="">No season: I add the steps</option>${projectSeasonOptions().map((e) =>
+          `<option value="${escEmail(`${e.id}:${e.year}`)}">${escEmail(`${e.name} ${e.year} (order by ${MKT_CAL.shortDate(e.orderBy)})`)}</option>`).join('')}</select></label>
+        <label>Key date <input type="date" name="key_date"></label>
+        <label>It is the <input name="key_label" maxlength="60" placeholder="Last day to order"></label>
+        <label style="flex:1 1 100%">What it is for <textarea name="summary" rows="2" maxlength="2000" placeholder="One or two lines on the goal"></textarea></label>
+        <button type="submit" class="btn">Start the project</button></form>
+      <p class="muted" style="margin-top:6px">The marketing calendar starts each coming season's project for the designer by itself, one at a time.</p></details>` : '';
+    res.send(adminPage('Projects', `${PROJECT_CSS}
+      ${pageHeader('Projects', 'Big work split into steps of about two hours, done one at a time.',
+        me == null ? '<a class="btn btn-ghost" href="/admin/tasks">Tasks</a>' : '<a class="btn btn-ghost" href="/admin/my-day">My Day</a>')}
+      ${flash(req.query)}${form}
+      ${html || `<div class="card">${emptyState(me == null ? 'No open projects.' : 'No project for you right now. Your tasks are on My Day.')}</div>`}
+      ${finished.length ? `<details class="card"><summary><b>Finished and archived (${finished.length})</b></summary><div class="rows">${finished.map((p) =>
+        `<div class="row-i"><span class="row-main"><a href="/admin/projects/${Number(p.id)}">${escEmail(p.title)}</a></span><span class="row-end">${p.archived_at ? pill('archived', 'neutral') : pill('completed', 'green')}</span></div>`).join('')}</div></details>` : ''}`, me == null ? 'tasks' : 'myday'));
+  } catch (err) {
+    console.error('projects page failed:', err.message);
+    res.status(500).send(adminPage('Projects', '<div class="card"><div class="warn">Could not load the projects.</div></div>', 'tasks'));
+  }
+});
+
+app.post('/admin/projects', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const backTo = '/admin/projects#new';
+  const assignTo = intIn(b.assigned_to);
+  if (!assignTo) return back(res, backTo, 'err', 'Pick the helper the project is for.');
+  try {
+    const roster = await staffRoster();
+    const helper = roster.find((r) => r.id === assignTo && r.active && !r.archived_at);
+    if (!helper) return back(res, backTo, 'err', 'That helper is not active.');
+    let p = { title: '', steps: [] };
+    const season = String(b.season || '');
+    if (season) {
+      const e = projectSeasonOptions().find((x) => `${x.id}:${x.year}` === season);
+      if (!e) return back(res, backTo, 'err', 'That season is not open any more. Pick another.');
+      p = PROJECTS.seasonProject(e, { longDate: MKT_CAL.longDate });
+      if (!p) return back(res, backTo, 'err', 'That season\'s last day to order has passed.');
+    }
+    const title = text(b.title, PROJECTS.TITLE_MAX).replace(/\s+/g, ' ') || p.title;
+    if (!title) return back(res, backTo, 'err', 'Give the project a title, or pick a season.');
+    const id = await saveProject({
+      ...p, title,
+      summary: text(b.summary, 2000) || p.summary || null,
+      key_date: isoDate(b.key_date) || p.key_date || null,
+      key_label: text(b.key_label, 60) || p.key_label || (isoDate(b.key_date) ? 'Key date' : null),
+    }, { assignedTo: assignTo });
+    if (!id) return back(res, backTo, 'err', 'There is already a project for that season. Open it from the list.');
+    notifyNow();
+    return res.redirect(`/admin/projects/${id}?ok=${encodeURIComponent(p.steps.length ? 'Project started with its steps.' : 'Project started. Add its steps below.')}`);
+  } catch (err) {
+    console.error('project add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not start the project.');
+  }
+});
+
+/** The project for this request, or a 404 answer already sent. */
+async function projectFor(req, res) {
+  const id = intIn(req.params.id);
+  const { rows: [p] } = id ? await pool.query('SELECT * FROM task_projects WHERE id = $1', [id]) : { rows: [] };
+  if (!projectVisibleTo(p, currentActor())) {
+    res.status(404).send(adminPage('Projects', '<div class="card"><div class="warn">That project is not one of yours.</div></div>', 'myday'));
+    return null;
+  }
+  return p;
+}
+
+app.get('/admin/projects/:id', requireAdmin, async (req, res) => {
+  try {
+    const p = await projectFor(req, res);
+    if (!p) return;
+    const actor = currentActor() || OWNER_ACTOR;
+    const owner = actor.kind !== 'staff';
+    const helper = !owner && p.assigned_to === actor.id;
+    const [roster, steps] = await Promise.all([staffRoster(), projectSteps(p.id)]);
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+    const states = PROJECTS.stepStates(steps);
+    const done = states.filter((s) => s.state === 'done').length;
+    const backTo = (t) => `/admin/projects/${Number(p.id)}#step-${Number(t.id)}`;
+    const files = (Array.isArray(p.files) ? p.files : []).map((f, n) => ({ ...f, n }))
+      .filter((f) => CHATFILES.fileUrlOk(f.url, QPHOTOS.cloudName(), CHATFILES.TASK_FOLDER));
+    const prev = (s) => states.filter((x) => x.step_no < s.step_no && x.state !== 'done').slice(-1)[0];
+    const stepCard = (s) => {
+      const b = FLOW.shapeBrief(s.brief);
+      const due = PROJECTS.ymdOf(s.due_on);
+      const status = s.state === 'done' ? pill('completed', 'green') : s.started_at ? pill('started', 'blue')
+        : s.state === 'current' ? pill('your step now', 'amber') : pill('opens later', 'neutral');
+      const before = prev(s);
+      const action = s.state === 'done' || p.archived_at ? ''
+        : s.state === 'locked' ? `<p class="muted" style="margin-top:8px">Opens when step ${Number(before ? before.step_no : s.step_no - 1)} is completed.</p>`
+          : `<div style="margin-top:10px">${taskActionForm(s, backTo(s), helper)}</div>`;
+      const edit = owner && !s.done_at && !p.archived_at ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Change this step</summary>
+        <form method="post" action="/admin/projects/${Number(p.id)}/steps/${Number(s.id)}" class="pj-form">
+          <label style="flex:1 1 260px">Title <input name="title" required maxlength="${PROJECTS.TITLE_MAX}" value="${escEmail(s.title)}"></label>
+          <label>Starts <input type="date" name="starts_on" required value="${escEmail(PROJECTS.ymdOf(s.starts_on))}"></label>
+          <label>Due <input type="date" name="due_on" required value="${escEmail(due)}"></label>
+          <button type="submit" class="btn btn-ghost">Save</button></form></details>` : '';
+      return `<div class="card pj-step is-${s.state}" id="step-${Number(s.id)}">
+        <div class="pj-step-h"><span><span class="pj-step-n">Step ${Number(s.step_no)} of ${states.length}</span><br><b style="font-size:16px">${escEmail(s.title)}</b> ${status}</span>
+          <span class="muted">${b && b.time ? `${escEmail(b.time)} &middot; ` : ''}${due ? `due ${escEmail(PROJECTS.withDay(due))}` : ''} ${!s.done_at && due && due < today ? pill('overdue', 'red') : ''}</span></div>
+        ${s.state === 'locked' ? `${s.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(s.description)}</div>` : ''}${taskBriefHtml(s, actor, { folded: true })}`
+          : taskDetailsHtml({ ...s, project_id: null }, actor, roster, { folded: s.state === 'done' })}
+        ${action}${edit}</div>`;
+    };
+    const rules = `<details class="card pj-rules" open><summary><b>Campaign rules</b> <span class="muted">the same for every campaign: check each step against them</span></summary>
+      ${PROJECTS.RULES.map((g) => `<div class="tb-h">${escEmail(g.head)}</div><ul>${g.items.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>`).join('')}</details>`;
+    const filesCard = `<div class="card" id="files"><h2 class="card-title">Files for this project <span class="muted">${files.length || ''}</span></h2>
+      ${files.length ? `<div class="rows">${files.map((f) => `<div class="row-i"><span class="row-main"><a href="/admin/projects/${Number(p.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a></span>
+        <span class="row-end"><a class="btn btn-ghost" href="/admin/projects/${Number(p.id)}/file/${f.n}">Download</a></span></div>`).join('')}</div>`
+        : `<p class="muted">${owner ? 'Nothing here yet. Add the photos, logos and references the steps need.' : 'June adds the photos, logos and references here.'}</p>`}
+      ${owner && !p.archived_at ? `<form method="post" action="/admin/projects/${Number(p.id)}/files" style="margin-top:8px">${taskUploadBox('Add files')}
+        <button type="submit" class="btn" style="margin-top:6px">Save the files</button></form>` : ''}</div>`;
+    const addStep = owner && !p.archived_at ? `<details class="card" id="add-step"><summary><b>Add a step</b> <span class="muted">about two hours of work, at the end</span></summary>
+      <form method="post" action="/admin/projects/${Number(p.id)}/steps" class="pj-form">
+        <label style="flex:1 1 260px">Title <input name="title" required maxlength="${PROJECTS.TITLE_MAX}"></label>
+        <label>Starts <input type="date" name="starts_on" required></label>
+        <label>Due <input type="date" name="due_on" required></label>
+        <label>Time it takes <input name="time" maxlength="100" value="About 2 hours"></label>
+        <label style="flex:1 1 100%">The step in full <textarea name="description" rows="3" maxlength="${TASK_TEXT_MAX}"></textarea></label>
+        <label style="flex:1 1 100%">Done when (one per line) <textarea name="done_when" rows="3"></textarea></label>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="proof_required" value="1" style="width:auto" checked> Files must be attached to mark it completed</label>
+        <button type="submit" class="btn">Add the step</button></form></details>` : '';
+    const archive = owner && !p.archived_at ? `<form method="post" action="/admin/projects/${Number(p.id)}/archive" onsubmit="return confirm('Archive this project? Its open steps are closed.')" style="margin-top:4px">
+      <button type="submit" class="btn btn-ghost">Archive the project</button></form>` : '';
+    res.send(adminPage(p.title, `${TASK_CSS}${PROJECT_CSS}
+      ${pageHeader(p.title, `${p.summary ? escEmail(p.summary) : ''}${owner ? `${p.summary ? '<br>' : ''}For ${escEmail(p.assigned_to != null ? nameOf(roster, p.assigned_to) : 'nobody yet')}` : ''}`,
+        `<a class="btn btn-ghost" href="${owner ? '/admin/projects' : '/admin/my-day'}">${owner ? 'All projects' : 'My Day'}</a>`)}
+      ${flash(req.query)}
+      ${p.archived_at ? '<div class="warn">This project is archived.</div>' : ''}
+      <div class="card"><h2 class="card-title">Timeline <span class="muted">${done} of ${states.length} steps done</span></h2>
+        ${steps.length ? `${PROJECTS.timelineSvg(p, steps, { today })}
+        <div class="pj-legend"><span><i class="pj-dot" style="background:#16a34a"></i>Done</span><span><i class="pj-dot" style="background:#E0107A"></i>The step now</span>
+          <span><i class="pj-dot" style="background:#94a3b8"></i>Opens later</span><span><i class="pj-dot" style="background:#dc2626"></i>Overdue</span>
+          <span>Steps open one at a time. Click a bar to jump to its step.</span></div>` : emptyState('No steps yet.')}</div>
+      ${p.guide_url || (owner && !p.archived_at) ? `<div class="card">${p.guide_url ? `<a href="${escEmail(p.guide_url)}" target="_blank" rel="noopener noreferrer"><b>Open the campaign guide &rarr;</b></a>` : '<span class="muted">No guide linked.</span>'}
+        ${owner && !p.archived_at ? `<form method="post" action="/admin/projects/${Number(p.id)}/guide" class="pj-form">
+          <label style="flex:1 1 320px">Guide link (a shared doc, https) <input name="guide_url" type="url" maxlength="500" value="${escEmail(p.guide_url || '')}" placeholder="https://..."></label>
+          <button type="submit" class="btn btn-ghost">Save</button></form>` : ''}</div>` : ''}
+      ${filesCard}${rules}
+      ${states.map(stepCard).join('')}
+      ${addStep}${archive}${TASK_UPLOAD_JS}`, owner ? 'tasks' : 'myday'));
+  } catch (err) {
+    console.error('project page failed:', err.message);
+    res.status(500).send(adminPage('Projects', '<div class="card"><div class="warn">Could not load the project.</div></div>', 'tasks'));
+  }
+});
+
+/* The owner links the campaign guide (any https page; empty removes it). */
+app.post('/admin/projects/:id/guide', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  if (!id) return res.redirect('/admin/projects');
+  const url = text((req.body || {}).guide_url, 500);
+  if (url && !/^https:\/\/[a-z0-9.-]+\.[a-z]{2,}(\/[^\s<>"']*)?$/i.test(url)) return back(res, `/admin/projects/${id}`, 'err', 'The guide link must start with https://');
+  try {
+    const { rowCount } = await pool.query('UPDATE task_projects SET guide_url = $2 WHERE id = $1 AND archived_at IS NULL', [id, url || null]);
+    return back(res, `/admin/projects/${id}`, rowCount ? 'ok' : 'err', rowCount ? (url ? 'Guide linked.' : 'Guide link removed.') : 'That project is archived or gone.');
+  } catch (err) {
+    console.error('project guide failed:', err.message);
+    return back(res, `/admin/projects/${id}`, 'err', 'Could not save the link.');
+  }
+});
+
+/* The owner moves a step's days or renames it, while it is open. */
+app.post('/admin/projects/:id/steps/:taskId', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const taskId = intIn(req.params.taskId);
+  const backTo = `/admin/projects/${id || ''}#step-${taskId || ''}`;
+  if (!id || !taskId) return res.redirect('/admin/projects');
+  const edit = PROJECTS.shapeStepEdit(req.body);
+  if (!edit.ok) return back(res, backTo, 'err', edit.error);
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE staff_tasks t SET title = $3, starts_on = $4::date, due_on = $5::date
+        FROM task_projects p WHERE t.id = $2 AND t.project_id = $1 AND p.id = t.project_id AND p.archived_at IS NULL AND t.done_at IS NULL`,
+      [id, taskId, edit.step.title, edit.step.starts_on, edit.step.due_on]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Step saved.' : 'That step is completed or not in this project.');
+  } catch (err) {
+    console.error('project step edit failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save the step.');
+  }
+});
+
+/* The owner adds a step at the end. */
+app.post('/admin/projects/:id/steps', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const backTo = `/admin/projects/${id || ''}#add-step`;
+  if (!id) return res.redirect('/admin/projects');
+  const edit = PROJECTS.shapeStepEdit(b);
+  if (!edit.ok) return back(res, backTo, 'err', edit.error);
+  const lines = (v) => String(v == null ? '' : v).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const brief = FLOW.shapeBrief({ time: b.time, done: lines(b.done_when), proof: b.proof_required === '1' ? 'The files you made, attached here.' : '',
+    proof_required: b.proof_required === '1' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [p] } = await client.query('SELECT id, assigned_to FROM task_projects WHERE id = $1 AND archived_at IS NULL FOR UPDATE', [id]);
+    if (!p) {
+      await client.query('ROLLBACK');
+      return back(res, '/admin/projects', 'err', 'That project is archived or gone.');
+    }
+    const { rows: [n] } = await client.query('SELECT COUNT(*)::int AS n, COALESCE(MAX(step_no), 0)::int AS last FROM staff_tasks WHERE project_id = $1', [id]);
+    if (n.n >= PROJECTS.STEP_MAX) {
+      await client.query('ROLLBACK');
+      return back(res, backTo, 'err', `A project holds ${PROJECTS.STEP_MAX} steps at most.`);
+    }
+    await client.query(
+      `INSERT INTO staff_tasks (title, assigned_to, business, description, goal, brief, project_id, step_no, starts_on, due_on)
+       VALUES ($1, $2, 'jtees', $3, 'sales', $4::jsonb, $5, $6, $7::date, $8::date)`,
+      [edit.step.title, p.assigned_to, text(b.description, TASK_TEXT_MAX) || null, brief ? JSON.stringify(brief) : null, id, n.last + 1, edit.step.starts_on, edit.step.due_on]);
+    await client.query('COMMIT');
+    notifyNow();
+    return back(res, `/admin/projects/${id}`, 'ok', 'Step added.');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('project step add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not add the step.');
+  } finally {
+    client.release();
+  }
+});
+
+/* The owner hands over files for the project (uploaded to the task folder). */
+app.post('/admin/projects/:id/files', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const backTo = `/admin/projects/${id || ''}#files`;
+  if (!id) return res.redirect('/admin/projects');
+  const picked = CHATFILES.pickTaskFiles((req.body || {}).files, QPHOTOS.cloudName());
+  if (picked.error) return back(res, backTo, 'err', 'A file did not upload properly. Pick it again.');
+  if (!picked.files.length) return back(res, backTo, 'err', 'Pick the files first.');
+  try {
+    const files = picked.files.map((f) => ({ ...f, at: new Date().toISOString() }));
+    const { rowCount } = await pool.query(
+      `UPDATE task_projects SET files = files || $2::jsonb
+        WHERE id = $1 AND archived_at IS NULL AND jsonb_array_length(files) + $3 <= $4`,
+      [id, JSON.stringify(files), files.length, PROJECT_FILES_MAX]);
+    return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? `${files.length} file${files.length === 1 ? '' : 's'} added.` : `A project holds ${PROJECT_FILES_MAX} files at most, and an archived one takes none.`);
+  } catch (err) {
+    console.error('project files failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save the files.');
+  }
+});
+
+/* A project file, for the owner or the helper it is for, through the signed
+   download (as task files). */
+app.get('/admin/projects/:id/file/:n', requireAdmin, async (req, res) => {
+  const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
+  try {
+    const p = await projectFor(req, res);
+    if (!p) return;
+    const f = n >= 0 && Array.isArray(p.files) ? p.files[n] : null;
+    const src = f ? CHATFILES.downloadSource(f.url, QPHOTOS.cloudName(), CHATFILES.TASK_FOLDER) : null;
+    if (!src) return res.status(404).send('That file is not in this project.');
+    const r = await fetch(cloudinary.utils.private_download_url(src.publicId, src.format, { resource_type: src.resourceType, type: 'upload' }));
+    if (!r.ok || !r.body) throw new Error(`Cloudinary answered ${r.status}`);
+    const name = MSGFILES.cleanName(f.name, src.ext);
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'private, no-store');
+    pipeline(Readable.fromWeb(r.body), res, (e) => { if (e) console.error('project file stream cut off:', e.message); });
+  } catch (err) {
+    console.error('project file failed:', err.message);
+    if (!res.headersSent) res.status(502).send('Could not fetch the file. Try again.');
+  }
+});
+
+/* Archive: the project leaves the lists and its open steps are closed. */
+app.post('/admin/projects/:id/archive', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  if (!id) return res.redirect('/admin/projects');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rowCount } = await client.query('UPDATE task_projects SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL', [id]);
+    if (rowCount) {
+      await client.query(`UPDATE staff_tasks SET done_at = NOW(), done_note = 'Closed: the project was archived.' WHERE project_id = $1 AND done_at IS NULL`, [id]);
+    }
+    await client.query('COMMIT');
+    return back(res, '/admin/projects', rowCount ? 'ok' : 'err', rowCount ? 'Project archived.' : 'It was already archived.');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('project archive failed:', err.message);
+    return back(res, `/admin/projects/${id}`, 'err', 'Could not archive the project.');
+  } finally {
+    client.release();
+  }
+});
 
 /** The written-out starter tasks (owner, 2026-10-22: "go deeper") reach the
  *  backlogs the owner already added and the open tasks already handed out
@@ -38090,7 +38550,8 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     if (me) await taskFlowFor(me).catch((e) => console.error('task flow on My Day failed:', e.message));
     const [leads, tasks, mine, released, liveList] = await Promise.all([
       can('leads.view') ? unansweredLeads() : Promise.resolve([]),
-      pool.query(`SELECT * FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+      pool.query(`SELECT *, ${TASK_PROJECT_COLS} FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
+                   AND ${TASK_STEP_NOW}
                    ORDER BY ${TASK_LANE_ORDER}, due_on NULLS LAST, created_at LIMIT 100`, [me]),
       me ? pool.query(`SELECT * FROM staff_approvals WHERE requested_by = $1
                         AND (status = 'pending' OR (status = 'rejected' AND decided_at > NOW() - interval '7 days'))
@@ -38158,6 +38619,8 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const copyJs = `<script>function jtCopy(id){var t=document.getElementById(id).innerText;
       (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(function(){});}</script>`;
 
+    /* A helper's projects, the owner's all of them; a failure leaves the rest of the day. */
+    const projects = await projectCards(me, roster).catch((e) => { console.error('My Day projects failed:', e.message); return { html: '', open: 0 }; });
     res.send(adminPage('My Day', `
       ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
         '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
@@ -38193,6 +38656,8 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
           <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('') },
+          { title: `Projects (${projects.open})`, short: 'Projects', n: projects.open, show: projects.open > 0,
+            inner: () => `${PROJECT_CSS}<p class="muted" style="margin:0 0 8px">Big work split into steps of about two hours. Do the pink step; the next one opens when it is completed.</p>${projects.html}` },
           { title: `Tasks (${tasks.rows.length})`, short: 'Tasks', n: tasks.rows.length, show: true, inner: () => taskGroups(tasks.rows, taskRow) },
           { title: 'Jobs with a next step', short: 'Jobs', n: nextSteps.length, show: can('quotes.view'), inner: () => nextSteps.map(({ q, cl }) => `
         <div class="row-i"><span class="row-main"><a href="/admin/production/${escEmail(q.code)}"><b>${escEmail(q.code)}</b></a> ${escEmail(q.name || '')}
