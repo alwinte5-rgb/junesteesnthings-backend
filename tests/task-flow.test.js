@@ -112,16 +112,18 @@ test('the routine: once a day per person, not again while the last one is open',
   assert.match(r, /FLOW\.isWorkday\(weekday, shiftDays, shiftDays\.length > 0\)/);
 });
 
-test('the designer gets each season\'s asset kit once, from the marketing calendar', () => {
-  assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS staff_tasks_auto_idx ON staff_tasks \(auto_ref\)/);
+test('the designer gets each season\'s project once, from the marketing calendar', () => {
+  assert.match(src, /auto_ref     TEXT UNIQUE/);
   const a = fn('async function makeAutoTasks(');
   assert.match(a, /MKT_CAL\.dueNow\(now\)/);
   assert.match(a, /`mcal:\$\{e\.id\}:\$\{e\.year\}`/);
   assert.match(a, /r\.training_track === 'design'/);
   /* One season at a time: four seasons in prep never land at once. */
-  assert.match(a, /AND done_at IS NULL AND auto_ref LIKE 'mcal:%' LIMIT 1/);
+  assert.match(a, /AND \$\{PROJECT_OPEN\}/);
   assert.match(a, /if \(busy\.length\) return 0;/);
-  /* The seasonal kits come from the calendar, so no starter repeats one. */
+  /* The old one-task kit for the season gives way to its project. */
+  assert.match(a, /UPDATE staff_tasks SET done_at = NOW\(\), done_note = \$2/);
+  /* The seasonal work comes from the calendar, so no starter repeats it. */
   for (const x of FLOW.STARTERS.design) assert.doesNotMatch(x.title, /asset kit/i);
 });
 
@@ -161,15 +163,6 @@ test('the owner hears when a lane runs low, once a week, cleared when refilled',
   assert.match(b, /notifyClearResolved\('owner', 'backlog'/);
   assert.match(fn('async function notifyAdd('), /UPDATE SET title = EXCLUDED\.title WHERE notifications\.read_at IS NULL/, 'the count stays current while unread');
   assert.match(fn('async function notifySweep('), /notifyPart\('backlog', backlogNotices\(roster\)\)/);
-});
-
-test('a season kit is due when its ads start, or a week out once they have', () => {
-  const at = src.indexOf('function flowDueOn(');
-  const body = src.slice(at, src.indexOf('\n}\n', at) + 2);
-  const flowDueOn = new Function(`${body}; return flowDueOn;`)();
-  const now = new Date(Date.UTC(2026, 9, 21));
-  assert.strictEqual(flowDueOn(new Date(Date.UTC(2026, 9, 24)), now), '2026-10-24', 'ads in 3 days: due then, not later');
-  assert.strictEqual(flowDueOn(new Date(Date.UTC(2026, 8, 20)), now), '2026-10-28', 'ads already running: a week from now');
 });
 
 test('a disabled helper\'s unstarted backlog work goes back to the backlog', () => {
@@ -249,7 +242,7 @@ test('proof: a task that asks for it closes only with a file or a link', () => {
 test('the brief travels with every task made from the backlog, and old rows are written out once', () => {
   assert.match(fn('async function fillTaskLanes('), /RETURNING id, title, description, how_to, goal, brief/);
   assert.match(fn('async function makeRecurringTasks('), /t\.brief \? JSON\.stringify\(t\.brief\) : null/);
-  assert.match(fn('async function makeAutoTasks('), /STARTERTASKS\.assetKitBrief\(e, \{ late: e\.ads <= now/);
+  assert.match(fn('async function saveProject('), /st\.brief \? JSON\.stringify\(FLOW\.shapeBrief\(st\.brief\)\) : null/);
   const bf = fn('async function backfillTaskBriefs(');
   assert.match(bf, /WHERE t\.track = \$1 AND t\.title = \$2 AND t\.brief IS NULL/, 'never overwrites a brief');
   assert.match(bf, /st\.brief IS NULL AND tt\.brief IS NOT NULL/);
