@@ -125,6 +125,18 @@ function sizeOptions(values, bySize, base) {
  * ordinary stock-out restocks. */
 const CLOSEOUT_MIN = 100;
 
+/* Brands the shop also buys from SanMar, so an S&S closeout is no reason to drop
+   a colour or retire the product (owner, 2026-10-22: "I have access to SanMar so
+   lets stop the discontinue thing for the Bella Canvas brand"). SanMar owns
+   Bella+Canvas, which is why S&S is clearing it out. */
+const SANMAR_BRANDS = /\bbella\s*\+?\s*canvas\b/i;
+const atSanMar = (name) => SANMAR_BRANDS.test(String(name || ''));
+
+/* Light tees (the Gildan 3000 Light Cotton and its kind) are not sold (owner,
+   2026-10-22: "they are not good and not sold regularly"): never added to the
+   shop and never offered in a reply. */
+const isLightTee = (name) => /\blight(weight)?\b/i.test(String(name || '')) && /\b(tee|t-shirt)\b/i.test(String(name || ''));
+
 /** { colourName: { closeout, minCore } } from S&S product rows. */
 function colourStock(rows) {
   const out = {};
@@ -160,4 +172,4 @@ function closedColours(options, stock, min = CLOSEOUT_MIN) {
   }).map((o) => o.title);
 }
 
-module.exports = { SALE_BUFFER_DAYS, CLOSEOUT_MIN, pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours };
+module.exports = { SALE_BUFFER_DAYS, CLOSEOUT_MIN, atSanMar, isLightTee, pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours };

@@ -26,9 +26,8 @@ const STAPLES = [/\bbella\s*\+?\s*canvas 3001 unisex jersey tee\b/i, /\bgildan 5
 const REGULAR_TEE = /\bgildan 5000 /i;
 const UNIFORM_TEE = /\bgildan 8000\b/i;
 const UNIFORM = /\b(uniforms?|staff|employees?|workwear|work\s*shirts?)\b/i;
-/* Light tees (the Gildan 3000 Light Cotton and its kind) are never offered: the
-   shop does not sell them (owner, 2026-10-22: "they are not good"). */
-const LIGHT_TEE = (name) => /\blight(weight)?\b/i.test(name) && /\b(tee|t-shirt)\b/i.test(name);
+/* Light tees are never offered: the shop does not sell them (lib/ssa-costs). */
+const { isLightTee: LIGHT_TEE } = require('./ssa-costs');
 /* A garment for a child: only the youth kind offers one. */
 const CHILD = /\b(youth|infant|toddler|kids?)\b/i;
 /* Words a customer uses for a garment, and the words in a catalogue name that mean it. */

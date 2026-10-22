@@ -257,7 +257,7 @@ const SUBLIMATION_RE = /^sublimation/i;
 /* ── S&S ── tools/lib/ssa-client.js (shared with publish-staged.js). */
 const { makeClient } = require('./lib/ssa-client');
 
-const { pieceCost, costBySize, baseCostOf, sizeOptions, colourStock, closedColours } = require('./lib/ssa-costs');
+const { pieceCost, costBySize, baseCostOf, sizeOptions, colourStock, closedColours, atSanMar, isLightTee } = require('./lib/ssa-costs');
 
 function buildStages(type) {
   const t = TYPES[type];
@@ -442,6 +442,10 @@ async function run(env) {
   let added = 0, skipped = 0, apiErrors = 0;
   for (const [token, type, brand, name] of list) {
     let s, rows;
+    if (isLightTee(name)) {
+      console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) + 'light tee, not sold — skipped');
+      skipped++; continue;
+    }
     try {
       const found = await ssa('styles/?search=' + encodeURIComponent(token));
       /* Match the BRAND as well as the style number. Style numbers are not
@@ -474,7 +478,7 @@ async function run(env) {
     /* Discontinued colours are left out before anything is costed or sized
        (owner, 2026-10-20), so a size only a dropped colour carried is never
        offered. A style with nothing left is not added. */
-    const closed = new Set(closedColours([...new Set(rows.map((r) => r.colorName).filter(Boolean))].map((title) => ({ title })), colourStock(rows)));
+    const closed = atSanMar(brand + ' ' + name) ? new Set() : new Set(closedColours([...new Set(rows.map((r) => r.colorName).filter(Boolean))].map((title) => ({ title })), colourStock(rows)));
     rows = rows.filter((r) => !closed.has(r.colorName));
     if (!rows.length) {
       console.log('  ' + token.padEnd(11) + name.slice(0, 44).padEnd(46) + 'discontinued at S&S — skipped');
