@@ -417,6 +417,7 @@ const ROUTES = {
   'POST /admin/projects/:id/files': 'owner',
   'POST /admin/projects/:id/archive': 'owner',
   'POST /admin/projects/:id/guide': 'owner',
+  'POST /admin/projects/:id/guide-text': 'owner',
   /* The backlogs (owner, 2026-10-21): only the owner fills and orders them. */
   'POST /admin/tasks/templates': 'owner',
   'POST /admin/tasks/templates/starters': 'owner',
