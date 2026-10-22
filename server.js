@@ -36891,13 +36891,19 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
         const a = by.get(x.id) || {}, b = by.get(y.id) || {};
         return (b.unread || 0) - (a.unread || 0) || new Date(b.last_at || 0) - new Date(a.last_at || 0);
       });
+      /* A history opened by its link (?staff=<id>: a disabled or archived
+         helper) stays theirs, first on the list: it was swapped for the first
+         person on the list, whose messages that marked read (#428).
+         chatThreadFor already checked the id is on the roster. */
+      const viewed = staffId && !people.some((r) => r.id === staffId) ? roster.find((r) => r.id === staffId) : null;
+      if (viewed) people = [viewed, ...people];
       if (!people.length && !channel) {
         return res.send(adminPage('Team chat', `${pageHeader('Team chat', '')}
           <div class="card">${emptyState('No helpers yet. Add one on the Staff page, then talk to them here.',
             '<a class="btn" href="/admin/staff">Add a helper</a>')}</div>`, 'chat'));
       }
-      if (!channel && (!staffId || !people.some((r) => r.id === staffId))) staffId = people[0].id;
-      dmChips = people.map((r) => ({ label: r.name + (r.active ? '' : ' (disabled)'),
+      if (!channel && !staffId) staffId = people[0].id;
+      dmChips = people.map((r) => ({ label: r.name + (r.archived_at ? ' (archived)' : r.active ? '' : ' (disabled)'),
         href: `/admin/team-chat?staff=${r.id}`, on: !channel && r.id === staffId, count: (by.get(r.id) || {}).unread || null }));
     } else {
       const { rows: [u] } = await pool.query(
