@@ -116,10 +116,30 @@ test('/p/:id sends a whole-number id to the designer page, anything else to all 
   assert.strictEqual(P.productLink('12'), 'https://www.jtees.net/p/12');
 });
 
-test('the reply offers a cheaper garment too, checks colors against the list, and links what it names', () => {
+test('light tees are never offered; the Gildan 5000 leads a tee order and the Gildan 8000 a uniform order', () => {
+  const LIGHT = { id: 11, name: 'Gildan 3000 Unisex Light Cotton T-Shirt', price: 4.86, printing_ids: [1], sizes: [] };
+  const LIGHT_YOUTH = { id: 12, name: 'Gildan 3000B Youth Light Cotton T-Shirt', price: 4.1, printing_ids: [1], sizes: [] };
+  const HEAVY = { id: 13, name: 'Gildan 5000 Unisex Heavy Cotton T-Shirt', price: 6.4, printing_ids: [1], sizes: [] };
+  const BLEND = { id: 14, name: 'Gildan 8000 Adult DryBlend 50/50 Tee', price: 6.9, printing_ids: [1], sizes: [] };
+  const all = [LIGHT, LIGHT_YOUTH, HEAVY, BLEND, ...CAT.products];
+  for (const ask of ['price on a t-shirt?', 'shirts for my family reunion', 'youth tees for the kids', 'Do you have the 3000?', 'hi']) {
+    const got = P.pickProducts(all, ask);
+    assert.ok(!got.includes(LIGHT) && !got.includes(LIGHT_YOUTH), `a light tee was offered for "${ask}"`);
+  }
+  assert.strictEqual(P.pickProducts(all, 'price on a t-shirt?')[0], HEAVY);
+  assert.deepStrictEqual(P.pickProducts(all, 'work shirts for our staff uniforms').slice(0, 2), [BLEND, HEAVY]);
+  const sheet = P.priceSheet({ ok: true, products: all, methods: [DTF] }, 'uniform shirts for staff');
+  assert.match(sheet, /- Gildan 8000 Adult DryBlend 50\/50 Tee \(our tee for uniform orders\): \$6\.90/);
+  assert.match(sheet, /- Gildan 5000 Unisex Heavy Cotton T-Shirt \(our regular tee\): \$6\.40/);
+  assert.doesNotMatch(sheet, /Light Cotton/);
+});
+
+test('the reply leads with the shop\'s pick, checks colors against the list, and links what it names', () => {
   const at = src.indexOf("app.post('/admin/api/lead/:id/suggest-followup'");
   const route = src.slice(at, src.indexOf('\n});', at));
-  assert.match(route, /also offer the cheapest garment in the list that suits the job/);
+  assert.doesNotMatch(route, /cheapest garment/);
+  assert.match(route, /lead with the shop\\'s pick, marked in the list/);
+  assert.match(route, /"our regular tee" for a regular order, "our tee for uniform orders"/);
   assert.match(route, /say a garment comes in a color only when that color is in its colors list/);
   assert.match(route, /Give each garment you name its link from the list/);
 });

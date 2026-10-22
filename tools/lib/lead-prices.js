@@ -20,6 +20,15 @@ const MAX_COLOURS = 40;
 const productLink = (id) => `https://www.jtees.net/p/${Number(id)}`;
 /* The everyday blanks, offered when the enquiry names nothing more specific. */
 const STAPLES = [/\bbella\s*\+?\s*canvas 3001 unisex jersey tee\b/i, /\bgildan 5000 /i, /\bgildan 18500 /i, /\bgildan 5400 /i];
+/* The shop's own pick for a job, listed first and marked so the reply leads with
+   it (owner, 2026-10-22): the Gildan 5000 Heavy Cotton for a regular order, the
+   Gildan 8000 50/50 for a uniform order. */
+const REGULAR_TEE = /\bgildan 5000 /i;
+const UNIFORM_TEE = /\bgildan 8000\b/i;
+const UNIFORM = /\b(uniforms?|staff|employees?|workwear|work\s*shirts?)\b/i;
+/* Light tees (the Gildan 3000 Light Cotton and its kind) are never offered: the
+   shop does not sell them (owner, 2026-10-22: "they are not good"). */
+const LIGHT_TEE = (name) => /\blight(weight)?\b/i.test(name) && /\b(tee|t-shirt)\b/i.test(name);
 /* A garment for a child: only the youth kind offers one. */
 const CHILD = /\b(youth|infant|toddler|kids?)\b/i;
 /* Words a customer uses for a garment, and the words in a catalogue name that mean it. */
@@ -87,14 +96,20 @@ function pickProducts(products, asked) {
   const words = new Set(text.match(/[a-z0-9]+/g) || []);
   const kinds = KINDS.filter((k) => k.ask.test(text));
   /* Staff-only services (design fees, folding) are not garments to offer. */
-  const usable = (products || []).filter((p) => p && p.name && Number(p.price) > 0 && !p.service)
+  const usable = (products || []).filter((p) => p && p.name && Number(p.price) > 0 && !p.service && !LIGHT_TEE(p.name))
     .slice().sort((a, b) => a.price - b.price);
   const out = [];
   const add = (p) => { if (out.length < MAX_PRODUCTS && !out.includes(p)) out.push(p); };
+  const adult = (re) => usable.find((x) => re.test(x.name) && !CHILD.test(x.name));
   /* "3001", "IND5000P": the strongest sign there is. */
   for (const p of usable) {
     const codes = (p.name.toLowerCase().match(/[a-z0-9]+/g) || []).filter((t) => /\d/.test(t) && t.length >= 3);
     if (codes.some((c) => words.has(c))) add(p);
+  }
+  /* The shop's pick for tees, ahead of the cheaper ones. */
+  if (!kinds.length || kinds.includes(KINDS[0])) {
+    const pick = UNIFORM.test(text) ? [UNIFORM_TEE, REGULAR_TEE] : [REGULAR_TEE];
+    for (const re of pick) { const p = adult(re); if (p) add(p); }
   }
   const perKind = Math.max(2, Math.floor(MAX_PRODUCTS / Math.max(1, kinds.length)) - 1);
   for (const k of kinds) {
@@ -102,8 +117,16 @@ function pickProducts(products, asked) {
     const pool = usable.filter((p) => k.name.test(p.name) && (k.child || !CHILD.test(p.name)));
     for (const p of pool.slice(0, perKind)) add(p);
   }
-  for (const re of STAPLES) { const p = usable.find((x) => re.test(x.name) && !CHILD.test(x.name)); if (p) add(p); }
+  for (const re of STAPLES) { const p = adult(re); if (p) add(p); }
   return out;
+}
+
+/** What the shop says about a garment in the list: its pick for regular or uniform orders. */
+function shopPick(p) {
+  if (CHILD.test(p.name)) return '';
+  if (REGULAR_TEE.test(p.name)) return 'our regular tee';
+  if (UNIFORM_TEE.test(p.name)) return 'our tee for uniform orders';
+  return '';
 }
 
 /** A garment's colourways, the ones the enquiry names first, cut at MAX_COLOURS. */
@@ -134,7 +157,8 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
       const can = (p.printing_ids || []).map((id) => byId.get(Number(id))).filter(Boolean)
         .map((m) => String(m.title).split(' — ')[0]).filter((t, i, a) => a.indexOf(t) === i);
       const colours = colourList(p, asked);
-      lines.push(`- ${p.name}: ${money(p.price)}${up.length ? ` (${up.join(', ')})` : ''}${can.length ? `; can take: ${can.join(', ')}` : ''}`
+      const pick = shopPick(p);
+      lines.push(`- ${p.name}${pick ? ` (${pick})` : ''}: ${money(p.price)}${up.length ? ` (${up.join(', ')})` : ''}${can.length ? `; can take: ${can.join(', ')}` : ''}`
         + `; link: ${productLink(p.id)}; colors: ${colours || 'not listed'}`);
     }
   }
@@ -155,4 +179,4 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
   return lines.join('\n');
 }
 
-module.exports = { priceSheet, pickProducts, colourList, productLink, ladder, methodLines, MAX_PRODUCTS, MAX_COLOURS };
+module.exports = { priceSheet, pickProducts, shopPick, colourList, productLink, ladder, methodLines, MAX_PRODUCTS, MAX_COLOURS };
