@@ -34,7 +34,7 @@ test('a helper sees only their own stats; the owner picks from the active roster
 
 test('the extra numbers are parameterised and counted per helper', () => {
   const fn = src.slice(src.indexOf('async function myStatsExtras('), src.indexOf('\n}\n', src.indexOf('async function myStatsExtras(')));
-  for (const needle of ["action IN ('lead registered as theirs', 'found lead was already known')", 's.rep_id = $1', "action = 'upsell applied'", 'AT TIME ZONE $4']) {
+  for (const needle of ["action = 'lead registered as theirs'", 's.rep_id = $1', "action = 'upsell applied'", 'AT TIME ZONE $4']) {
     assert.ok(fn.includes(needle), needle);
   }
   assert.doesNotMatch(fn, /\$\{/, 'no values built into the SQL');

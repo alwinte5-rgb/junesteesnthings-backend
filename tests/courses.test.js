@@ -205,9 +205,10 @@ test('restart: the owner only, a ticked confirmation, one transaction, page tips
   assert.match(r, /ROLLBACK/);
 });
 
-test('prospects are counted from the leads they registered as found', () => {
+test('prospects are counted from the leads they registered as found, new to the shop only', () => {
   const fn = src.slice(src.indexOf('async function trainingFacts('), src.indexOf('\n}\n', src.indexOf('async function trainingFacts(')));
-  assert.match(fn, /action IN \('lead registered as theirs', 'found lead was already known'\)\)::int AS prospects/);
+  assert.match(fn, /action = 'lead registered as theirs'\)::int AS prospects/);
+  assert.ok(!/found lead was already known'\)\)::int AS prospects/.test(fn), 'a customer the shop already had is not a prospect');
   assert.match(src, /logActivity\(actor, label\.sale_type === 'shop' \? 'found lead was already known' : 'lead registered as theirs'/,
     'the actions counted are the ones the Add a lead form really logs');
 });

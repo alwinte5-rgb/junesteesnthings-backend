@@ -71,6 +71,7 @@ const NOT_A_MENU_PAGE = {
   '/admin/tax.csv': 'a download on Exports',
   '/admin/mailbox/new': 'the New conversation button on Mailbox and on each order and task',
   '/admin/training/attempts': "one helper's tries at one quiz, opened from Training",
+  '/admin/leads/find': 'the AI lead finder, the Find leads with AI button on Leads and My stats',
 };
 const isData = (p) => /^\/admin\/api\//.test(p) || /\.(csv|json)$/.test(p);
 
