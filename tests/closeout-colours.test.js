@@ -56,3 +56,25 @@ test('a dropped default falls back to White, then Black', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
   assert.match(src, /\['White', 'Black'\]\.map/);
 });
+
+test('Bella+Canvas keeps every colour: the shop buys it from SanMar (owner, 2026-10-22)', () => {
+  const { atSanMar } = require('../tools/lib/ssa-costs');
+  for (const n of ['BELLA + CANVAS 3001 Unisex Jersey Tee', 'Bella+Canvas 3001 Unisex Jersey Tee', 'Bella Canvas 3719 Hoodie']) assert.ok(atSanMar(n), n);
+  assert.ok(!atSanMar('Gildan 5000 Unisex Heavy Cotton T-Shirt'));
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  assert.match(src, /!atSanMar\(p\.name\) \? closedColours\(/, 'the sync drops no Bella colour');
+  assert.match(src, /if \(atSanMar\(p\.name\)\) return false;/, 'the sync never switches off a Bella product gone from S&S');
+  const add = require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
+  assert.match(add, /atSanMar\(brand \+ ' ' \+ name\) \? new Set\(\) :/, 'the add tool keeps Bella closeout colours');
+});
+
+test('light tees are never added to the shop (owner, 2026-10-22)', () => {
+  const { isLightTee } = require('../tools/lib/ssa-costs');
+  assert.ok(isLightTee('Gildan 3000 Unisex Light Cotton T-Shirt'));
+  assert.ok(isLightTee('Gildan 3000B Youth Light Cotton T-Shirt'));
+  assert.ok(isLightTee('Next Level 6210 Lightweight Tee'));
+  assert.ok(!isLightTee('Gildan 5000 Unisex Heavy Cotton T-Shirt'));
+  assert.ok(!isLightTee('Gildan 18500 Lightweight Hooded Sweatshirt'), 'only tees');
+  const add = require('fs').readFileSync(require('path').join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
+  assert.match(add, /if \(isLightTee\(name\)\) \{/);
+});

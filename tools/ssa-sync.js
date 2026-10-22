@@ -32,7 +32,7 @@
    result, which strips leading whitespace from the first column as well as the
    trailing newline. That is the drift lib/db exists to prevent. */
 const { mysql, sq, mysqlUrlFrom, dejson, enjson } = require('./lib/db');
-const { pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours, CLOSEOUT_MIN } = require('./lib/ssa-costs');
+const { pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours, CLOSEOUT_MIN, atSanMar } = require('./lib/ssa-costs');
 const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
@@ -339,7 +339,8 @@ process.stdin.on('end', async () => {
     if (ck) {
       let cv = attrs[ck].values; const cvStr = typeof cv === 'string';
       if (cvStr) { try { cv = JSON.parse(cv); } catch { cv = null; } }
-      const drop = cv && Array.isArray(cv.options) ? closedColours(cv.options, bySize.colours || {}) : [];
+      /* A brand the shop also buys from SanMar keeps every colour (lib/ssa-costs). */
+      const drop = cv && Array.isArray(cv.options) && !atSanMar(p.name) ? closedColours(cv.options, bySize.colours || {}) : [];
       if (drop.length) {
         const keep = cv.options.filter((o) => !drop.includes(o.title));
         if (!keep.length) {
@@ -385,6 +386,7 @@ process.stdin.on('end', async () => {
      seen today, or never seen because this is the first run, is left alone. */
   const stale = missing.filter((p) => {
     if (!p.seen) return false;                     // never recorded — give it a cycle
+    if (atSanMar(p.name)) return false;            // gone from S&S, still bought at SanMar
     const days = (Date.now() - Date.parse(p.seen)) / 86400000;
     return days >= STALE_DAYS;
   });
@@ -463,6 +465,7 @@ process.stdin.on('end', async () => {
       const days = p.seen ? Math.floor((Date.now() - Date.parse(p.seen)) / 86400000) : null;
       console.log('  #' + String(p.id).padStart(3) + '  ' + p.name.slice(0, 44).padEnd(46) +
         (days === null ? 'first seen this run' :
+         atSanMar(p.name) ? 'unavailable ' + days + 'd, kept on (buy from SanMar)' :
          days >= STALE_DAYS ? 'unavailable ' + days + 'd -> DEACTIVATING' :
          'unavailable ' + days + 'd (of ' + STALE_DAYS + ')'));
     }
