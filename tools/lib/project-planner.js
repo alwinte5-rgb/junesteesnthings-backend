@@ -148,12 +148,10 @@ function shapePlan(raw) {
 
 const NOT_SET_UP = 'The planner is not set up yet: the Anthropic API key is missing or wrong on Railway.';
 
-/** Is there a key to call Claude with? Checked before a call is counted. */
-const ready = () => Boolean(process.env.ANTHROPIC_API_KEY);
 
 /** Why a plan did not come back, in words for the page. */
 function failureMessage(err) {
-  if (err instanceof Anthropic.AuthenticationError) return NOT_SET_UP;
+  if (err instanceof Anthropic.AuthenticationError || (err && err.code === 'nokey')) return NOT_SET_UP;
   if (err instanceof Anthropic.RateLimitError) return 'Too many requests at once. Wait a minute and try again.';
   if (err instanceof Anthropic.APIConnectionError) return 'Could not reach Claude. Try again in a moment.';
   if (err && err.code === 'refusal') return 'Claude declined to plan that. Try describing the project differently.';
@@ -164,15 +162,22 @@ function failureMessage(err) {
 /** Write a plan. `client` is for tests. Throws; failureMessage() words it. */
 async function planProject(ask, facts = {}, { client } = {}) {
   const c = client || new Anthropic({ timeout: 3 * 60 * 1000, maxRetries: 0 });
-  const res = await c.beta.messages.create({
-    model: MODEL,
-    max_tokens: 20000,
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: PLAN_SCHEMA } },
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
-    system: SYSTEM,
-    messages: [{ role: 'user', content: askMessage(ask, facts) }],
-  });
+  let res;
+  try {
+    res = await c.beta.messages.create({
+      model: MODEL,
+      max_tokens: 20000,
+      output_config: { effort: 'medium', format: { type: 'json_schema', schema: PLAN_SCHEMA } },
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      system: SYSTEM,
+      messages: [{ role: 'user', content: askMessage(ask, facts) }],
+    });
+  } catch (err) {
+    /* No API key: the SDK refuses before sending anything, so nothing is spent. */
+    if (/Could not resolve authentication method/i.test(String(err && err.message))) { const e = new Error('no API key'); e.code = 'nokey'; throw e; }
+    throw err;
+  }
   if (res.stop_reason === 'refusal') { const e = new Error('model declined'); e.code = 'refusal'; throw e; }
   const text = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
   let parsed;
@@ -182,4 +187,4 @@ async function planProject(ask, facts = {}, { client } = {}) {
   return plan;
 }
 
-module.exports = { MODEL, LIMITS, DAILY_CAP, PRODUCTS, SYSTEM, PLAN_SCHEMA, NOT_SET_UP, ready, validateAsk, askMessage, shapePlan, failureMessage, planProject };
+module.exports = { MODEL, LIMITS, DAILY_CAP, PRODUCTS, SYSTEM, PLAN_SCHEMA, NOT_SET_UP, validateAsk, askMessage, shapePlan, failureMessage, planProject };

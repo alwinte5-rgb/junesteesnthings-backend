@@ -35629,7 +35629,6 @@ app.post('/admin/projects', requireAdmin, async (req, res) => {
          owner typed (tools/lib/project-planner.js), capped a day for the shop. */
       const v = PLANNER.validateAsk(b);
       if (v.error) return back(res, backTo, 'err', v.error);
-      if (!PLANNER.ready()) return back(res, backTo, 'err', PLANNER.NOT_SET_UP);
       if (!(await reservePlannerCall(v.ask.title))) return back(res, backTo, 'err', `The planner has written ${PLANNER.DAILY_CAP} plans today. More tomorrow.`);
       const start = PROJECTS.addWorkDays(shopToday(), 1);
       const track = JOB_TRACKS[helper.training_track] || {};

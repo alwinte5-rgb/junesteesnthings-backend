@@ -80,18 +80,20 @@ test('only the owner plans and edits guides; the planner is capped a day', () =>
   assert.match(src, /if \(n\.n >= PLANNER\.DAILY_CAP\)/);
 });
 
-test('every AI plan call is counted under a lock before it is made, and only when a key is set', () => {
+test('every AI plan call is counted under a lock before it is made; a missing key says so', () => {
   const route = src.slice(src.indexOf("if (season === 'ai') {"));
-  const ready = route.indexOf('PLANNER.ready()');
   const reserve = route.indexOf('reservePlannerCall(');
   const call = route.indexOf('PLANNER.planProject(');
-  assert.ok(ready > 0 && reserve > ready && call > reserve, 'key check, then the reservation, then the paid call');
+  assert.ok(reserve > 0 && call > reserve, 'the reservation, then the paid call');
   const fn = src.slice(src.indexOf('async function reservePlannerCall('), src.indexOf("app.post('/admin/projects', requireAdmin"));
   assert.match(fn, /pg_advisory_xact_lock/);
   assert.match(fn, /action = 'project plan asked of AI'/);
   assert.ok(fn.indexOf('COUNT(*)') < fn.indexOf('INSERT INTO staff_activity'), 'counted, then recorded, inside one transaction');
   assert.strictEqual(PL.failureMessage(new Error('x')).includes('not set up'), false);
   assert.match(PL.NOT_SET_UP, /not set up yet/);
+  const e = new Error('x'); e.code = 'nokey';
+  assert.strictEqual(PL.failureMessage(e), PL.NOT_SET_UP);
+  assert.doesNotMatch(require('fs').readFileSync(require.resolve('../tools/lib/project-planner'), 'utf8'), /process\.env/);
 });
 
 test('a removed guide is stored empty, so the startup seed never brings it back', () => {
