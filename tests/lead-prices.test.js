@@ -93,3 +93,33 @@ test('the price list reaches Claude as data, and the route builds it from the li
   assert.match(route, /history, playbook, ask, money: false, pictures, prices,/);
   assert.match(route, /Say it is an estimate and the exact price comes on their written quote; sales tax is extra/);
 });
+
+test('each garment carries its colors (the ones they named first) and a jtees.net link; services are not garments', () => {
+  const tee = { ...TEE, colours: [{ name: 'Black' }, { name: 'Asphalt' }, { name: 'Charcoal Heather' }, { name: 'Black' }] };
+  const FEE = { id: 77, name: 'Design fee tee artwork', price: 25, service: true, printing_ids: [], sizes: [] };
+  const s = P.priceSheet({ ...CAT, products: [tee, FEE] }, 'charcoal tees with cream design');
+  assert.match(s, /- Bella\+Canvas 3001 Unisex Jersey Tee: \$9\.24 .*; link: https:\/\/www\.jtees\.net\/p\/5; colors: Charcoal Heather, Black, Asphalt$/m);
+  assert.doesNotMatch(s, /Design fee/);
+  const many = { ...TEE, colours: Array.from({ length: 50 }, (_, i) => ({ name: 'Color ' + i })).concat([{ name: 'Alpine Green' }]) };
+  const list = P.colourList(many, 'alpine green hoodie');
+  assert.match(list, /^Alpine Green, Color 0, /, 'the color they asked for is never cut');
+  assert.match(list, / and 11 more$/);
+  assert.strictEqual(P.colourList({ ...TEE, colours: [] }, 'x'), '');
+  assert.match(P.priceSheet({ ...CAT, products: [{ ...TEE }] }, 'tees'), /colors: not listed/);
+});
+
+test('/p/:id sends a whole-number id to the designer page, anything else to all products', () => {
+  const at = src.indexOf("app.get('/p/:id'");
+  const route = src.slice(at, src.indexOf('\n});', at));
+  assert.match(route, /\/\^\\d\{1,7\}\$\/\.test\(req\.params\.id\)/);
+  assert.match(route, /`https:\/\/design\.jtees\.net\/editor\.php\?product_base=\$\{id\}` : 'https:\/\/design\.jtees\.net\/products\.php'/);
+  assert.strictEqual(P.productLink('12'), 'https://www.jtees.net/p/12');
+});
+
+test('the reply offers a cheaper garment too, checks colors against the list, and links what it names', () => {
+  const at = src.indexOf("app.post('/admin/api/lead/:id/suggest-followup'");
+  const route = src.slice(at, src.indexOf('\n});', at));
+  assert.match(route, /also offer the cheapest garment in the list that suits the job/);
+  assert.match(route, /say a garment comes in a color only when that color is in its colors list/);
+  assert.match(route, /Give each garment you name its link from the list/);
+});

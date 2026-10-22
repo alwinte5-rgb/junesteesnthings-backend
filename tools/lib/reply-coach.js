@@ -151,7 +151,7 @@ function askMessage({ job, history, playbook = [], shop = {}, ask, money = true,
     '</shop_facts>',
     playbook.length ? ['<playbook>', ...playbook.map((a) => `Q: ${esc(a.title)}\nA: ${esc(clip(a.body, 800))}`), '</playbook>'].join('\n') : '',
     /* The shop's own list prices (lead replies, tools/lib/lead-prices.js). */
-    prices ? `<price_list>\n${esc(clip(prices, 12000))}\n</price_list>` : '',
+    prices ? `<price_list>\n${esc(clip(prices, 24000))}\n</price_list>` : '',
     jobBlock(job, { money }),
     files.length ? ['<files>', 'Files already on this job:', ...files.map((f) => `- ${esc(f.name)} (${
       f.from === 'design' ? "the designer's final art" : 'sent by the customer'})`),

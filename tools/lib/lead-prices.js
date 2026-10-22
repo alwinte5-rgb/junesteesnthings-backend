@@ -13,6 +13,11 @@
  */
 
 const MAX_PRODUCTS = 12;
+/* A colour list is cut here; the colours they named are always kept. */
+const MAX_COLOURS = 40;
+/* The jtees.net link to a garment's page in the designer (GET /p/:id). Customers
+   only ever see jtees.net (owner, 2026-10-05). */
+const productLink = (id) => `https://www.jtees.net/p/${Number(id)}`;
 /* The everyday blanks, offered when the enquiry names nothing more specific. */
 const STAPLES = [/\bbella\s*\+?\s*canvas 3001 unisex jersey tee\b/i, /\bgildan 5000 /i, /\bgildan 18500 /i, /\bgildan 5400 /i];
 /* A garment for a child: only the youth kind offers one. */
@@ -81,7 +86,8 @@ function pickProducts(products, asked) {
   const text = String(asked || '').toLowerCase();
   const words = new Set(text.match(/[a-z0-9]+/g) || []);
   const kinds = KINDS.filter((k) => k.ask.test(text));
-  const usable = (products || []).filter((p) => p && p.name && Number(p.price) > 0)
+  /* Staff-only services (design fees, folding) are not garments to offer. */
+  const usable = (products || []).filter((p) => p && p.name && Number(p.price) > 0 && !p.service)
     .slice().sort((a, b) => a.price - b.price);
   const out = [];
   const add = (p) => { if (out.length < MAX_PRODUCTS && !out.includes(p)) out.push(p); };
@@ -100,6 +106,17 @@ function pickProducts(products, asked) {
   return out;
 }
 
+/** A garment's colourways, the ones the enquiry names first, cut at MAX_COLOURS. */
+function colourList(p, asked) {
+  const text = String(asked || '').toLowerCase();
+  const names = (Array.isArray(p.colours) ? p.colours : []).map((c) => String((c && c.name) || '').trim()).filter(Boolean)
+    .filter((n, i, a) => a.indexOf(n) === i);
+  const named = names.filter((n) => n.toLowerCase().split(/[^a-z]+/).some((w) => w.length > 2 && text.includes(w)));
+  const rest = names.filter((n) => !named.includes(n));
+  const shown = [...named, ...rest].slice(0, Math.max(MAX_COLOURS, named.length));
+  return shown.length < names.length ? `${shown.join(', ')} and ${names.length - shown.length} more` : shown.join(', ');
+}
+
 /** The price list for one enquiry, as plain text for the prompt; '' with no catalogue.
  *  `blankTiers` [{min, pct}], `screenFee` (0 when screens are in the per-piece
  *  rate), `addons` [{label, kind, rate, note}]. */
@@ -116,7 +133,9 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
       const up = (p.sizes || []).filter((s) => Number(s.upcharge) > 0).map((s) => `${s.size} +${money(s.upcharge)}`);
       const can = (p.printing_ids || []).map((id) => byId.get(Number(id))).filter(Boolean)
         .map((m) => String(m.title).split(' — ')[0]).filter((t, i, a) => a.indexOf(t) === i);
-      lines.push(`- ${p.name}: ${money(p.price)}${up.length ? ` (${up.join(', ')})` : ''}${can.length ? `; can take: ${can.join(', ')}` : ''}`);
+      const colours = colourList(p, asked);
+      lines.push(`- ${p.name}: ${money(p.price)}${up.length ? ` (${up.join(', ')})` : ''}${can.length ? `; can take: ${can.join(', ')}` : ''}`
+        + `; link: ${productLink(p.id)}; colors: ${colours || 'not listed'}`);
     }
   }
   const tiers = (blankTiers || []).slice().sort((a, b) => a.min - b.min);
@@ -136,4 +155,4 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
   return lines.join('\n');
 }
 
-module.exports = { priceSheet, pickProducts, ladder, methodLines, MAX_PRODUCTS };
+module.exports = { priceSheet, pickProducts, colourList, productLink, ladder, methodLines, MAX_PRODUCTS, MAX_COLOURS };
