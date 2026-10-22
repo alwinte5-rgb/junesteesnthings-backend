@@ -269,10 +269,70 @@ function leadDays(kind) {
   return [prod[0] + INBOUND_DAYS[0], prod[1] + INBOUND_DAYS[1]];
 }
 
+/* SinaLite items customers design and buy in the designer (owner, 2026-10-22:
+   roll labels, previewed on a jar). Each is published as one more sign STOCK
+   family (/api/pricing-rules `signs.families`), so the designer's sign screen,
+   cart pricing and "See it in place" serve it as they are. The designer's
+   size option is "WxH" in inches, so each SinaLite size is mapped to its
+   inches; 'circle' draws a round cut guide. */
+const DESIGNER = {
+  roll_label: {
+    sizes: { circle2: [2, 2, 'circle'], circle3: [3, 3, 'circle'], rect2x3: [2, 3], rect3x4: [3, 4] },
+    target_dpi: 300, noun: 'label',
+  },
+};
+
+/**
+ * The DESIGNER items as sign stock families. Only SinaLite's own runs from
+ * sell_from up are listed, each priced by eachFor() exactly as a staff quote
+ * prices it (quote-signs.js priceSign), so the two never disagree. Two flags
+ * the designer reads (jt-signs.php):
+ *   runs_only  only a listed run is sold; 700 labels is refused, not banded
+ *   no_pool    each design is its own SinaLite order, so lines never add up
+ *              to a run together the way designs share a Signs365 sheet
+ * Shipping is inside every price (freight 0). An item with no table, or no
+ * priced run, is left out, so the designer refuses it rather than sell at $0.
+ */
+function designerFamilies() {
+  const t = table(), out = {};
+  for (const [key, d] of Object.entries(DESIGNER)) {
+    const f = t.families[key];
+    if (!f) continue;
+    const prices = Object.fromEntries(f.materials.map((m) => [m.key, {}]));
+    const sizes = [];
+    for (const s of f.sizes) {
+      const dim = d.sizes[s.key];
+      if (!dim) continue;
+      const sk = `${dim[0]}x${dim[1]}`;
+      let any = false;
+      for (const m of f.materials) {
+        const lad = ((f.prices[m.key] || {})[s.key] || {})[''];
+        if (!lad || !lad.length) continue;
+        const sold = lad.filter(([q]) => q >= (f.sell_from || 0))
+          .map(([q]) => [q, eachFor(lad, q, f.any_qty, f.design_in)]).filter(([, e]) => e > 0);
+        if (sold.length) { prices[m.key][sk] = { '': sold }; any = true; }
+      }
+      if (any) sizes.push({ key: sk, w: dim[0], h: dim[1], label: s.label, step: 1, sinalite: s.key, ...(dim[2] ? { shape: dim[2] } : {}) });
+    }
+    if (!sizes.length) continue;
+    const lead = leadDays(key) || FALLBACK_LEAD;
+    out[key] = {
+      label: f.label, note: f.note, sizing: 'stock', target_dpi: d.target_dpi, noun: d.noun || 'sign',
+      /* Business days all in: SinaLite's slowest turnaround plus inbound shipping. */
+      turnaround_days: lead[1], wrap_in: 0, bleed_in: 0, markup: MARKUP,
+      freight: 0, freight_by_size: {},
+      materials: f.materials.map((m) => ({ key: m.key, label: m.label, unit: 'piece', double: false })),
+      upgrades: [], sizes, sheet_upgrades: {}, prices,
+      runs_only: true, no_pool: true, supplier: 'sinalite',
+    };
+  }
+  return out;
+}
+
 /** For tests: swap the data in. */
 /** For tests: look at the file again on the next call. */
 function _recheck() { checkedAt = 0; }
 
 function _setData(d) { checkedAt = 0; cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
 
-module.exports = { _recheck, priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, MAX_QTY, table, kindOf, ageDays, stale, familyOf, _setData, DATA_FILE };
+module.exports = { _recheck, priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, MAX_QTY, table, kindOf, ageDays, stale, familyOf, designerFamilies, DESIGNER, _setData, DATA_FILE };
