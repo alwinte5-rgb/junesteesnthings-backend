@@ -107,6 +107,7 @@ const QFORM = require('./tools/lib/quote-form-key');
 const TEAM = require('./tools/lib/team-metrics');
 const TIMECLOCK = require('./tools/lib/timeclock');
 const TRAINING = require('./tools/lib/training');
+const TOUR = require('./tools/lib/tour');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
 const CONTRACTS = require('./tools/lib/contracts');
@@ -34645,7 +34646,7 @@ function taskDetailsHtml(t, actor, roster, { folded = false } = {}) {
     ${t.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(t.description)}</div>` : ''}
     ${taskBriefHtml(t, actor, { folded })}
     ${t.quote_code ? `<div class="row-sub">Order: <a href="${escEmail(jobLinkFor(actor, t.quote_code))}"><b>${escEmail(t.quote_code)}</b></a></div>` : ''}
-    <div class="row-sub"><a href="/admin/mailbox/new?task=${Number(t.id)}">Message about this task →</a></div>
+    <div class="row-sub"><a href="/admin/mailbox/new?task=${Number(t.id)}">Message about this task →</a>${!t.done_at ? ` &nbsp; <a href="/admin/playbook?q=${encodeURIComponent(String(t.title || '').slice(0, 100))}">Stuck? Search the Playbook →</a>` : ''}</div>
     ${files.length ? `<div class="row-sub">${files.map((f) => `<a href="/admin/tasks/${Number(t.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a>${
       f.by != null && f.by === t.assigned_to && t.done_at ? ' <span class="muted">(with the work)</span>' : ''}`).join(' &nbsp; ')}</div>` : ''}
     ${t.done_at && t.done_note ? `<div style="margin-top:4px;padding:6px 10px;background:#ecfdf5;border-radius:8px;white-space:pre-wrap"><b>What was done:</b> ${escEmail(t.done_note)}</div>` : ''}`;
@@ -38638,8 +38639,11 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const copyJs = `<script>function jtCopy(id){var t=document.getElementById(id).innerText;
       (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(function(){});}</script>`;
 
-    /* A helper's projects, the owner's all of them; a failure leaves the rest of the day. */
-    const projects = await projectCards(me, roster).catch((e) => { console.error('My Day projects failed:', e.message); return { html: '', open: 0 }; });
+    /* A helper's projects (the owner's: all of them) and their tour; a failure
+       leaves the rest of the day. */
+    const [tour, projects] = await Promise.all([
+      tourFor(actor).catch((e) => { console.error('My Day tour failed:', e.message); return null; }),
+      projectCards(me, roster).catch((e) => { console.error('My Day projects failed:', e.message); return { html: '', open: 0 }; })]);
     res.send(adminPage('My Day', `
       ${pageHeader(`My Day${actor.kind === 'staff' ? ` — ${actor.name}` : ''}`, 'Oldest first. Answer leads, then follow-ups, then the jobs.',
         '<a class="btn btn-ghost" href="/admin/playbook">Playbook</a>')}
@@ -38655,6 +38659,9 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
            a card, and the counts across the top jump to each section. */
         const blocks = [
           { title: 'Latest note from the owner', show: !!(training && training.note), inner: () => coachingRow(training.note) },
+          { title: `Back-office tour (${tour ? tour.done : 0} of ${tour ? tour.total : 0})`, short: 'Tour', n: tour ? tour.total - tour.done : 0, show: !!(tour && !tour.finished),
+            inner: () => `<p style="margin:0 0 8px">About ten minutes: open each screen once and read what it is for.${tour.next ? ` Next: <b>${escEmail(tour.next.title)}</b>.` : ''}</p>
+              <a class="btn" href="/admin/tour${tour.next ? `#tour-${escEmail(tour.next.key)}` : ''}">${tour.done ? 'Continue the tour' : 'Start the tour'} &rarr;</a>` },
           { title: `Mailbox (${mail ? mail.unread : 0})`, short: 'Mailbox', n: mail ? mail.unread : 0, show: !!mail,
             inner: () => `<a class="muted" href="/admin/mailbox" style="display:block;text-align:right;margin:0 0 6px">All conversations →</a><div class="rows">${mail.rows}</div>` },
           { title: `Leads waiting for a reply (${waiting.length})`, short: 'Leads', n: waiting.length, show: can('leads.view'),
@@ -38726,6 +38733,73 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
    The steps and the rules for who ticks what are in tools/lib/training.js.
    Work steps are counted from the work itself on every view; only reading
    ticks, sign-offs and dismissed page tips are stored (staff_training). */
+
+/* ── The back-office tour (tools/lib/tour.js) ───────────────────────────────
+   Every helper walks the screens they will use, about ten minutes, outside
+   the 8-hour courses. A stop ticks when opened from the tour, or by itself
+   when the real work is done. */
+
+/** What a helper has really done, for the tour's "try it" stops. */
+async function tourFacts(staffId) {
+  const { rows: [f] } = await pool.query(
+    `SELECT EXISTS (SELECT 1 FROM staff_shifts WHERE staff_id = $1) AS clocked,
+            EXISTS (SELECT 1 FROM staff_tasks WHERE done_by = $1) AS "taskDone",
+            (EXISTS (SELECT 1 FROM team_messages WHERE staff_id = $1 AND NOT from_owner)
+             OR EXISTS (SELECT 1 FROM team_channel_messages WHERE staff_id = $1)) AS chatted`, [staffId]);
+  return f || {};
+}
+
+/** Where this helper is on the tour, or null for the owner. */
+async function tourFor(actor) {
+  if (!actor || actor.kind !== 'staff') return null;
+  const stops = TOUR.stopsFor((perm) => STAFF.levelOf(actor, perm) !== 'off');
+  const [{ rows }, facts] = await Promise.all([
+    pool.query(`SELECT step_key FROM staff_training WHERE staff_id = $1 AND step_key LIKE 'tour:%'`, [actor.id]),
+    tourFacts(actor.id)]);
+  return TOUR.progress(stops, new Set(rows.map((r) => r.step_key)), facts);
+}
+
+app.get('/admin/tour', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const t = await tourFor(actor);
+    /* The owner sees every stop, as a preview of what helpers are shown. */
+    const list = t ? t.stops : TOUR.STOPS.map((s) => ({ ...s, done: false }));
+    const card = (s, i) => `<div class="card" id="tour-${escEmail(s.key)}" style="${!s.done && t && t.next && t.next.key === s.key ? 'border:2px solid #E0107A' : ''}">
+      <div style="display:flex;flex-wrap:wrap;gap:6px 10px;justify-content:space-between;align-items:baseline">
+        <span><span class="muted" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em">Stop ${i + 1} of ${list.length}</span><br>
+          <b style="font-size:16px">${escEmail(s.title)}</b> ${s.done ? pill('done', 'green') : ''}</span>
+        <span class="muted">about ${Number(s.minutes)} min</span></div>
+      <p style="margin:6px 0 0">${escEmail(s.what)}</p>
+      ${s.tryIt ? `<p class="muted" style="margin:4px 0 0">Try it: ${escEmail(s.tryIt)}. ${s.done ? 'Done.' : 'This ticks by itself once you have.'}</p>` : ''}
+      <form method="post" action="/admin/tour/${encodeURIComponent(s.key)}" style="margin-top:8px"><button type="submit" class="btn${s.done ? ' btn-ghost' : ''}">Open it &rarr;</button></form></div>`;
+    res.send(adminPage('Back-office tour', `
+      ${pageHeader('Back-office tour', t ? `${t.done} of ${t.total} stops. About ten minutes: open each screen once and read what it is for.`
+        : 'What every helper is walked through, about ten minutes. Helpers see only the stops their permissions open.',
+        '<a class="btn btn-ghost" href="/admin/my-day">My Day</a>')}
+      ${flash(req.query)}
+      ${t && t.finished ? '<div class="ok">You have seen every screen. The tour leaves My Day now.</div>' : ''}
+      ${list.map(card).join('')}`, 'tour'));
+  } catch (err) {
+    console.error('tour page failed:', err.message);
+    res.status(500).send(adminPage('Back-office tour', '<div class="card"><div class="warn">Could not load the tour.</div></div>', 'myday'));
+  }
+});
+
+/* Opening a stop ticks it (a helper's own), then goes to its screen. */
+app.post('/admin/tour/:key', requireAdmin, async (req, res) => {
+  const stop = TOUR.byKey(String(req.params.key || ''));
+  if (!stop) return res.redirect('/admin/tour');
+  const actor = currentActor();
+  try {
+    if (actor && actor.kind === 'staff' && (!stop.needs || STAFF.levelOf(actor, stop.needs) !== 'off')) {
+      await pool.query('INSERT INTO staff_training (staff_id, step_key) VALUES ($1, $2) ON CONFLICT DO NOTHING', [actor.id, TOUR.stepKey(stop.key)]);
+    }
+  } catch (err) {
+    console.error('tour tick failed:', err.message);
+  }
+  return res.redirect(stop.href);
+});
 
 /** Counts of the real work a helper has done, for the "do" steps. A message
  *  held for the owner counts: writing it is the skill being learned. */
@@ -40779,11 +40853,12 @@ app.post('/admin/training/restart', requireAdmin, async (req, res) => {
        SELECT $1,
               COALESCE((SELECT jsonb_agg(jsonb_build_object('step_key', step_key, 'done_at', done_at, 'signed_by', signed_by))
                           FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'
-                           AND step_key NOT LIKE 'signoff:was-ready-until:%'), '[]'::jsonb),
+                           AND step_key NOT LIKE 'signoff:was-ready-until:%' AND step_key NOT LIKE 'tour:%'), '[]'::jsonb),
               COALESCE((SELECT jsonb_agg(jsonb_build_object('step_key', step_key, 'started_at', started_at, 'done_at', done_at))
                           FROM staff_lesson_time WHERE staff_id = $1), '[]'::jsonb)`, [staffId]);
+    /* The back-office tour (tour:) sits outside the courses and is kept. */
     await client.query(`DELETE FROM staff_training WHERE staff_id = $1 AND step_key NOT LIKE 'tip:%'
-                          AND step_key NOT LIKE 'signoff:was-ready-until:%'`, [staffId]);
+                          AND step_key NOT LIKE 'signoff:was-ready-until:%' AND step_key NOT LIKE 'tour:%'`, [staffId]);
     await client.query('UPDATE staff_quiz_attempts SET archived_at = NOW() WHERE staff_id = $1 AND archived_at IS NULL', [staffId]);
     await client.query('UPDATE staff_exam_attempts SET archived_at = NOW() WHERE staff_id = $1 AND archived_at IS NULL', [staffId]);
     await client.query('DELETE FROM staff_lesson_time WHERE staff_id = $1', [staffId]);

@@ -422,6 +422,8 @@ const ROUTES = {
   'POST /admin/quote/:code/sale-type': 'owner',
   'GET /admin/my-earnings': 'any',
   'GET /admin/my-stats': 'any',
+  'GET /admin/tour': 'any',
+  'POST /admin/tour/:key': 'any',
   // Timeclock (tools/lib/timeclock.js): a helper's own clock; the owner reviews and approves.
   'GET /admin/clock': 'any',
   'POST /admin/clock/in': 'any',

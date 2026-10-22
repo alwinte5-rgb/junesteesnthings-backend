@@ -72,6 +72,7 @@ const NOT_A_MENU_PAGE = {
   '/admin/mailbox/new': 'the New conversation button on Mailbox and on each order and task',
   '/admin/training/attempts': "one helper's tries at one quiz, opened from Training",
   '/admin/leads/find': 'the AI lead finder, the Find leads with AI button on Leads and My stats',
+  '/admin/tour': 'the Back-office tour card on My Day, for each new helper',
   '/admin/projects': 'the Projects tab on Tasks, and the Projects cards on the Dashboard and My Day',
 };
 const isData = (p) => /^\/admin\/api\//.test(p) || /\.(csv|json)$/.test(p);
