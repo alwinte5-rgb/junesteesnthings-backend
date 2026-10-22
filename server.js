@@ -26221,10 +26221,13 @@ async function claudeJobContext(code, ask, fullView) {
 
 app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, claudeRoute('suggest'));
 
-/* A follow-up for a lead the shop wrote to and has not heard back from
-   (owner, 2026-10-15). The same coach as the job page, shown the enquiry as
-   what they said and every note and email on the lead as what the shop did.
-   Suggests only: the page puts it in the box and a person sends it. */
+/* Claude's reply to a lead: for a new one, an answer to what they actually
+   asked (owner, 2026-10-22: the stock "a few more details" email answered
+   nobody's question); for one already written to, a follow-up (2026-10-15).
+   The same coach as the job page, shown the enquiry as what they said and
+   every note and email on the lead as what the shop did. Facts it does not
+   have go in the reply as [June to fill in: ...], which cleanEmail refuses
+   to send. Suggests only: the page puts it in the box and a person sends it. */
 app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const id = intIn(req.params.id);
@@ -26242,7 +26245,7 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
   if (recent.length >= 10) return res.status(429).json({ error: 'That is a lot of Claude requests in a minute. Wait a moment.' });
   replyAsks.set(who, [...recent, now]);
   try {
-    const { rows: [l] } = await pool.query('SELECT id, name, description, photo_url, created_at FROM submissions WHERE id = $1', [id]);
+    const { rows: [l] } = await pool.query('SELECT id, name, description, photo_url, source, created_at FROM submissions WHERE id = $1', [id]);
     if (!l) return res.status(404).json({ error: 'No such enquiry.' });
     const { rows: notes } = await pool.query(
       `SELECT kind, body, created_at FROM lead_notes WHERE submission_id = $1 ORDER BY created_at DESC LIMIT 20`, [id]);
@@ -26250,22 +26253,36 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
                                                               hour: 'numeric', minute: '2-digit' });
     const history = [
       ...notes.map((n) => ({ channel: CONTACT_KINDS.includes(n.kind) ? n.kind : 'internal note (not sent)', body: n.body, inbound: false, when: when(n.created_at) })),
-      { channel: 'website form', body: l.description || '(no details)', inbound: true, when: when(l.created_at) },
+      { channel: String((LEAD_SOURCES[l.source] || LEAD_SOURCES.form)[0]).toLowerCase(), body: l.description || '(no details)', inbound: true, when: when(l.created_at) },
     ];
     /* The last time the shop reached them, not the last internal note. */
     const lastOut = notes.find((n) => CONTACT_KINDS.includes(n.kind));
     const days = lastOut ? Math.max(0, Math.round((now - new Date(lastOut.created_at)) / 86400000)) : null;
-    const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft: (req.body || {}).draft,
-      note: `This is a lead, not an order yet: no quote has been made. The shop wrote to them${days != null ? ` ${days} day${days === 1 ? '' : 's'} ago` : ''} and they have not replied. `
-        + 'Write a short, warm follow-up email that asks if they still need it and gives one easy next step. '
-        + 'Ask only for details their enquiry is still missing. No prices, no dates promised, no pressure.' });
+    const fillIn = 'Where an answer needs a fact you were not given (a price, a turnaround, whether the shop carries an item '
+      + 'or takes a kind of job), write [June to fill in: what is needed] at that spot in the reply and list it under ask_shop. '
+      + 'No prices or dates of your own, no pressure.';
+    const note = lastOut
+      ? `This is a lead, not an order yet: no quote has been made. The shop wrote to them ${days} day${days === 1 ? '' : 's'} ago and they have not replied. `
+        + 'Write a short, warm follow-up email. If their enquiry asked anything the shop has not answered yet, answer it first. '
+        + 'Then ask if they still need it and give one easy next step, asking only for details their enquiry is still missing. ' + fillIn
+      : 'This is a new enquiry nobody has answered yet: no quote has been made. Write the first reply to what they actually wrote. '
+        + 'Answer each question they asked, in the order they asked it, and speak to the specifics they gave (items, colors, quantities, '
+        + 'design, place, date). Then ask only for the details a quote still needs that they have not given. '
+        + 'Do not send a generic checklist of everything a quote could need. ' + fillIn;
+    const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft: (req.body || {}).draft, note });
+    /* Answers the owner has checked, picked by what they asked. */
+    const topic = String(l.description || '').slice(0, 300);
+    const playbook = topic ? await pool.query(
+      `SELECT title, body FROM kb_articles WHERE kind = 'faq' AND published AND NOT needs_review AND ${kbMatch(1).where}
+        ORDER BY ${kbMatch(1).rank} DESC LIMIT 4`, [topic, topic.toLowerCase().slice(0, 60)])
+      .then((r) => r.rows).catch(() => []) : [];
     const pictures = /^https:\/\/res\.cloudinary\.com\//.test(String(l.photo_url || '')) ? [l.photo_url] : [];
     const out = await REPLYCOACH.suggestReply({
-      job: { code: 'enquiry #' + l.id, name: l.name, status: 'enquiry, contacted, waiting on them',
+      job: { code: 'enquiry #' + l.id, name: l.name, status: lastOut ? 'enquiry, contacted, waiting on them' : 'new enquiry, not answered yet',
              today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }), items: [], files: [], pictures: pictures.length },
-      history, playbook: [], ask, money: false, pictures,
+      history, playbook, ask, money: false, pictures,
       shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})` } });
-    return res.json({ subject: out.subject, reply: out.reply });
+    return res.json({ subject: out.subject, reply: out.reply, ask_shop: out.ask_shop });
   } catch (err) {
     console.error(`lead follow-up suggestion for ${id} failed:`, err.message);
     if (err.code !== 'refusal') reportError('claude-lead-followup', err, `lead ${id}`).catch(() => {});
@@ -26467,7 +26484,7 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                 loses the only number that says the shop is leaving money on the
                 table, and it is untrue about the customer. */ ''}
           ${l.email ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>` : ''}
+             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block';if(f.style.display==='block')f.dispatchEvent(new Event('jt-open'))">Email them</button>` : ''}
           <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
             <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
@@ -26486,11 +26503,13 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
       </div>`;
 }
 
-/** Email a lead from their card: opens on the "a few more details" message,
- *  editable. Below it, one press records an email sent from your own inbox. */
+/** Email a lead from their card. On opening, Claude writes a reply to what
+ *  they asked (or a follow-up once written to) and puts it in the box to edit;
+ *  the stock message stays underneath if Claude cannot answer. Below it, one
+ *  press records an email sent from your own inbox. */
 function leadEmailBox(l, backField) {
-  /* Already written to and waiting on them: the box opens on a follow-up,
-     with Claude a press away (owner, 2026-10-15). */
+  /* Already written to and waiting on them: the stock message is a follow-up
+     (owner, 2026-10-15). */
   const contacted = l.lead_status === 'contacted';
   const m = (contacted ? LEADMAIL.followUp : LEADMAIL.infoRequest)(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
   // In training it goes to the owner first (POST /admin/lead/:id/email).
@@ -26502,9 +26521,9 @@ function leadEmailBox(l, backField) {
         <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. ${held ? 'June checks it first and it is sent when she approves it. ' : ''}Their reply comes to the shop's email.</p>
         <input name="subject" maxlength="${LEADMAIL.LIMITS.subject}" required value="${escEmail(m.subject)}" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
         <textarea name="body" rows="14" maxlength="${LEADMAIL.LIMITS.body}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${escEmail(m.body)}</textarea>${backField}
-        ${contacted ? `<div style="margin:0 0 8px">
-          <button type="button" class="btn" data-lsug="${l.id}" style="padding:6px 14px;font-size:12.5px;background:#5b3fb0">Suggest a follow-up with Claude</button>
-          <span class="muted" data-lsugst style="font-size:12px;margin-left:6px">Reads their enquiry and what was sent. Replaces the message; you edit and send.</span></div>` : ''}
+        <div style="margin:0 0 8px">
+          <button type="button" class="btn" data-lsug="${l.id}" style="padding:6px 14px;font-size:12.5px;background:#5b3fb0">${contacted ? 'Suggest a follow-up with Claude' : 'Write a reply with Claude'}</button>
+          <span class="muted" data-lsugst style="font-size:12px;margin-left:6px">${contacted ? 'Reads their enquiry and what was sent.' : 'Answers what they asked.'} Replaces the message; you edit and send.</span></div>
         <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">${held ? 'Send to June to check' : 'Send email'}</button>
       </form>
       <script>/* A send that fails comes back with the stock message; the draft typed
@@ -26514,12 +26533,19 @@ function leadEmailBox(l, backField) {
         if(d&&p.get('err')){f.subject.value=d.s;f.body.value=d.b;box.style.display='block';}else if(p.get('ok'))sessionStorage.removeItem(k);}catch(e){}
       f.addEventListener('submit',function(){try{sessionStorage.setItem(k,JSON.stringify({s:f.subject.value,b:f.body.value}));}catch(e){}});
       var sg=f.querySelector('[data-lsug]'),st=f.querySelector('[data-lsugst]');
-      if(sg)sg.addEventListener('click',function(){sg.disabled=true;st.textContent='Asking Claude...';
+      /* The stock message is not sent as a draft: Claude would keep its generic checklist.
+         Anything it cannot know comes back as [June to fill in: ...], which the server will not send. */
+      var ask=function(){sg.disabled=true;asked=true;st.textContent='Claude is writing a reply to what they asked...';
         fetch('/admin/api/lead/${l.id}/suggest-followup',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({draft:f.body.value})}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+          body:JSON.stringify({draft:f.body.value===f.body.defaultValue?'':f.body.value})}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
         .then(function(x){sg.disabled=false;if(!x.ok||!x.d.reply){st.textContent=(x.d&&x.d.error)||'No suggestion this time.';return;}
-          if(x.d.subject)f.subject.value=x.d.subject;f.body.value=x.d.reply;st.textContent='Suggested. Read it, change anything, then send.';})
-        .catch(function(){sg.disabled=false;st.textContent='Could not reach the server. Try again.';});});})();</script>
+          if(x.d.subject)f.subject.value=x.d.subject;f.body.value=x.d.reply;
+          var need=(x.d.ask_shop||[]).filter(Boolean);
+          st.textContent=need.length?'Suggested. Before sending, fill in: '+need.join('; '):'Suggested. Read it, change anything, then send.';})
+        .catch(function(){sg.disabled=false;st.textContent='Could not reach the server. Try again.';});};
+      var asked=false;sg.addEventListener('click',ask);
+      /* The first time the box opens on the stock message, Claude writes the reply (not after a failed send put a draft back). */
+      box.addEventListener('jt-open',function(){if(!asked&&!sg.disabled&&f.body.value===f.body.defaultValue)ask();});})();</script>
       <form method="POST" action="/admin/lead/${l.id}/note" style="margin-top:10px">
         <input type="hidden" name="kind" value="email"><input type="hidden" name="body" value="Emailed them from my own inbox.">${backField}
         <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">I already emailed them</button>

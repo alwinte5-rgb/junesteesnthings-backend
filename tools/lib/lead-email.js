@@ -7,6 +7,7 @@
  */
 
 const LIMITS = { subject: 150, body: 10000 };
+const FILL_IN = /\[\s*(june|owner)\s+to\s+fill\s+in\b/i;
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -67,6 +68,8 @@ function cleanEmail(body) {
   if (!subject) return { error: 'Add a subject.' };
   if (!text) return { error: 'Write the message first.' };
   if (text.length > LIMITS.body) return { error: `The message is too long (${LIMITS.body} characters at most).` };
+  /* Claude marks what it could not know; none of it may reach a customer. */
+  if (FILL_IN.test(`${subject}\n${text}`)) return { error: 'Fill in the [June to fill in] parts first.' };
   return { subject, text };
 }
 

@@ -35,7 +35,7 @@ test('#179 supplied plain text still carries the footer', () => {
   assert.match(after('async function sendEmail(', 1600), /text \? `\$\{text\}\\n\\n\$\{htmlToText\(footer\)\}` : htmlToText\(html\)/);
 });
 test('#179 a failed send puts the typed draft back', () => {
-  const box = after('function leadEmailBox(l, backField)', 2600);
+  const box = after('function leadEmailBox(l, backField)', 3400);
   assert.match(box, /sessionStorage\.setItem\(k/);
   assert.match(box, /p\.get\('err'\)\)\{f\.subject\.value=d\.s;f\.body\.value=d\.b/);
 });
