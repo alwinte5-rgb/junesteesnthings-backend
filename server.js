@@ -26663,11 +26663,20 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
       { label: 'Social & added by hand', href: link({ source: 'social' }), count: count(status, 'social'), on: source === 'social' },
     ]);
 
-    const body = shown.length
-      ? `<div class="grid-cards">${shown.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/admin/leads', roster })}${
-          leadWorkPanel(l, notesBy[l.id] || [], roster, currentActor())}</div>`).join('')}</div>`
-      : `<div class="card">${emptyState(q ? `Nothing matches &ldquo;${escEmail(q)}&rdquo;.`
-          : status === 'new' || status === 'open' ? 'Nobody is waiting for a reply.' : 'Nothing here.')}</div>`;
+    const grid = (list) => `<div class="grid-cards">${list.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/admin/leads', roster })}${
+      leadWorkPanel(l, notesBy[l.id] || [], roster, currentActor())}</div>`).join('')}</div>`;
+    /* Open shows the two kinds apart (owner, 2026-10-22): the ones nobody has
+       answered first, then the ones written to and waiting on the customer. */
+    const toAnswer = shown.filter((l) => l.lead_status === 'new');
+    const contacted = shown.filter((l) => l.lead_status === 'contacted');
+    const none = (text) => `<div class="card">${emptyState(text)}</div>`;
+    const body = q && !shown.length ? none(`Nothing matches &ldquo;${escEmail(q)}&rdquo;.`)
+      : status === 'open'
+        ? `<h2 class="sec-h" id="to-answer">Waiting for a reply <span class="n">${toAnswer.length}</span></h2>${
+            toAnswer.length ? grid(toAnswer) : none('Nobody is waiting for a reply.')}
+          <h2 class="sec-h" id="contacted">Contacted, waiting on them <span class="n">${contacted.length}</span></h2>${
+            contacted.length ? grid(contacted) : none('Nobody you wrote to is waiting on a reply.')}`
+      : shown.length ? grid(shown) : none(status === 'new' ? 'Nobody is waiting for a reply.' : 'Nothing here.');
 
     res.send(adminPage('Leads', `
       ${pageHeader('Leads', 'Every enquiry: the website form, embroidery requests and tawk.to chats that left an email.',
