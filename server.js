@@ -259,6 +259,13 @@ app.use((req, res, next) => {
 app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
 // Design Ideas is replaced by the online Design Studio — permanent redirect.
 app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/products.php'));
+/* A garment's page in the designer, on a jtees.net address: lead replies link
+   garments this way because customers only ever see jtees.net (owner,
+   2026-10-05). Whole numbers only, to a fixed host. */
+app.get('/p/:id', (req, res) => {
+  const id = /^\d{1,7}$/.test(req.params.id) ? Number(req.params.id) : 0;
+  return res.redirect(302, id ? `https://design.jtees.net/editor.php?product_base=${id}` : 'https://design.jtees.net/products.php');
+});
 /* Printed-product pages switched off for now (owner, 2026-10-20): calendars
    until there is a way to design one, pouches until a smaller-run source.
    302, not 301: they are coming back, and the quote form still takes
@@ -26272,6 +26279,10 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
         + 'their quantity. Show the garment and the print separately, then the per-piece total, and the order total when the '
         + 'quantity is known. Say it is an estimate and the exact price comes on their written quote; sales tax is extra. '
         + 'When it depends on something they have not said (sizes, print size, ink colors), give the price for the likely choice and say so. '
+        + 'Garments: price the one they picked or named, then also offer the cheapest garment in the list that suits the job '
+        + '(same kind of garment, takes the same print, comes in their color), so they can choose; at most three options per item. '
+        + 'Colors: say a garment comes in a color only when that color is in its colors list; if the color they want is not listed, '
+        + 'say so and name the closest listed ones. Give each garment you name its link from the list, on its own line, so they can see it. '
       : '')
       + 'Where an answer needs a fact you were not given (a price that is not in the list, a turnaround, whether the shop carries an item '
       + 'or takes a kind of job), write [June to fill in: what is needed] at that spot in the reply and list it under ask_shop. '
