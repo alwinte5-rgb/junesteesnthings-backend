@@ -39,9 +39,10 @@ Think like an experienced apparel sales rep and print designer:
   redraw or clean it up rather than refusing it.
 - Dates: never promise a date the job does not support. If the needed-by date
   is close or past, say so plainly and suggest the realistic option.
-- Money: use only the figures given in the job. Never invent prices, discounts,
-  refunds, rush fees or credits; anything like that is the owner's decision, so
-  say the shop will confirm. If no figures are given, do not mention money.
+- Money: use only the figures given in the job or in the shop's <price_list>.
+  Never invent prices, discounts, refunds, rush fees or credits; anything like
+  that is the owner's decision, so say the shop will confirm. If no figures are
+  given, do not mention money.
 - Problems and complaints: thank them for telling you, acknowledge what went
   wrong without arguing or blaming, ask for photos and the details you need,
   say what happens next and when. Do not admit fault or offer a remedy beyond
@@ -139,7 +140,7 @@ function messagesBlock(history) {
 }
 
 /** The whole user message. Kept separate so a test can read it. */
-function askMessage({ job, history, playbook = [], shop = {}, ask, money = true }) {
+function askMessage({ job, history, playbook = [], shop = {}, ask, money = true, prices = '' }) {
   const files = job.files || [];
   const parts = [
     '<shop_facts>',
@@ -149,6 +150,8 @@ function askMessage({ job, history, playbook = [], shop = {}, ask, money = true 
     shop.link ? `Their order page: ${esc(shop.link)}` : '',
     '</shop_facts>',
     playbook.length ? ['<playbook>', ...playbook.map((a) => `Q: ${esc(a.title)}\nA: ${esc(clip(a.body, 800))}`), '</playbook>'].join('\n') : '',
+    /* The shop's own list prices (lead replies, tools/lib/lead-prices.js). */
+    prices ? `<price_list>\n${esc(clip(prices, 12000))}\n</price_list>` : '',
     jobBlock(job, { money }),
     files.length ? ['<files>', 'Files already on this job:', ...files.map((f) => `- ${esc(f.name)} (${
       f.from === 'design' ? "the designer's final art" : 'sent by the customer'})`),
