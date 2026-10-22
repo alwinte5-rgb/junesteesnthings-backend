@@ -259,10 +259,10 @@ app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
 // Design Ideas is replaced by the online Design Studio — permanent redirect.
 app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/products.php'));
 /* Printed-product pages switched off for now (owner, 2026-10-20): calendars
-   until there is a way to design one, pouches until a smaller-run source,
-   table covers until the DTF-printed cover is priced. 302, not 301: they are
-   coming back, and the quote form still takes enquiries. */
-app.get(['/print/wall-calendars.html', '/print/stand-up-pouches.html', '/print/table-covers.html'],
+   until there is a way to design one, pouches until a smaller-run source.
+   302, not 301: they are coming back, and the quote form still takes
+   enquiries. Table covers came back 2026-10-21 as the DTF-printed cover. */
+app.get(['/print/wall-calendars.html', '/print/stand-up-pouches.html'],
   (_req, res) => res.redirect(302, '/contact'));
 /* Old Shopify and WooCommerce store URLs still bring customers in from Google,
    old posts and texts; each used to end on the 404 page. tools/lib/legacy-redirects.js
@@ -15744,8 +15744,14 @@ function sinaliteRunsOf(it) {
   const lad = ((fam.prices[sg.mat] || {})[sg.size] || {})[''];
   /* `qty`: the quantity it was priced at. At that quantity the saved price
      stands, even if SinaLite's table has moved since (Codex on #293). */
-  return Array.isArray(lad) && lad.length
-    ? { ladder: lad, any: !!fam.any_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
+  /* Only the runs the shop sells (sinalite.js sell_from), so the estimate
+     says "Minimum 500" where the save would refuse a smaller run. A line saved
+     below it before the cut keeps the full ladder: its saved quantity still
+     prices (code review). */
+  const from = Number(fam.sell_from) || 0;
+  const sells = Array.isArray(lad) && !(Number(it.qty) < from) ? lad.filter(([q]) => q >= from) : lad;
+  return Array.isArray(sells) && sells.length
+    ? { ladder: sells, any: !!fam.any_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
 }
 
 app.get('/q/:code', async (req, res) => {

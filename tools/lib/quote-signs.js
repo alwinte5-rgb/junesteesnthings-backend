@@ -120,20 +120,27 @@ function priceSign(kind, spec, qty, takeFreight, opts = {}) {
     const combo = Object.keys(fam.sheet_upgrades || {}).filter((k) => up.includes(k)).sort().join('+');
     const ladder = ((fam.prices[mat.key] || {})[size.key] || {})[combo];
     if (!ladder) return { ok: false, error: `${size.label} is not made in that material.` };
-    if (q < ladder[0][0]) return { ok: false, min: ladder[0][0], error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${ladder[0][0]}.` };
+    /* The smallest run offered (sinalite.js sell_from); a line saved below it
+       before the cut re-saves unchanged (opts.grandfather). */
+    const minQ = opts.grandfather ? ladder[0][0] : Math.max(ladder[0][0], fam.sell_from || 0);
+    if (q < minQ) return { ok: false, min: minQ, error: `${size.label} ${fam.label.toLowerCase()} have a minimum of ${minQ.toLocaleString('en-US')}.` };
+    const offered = ladder.filter(([rq]) => rq >= minQ);
+    /* No run of this size at or above the smallest sold (a re-capture that
+       capped it lower): say so rather than fall through to undefined. */
+    if (!offered.length) return { ok: false, error: `${size.label} ${fam.label.toLowerCase()} are not sold right now; quote it by hand.` };
     /* Set runs only (owner, 2026-10-20: "staff quote should only select the
        numbers given"). A quantity between SinaLite's runs is refused, naming
        the runs either side, rather than bought as a mix of runs. Any-quantity
        items (typed box on SinaLite) still take any number. */
     /* opts.grandfather: a line already saved at this quantity before the
        rule, re-saved unchanged, keeps its run-mix price (code review). */
-    if (fam.supplier === 'sinalite' && !fam.any_qty && !opts.grandfather && !ladder.some(([rq]) => rq === q)) {
+    if (fam.supplier === 'sinalite' && !fam.any_qty && !opts.grandfather && !offered.some(([rq]) => rq === q)) {
       const n = (x) => x.toLocaleString('en-US');
-      const below = ladder.filter(([rq]) => rq < q).pop();
-      const above = ladder.find(([rq]) => rq > q);
+      const below = offered.filter(([rq]) => rq < q).pop();
+      const above = offered.find(([rq]) => rq > q);
       const near = [below, above].filter(Boolean).map(([rq]) => rq);
-      return { ok: false, runs: ladder.map(([rq]) => rq), use: near,
-        error: `${fam.label} are sold only in these quantities: ${ladder.map(([rq]) => n(rq)).join(', ')}. ${n(q)} is not one` +
+      return { ok: false, runs: offered.map(([rq]) => rq), use: near,
+        error: `${fam.label} are sold only in these quantities: ${offered.map(([rq]) => n(rq)).join(', ')}. ${n(q)} is not one` +
           (above ? `; use ${near.map(n).join(' or ')}.` : `; for more than ${n(below[0])}, quote the extra runs by hand.`) };
     }
     /* SinaLite sells set runs only: a quantity between runs is bought as the
@@ -154,7 +161,7 @@ function priceSign(kind, spec, qty, takeFreight, opts = {}) {
        better buy: say so, so the shop offers that instead (owner,
        2026-10-15: "if it'll jump that much just recommend the 2500 not
        3000"). */
-    const hint = fam.supplier === 'sinalite' && !fam.any_qty ? runHint(ladder, q, upEach) : null;
+    const hint = fam.supplier === 'sinalite' && !fam.any_qty ? runHint(offered, q, upEach) : null;
     return { ok: true, piece, freight, oversized: oversized != null, each: ceil2(piece + freight / q), text, spec: outSpec, ...(hint ? { hint } : {}) };
   }
 

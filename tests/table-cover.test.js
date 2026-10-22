@@ -2,7 +2,7 @@
 
 /* The 6 ft table cover (owner, 2026-10-21): DTF printed in house on one or two
  * sides of a YCC Linens blank, at the owner's all-in prices, shipping included:
- *   1 side  $75 for 1-2, $65 each from 3;  2 sides $90 for 1, $80 each from 2.
+ *   1 side  $75 for 1-2, $65 each from 3;  2 sides $110 for 1, $95 each for 2, $80 each from 3.
  * tools/add-table-cover.js writes them as one decoration method whose main
  * stage is the 1-side price and whose second stage is what the back adds. */
 
@@ -14,8 +14,8 @@ const vm = require('node:vm');
 
 const tool = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-table-cover.js'), 'utf8');
 const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-const grab = (name) => vm.runInThisContext('(' + (tool.match(new RegExp('const ' + name + ' = (\\{[^}]*\\});')) || [])[1] + ')');
-const ONE = grab('ONE_SIDE'), TWO = grab('TWO_SIDES');
+const TC = require('../tools/lib/table-cover');
+const ONE = TC.ONE_SIDE, TWO = TC.TWO_SIDES;
 /* The REAL quote engine (server.js quotePricingSource priceLine), given the
    method exactly as the tool writes it. */
 function lift(name) {
@@ -38,7 +38,7 @@ const line = (qty, prints) => priceLine({ product: { price: 0, sizes: [] }, addo
 const r2 = (n) => Math.round(n * 100) / 100;
 
 test('the owner\'s prices, each, at every quantity, from the real engine', () => {
-  for (const [q, one, two] of [[1, 75, 90], [2, 75, 80], [3, 65, 80], [10, 65, 80], [500, 65, 80]]) {
+  for (const [q, one, two] of [[1, 75, 110], [2, 75, 95], [3, 65, 80], [10, 65, 80], [500, 65, 80]]) {
     assert.strictEqual(r2(line(q, [{ loc: 'front', method: COVER }]).unit), one, `1 side at ${q}`);
     assert.strictEqual(r2(line(q, [{ loc: 'front', method: COVER }, { loc: 'back', method: COVER }]).unit), two, `2 sides at ${q}`);
     assert.strictEqual(r2(line(q, [{ loc: 'back', method: COVER }]).unit), one, `a back-only print is one side at ${q}`);

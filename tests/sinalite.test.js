@@ -401,7 +401,7 @@ test('a renamed product keeps pricing under its former name until its row is ren
 
 test('the sizer lists the SinaLite runs and says shipping is included; the internal note names SinaLite', () => {
   const o = require('../tools/lib/quote-signs').sizerOptions();
-  assert.deepStrictEqual(o.brochure.runs.slice(0, 3), [25, 50, 75]);
+  assert.deepStrictEqual(o.brochure.runs.slice(0, 3), [250, 500, 750]);
   assert.strictEqual(o.pouch.any_qty, true);
   assert.strictEqual(o.banner.runs, undefined);
   assert.ok(SERVER.includes('Shipping to the shop is included in the price.'));

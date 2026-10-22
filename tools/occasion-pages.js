@@ -24,6 +24,7 @@ const path = require('node:path');
 const { escHtml: esc } = require('./lib/html-escape');
 const CAL = require('./lib/marketing-calendar');
 const SL = require('./lib/sinalite');
+const TC = require('./lib/table-cover');
 const SERVICES = require('./lib/services');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -71,9 +72,23 @@ function orderNote(page) {
 const money = (n) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const count = (n) => n.toLocaleString('en-US');
 
+/* The 6 ft table cover is printed in our shop, not bought from SinaLite
+   (owner, 2026-10-21), so its table comes from tools/lib/table-cover.js, the
+   same numbers tools/add-table-cover.js gives the quote engine. Bands: 1, 2,
+   then one price from 3. Ready on the in-house window (server.js JT_PROD_MIN/MAX). */
+const IN_HOUSE_LEAD = [7, 10];
+function tableCoverFamily() {
+  const rows = [1, 2, 3].map((q) => ({ q, cells: [TC.priceEach(q, 1), TC.priceEach(q, 2)] }));
+  return { key: 'table_cover', lead: IN_HOUSE_LEAD, rows,
+    cols: [{ label: 'Printed one side (front)' }, { label: 'Printed two sides (front and back)' }],
+    f: { label: 'Fitted Table Cover — 6 ft', any_qty: false,
+      pp_note: 'Each price includes the cover and its delivery to our shop. From 3 covers, every cover is the 3-cover price.' } };
+}
+
 function printFamilies(page) {
   const t = SL.table();
   return page.print.families.map((k) => {
+    if (k === 'table_cover_inhouse') return tableCoverFamily();
     const f = t.families[k];
     if (!f) throw new Error(`${page.path}: no SinaLite family "${k}" in tools/data/sinalite-costs.json`);
     const cols = [];
@@ -144,7 +159,9 @@ function designBox(page) {
 /* Photos on a printed-product page (owner, 2026-10-20: "each page needs to
    have photos, they could be stock photos"). Stock photos are licensed free
    for commercial use (Unsplash); `source` in the data records where each came
-   from. They are never captioned as the shop's own work. */
+   from. They are never captioned as the shop's own work. A photo of the
+   shop's own work carries `own: true` instead of a source (owner,
+   2026-10-21: "make sure the table cover image I have is presented"). */
 function photoStrip(page) {
   const photos = page.print.photos || [];
   for (const ph of photos) {
@@ -157,6 +174,21 @@ function photoStrip(page) {
 }
 const photoUrl = (page) => (page.print && (page.print.photos || [])[0] ? `${SITE}/assets/images/print/${page.print.photos[0].file}.jpg` : null);
 
+/* The colors a product comes in (owner, 2026-10-21: "add available colors
+   to website"). page.print.colors names the list's source; the list itself
+   is the supplier's, never typed into the page data. */
+function colorsBox(page) {
+  if (page.print.colors !== 'table_cover') return '';
+  const list = TC.COLORS;
+  return `<div class="pp-colors">
+      <h3>Cover colors</h3>
+      ${list.length
+        ? `<p>${list.length} cover colors. Tell us the one you want on the quote form and we confirm it is in stock:</p>
+      <ul>${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`
+        : '<p>The covers come in about 30 colors, from black, white and navy to bright and pastel shades. Tell us the color you want on the quote form and we confirm it is in stock.</p>'}
+    </div>`;
+}
+
 function pricesSection(page, fams, sum) {
   const tables = fams.map((fm) => `<div class="pp-fam">
       <h3>${esc(fm.f.label)}</h3>
@@ -166,7 +198,7 @@ function pricesSection(page, fams, sum) {
         ${fm.rows.map((r) => `<tr><th scope="row">${count(r.q)}</th>${r.cells.map((e) => (e > 0 ? `<td><b>${money(e)}</b> each<span>${money(Math.round(e * r.q * 100) / 100)} total</span></td>` : '<td>&mdash;<span>not sold at this quantity</span></td>')).join('')}</tr>`).join('\n        ')}
         </tbody>
       </table></div>
-      <p class="pp-note">${fm.f.any_qty
+      <p class="pp-note">${fm.f.pp_note ? esc(fm.f.pp_note) : fm.f.any_qty
         ? `Any quantity from ${count(fm.rows[0].q)}. A quantity between two rows pays the lower row's price each, or the next row's total if that is less.`
         : 'We only sell in these quantities.'}</p>
     </div>`).join('\n    ');
@@ -177,6 +209,7 @@ function pricesSection(page, fams, sum) {
     <h2>${esc(page.print.prices_h2)}</h2>
     <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop for pickup; we can also ship your order straight to you or your event, quoted with your order. Sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
     ${tables}
+    ${colorsBox(page)}
     ${designBox(page)}
     <div class="hero-btns"><a href="#get-quote" class="btn btn-gold">Get a Free Quote</a><a href="tel:+17739004592" class="btn btn-outline-white pp-call">📞 Call Us</a></div>
   </div>
@@ -196,6 +229,9 @@ const PRINT_STYLE = `<style>
     .pp-call{border:1px solid var(--border);}
     .pp-photos{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:0 0 2rem;}
     .pp-photos img{width:100%;height:260px;object-fit:cover;border-radius:var(--radius);display:block;}
+    .pp-colors{margin:1.5rem 0;max-width:720px;}.pp-colors p{font-size:.92rem;margin:.3rem 0;}
+    .pp-colors ul{list-style:none;padding:0;margin:.5rem 0 0;display:flex;flex-wrap:wrap;gap:6px;}
+    .pp-colors li{border:1px solid var(--border);border-radius:999px;padding:.25rem .7rem;font-size:.85rem;background:#fff;}
     .pp-design{border:2px solid var(--gold);border-radius:var(--radius);padding:1rem 1.25rem;margin:1.5rem 0;max-width:720px;background:#fff;}
     .pp-design h3{margin:0 0 .4rem;}.pp-design p{font-size:.92rem;margin:.3rem 0;}.pp-design ul{margin:.4rem 0 .4rem 1.2rem;font-size:.95rem;}
     @media(max-width:768px){.container{padding:0 16px;}}

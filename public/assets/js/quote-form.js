@@ -223,7 +223,7 @@
     ['embroidery', 'Embroidery'],
     ['signs', 'Banners & signs'],
     ['drinkware', 'Mugs & tumblers'],
-    ['stickers', 'Stickers & labels'],
+    ['stickers', 'Roll labels'],
     ['table_cover', 'Table covers'],
     ['xframe', 'X-frame banners'],
     ['brochure', 'Brochures & flyers'],
