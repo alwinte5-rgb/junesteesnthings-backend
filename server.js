@@ -35599,11 +35599,13 @@ app.post('/admin/projects', requireAdmin, async (req, res) => {
       if (v.error) return back(res, backTo, 'err', v.error);
       if (String(b.key_date || '').trim() && !PROJECTS.validDate(b.key_date)) return back(res, backTo, 'err', 'That key date is not a real date.');
       const { rows: [n] } = await pool.query(
-        `SELECT COUNT(*)::int AS n FROM staff_activity WHERE action = 'project planned with AI'
+        `SELECT COUNT(*)::int AS n FROM staff_activity WHERE action = 'project plan asked of AI'
            AND created_at >= (date_trunc('day', NOW() AT TIME ZONE $1) AT TIME ZONE $1)`, [SHOP_TZ]);
       if (n.n >= PLANNER.DAILY_CAP) return back(res, backTo, 'err', `The planner has written ${PLANNER.DAILY_CAP} plans today. More tomorrow.`);
       const start = PROJECTS.addWorkDays(shopToday(), 1);
       const track = JOB_TRACKS[helper.training_track] || {};
+      /* Every call counts toward the cap, failed ones too: each one is paid for. */
+      await logActivity(currentActor() || OWNER_ACTOR, 'project plan asked of AI', { type: 'project', id: null }, { title: v.ask.title || null });
       let plan;
       try {
         plan = await PLANNER.planProject(v.ask, {
@@ -35629,7 +35631,7 @@ app.post('/admin/projects', requireAdmin, async (req, res) => {
     if (!title) return back(res, backTo, 'err', 'Give the project a title, or pick a season.');
     const id = await saveProject({
       ...p, title,
-      summary: text(b.summary, 2000) || p.summary || null,
+      summary: text(b.summary, 3000) || p.summary || null,
       key_date: PROJECTS.validDate(b.key_date) || p.key_date || null,
       key_label: text(b.key_label, 60) || p.key_label || (PROJECTS.validDate(b.key_date) ? 'Key date' : null),
     }, { assignedTo: assignTo });
@@ -35757,13 +35759,15 @@ app.post('/admin/projects/:id/guide', requireAdmin, async (req, res) => {
   }
 });
 
-/* The owner writes or rewrites the guide (empty removes it). */
+/* The owner writes or rewrites the guide (empty removes it). A removed guide
+   is stored as '' rather than NULL, so the startup seed (initStaffTables)
+   never brings the Christmas guide back. */
 app.post('/admin/projects/:id/guide-text', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   if (!id) return res.redirect('/admin/projects');
   const guide = String((req.body || {}).guide || '').replace(/\r\n?/g, '\n').trim().slice(0, PROJECTS.GUIDE_MAX);
   try {
-    const { rowCount } = await pool.query('UPDATE task_projects SET guide = $2 WHERE id = $1 AND archived_at IS NULL', [id, guide || null]);
+    const { rowCount } = await pool.query('UPDATE task_projects SET guide = $2 WHERE id = $1 AND archived_at IS NULL', [id, guide]);
     return back(res, `/admin/projects/${id}#guide`, rowCount ? 'ok' : 'err', rowCount ? (guide ? 'Guide saved.' : 'Guide removed.') : 'That project is archived or gone.');
   } catch (err) {
     console.error('project guide text failed:', err.message);

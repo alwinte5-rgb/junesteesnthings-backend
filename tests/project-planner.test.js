@@ -79,3 +79,22 @@ test('only the owner plans and edits guides; the planner is capped a day', () =>
   assert.strictEqual(STAFF.ROUTES['POST /admin/projects'], 'owner');
   assert.match(src, /if \(n\.n >= PLANNER\.DAILY_CAP\)/);
 });
+
+test('every AI plan call counts toward the daily cap, failed ones too', () => {
+  const route = src.slice(src.indexOf("if (String(b.season || '') === 'ai')"));
+  const asked = route.indexOf("'project plan asked of AI'", route.indexOf('PLANNER.DAILY_CAP'));
+  assert.ok(asked > 0, 'the attempt is logged after the cap check');
+  assert.ok(asked < route.indexOf('PLANNER.planProject('), 'the attempt is logged before the paid call');
+  assert.match(route.slice(0, route.indexOf('PLANNER.DAILY_CAP')), /action = 'project plan asked of AI'/);
+});
+
+test('a removed guide is stored empty, so the startup seed never brings it back', () => {
+  const r = src.slice(src.indexOf("app.post('/admin/projects/:id/guide-text'"));
+  assert.match(r.slice(0, 900), /\[id, guide\]\)/);
+  assert.match(src, /SET guide = \$1 WHERE auto_ref = 'mcal:christmas:2026' AND guide IS NULL/);
+});
+
+test('the server keeps as much of the description as the form allows', () => {
+  assert.match(src, /summary: text\(b\.summary, 3000\)/);
+  assert.match(src, /name="summary" rows="4" maxlength="3000"/);
+});
