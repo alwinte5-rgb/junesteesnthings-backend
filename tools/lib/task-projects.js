@@ -340,28 +340,52 @@ function guideHtml(md) {
   const inline = (raw) => escHtml(raw)
     .replace(/\*\*([^*]{1,300})\*\*/g, '<b>$1</b>')
     .replace(/\[([^\]]{1,200})\]\((https:\/\/[^\s()"'<>]{1,500})\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  /* Line by line, so a heading, a lead-in line, a list and a table may sit
+     together without blank lines between them (the planner does not always
+     leave them). Consecutive lines of one kind form one block. */
+  const kindOf = (l) => {
+    const t = l.trim();
+    if (!t) return 'blank';
+    if (/^#{1,4}\s+\S/.test(t)) return 'h';
+    if (/^\|.*\|$/.test(t)) return 'table';
+    if (/^- \[[ xX]\] /.test(t)) return 'check';
+    if (/^[-*] /.test(t)) return 'ul';
+    if (/^\d+\. /.test(t)) return 'ol';
+    return 'p';
+  };
+  const cells = (l) => l.trim().slice(1, -1).split('|').map((c) => c.trim());
+  /* A separator row is cells of three or more dashes (colons allowed); a data
+     row of single dashes or blanks is kept. */
+  const isSep = (l) => cells(l).every((c) => /^:?-{3,}:?$/.test(c));
   const out = [];
-  const blocks = text.split(/\n{2,}/);
-  for (const block of blocks) {
-    const lines = block.split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
-    if (!lines.length) continue;
-    const h = /^(#{2,3})\s+(.+)$/.exec(lines[0]);
-    if (h && lines.length === 1) { out.push(`<h${h[1].length === 2 ? 3 : 4} class="gd-h">${inline(h[2])}</h${h[1].length === 2 ? 3 : 4}>`); continue; }
-    if (lines.every((l) => /^\|.*\|$/.test(l.trim()))) {
-      const cells = (l) => l.trim().slice(1, -1).split('|').map((c) => c.trim());
-      const rows = lines.filter((l) => !/^\|[\s:|-]+\|$/.test(l.trim())).map(cells);
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length;) {
+    const kind = kindOf(lines[i]);
+    if (kind === 'blank') { i += 1; continue; }
+    if (kind === 'h') {
+      const [, hashes, body] = /^(#{1,4})\s+(.+)$/.exec(lines[i].trim());
+      const n = hashes.length <= 2 ? 3 : 4;
+      out.push(`<h${n} class="gd-h">${inline(body)}</h${n}>`);
+      i += 1;
+      continue;
+    }
+    const group = [];
+    while (i < lines.length && kindOf(lines[i]) === kind) { group.push(lines[i].trim()); i += 1; }
+    if (kind === 'table') {
+      const rows = group.filter((l) => !isSep(l)).map(cells);
+      if (!rows.length) continue;
       const [head, ...body] = rows;
       out.push(`<div class="gd-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${
         body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
-      continue;
+    } else if (kind === 'check') {
+      out.push(`<ul class="gd-check">${group.map((l) => `<li>${/^- \[[xX]\]/.test(l) ? '☑' : '☐'} ${inline(l.replace(/^- \[[ xX]\] /, ''))}</li>`).join('')}</ul>`);
+    } else if (kind === 'ul') {
+      out.push(`<ul>${group.map((l) => `<li>${inline(l.replace(/^[-*] /, ''))}</li>`).join('')}</ul>`);
+    } else if (kind === 'ol') {
+      out.push(`<ol>${group.map((l) => `<li>${inline(l.replace(/^\d+\. /, ''))}</li>`).join('')}</ol>`);
+    } else {
+      out.push(`<p>${group.map(inline).join('<br>')}</p>`);
     }
-    if (lines.every((l) => /^\s*- \[[ xX]\] /.test(l))) {
-      out.push(`<ul class="gd-check">${lines.map((l) => `<li>☐ ${inline(l.replace(/^\s*- \[[ xX]\] /, ''))}</li>`).join('')}</ul>`);
-      continue;
-    }
-    if (lines.every((l) => /^\s*[-*] /.test(l))) { out.push(`<ul>${lines.map((l) => `<li>${inline(l.replace(/^\s*[-*] /, ''))}</li>`).join('')}</ul>`); continue; }
-    if (lines.every((l) => /^\s*\d+\. /.test(l))) { out.push(`<ol>${lines.map((l) => `<li>${inline(l.replace(/^\s*\d+\. /, ''))}</li>`).join('')}</ol>`); continue; }
-    out.push(`<p>${lines.map(inline).join('<br>')}</p>`);
   }
   return out.join('');
 }

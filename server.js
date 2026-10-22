@@ -35556,18 +35556,22 @@ app.get('/admin/projects', requireAdmin, async (req, res) => {
           AND NOT (${PROJECT_OPEN})
         ORDER BY p.created_at DESC LIMIT 20`, [me]);
     const form = me == null ? `<details class="card" id="new"><summary><b>Start a project</b> <span class="muted">for one helper, from a season of the marketing calendar or from scratch</span></summary>
-      <form method="post" action="/admin/projects" class="pj-form" onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;if(this.season.value==='ai')b.textContent='Writing the plan… about a minute'">
+      <form method="post" action="/admin/projects" class="pj-form" id="pj-new" onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;if(this.season.value==='ai'){b.textContent='Writing the plan… about a minute';try{sessionStorage.setItem('pj-ask',JSON.stringify({title:this.title.value,summary:this.summary.value,key_date:this.key_date.value,key_label:this.key_label.value}))}catch(e){}}">
         <label style="flex:1 1 260px">Title <input name="title" maxlength="${PROJECTS.TITLE_MAX}" placeholder="Leave empty to use the season's"></label>
         <label>For <select name="assigned_to" required><option value="">Pick a helper</option>${roster.filter((r) => r.active && !r.archived_at).map((r) =>
           `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
-        <label>Steps from <select name="season"><option value="ai">Plan it with AI from what I describe below</option><option value="">Nothing: I add the steps myself</option>${projectSeasonOptions().map((e) =>
+        <label>Steps from <select name="season"><option value="">Nothing: I add the steps myself</option><option value="ai">Plan it with AI from what I describe below</option>${projectSeasonOptions().map((e) =>
           `<option value="${escEmail(`${e.id}:${e.year}`)}">${escEmail(`${e.name} ${e.year} (order by ${MKT_CAL.shortDate(e.orderBy)})`)}</option>`).join('')}</select></label>
         <label>Key date <input type="date" name="key_date"></label>
         <label>It is the <input name="key_label" maxlength="60" placeholder="Last day to order"></label>
         <label style="flex:1 1 100%">What it is for <textarea name="summary" rows="4" maxlength="3000" placeholder="What you want done and why, the date that matters, what to sell or make, anything to avoid. With Plan it with AI, the more you say the better the plan: e.g. 'Valentine's campaign for couples and Galentine's groups: matching tees and custom glassware, launch Jan 5, last order Jan 30, no discounts.'"></textarea></label>
         <button type="submit" class="btn">Start the project</button>
         <span class="muted" style="font-size:12.5px">With Plan it with AI, Claude writes the guide and the two-hour steps in about a minute. You can change any of it afterwards.</span></form>
-      <p class="muted" style="margin-top:6px">The marketing calendar starts each coming season's project for the designer by itself, one at a time.</p></details>` : '';
+      <p class="muted" style="margin-top:6px">The marketing calendar starts each coming season's project for the designer by itself, one at a time.</p></details>
+      <script>/* A plan that did not come back keeps what the owner typed. */
+      (function(){try{var f=document.getElementById('pj-new'),s=sessionStorage.getItem('pj-ask');if(!f||!s)return;sessionStorage.removeItem('pj-ask');
+      if(!/[?&]err=/.test(location.search))return;var a=JSON.parse(s);['title','summary','key_date','key_label'].forEach(function(k){if(f[k]&&!f[k].value&&a[k])f[k].value=a[k]});
+      f.season.value='ai';f.closest('details').open=true}catch(e){}})();</script>` : '';
     res.send(adminPage('Projects', `${PROJECT_CSS}
       ${pageHeader('Projects', 'Big work split into steps of about two hours, done one at a time.',
         me == null ? '<a class="btn btn-ghost" href="/admin/tasks">Tasks</a>' : '<a class="btn btn-ghost" href="/admin/my-day">My Day</a>')}
@@ -35581,6 +35585,32 @@ app.get('/admin/projects', requireAdmin, async (req, res) => {
   }
 });
 
+/** Count one AI planner call toward today's cap, or refuse it when the cap is
+ *  reached. Under an advisory lock, so two submits at once cannot both pass;
+ *  failed calls count too, because each one is paid for. */
+async function reservePlannerCall(title) {
+  const actor = currentActor() || OWNER_ACTOR;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('project-planner-cap'))");
+    const { rows: [n] } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM staff_activity WHERE action = 'project plan asked of AI'
+         AND created_at >= (date_trunc('day', NOW() AT TIME ZONE $1) AT TIME ZONE $1)`, [SHOP_TZ]);
+    if (n.n >= PLANNER.DAILY_CAP) { await client.query('ROLLBACK'); return false; }
+    await client.query(
+      `INSERT INTO staff_activity (staff_id, action, subject_type, subject_id, detail) VALUES ($1, 'project plan asked of AI', 'project', NULL, $2)`,
+      [actor && actor.kind === 'staff' ? actor.id : null, JSON.stringify({ title: title || null })]);
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 app.post('/admin/projects', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const backTo = '/admin/projects#new';
@@ -35592,20 +35622,17 @@ app.post('/admin/projects', requireAdmin, async (req, res) => {
     if (!helper) return back(res, backTo, 'err', 'That helper is not active.');
     let p = { title: '', steps: [] };
     const season = String(b.season || '');
-    if (String(b.season || '') === 'ai') {
+    /* Checked before any paid planner call, and once for every path. */
+    if (String(b.key_date || '').trim() && !PROJECTS.validDate(b.key_date)) return back(res, backTo, 'err', 'That key date is not a real date.');
+    if (season === 'ai') {
       /* Plan it with AI: Claude writes the guide and the steps from what the
          owner typed (tools/lib/project-planner.js), capped a day for the shop. */
       const v = PLANNER.validateAsk(b);
       if (v.error) return back(res, backTo, 'err', v.error);
-      if (String(b.key_date || '').trim() && !PROJECTS.validDate(b.key_date)) return back(res, backTo, 'err', 'That key date is not a real date.');
-      const { rows: [n] } = await pool.query(
-        `SELECT COUNT(*)::int AS n FROM staff_activity WHERE action = 'project plan asked of AI'
-           AND created_at >= (date_trunc('day', NOW() AT TIME ZONE $1) AT TIME ZONE $1)`, [SHOP_TZ]);
-      if (n.n >= PLANNER.DAILY_CAP) return back(res, backTo, 'err', `The planner has written ${PLANNER.DAILY_CAP} plans today. More tomorrow.`);
+      if (!PLANNER.ready()) return back(res, backTo, 'err', PLANNER.NOT_SET_UP);
+      if (!(await reservePlannerCall(v.ask.title))) return back(res, backTo, 'err', `The planner has written ${PLANNER.DAILY_CAP} plans today. More tomorrow.`);
       const start = PROJECTS.addWorkDays(shopToday(), 1);
       const track = JOB_TRACKS[helper.training_track] || {};
-      /* Every call counts toward the cap, failed ones too: each one is paid for. */
-      await logActivity(currentActor() || OWNER_ACTOR, 'project plan asked of AI', { type: 'project', id: null }, { title: v.ask.title || null });
       let plan;
       try {
         plan = await PLANNER.planProject(v.ask, {
@@ -35626,12 +35653,12 @@ app.post('/admin/projects', requireAdmin, async (req, res) => {
       p = PROJECTS.seasonProject(e, { today: shopToday(), longDate: MKT_CAL.longDate });
       if (!p) return back(res, backTo, 'err', 'That season\'s last day to order has passed.');
     }
-    if (String(b.key_date || '').trim() && !PROJECTS.validDate(b.key_date)) return back(res, backTo, 'err', 'That key date is not a real date.');
     const title = text(b.title, PROJECTS.TITLE_MAX).replace(/\s+/g, ' ') || p.title;
     if (!title) return back(res, backTo, 'err', 'Give the project a title, or pick a season.');
     const id = await saveProject({
       ...p, title,
-      summary: text(b.summary, 3000) || p.summary || null,
+      /* With AI the box held the brief for Claude; the project keeps Claude's short summary. */
+      summary: season === 'ai' ? (p.summary || null) : (text(b.summary, 3000) || p.summary || null),
       key_date: PROJECTS.validDate(b.key_date) || p.key_date || null,
       key_label: text(b.key_label, 60) || p.key_label || (PROJECTS.validDate(b.key_date) ? 'Key date' : null),
     }, { assignedTo: assignTo });

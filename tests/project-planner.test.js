@@ -80,12 +80,18 @@ test('only the owner plans and edits guides; the planner is capped a day', () =>
   assert.match(src, /if \(n\.n >= PLANNER\.DAILY_CAP\)/);
 });
 
-test('every AI plan call counts toward the daily cap, failed ones too', () => {
-  const route = src.slice(src.indexOf("if (String(b.season || '') === 'ai')"));
-  const asked = route.indexOf("'project plan asked of AI'", route.indexOf('PLANNER.DAILY_CAP'));
-  assert.ok(asked > 0, 'the attempt is logged after the cap check');
-  assert.ok(asked < route.indexOf('PLANNER.planProject('), 'the attempt is logged before the paid call');
-  assert.match(route.slice(0, route.indexOf('PLANNER.DAILY_CAP')), /action = 'project plan asked of AI'/);
+test('every AI plan call is counted under a lock before it is made, and only when a key is set', () => {
+  const route = src.slice(src.indexOf("if (season === 'ai') {"));
+  const ready = route.indexOf('PLANNER.ready()');
+  const reserve = route.indexOf('reservePlannerCall(');
+  const call = route.indexOf('PLANNER.planProject(');
+  assert.ok(ready > 0 && reserve > ready && call > reserve, 'key check, then the reservation, then the paid call');
+  const fn = src.slice(src.indexOf('async function reservePlannerCall('), src.indexOf("app.post('/admin/projects', requireAdmin"));
+  assert.match(fn, /pg_advisory_xact_lock/);
+  assert.match(fn, /action = 'project plan asked of AI'/);
+  assert.ok(fn.indexOf('COUNT(*)') < fn.indexOf('INSERT INTO staff_activity'), 'counted, then recorded, inside one transaction');
+  assert.strictEqual(PL.failureMessage(new Error('x')).includes('not set up'), false);
+  assert.match(PL.NOT_SET_UP, /not set up yet/);
 });
 
 test('a removed guide is stored empty, so the startup seed never brings it back', () => {
@@ -94,7 +100,23 @@ test('a removed guide is stored empty, so the startup seed never brings it back'
   assert.match(src, /SET guide = \$1 WHERE auto_ref = 'mcal:christmas:2026' AND guide IS NULL/);
 });
 
-test('the server keeps as much of the description as the form allows', () => {
-  assert.match(src, /summary: text\(b\.summary, 3000\)/);
+test('the server keeps as much of the description as the form allows; with AI the project keeps Claude\'s summary', () => {
+  assert.match(src, /summary: season === 'ai' \? \(p\.summary \|\| null\) : \(text\(b\.summary, 3000\) \|\| p\.summary \|\| null\)/);
   assert.match(src, /name="summary" rows="4" maxlength="3000"/);
+});
+
+test('a plain project stays the default; AI is picked on purpose', () => {
+  assert.match(src, /<select name="season"><option value="">Nothing: I add the steps myself<\/option><option value="ai">/);
+  assert.match(src, /sessionStorage\.setItem\('pj-ask'/);
+});
+
+test('the guide reads ordinary markdown and never breaks the page', () => {
+  assert.strictEqual(P.guideHtml('|---|'), '');
+  assert.strictEqual(P.guideHtml('| --- | :---: |'), '');
+  const h = P.guideHtml('## The message\nHeadline\nIntro:\n- a\n- b\n| a | b |\n|---|---|\n| - |  |\n- [x] done\n- [ ] todo\n# Top\n#### Small');
+  assert.match(h, /^<h3 class="gd-h">The message<\/h3><p>Headline<br>Intro:<\/p><ul><li>a<\/li><li>b<\/li><\/ul>/);
+  assert.match(h, /<tbody><tr><td>-<\/td><td><\/td><\/tr><\/tbody>/);
+  assert.match(h, /<li>☑ done<\/li><li>☐ todo<\/li>/);
+  assert.match(h, /<h3 class="gd-h">Top<\/h3><h4 class="gd-h">Small<\/h4>$/);
+  assert.doesNotMatch(P.guideHtml('## <img src=x onerror=alert(1)>\n| <b>x</b> |'), /<img|<b>x/);
 });

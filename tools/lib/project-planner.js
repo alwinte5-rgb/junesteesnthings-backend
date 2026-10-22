@@ -14,6 +14,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { RULES, RULES_DONE: RULES_DONE_LINE } = require('./task-projects');
+const { escHtml: esc } = require('./html-escape');
 
 const MODEL = 'claude-opus-5-5';
 const LIMITS = { goal: 3000, title: 200, guide: 20000, field: 1500, list: 300, steps: 12, items: 8, days: 60 };
@@ -102,7 +103,6 @@ const PLAN_SCHEMA = {
 
 const clip = (v, n) => String(v == null ? '' : v).replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, ' ').trim().slice(0, n);
 const one = (v, n) => clip(v, n).replace(/\s+/g, ' ');
-const esc = (s) => String(s == null ? '' : s).replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** The owner's form, checked: { ask } or { error }. */
 function validateAsk(body = {}) {
@@ -146,9 +146,14 @@ function shapePlan(raw) {
   return { title: one(o.title, LIMITS.title), summary: clip(o.summary, 600), guide: clip(o.guide, LIMITS.guide), steps };
 }
 
+const NOT_SET_UP = 'The planner is not set up yet: the Anthropic API key is missing or wrong on Railway.';
+
+/** Is there a key to call Claude with? Checked before a call is counted. */
+const ready = () => Boolean(process.env.ANTHROPIC_API_KEY);
+
 /** Why a plan did not come back, in words for the page. */
 function failureMessage(err) {
-  if (err instanceof Anthropic.AuthenticationError) return 'The planner is not set up yet: the Anthropic API key is missing or wrong on Railway.';
+  if (err instanceof Anthropic.AuthenticationError) return NOT_SET_UP;
   if (err instanceof Anthropic.RateLimitError) return 'Too many requests at once. Wait a minute and try again.';
   if (err instanceof Anthropic.APIConnectionError) return 'Could not reach Claude. Try again in a moment.';
   if (err && err.code === 'refusal') return 'Claude declined to plan that. Try describing the project differently.';
@@ -177,4 +182,4 @@ async function planProject(ask, facts = {}, { client } = {}) {
   return plan;
 }
 
-module.exports = { MODEL, LIMITS, DAILY_CAP, PRODUCTS, SYSTEM, PLAN_SCHEMA, validateAsk, askMessage, shapePlan, failureMessage, planProject };
+module.exports = { MODEL, LIMITS, DAILY_CAP, PRODUCTS, SYSTEM, PLAN_SCHEMA, NOT_SET_UP, ready, validateAsk, askMessage, shapePlan, failureMessage, planProject };
