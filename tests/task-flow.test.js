@@ -35,7 +35,7 @@ const ok = { track: 'design', lane: 'medium', title: 'Fill the galleries', goal:
 
 test('a backlog task must say who it is for, its lane and what it moves', () => {
   assert.deepStrictEqual(FLOW.cleanTemplate(ok, TRACK_KEYS).template,
-    { track: 'design', lane: 'medium', repeat: 'none', weekday: null, title: 'Fill the galleries', goal: 'conversion', description: null, how_to: null });
+    { track: 'design', lane: 'medium', repeat: 'none', weekday: null, title: 'Fill the galleries', goal: 'conversion', description: null, how_to: null, brief: null });
   assert.match(FLOW.cleanTemplate({ ...ok, track: 'pirate' }, TRACK_KEYS).error, /who the task is for/);
   assert.match(FLOW.cleanTemplate({ ...ok, lane: 'someday' }, TRACK_KEYS).error, /lane/);
   assert.match(FLOW.cleanTemplate({ ...ok, goal: '' }, TRACK_KEYS).error, /what the task moves/, 'no busy work: every task names its result');
@@ -190,3 +190,107 @@ test('a backlog change refills only that role, at once', () => {
   assert.match(route("app.post('/admin/tasks/templates/starters', requireAdmin"), /taskFlowForTrack\(track\)/);
 });
 
+
+/* ── Briefs (owner, 2026-10-22: "the tasks are basic and dont explain
+   anything go deeper ... dont be vague. be descriptive") ───────────────── */
+
+test('every starter task is written out in full: why, what June gives, done when, proof, example, time, links', () => {
+  for (const [track, list] of Object.entries(FLOW.STARTERS)) {
+    for (const t of list) {
+      const b = FLOW.shapeBrief(t.brief);
+      const at = `${track}: ${t.title}`;
+      assert.ok(b, at);
+      assert.ok(b.why.length >= 80, `${at}: why it matters`);
+      assert.ok(Array.isArray(b.gives) && b.gives.length >= 1, `${at}: what June gives`);
+      assert.ok(b.done.length >= 1, `${at}: done when`);
+      assert.ok(b.proof.length >= 10, `${at}: proof`);
+      assert.ok(b.example.length >= 40, `${at}: example`);
+      assert.match(b.time, /\d|minutes/, `${at}: time`);
+      assert.ok(b.resources.length >= 1 && b.resources.every((r) => r.url), `${at}: resources with links`);
+      assert.ok(t.how_to && t.how_to.length >= 60, `${at}: steps`);
+      /* The shop's rules: never promise rush or free shipping, never Oak Lawn. */
+      const all = JSON.stringify(t);
+      assert.doesNotMatch(all, /free shipping(?! anywhere)|rush order(?!s,)|oak lawn(?!\))/i, at);
+    }
+  }
+});
+
+test('a brief is checked: lists capped, links https or a back-office path, empty means none', () => {
+  assert.strictEqual(FLOW.shapeBrief(null), null);
+  assert.strictEqual(FLOW.shapeBrief({ why: '  ' }), null);
+  const b = FLOW.shapeBrief({ why: 'w', done: Array(30).fill('x'), proof_required: 'yes',
+    resources: [{ label: 'ok', url: 'https://www.jtees.net/a' }, { label: 'path', url: '/admin/leads' },
+      { label: 'bad', url: 'javascript:alert(1)' }, { label: 'proto', url: '//evil.example' }, { label: '', url: 'https://x.org' }] });
+  assert.strictEqual(b.done.length, 12);
+  assert.strictEqual(b.proof_required, false, 'only a real true locks Done');
+  assert.deepStrictEqual(b.resources.map((r) => r.url), ['https://www.jtees.net/a', '/admin/leads', '', '']);
+  const f = FLOW.briefFromForm({ why: 'Because', gives: 'Login\n\nFolder', done_when: 'A\nB', proof_required: '1',
+    resources: 'Photos | https://drive.google.com/x\nLeads | /admin/leads\nJust a name' });
+  assert.deepStrictEqual(f.gives, ['Login', 'Folder']);
+  assert.deepStrictEqual(f.done, ['A', 'B']);
+  assert.strictEqual(f.proof_required, true);
+  assert.deepStrictEqual(f.resources, [{ label: 'Photos', url: 'https://drive.google.com/x' }, { label: 'Leads', url: '/admin/leads' }, { label: 'Just a name', url: '' }]);
+  assert.strictEqual(FLOW.cleanTemplate({ ...ok, why: 'Because it sells' }, TRACK_KEYS).template.brief.why, 'Because it sells');
+});
+
+test('proof: a task that asks for it closes only with a file or a link', () => {
+  const brief = { proof: 'The files', proof_required: true };
+  assert.strictEqual(FLOW.proofMissing(brief, { files: 0, note: 'did it' }), true);
+  assert.strictEqual(FLOW.proofMissing(brief, { files: 1, note: '' }), false);
+  assert.strictEqual(FLOW.proofMissing(brief, { files: 0, note: 'see https://drive.google.com/x' }), false);
+  assert.strictEqual(FLOW.proofMissing(brief, { files: 0, note: 'see http://x.org' }), true, 'https only');
+  assert.strictEqual(FLOW.proofMissing({ proof_required: false }, {}), false);
+  assert.strictEqual(FLOW.proofMissing(null, {}), false);
+  const done = route("app.post('/admin/tasks/:id/done', requireAdmin");
+  assert.match(done, /FLOW\.proofMissing\(cur\.brief, \{ files: before \+ added\.length, note \}\)/);
+  assert.match(done, /filter\(\(f\) => f && f\.by === staffId\)/, "only the helper's own files count as their proof");
+});
+
+test('the brief travels with every task made from the backlog, and old rows are written out once', () => {
+  assert.match(fn('async function fillTaskLanes('), /RETURNING id, title, description, how_to, goal, brief/);
+  assert.match(fn('async function makeRecurringTasks('), /t\.brief \? JSON\.stringify\(t\.brief\) : null/);
+  assert.match(fn('async function makeAutoTasks('), /STARTERTASKS\.assetKitBrief\(e, \{ late: e\.ads <= now/);
+  const bf = fn('async function backfillTaskBriefs(');
+  assert.match(bf, /WHERE t\.track = \$1 AND t\.title = \$2 AND t\.brief IS NULL/, 'never overwrites a brief');
+  assert.match(bf, /st\.brief IS NULL AND tt\.brief IS NOT NULL/);
+});
+
+test('a late season kit says it is late instead of quoting a start date that has passed', () => {
+  const S = require('../tools/lib/task-starters');
+  const CAL = require('../tools/lib/marketing-calendar');
+  const e = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'christmas'), 2026);
+  const late = S.assetKitBrief(e, { late: true, longDate: CAL.longDate });
+  assert.match(late.description, /already late/);
+  assert.doesNotMatch(late.description, /Ads and emails start/);
+  const ontime = S.assetKitBrief(e, { late: false, longDate: CAL.longDate });
+  assert.match(ontime.description, /Ads and emails start/);
+  assert.ok(FLOW.shapeBrief(late.brief).proof_required);
+  assert.ok(late.brief.resources.some((r) => r.url === 'https://www.jtees.net/occasions/christmas-shirts-chicago.html'));
+});
+
+test('the owner page: three tabs, one card per helper with their lanes, an empty lane says so', () => {
+  const page = route("app.get('/admin/tasks', requireAdmin");
+  for (const tab of ['Team now', 'Backlog', 'Done']) assert.ok(page.includes(`label: '${tab}'`), tab);
+  assert.match(page, /TASK_SLOTS\.map\(/);
+  assert.match(page, /Empty: nothing waiting in the/);
+  assert.match(src, /title="The next helper with room in this lane gets this one first">Move to front</);
+});
+
+test('review fixes: a lone proof lock still locks, late and page-less kits read right, backfill keeps June\'s words', () => {
+  const lock = FLOW.shapeBrief({ proof_required: true });
+  assert.ok(lock && lock.proof_required && lock.proof.length > 10, 'ticking only the lock is not dropped');
+  const S = require('../tools/lib/task-starters');
+  const CAL = require('../tools/lib/marketing-calendar');
+  const xmas = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'christmas'), 2026);
+  assert.ok(S.assetKitBrief(xmas, { late: true, longDate: CAL.longDate }).brief.done.some((d) => /already late/.test(d)));
+  assert.ok(!S.assetKitBrief(xmas, { late: true, longDate: CAL.longDate }).brief.done.some((d) => /attached before/.test(d)));
+  const easter = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'easter'), 2027);
+  const k = S.assetKitBrief(easter, { late: false, longDate: CAL.longDate });
+  assert.match(k.description, /there is no page yet/);
+  assert.doesNotMatch(k.how_to, /open the Easter page/);
+  const bf = fn('async function backfillTaskBriefs(');
+  assert.match(bf, /o\.created_at = t\.created_at\) >= 3/, 'only rows the starter button made');
+  assert.match(bf, /st\.started_at IS NULL/, 'a started task keeps its rules');
+  const done = route("app.post('/admin/tasks/:id/done', requireAdmin");
+  assert.match(done, /WHERE id = \$1 AND assigned_to = \$2 AND started_at IS NOT NULL AND done_at IS NULL/, "another helper's task never answers with its brief");
+});
