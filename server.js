@@ -69,6 +69,7 @@ const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const LEADPRICES = require('./tools/lib/lead-prices');
 const FINDER = require('./tools/lib/lead-finder');
+const STARTERTASKS = require('./tools/lib/task-starters');
 const FOLLOWUPS = require('./tools/lib/followups');
 const INBOUND = require('./tools/lib/inbound-email');
 const RELAY = require('./tools/lib/text-relay');
@@ -1167,6 +1168,7 @@ async function initDB() {
     .catch(() => {});
 
   await initStaffTables();
+  await backfillTaskBriefs().catch((e) => console.error('task briefs backfill failed:', e.message));
 
   console.log('Database ready.');
 }
@@ -1347,6 +1349,11 @@ async function initStaffTables() {
       created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS task_templates_waiting_idx ON task_templates (track, lane, sort, id) WHERE active AND used_at IS NULL');
+  /* The task's brief (FLOW.shapeBrief; owner, 2026-10-22: "go deeper"): why,
+     what June gives, done-when, proof, example, time, resources. On the
+     backlog row and copied to each task made from it. */
+  await pool.query('ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS brief JSONB');
+  await pool.query('ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS brief JSONB');
   /* The tools the team works in (/admin/resources): links and how to get in,
      never a password. Started with what the playbook already names. */
   /* Seeded only by the run that creates the table: seeding whenever it was
@@ -27160,7 +27167,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
             <div class="row-sub">${due ? `due ${escEmail(fmtDate(t.due_on))}` : 'no date'}${
               t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
               t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : t.assigned_to != null ? ' &middot; <b style="color:#b45309">not started</b>' : ''}</div>
-            ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster)}</span>
+            ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster, { folded: true })}</span>
             <span class="row-end">${due && due < todayIso ? pill('overdue', 'red') : due === todayIso ? pill('today', 'amber') : ''}
               ${taskActionForm(t, '/admin/dashboard#todo', me != null)}</span></div>`;
         }).join('')}</div>` : emptyState('Nothing on the list.')}
@@ -27169,7 +27176,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${pill('completed', 'green')}
             <div class="row-sub">${t.done_by == null && me == null ? 'You' : escEmail(nameOf(roster, t.done_by))} &middot; ${escEmail(whenShort(t.done_at))}${
               t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : ''}</div>
-            ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster)}</span></div>`).join('')}</div></details>` : ''}
+            ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster, { folded: true })}</span></div>`).join('')}</div></details>` : ''}
         <details style="margin-top:10px"><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
           ${addTaskForm}</details>
       </div>${TASK_CSS}${TASK_UPLOAD_JS}
@@ -34413,6 +34420,16 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
     const picked = CHATFILES.pickTaskFiles(req.body && req.body.files, QPHOTOS.cloudName());
     if (picked.error) return back(res, backTo, 'err', 'A file did not upload properly. Pick it again.');
     const added = picked.files.map((f) => ({ ...f, by: staffId, at: new Date().toISOString() }));
+    /* A task whose brief asks for proof closes only with it: a file from the
+       helper (now or attached before) or a link in what they wrote. */
+    if (staffId) {
+      const { rows: [cur] } = await pool.query('SELECT brief, files FROM staff_tasks WHERE id = $1', [id]);
+      const before = (cur && Array.isArray(cur.files) ? cur.files : []).filter((f) => f && f.by === staffId).length;
+      if (cur && FLOW.proofMissing(cur.brief, { files: before + added.length, note })) {
+        const b = FLOW.shapeBrief(cur.brief);
+        return back(res, backTo, 'err', `Attach the proof before marking it completed: ${b.proof} Add the files, or paste a link (https://…) in what you did.`);
+      }
+    }
     const { rowCount, rows: closed } = await pool.query(
       `UPDATE staff_tasks SET done_at = NOW(), done_by = $2, done_note = $3, files = files || $4::jsonb
         WHERE id = $1 AND done_at IS NULL AND ($2::int IS NULL OR (assigned_to = $2 AND started_at IS NOT NULL))
@@ -34542,12 +34559,40 @@ async function taskAddForm({ back: backTo, roster, owner }) {
 
 /** What a task carries beyond its title: the task, how-to, order, files and,
  *  once done, what was done. */
-function taskDetailsHtml(t, actor, roster) {
+/** A task's brief as HTML (FLOW.shapeBrief). The helper sees why it matters,
+ *  what finished means and the proof to attach straight away, and the steps,
+ *  example and links one click down; `folded` (the owner's board) folds it
+ *  all into one line. Every value is escaped; links are https or a back-office
+ *  path (shapeBrief checks them). */
+function taskBriefHtml(t, actor, { folded = false } = {}) {
+  const b = FLOW.shapeBrief(t.brief);
+  const owner = !actor || actor.kind !== 'staff';
+  const list = (items, mark = '•') => `<ul class="tb-list">${items.map((x) => `<li><span class="tb-mark">${mark}</span>${escEmail(x)}</li>`).join('')}</ul>`;
+  const head = (label) => `<div class="tb-h">${escEmail(label)}</div>`;
+  const steps = t.how_to ? `${head('Steps')}<div class="tb-pre">${escEmail(t.how_to)}</div>` : '';
+  if (!b) {
+    return steps ? `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer">How to do it</summary>${steps}</details>` : '';
+  }
+  const top = `${b.why ? `${head('Why it matters')}<div class="tb-p">${escEmail(b.why)}</div>` : ''}
+    ${b.done.length ? `${head('Done when')}${list(b.done, '☐')}` : ''}
+    ${b.proof ? `${head(b.proof_required ? 'Attach before you mark it completed' : 'Proof')}<div class="tb-p">${escEmail(b.proof)}</div>` : ''}`;
+  const more = `${b.gives.length ? `${head(owner ? 'What you give them' : 'What June gives you')}${list(b.gives)}` : ''}
+    ${steps}
+    ${b.example ? `${head('Example')}<div class="tb-p tb-ex">${escEmail(b.example)}</div>` : ''}
+    ${b.resources.length ? `${head('Resources')}<ul class="tb-list">${b.resources.map((r) => `<li><span class="tb-mark">→</span>${r.url
+      ? `<a href="${escEmail(r.url)}"${/^https:/.test(r.url) ? ' target="_blank" rel="noopener noreferrer"' : ''}>${escEmail(r.label)}</a>` : escEmail(r.label)}</li>`).join('')}</ul>` : ''}`;
+  const time = b.time ? `<span class="tb-time">⏱ ${escEmail(b.time)}</span>` : '';
+  if (folded) {
+    return `<details class="tb"><summary class="muted">Brief${b.time ? ` · ${escEmail(b.time)}` : ''}${b.proof_required ? ' · proof needed' : ''}</summary>${top}${more}</details>`;
+  }
+  return `<div class="tb">${time}${top}<details style="margin-top:6px"><summary class="tb-more">Steps, example and resources</summary>${more}</details></div>`;
+}
+
+function taskDetailsHtml(t, actor, roster, { folded = false } = {}) {
   const files = (Array.isArray(t.files) ? t.files : []).map((f, n) => ({ ...f, n }))
     .filter((f) => CHATFILES.fileUrlOk(f.url, QPHOTOS.cloudName(), CHATFILES.TASK_FOLDER));
   return `${t.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(t.description)}</div>` : ''}
-    ${t.how_to ? `<details style="margin-top:4px"><summary class="muted" style="cursor:pointer">How to do it</summary>
-      <div style="white-space:pre-wrap;margin-top:4px;padding:8px 10px;background:#f7f8fb;border-radius:8px">${escEmail(t.how_to)}</div></details>` : ''}
+    ${taskBriefHtml(t, actor, { folded })}
     ${t.quote_code ? `<div class="row-sub">Order: <a href="${escEmail(jobLinkFor(actor, t.quote_code))}"><b>${escEmail(t.quote_code)}</b></a></div>` : ''}
     <div class="row-sub"><a href="/admin/mailbox/new?task=${Number(t.id)}">Message about this task →</a></div>
     ${files.length ? `<div class="row-sub">${files.map((f) => `<a href="/admin/tasks/${Number(t.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a>${
@@ -34570,11 +34615,13 @@ function taskActionForm(t, backTo, helper) {
 function taskDoneForm(t, backTo, helper) {
   if (!helper) {
     return `<form method="post" action="/admin/tasks/${Number(t.id)}/done" style="margin:0">
-      <input type="hidden" name="back" value="${escEmail(backTo)}"><button type="submit" class="btn btn-ghost">Done</button></form>`;
+      <input type="hidden" name="back" value="${escEmail(backTo)}"><button type="submit" class="btn btn-ghost" title="Close it yourself, without a note from the helper">Close task</button></form>`;
   }
+  const brief = FLOW.shapeBrief(t.brief);
   return `<details class="task-done"><summary class="btn">Mark completed</summary>
     <form method="post" action="/admin/tasks/${Number(t.id)}/done" style="margin-top:8px">
       <input type="hidden" name="back" value="${escEmail(backTo)}">
+      ${brief && brief.proof_required ? `<div class="warn" style="margin-bottom:6px">Needs proof: ${escEmail(brief.proof)} Attach the files below, or paste a link in what you did.</div>` : ''}
       <textarea name="done_note" rows="3" required minlength="3" maxlength="${TASK_TEXT_MAX}" placeholder="What you did, and anything the owner should know" style="width:100%"></textarea>
       ${taskUploadBox('Attach what you made')}
       <button type="submit" class="btn" style="margin-top:6px">Completed</button></form></details>`;
@@ -34582,6 +34629,29 @@ function taskDoneForm(t, backTo, helper) {
 
 const TASK_CSS = `<style>
 .task-form{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.tb{margin-top:6px}
+.tn-card{padding-bottom:6px}
+.tn-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;align-items:baseline;margin-bottom:6px}
+.tn-slot{border-top:1px solid #eef1f8;padding:8px 0}
+.tn-slot-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#0B1F4B;margin-bottom:4px}
+.tn-slot-h .muted{text-transform:none;letter-spacing:0;font-weight:400}
+.tn-task{padding:4px 0}
+.tn-task+.tn-task{border-top:1px dashed #eef1f8}
+.tn-task>summary{cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:1px;padding:4px 0}
+.tn-task>summary::-webkit-details-marker{display:none}
+.tn-task>summary .tn-title::before{content:'▸';color:#94a3b8;margin-right:6px}
+.tn-task[open]>summary .tn-title::before{content:'▾'}
+.tn-body{padding:4px 0 10px 16px}
+.tn-empty{color:#92400e;background:#fffbeb;border-radius:8px;padding:6px 10px;font-size:13.5px}
+.tb-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#0B1F4B;margin:10px 0 3px}
+.tb-p{white-space:pre-wrap;line-height:1.45}
+.tb-pre{white-space:pre-wrap;line-height:1.5;padding:8px 10px;background:#f7f8fb;border-radius:8px}
+.tb-ex{padding:8px 10px;background:#fffbea;border-radius:8px}
+.tb-list{list-style:none;margin:0;padding:0}
+.tb-list li{display:flex;gap:6px;margin:3px 0;line-height:1.4}
+.tb-mark{flex:0 0 auto;color:#64748b}
+.tb-time{display:inline-block;font-size:12.5px;color:#475569;background:#eef2f7;border-radius:999px;padding:2px 10px;margin-top:2px}
+.tb-more{cursor:pointer;color:#1d4ed8;font-weight:600;font-size:13.5px}
 .task-lane{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#0B1F4B;margin:14px 0 2px}
 .task-lane:first-child{margin-top:0}
 .bl-lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
@@ -34639,50 +34709,101 @@ app.get('/admin/tasks/:id/file/:n', requireAdmin, async (req, res) => {
    tasks on my end, they are only on the dashboard"). Every open task, by
    person, with what was done lately and the Add a task form. Owner only
    (ROUTES); a helper's tasks are on My Day. */
+/* Tasks, for the owner (2026-10-22: "I don't like how this is organized, it
+   is confusing"): three tabs. Team now has one card per helper with the four
+   places their work sits (handed out by June, Now, This week, Big project,
+   Every day), so it is plain what each person is on and what is empty;
+   Backlog is what each role gets next; Done is the last 30 days. */
+const TASK_SLOTS = [
+  { key: 'handed', label: 'From you', hint: 'handed out by you or the shop', match: (t) => !t.lane },
+  { key: 'short', label: FLOW.LANES.short.label, hint: FLOW.LANES.short.hint, match: (t) => t.lane === 'short' },
+  { key: 'medium', label: FLOW.LANES.medium.label, hint: FLOW.LANES.medium.hint, match: (t) => t.lane === 'medium' },
+  { key: 'long', label: FLOW.LANES.long.label, hint: FLOW.LANES.long.hint, match: (t) => t.lane === 'long' },
+  { key: 'daily', label: 'Every day', hint: 'the routine', match: (t) => t.lane === FLOW.DAILY },
+];
+
 app.get('/admin/tasks', requireAdmin, async (req, res) => {
   try {
     const roster = await staffRoster();
-    const who = String(req.query.who || '');
-    const whoId = /^\d{1,9}$/.test(who) ? Number(who) : null;
-    const filter = who === 'anyone' ? 'AND assigned_to IS NULL' : whoId ? 'AND assigned_to = $1' : '';
-    const args = whoId ? [whoId] : [];
-    const [{ rows: open }, { rows: done }, { rows: counts }] = await Promise.all([
-      pool.query(`SELECT * FROM staff_tasks WHERE done_at IS NULL ${filter} ORDER BY due_on NULLS LAST, created_at LIMIT 300`, args),
-      pool.query(`SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '30 days' ${filter} ORDER BY done_at DESC LIMIT 200`, args),
-      pool.query('SELECT assigned_to, COUNT(*)::int AS n FROM staff_tasks WHERE done_at IS NULL GROUP BY assigned_to'),
-    ]);
-    const countOf = (id) => (counts.find((c) => c.assigned_to === id) || {}).n || 0;
-    const chips = [
-      { label: 'Everyone', href: '/admin/tasks', on: !who, count: counts.reduce((a, c) => a + c.n, 0) || null },
-      ...roster.filter((r) => !r.archived_at && (r.active || countOf(r.id))).map((r) => ({ label: r.name, href: `/admin/tasks?who=${r.id}`, on: whoId === r.id, count: countOf(r.id) || null })),
-      { label: 'Anyone (unassigned)', href: '/admin/tasks?who=anyone', on: who === 'anyone', count: countOf(null) || null },
-    ];
-    const backTo = `/admin/tasks${who ? `?who=${encodeURIComponent(who)}` : ''}`;
+    const view = req.query.backlog ? 'backlog' : ['team', 'backlog', 'done'].includes(String(req.query.view)) ? String(req.query.view) : 'team';
     const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
-    const row = (t) => {
-      const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
-      return `<div class="row-i" id="task-${Number(t.id)}" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
-        ${t.done_at ? pill('completed', 'green') : t.started_at ? pill('started', 'blue') : t.assigned_to != null ? pill('not started', 'amber') : ''}
-        <div class="row-sub">${escEmail(BUSINESSES[t.business] || t.business)}${due ? ` &middot; due ${escEmail(fmtDate(t.due_on))}` : ''}${
-          t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
-          t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : ''}${
-          t.done_at ? ` &middot; completed ${escEmail(whenShort(t.done_at))} by ${t.done_by == null ? 'you' : escEmail(nameOf(roster, t.done_by))}` : ''}</div>
-        ${taskDetailsHtml(t, OWNER_ACTOR, roster)}</span>
-        <span class="row-end">${!t.done_at && due && due < todayIso ? pill('overdue', 'red') : !t.done_at && due === todayIso ? pill('today', 'amber') : ''}
-          ${taskActionForm(t, backTo, false)}</span></div>`;
-    };
+    const dueIso = (t) => (t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '');
+    const status = (t) => (t.done_at ? pill('completed', 'green') : t.started_at ? pill(`started ${whenShort(t.started_at)}`, 'blue')
+      : t.assigned_to != null ? pill('not started', 'amber') : '');
+    const late = (t) => (!t.done_at && dueIso(t) && dueIso(t) < todayIso ? pill('overdue', 'red') : !t.done_at && dueIso(t) === todayIso ? pill('due today', 'amber') : '');
+    const tabs = filterChips([
+      { label: 'Team now', href: '/admin/tasks', on: view === 'team' },
+      { label: 'Backlog', href: '/admin/tasks?view=backlog', on: view === 'backlog' },
+      { label: 'Done', href: '/admin/tasks?view=done', on: view === 'done' },
+    ]);
+    let body = '';
+    if (view === 'team') {
+      const backTo = '/admin/tasks';
+      const [{ rows: open }, { rows: weekDone }] = await Promise.all([
+        pool.query('SELECT * FROM staff_tasks WHERE done_at IS NULL ORDER BY due_on NULLS LAST, created_at LIMIT 400'),
+        pool.query(`SELECT assigned_to, COUNT(*)::int AS n FROM staff_tasks WHERE done_at > NOW() - interval '7 days' GROUP BY assigned_to`),
+      ]);
+      /* One line per task; what it is, its brief and Close task one click down. */
+      const slotRow = (t) => {
+        const b = FLOW.shapeBrief(t.brief);
+        return `<details class="tn-task" id="task-${Number(t.id)}"><summary>
+            <span class="tn-title"><b>${escEmail(t.title)}</b> ${status(t)} ${late(t)}</span>
+            <span class="row-sub">${t.due_on ? `due ${escEmail(fmtDate(t.due_on))} &middot; ` : ''}${escEmail(FLOW.GOALS[t.goal] || BUSINESSES[t.business] || '')}${
+              b && b.time ? ` &middot; ${escEmail(b.time)}` : ''}${b && b.proof_required ? ' &middot; proof needed' : ''}</span></summary>
+          <div class="tn-body">${taskDetailsHtml({ ...t, brief: null, how_to: null }, OWNER_ACTOR, roster)}
+            ${taskBriefHtml(t, OWNER_ACTOR)}
+            <div style="margin-top:8px">${taskActionForm(t, backTo, false)}</div></div></details>`;
+      };
+      const people = roster.filter((r) => !r.archived_at && (r.active || open.some((t) => t.assigned_to === r.id)));
+      const card = (name, sub, mine, flowRole) => {
+        const overdue = mine.filter((t) => dueIso(t) && dueIso(t) < todayIso).length;
+        const slots = TASK_SLOTS.map((sl) => {
+          const list = mine.filter(sl.match);
+          if (!list.length && (sl.key === 'handed' || !flowRole)) return '';
+          return `<div class="tn-slot"><div class="tn-slot-h">${escEmail(sl.label)} <span class="muted">${escEmail(sl.hint)}</span></div>
+            ${list.length ? list.map(slotRow).join('') : `<div class="tn-empty">Empty: nothing waiting in the ${escEmail(JOB_TRACKS[flowRole].label)} backlog. <a href="/admin/tasks?backlog=${encodeURIComponent(flowRole)}#backlog">Add some →</a></div>`}</div>`;
+        }).join('');
+        return `<div class="card tn-card"><div class="tn-head"><span><b style="font-size:16px">${escEmail(name)}</b>
+            <span class="muted"> &middot; ${sub}</span></span>
+            <span class="muted">${mine.length} open${overdue ? ` &middot; <span style="color:#b91c1c">${overdue} overdue</span>` : ''}</span></div>
+          ${slots || emptyState('Nothing open.')}</div>`;
+      };
+      const cards = people.map((r) => {
+        const role = FLOW_TRACKS.includes(r.training_track) && FLOW.STARTERS[r.training_track] ? r.training_track : null;
+        const done7 = (weekDone.find((w) => w.assigned_to === r.id) || {}).n || 0;
+        return card(r.name, `${escEmail(role ? JOB_TRACKS[role].label : 'Helper')} &middot; ${done7} done this week`,
+          open.filter((t) => t.assigned_to === r.id), role);
+      }).join('');
+      const anyone = open.filter((t) => t.assigned_to == null);
+      body = `<details class="card" id="add"><summary><b>Hand out a task</b> <span class="muted">to one helper or anyone, with the details, files and an order</span></summary>
+          ${await taskAddForm({ back: backTo, roster, owner: true })}</details>
+        ${cards || `<div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`}
+        ${anyone.length ? `<div class="card tn-card"><div class="tn-head"><b style="font-size:16px">Anyone</b> <span class="muted">${anyone.length} open, for whoever takes it</span></div>
+          <div class="tn-slot">${anyone.map(slotRow).join('')}</div></div>` : ''}`;
+    } else if (view === 'done') {
+      const who = String(req.query.who || '');
+      const whoId = /^\d{1,9}$/.test(who) ? Number(who) : null;
+      const { rows: done } = await pool.query(
+        `SELECT * FROM staff_tasks WHERE done_at > NOW() - interval '30 days' ${whoId ? 'AND assigned_to = $1' : ''} ORDER BY done_at DESC LIMIT 200`,
+        whoId ? [whoId] : []);
+      const chips = filterChips([{ label: 'Everyone', href: '/admin/tasks?view=done', on: !whoId },
+        ...roster.filter((r) => !r.archived_at && r.active).map((r) => ({ label: r.name, href: `/admin/tasks?view=done&who=${r.id}`, on: whoId === r.id }))]);
+      const row = (t) => `<div class="row-i" id="task-${Number(t.id)}" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
+          <div class="row-sub">${t.assigned_to != null ? escEmail(nameOf(roster, t.assigned_to)) : 'anyone'} &middot; completed ${escEmail(whenShort(t.done_at))} by ${
+            t.done_by == null ? 'you' : escEmail(nameOf(roster, t.done_by))}${t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : ''}</div>
+          ${taskDetailsHtml(t, OWNER_ACTOR, roster, { folded: true })}</span></div>`;
+      body = `${chips}<div class="card"><h2 class="card-title">Completed in the last 30 days <span class="muted">${done.length || ''}</span></h2>
+        ${done.length ? `<div class="rows">${done.map(row).join('')}</div>` : emptyState('Nothing completed in the last 30 days.')}</div>`;
+    } else {
+      body = await backlogSection(roster, String(req.query.backlog || ''));
+    }
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Tasks', `${TASK_CSS}
-      ${pageHeader('Tasks', 'Everything you have handed out. A helper presses Start to accept a task, and says what they did to complete it.')}
+      ${pageHeader('Tasks', view === 'team' ? 'What each helper is working on right now. Every helper holds one task in each lane; when they finish one, the next comes from the backlog by itself.'
+        : view === 'backlog' ? 'What each role gets next, in order. You never need to hand these out yourself.' : 'Everything finished in the last 30 days, with what was done and the files.')}
       ${flash(req.query)}
-      ${filterChips(chips)}
-      <details class="card" id="add"${open.length ? '' : ' open'}><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
-        ${await taskAddForm({ back: backTo, roster, owner: true })}</details>
-      <div class="card"><h2 class="card-title">Open <span class="muted">${open.length || ''}</span></h2>
-        ${open.length ? `<div class="rows">${open.map(row).join('')}</div>` : emptyState('Nothing open.')}</div>
-      <div class="card"><h2 class="card-title">Completed in the last 30 days <span class="muted">${done.length || ''}</span></h2>
-        ${done.length ? `<div class="rows">${done.map(row).join('')}</div>` : emptyState('Nothing completed in the last 30 days.')}</div>
-      ${await backlogSection(roster, String(req.query.backlog || ''))}
+      ${tabs}
+      ${body}
       ${TASK_UPLOAD_JS}`, 'tasks'));
   } catch (err) {
     console.error('tasks page failed:', err.message);
@@ -34713,12 +34834,12 @@ async function backlogSection(roster, pick) {
   const item = (t) => `<div class="bl-item"><span class="bl-t"><b>${escEmail(t.title)}</b>
       <div class="row-sub">${escEmail(FLOW.GOALS[t.goal] || '')}${t.repeat === 'weekly' ? ` &middot; every ${escEmail(SHIFTS.DAYS[t.weekday - 1] || '')}` : ''}${
         t.repeat === 'daily' ? ' &middot; every work day' : ''}</div>
-      ${t.description ? `<details><summary class="muted">Details</summary><div style="white-space:pre-wrap">${escEmail(t.description)}</div>${
-        t.how_to ? `<div style="white-space:pre-wrap;margin-top:6px"><b>How:</b> ${escEmail(t.how_to)}</div>` : ''}</details>` : ''}</span>
+      ${t.description ? `<div class="muted" style="white-space:pre-wrap;margin-top:2px">${escEmail(t.description)}</div>` : ''}
+      ${taskBriefHtml(t, OWNER_ACTOR, { folded: true }) || (t.how_to ? `<details><summary class="muted">Steps</summary><div class="tb-pre">${escEmail(t.how_to)}</div></details>` : '')}</span>
     ${t.repeat === 'none' ? `<form method="post" action="/admin/tasks/templates/${Number(t.id)}/top"><input type="hidden" name="back" value="${escEmail(back)}">
-      <button type="submit" class="btn btn-ghost" title="Hand this out next">Next</button></form>` : ''}
+      <button type="submit" class="btn btn-ghost" title="The next helper with room in this lane gets this one first">Move to front</button></form>` : ''}
     <form method="post" action="/admin/tasks/templates/${Number(t.id)}/archive" data-once><input type="hidden" name="back" value="${escEmail(back)}">
-      <button type="submit" class="btn btn-ghost" title="Take it off the backlog">Remove</button></form></div>`;
+      <button type="submit" class="btn btn-ghost" title="Take it off the backlog; tasks already handed out stay">Delete</button></form></div>`;
   const lanes = FLOW.LANE_KEYS.map((k) => {
     const list = rows.filter((t) => t.repeat === 'none' && t.lane === k);
     return `<div class="bl-lane"><b>${escEmail(FLOW.LANES[k].label)}</b> <span class="muted">${escEmail(FLOW.LANES[k].hint)} &middot; ${list.length} waiting</span>
@@ -34747,7 +34868,15 @@ async function backlogSection(roster, pick) {
         <label>Day (for "once a week")<select name="weekday">${SHIFTS.DAYS.map((d, i) => opt(String(i + 1), d, i === 0)).join('')}</select></label>
         <label>What it moves<select name="goal" required>${opt('', 'Pick one', true)}${Object.entries(FLOW.GOALS).map(([k, v]) => opt(k, v, false)).join('')}</select></label>
         <label>What to do<textarea name="description" maxlength="${FLOW.TEXT_MAX}"></textarea></label>
-        <label>How (steps)<textarea name="how_to" maxlength="${FLOW.TEXT_MAX}"></textarea></label>
+        <label>Steps (one per line, name the page and button)<textarea name="how_to" rows="5" maxlength="${FLOW.TEXT_MAX}"></textarea></label>
+        <label>Why it matters<textarea name="why" rows="2" maxlength="1500" placeholder="What it does for sales or saves you, with numbers if you have them"></textarea></label>
+        <label>What you give them (one per line)<textarea name="gives" rows="2" placeholder="Logins, files, a yes on the sketches..."></textarea></label>
+        <label>Done when (one per line)<textarea name="done_when" rows="3" placeholder="12 designs, each with editable name and year&#10;Approved by June in Team chat"></textarea></label>
+        <label>Proof to attach<input name="proof" maxlength="600" placeholder="The files, a link, a screenshot..."></label>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="proof_required" value="1" style="width:auto"> They cannot mark it completed without attaching it</label>
+        <label>Example of good work<textarea name="example" rows="2" maxlength="2000"></textarea></label>
+        <label>Time it takes<input name="time" maxlength="100" placeholder="About 3 hours"></label>
+        <label>Resources (one per line: Label | link)<textarea name="resources" rows="2" placeholder="Website photos | https://drive.google.com/...&#10;Leads | /admin/leads"></textarea></label>
         <button type="submit">Add</button>
       </form></details></div>${SHIP_ONCE_JS}`;
 }
@@ -34772,12 +34901,13 @@ async function fillTaskLanes(helper) {
           WHERE id = (SELECT id FROM task_templates
                        WHERE track = $1 AND lane = $2 AND repeat = 'none' AND active AND used_at IS NULL
                        ORDER BY sort, id LIMIT 1 FOR UPDATE SKIP LOCKED)
-          RETURNING id, title, description, how_to, goal`, [helper.training_track, lane, helper.id]);
+          RETURNING id, title, description, how_to, goal, brief`, [helper.training_track, lane, helper.id]);
       if (!tpl) continue;
       await client.query(
-        `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, lane, template_id, goal)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [tpl.title, helper.id, flowBusiness(helper.training_track), tpl.description, tpl.how_to, lane, tpl.id, tpl.goal]);
+        `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, lane, template_id, goal, brief)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+        [tpl.title, helper.id, flowBusiness(helper.training_track), tpl.description, tpl.how_to, lane, tpl.id, tpl.goal,
+         tpl.brief ? JSON.stringify(tpl.brief) : null]);
       made++;
     }
     await client.query('COMMIT');
@@ -34810,11 +34940,12 @@ async function makeRecurringTasks(helper, shifts, templates, now = new Date()) {
   for (const t of mine) {
     if (!FLOW.recurringDue(t, weekday, workday)) continue;
     const { rowCount } = await pool.query(
-      `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, lane, template_id, goal, due_on)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9::date
+      `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, lane, template_id, goal, due_on, brief)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10::jsonb
         WHERE NOT EXISTS (SELECT 1 FROM staff_tasks WHERE template_id = $7 AND assigned_to = $2 AND done_at IS NULL)
        ON CONFLICT DO NOTHING`,
-      [t.title, helper.id, flowBusiness(helper.training_track), t.description, t.how_to, FLOW.DAILY, t.id, t.goal, today]);
+      [t.title, helper.id, flowBusiness(helper.training_track), t.description, t.how_to, FLOW.DAILY, t.id, t.goal, today,
+       t.brief ? JSON.stringify(t.brief) : null]);
     made += rowCount;
   }
   return made;
@@ -34842,14 +34973,44 @@ async function makeAutoTasks(roster, now = new Date()) {
   const had = new Set(made0.map((r) => r.auto_ref));
   const e = MKT_CAL.dueNow(now).sort((a, b) => a.ads - b.ads).find((x) => !had.has(`mcal:${x.id}:${x.year}`));
   if (!e) return 0;
+  const kit = STARTERTASKS.assetKitBrief(e, { late: e.ads <= now, longDate: MKT_CAL.longDate });
   const { rowCount } = await pool.query(
-      `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, goal, auto_ref, due_on)
-       VALUES ($1, $2, 'jtees', $3, $4, 'sales', $5, $6::date) ON CONFLICT DO NOTHING`,
-      [`Asset kit: ${e.name} ${e.year}`, designer.id,
-        `The ${e.name} season opens ${MKT_CAL.longDate(e.season)}. Ads and emails start ${MKT_CAL.longDate(e.ads)}, and the last day to order is ${MKT_CAL.longDate(e.orderBy)}. Everything to sell it must be ready before the ads start.`,
-        '1. Mockups for the holiday page.\n2. Three social posts.\n3. One email header.\n4. Attach the files here and say what you made.',
-        `mcal:${e.id}:${e.year}`, flowDueOn(e.ads, now)]);
+      `INSERT INTO staff_tasks (title, assigned_to, business, description, how_to, goal, auto_ref, due_on, brief)
+       VALUES ($1, $2, 'jtees', $3, $4, 'sales', $5, $6::date, $7::jsonb) ON CONFLICT DO NOTHING`,
+      [`Asset kit: ${e.name} ${e.year}`, designer.id, kit.description, kit.how_to,
+        `mcal:${e.id}:${e.year}`, flowDueOn(e.ads, now), JSON.stringify(FLOW.shapeBrief(kit.brief))]);
   return rowCount;
+}
+
+/** The written-out starter tasks (owner, 2026-10-22: "go deeper") reach the
+ *  backlogs the owner already added and the open tasks already handed out
+ *  from them: a row gets the new text only while it has no brief, so this
+ *  runs once per row and never overwrites a brief the owner wrote. The open
+ *  season kit is rewritten the same way. */
+async function backfillTaskBriefs(now = new Date()) {
+  let n = 0;
+  for (const [track, list] of Object.entries(FLOW.STARTERS)) {
+    for (const t of list) {
+      const { rowCount } = await pool.query(
+        `UPDATE task_templates SET description = $3, how_to = $4, brief = $5::jsonb WHERE track = $1 AND title = $2 AND brief IS NULL`,
+        [track, t.title, t.description, t.how_to || null, JSON.stringify(FLOW.shapeBrief(t.brief))]);
+      n += rowCount;
+    }
+  }
+  const { rowCount: tasks } = await pool.query(
+    `UPDATE staff_tasks st SET description = tt.description, how_to = tt.how_to, brief = tt.brief
+       FROM task_templates tt WHERE st.template_id = tt.id AND st.done_at IS NULL AND st.brief IS NULL AND tt.brief IS NOT NULL`);
+  const { rows: kits } = await pool.query(`SELECT id, auto_ref FROM staff_tasks WHERE auto_ref LIKE 'mcal:%' AND done_at IS NULL AND brief IS NULL`);
+  for (const k of kits) {
+    const [, id, year] = String(k.auto_ref).split(':');
+    const occ = MKT_CAL.OCCASIONS.find((o) => o.id === id);
+    if (!occ || !/^\d{4}$/.test(year)) continue;
+    const e = MKT_CAL.datesFor(occ, Number(year));
+    const kit = STARTERTASKS.assetKitBrief(e, { late: e.ads <= now, longDate: MKT_CAL.longDate });
+    await pool.query('UPDATE staff_tasks SET description = $2, how_to = $3, brief = $4::jsonb WHERE id = $1 AND brief IS NULL',
+      [k.id, kit.description, kit.how_to, JSON.stringify(FLOW.shapeBrief(kit.brief))]);
+  }
+  if (n || tasks || kits.length) console.log(`task briefs: ${n} backlog rows, ${tasks + kits.length} open tasks written out`);
 }
 
 /** One pass for everyone: routines, empty lanes, the shop's own tasks. A
@@ -34931,16 +35092,16 @@ async function backlogNotices(roster) {
 /* The backlog, owner only (STAFF.ROUTES). Each change goes back to the
    role's backlog it came from, and a new task may be handed out at once. */
 app.post('/admin/tasks/templates', requireAdmin, async (req, res) => {
-  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks?view=backlog#backlog');
   const c = FLOW.cleanTemplate(req.body, FLOW_TRACKS);
   if (c.error) return back(res, backTo, 'err', c.error);
   const t = c.template;
   try {
     const { rowCount } = await pool.query(
-      `INSERT INTO task_templates (track, lane, repeat, weekday, title, description, how_to, goal, sort)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, COALESCE((SELECT MAX(sort) + 1 FROM task_templates WHERE track = $1), 0)
+      `INSERT INTO task_templates (track, lane, repeat, weekday, title, description, how_to, goal, sort, brief)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, COALESCE((SELECT MAX(sort) + 1 FROM task_templates WHERE track = $1), 0), $9::jsonb
         WHERE NOT EXISTS (SELECT 1 FROM task_templates WHERE track = $1 AND title = $5 AND active AND created_at > NOW() - interval '10 seconds')`,
-      [t.track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to, t.goal]);
+      [t.track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to, t.goal, t.brief ? JSON.stringify(t.brief) : null]);
     if (rowCount) taskFlowForTrack(t.track).catch((e) => console.error('task flow after backlog add failed:', e.message));
     return back(res, backTo, rowCount ? 'ok' : 'err', rowCount ? 'Added to the backlog.' : 'That was added a moment ago.');
   } catch (err) {
@@ -34951,7 +35112,7 @@ app.post('/admin/tasks/templates', requireAdmin, async (req, res) => {
 
 /* The first backlog for a role, once: only while the role has none at all. */
 app.post('/admin/tasks/templates/starters', requireAdmin, async (req, res) => {
-  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks?view=backlog#backlog');
   const track = String((req.body && req.body.track) || '');
   const list = FLOW_TRACKS.includes(track) && FLOW.STARTERS[track];
   if (!list) return back(res, backTo, 'err', 'There are no starter tasks for that role.');
@@ -34964,8 +35125,8 @@ app.post('/admin/tasks/templates/starters', requireAdmin, async (req, res) => {
     let sort = 0;
     for (const t of list) {
       await client.query(
-        `INSERT INTO task_templates (track, lane, repeat, weekday, title, description, how_to, goal, sort) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to || null, t.goal, sort++]);
+        `INSERT INTO task_templates (track, lane, repeat, weekday, title, description, how_to, goal, sort, brief) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+        [track, t.lane, t.repeat, t.weekday, t.title, t.description, t.how_to || null, t.goal, sort++, JSON.stringify(FLOW.shapeBrief(t.brief))]);
     }
     await client.query('COMMIT');
     taskFlowForTrack(track).catch((e) => console.error('task flow after starters failed:', e.message));
@@ -34981,7 +35142,7 @@ app.post('/admin/tasks/templates/starters', requireAdmin, async (req, res) => {
 
 /* "Next": this task is handed out before the others in its lane. */
 app.post('/admin/tasks/templates/:id/top', requireAdmin, async (req, res) => {
-  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks?view=backlog#backlog');
   const id = intIn(req.params.id);
   if (!id) return res.redirect(backTo);
   try {
@@ -34998,7 +35159,7 @@ app.post('/admin/tasks/templates/:id/top', requireAdmin, async (req, res) => {
 /* Remove from the backlog. Kept (inactive) so tasks already handed out still
    say where they came from. */
 app.post('/admin/tasks/templates/:id/archive', requireAdmin, async (req, res) => {
-  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks#backlog');
+  const backTo = safeAdminPath(req.body && req.body.back, '/admin/tasks?view=backlog#backlog');
   const id = intIn(req.params.id);
   if (!id) return res.redirect(backTo);
   try {

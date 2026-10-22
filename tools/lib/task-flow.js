@@ -61,7 +61,8 @@ function cleanTemplate(b, tracks) {
   const weekday = repeat === 'weekly' ? Number(x.weekday) : null;
   if (repeat === 'weekly' && !(Number.isInteger(weekday) && weekday >= 1 && weekday <= 7)) return { error: 'Pick the day a weekly task comes round.' };
   return { template: { track, lane, repeat, weekday, title, goal,
-    description: many(x.description, TEXT_MAX) || null, how_to: many(x.how_to, TEXT_MAX) || null } };
+    description: many(x.description, TEXT_MAX) || null, how_to: many(x.how_to, TEXT_MAX) || null,
+    brief: x.brief && typeof x.brief === 'object' ? shapeBrief(x.brief) : briefFromForm(x) } };
 }
 
 /** The lanes a helper has room in: every lane with no open task in it. */
@@ -111,85 +112,56 @@ function isoWeek(d) {
   return `${y}-W${String(wk).padStart(2, '0')}`;
 }
 
-/* The first backlog for each role, from the owner's plan (2026-10-21). They
-   are ordinary backlog rows once added: the owner edits, reorders or archives
-   them on Tasks → Backlog. Nothing here promises a customer anything. */
-const t = (lane, goal, title, description, how_to, extra) => ({ lane, goal, title, description, how_to, repeat: 'none', weekday: null, ...extra });
-const daily = (goal, title, description, how_to) => ({ lane: DAILY, goal, title, description, how_to, repeat: 'daily', weekday: null });
-const weekly = (weekday, goal, title, description, how_to) => ({ lane: DAILY, goal, title, description, how_to, repeat: 'weekly', weekday });
+/* A task's brief (owner, 2026-10-22: "go deeper ... don't be vague"): why it
+   matters, what June gives, the done checklist, the proof to attach, an
+   example, the time it takes and where to look. Stored as JSON on the backlog
+   row and on each task made from it; tools/lib/task-starters.js has the
+   starter tasks written out in full. */
+const BRIEF_LIST_MAX = 12;
+const linkOk = (u) => /^https:\/\/[a-z0-9.-]+\.[a-z]{2,}(\/[^\s<>"']*)?$/i.test(u) || /^\/[a-z0-9][^\s<>"']*$/i.test(u);
 
-const STARTERS = {
-  design: [
-    t('long', 'sales', 'Premade design library: sports teams',
-      'Twelve ready-to-edit team designs (youth leagues, school teams, adult rec teams) a customer can pick in the designer, with space for the team name, numbers and year. Seasonal asset kits (Christmas, Valentine\'s and so on) come to you by themselves from the marketing calendar.',
-      '1. Look at the last team orders for ideas.\n2. Make 12 designs.\n3. Send them for June to approve before anything is published.'),
-    t('long', 'conversion', 'Premade design library: family reunions',
-      'Twelve ready-to-edit reunion designs a customer can pick in the designer, so they start from something good instead of a blank shirt.',
-      '1. Look at the last reunion orders for ideas.\n2. Make 12 designs with space for the family name and year.\n3. Send them for June to approve before anything is published.'),
-    t('medium', 'conversion', 'Fill the short holiday galleries',
-      'Some holiday pages have too few pictures (big heads, glassware, weddings, Christmas). Add mockups so each one has at least 6.',
-      '1. Check each holiday page on jtees.net.\n2. Make mockups for the shortest ones first.\n3. Attach them here; June or the developer puts them on the page.'),
-    t('medium', 'conversion', 'Mockups for products with no good photo',
-      'Some products on the shop show a plain supplier photo. Make a clean mockup with a sample design for 10 of them.',
-      '1. Browse the shop and list 10 products whose photo is plain or missing.\n2. Make a mockup for each.\n3. Attach them with the product names.'),
-    t('medium', 'retention', 'New photos for the event emails',
-      'The planned event emails (birthdays, reunions, game days) need our own pictures instead of the placeholders. Make one picture per email.',
-      '1. Ask June for the list of events.\n2. Make one picture each, 1200 x 600.\n3. Attach them here.'),
-    t('medium', 'conversion', 'One blog post, ready to publish',
-      'Write and lay out one blog post a customer would search for, for example "How to order shirts for a family reunion".',
-      '1. Draft it with 3 or 4 pictures.\n2. Put the draft and pictures in the blog folder.\n3. June publishes it.'),
-    t('short', 'capacity', 'Turn a past customer artwork into a reusable template',
-      'Pick a recent order whose artwork could work for other customers (a team, a church, a business) and make a clean template of it with the names removed.', null),
-    t('short', 'sales', 'Three social posts from real orders',
-      'Make 3 posts showing finished orders (no customer names or faces without permission).', null),
-    t('short', 'conversion', 'Five product photos, one look',
-      'Make 5 product photos on the shop match each other: same background, same crop, same light.', null),
-    t('short', 'capacity', 'Clean up the clipart folder',
-      'Find duplicates and broken files in the clipart folder and list them, so the designer stays fast.', null),
-  ],
-  sales: [
-    daily('sales', 'Daily leads: find 10, contact 5',
-      'Find 10 new possible customers (schools, teams, churches, reunions, local businesses) and register each one on Leads with where you found them. Send a personal first message to the 5 best.',
-      '1. Leads → Find leads with AI for a starting list, or search yourself; Add the good ones (or Leads → I found this customer, with the link where you found them).\n2. Write each first message from the lead\'s page so it is logged.\n3. A lead counts once it has been contacted.'),
-    daily('sales', 'Follow up every quote with no answer for 3 days',
-      'Open each quote that was sent more than 3 days ago with no reply and follow up personally, once.',
-      '1. Open the quotes sent more than 3 days ago that have no reply.\n2. Use "Ask Claude how to reply" for a draft, then make it your own.\n3. Log what you sent.'),
-    daily('capacity', 'End-of-shift summary',
-      'Before you clock out: what you finished, what you started, and anything June needs to decide.',
-      'Write it in Team chat, # Sales, in 5 lines or fewer.'),
-    weekly(5, 'retention', 'Ask two happy customers for a Google review',
-      'Pick two customers whose order was delivered this week with no complaints and ask them, personally, for a review.', null),
-    t('long', 'sales', 'School and booster club pipeline',
-      'Build a list of 50 local schools and booster clubs, contact all of them over the next weeks, follow up, and get quotes out. Report the tally each Friday: contacted, replied, quoted, won.',
-      '1. Start with the closest 15.\n2. Register each on Leads.\n3. Two follow-ups at most, a week apart.'),
-    t('medium', 'sales', 'Christmas gifts: 30 local businesses',
-      'Find 30 local businesses that buy staff or client gifts and offer printed shirts, hoodies or glassware for Christmas.',
-      '1. Register each on Leads.\n2. First message from the lead\'s page.\n3. Ask June before offering any discount beyond your allowance.'),
-    t('medium', 'retention', 'Reorder push: customers from a year ago',
-      'Contact customers whose last order was 10 to 12 months ago and offer a reorder. Email or call only; text only people who signed up for texts.', null),
-    t('medium', 'retention', 'Business Partners: follow up the invites',
-      'Follow up the businesses invited to the Business Partners program who have not joined yet, once, personally.', null),
-    t('short', 'conversion', 'Tidy five stale leads',
-      'Pick 5 leads with no next step and either follow up or close them with the honest outcome.', null),
-    t('short', 'sales', 'Find one new niche to try',
-      'Find one kind of customer we have never sold to (for example dance studios or food trucks), list 10 of them, and write two lines on why they would buy.', null),
-  ],
-  software: [
-    daily('sales', 'Daily prospects: research 5, contact 3',
-      'Research 5 agencies or teams that post for several brands and send a personal first message to the 3 best.',
-      'Log each one and each message so it counts.'),
-    daily('capacity', 'End-of-shift summary',
-      'Before you clock out: who you contacted, who replied, demos booked, anything June needs to decide.', null),
-    t('long', 'sales', 'Agency pipeline: 40 researched prospects',
-      'Build and work a list of 40 agencies that fit COS Creator Studio\'s Agency plan. Report the tally each Friday: contacted, replied, demo, trial, won.', null),
-    t('medium', 'sales', 'Book three demos',
-      'Turn replies into three booked 15-minute demos this week.', null),
-    t('short', 'retention', 'Check every free trial',
-      'Message each trial user who has not set up their brands yet, with one helpful tip.', null),
-  ],
-};
+/** A brief, checked and capped, or null when it says nothing. */
+function shapeBrief(raw) {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const list = (v, max) => (Array.isArray(v) ? v : []).map((x) => one(x, max)).filter(Boolean).slice(0, BRIEF_LIST_MAX);
+  const resources = (Array.isArray(o.resources) ? o.resources : []).map((r) => {
+    const label = one(r && r.label, 120);
+    const url = one(r && r.url, 500);
+    return label ? { label, url: linkOk(url) ? url : '' } : null;
+  }).filter(Boolean).slice(0, BRIEF_LIST_MAX);
+  const b = {
+    why: many(o.why, 1500), gives: list(o.gives, 300), done: list(o.done, 300),
+    proof: many(o.proof, 600), proof_required: o.proof_required === true, example: many(o.example, 2000),
+    time: one(o.time, 100), resources,
+  };
+  const empty = !b.why && !b.gives.length && !b.done.length && !b.proof && !b.example && !b.time && !b.resources.length;
+  return empty ? null : b;
+}
+
+/** The brief from the owner's backlog form: one item per line, and a
+ *  resource as "Label | link". */
+function briefFromForm(x) {
+  const lines = (v) => String(v == null ? '' : v).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return shapeBrief({
+    why: x.why, gives: lines(x.gives), done: lines(x.done_when), proof: x.proof,
+    proof_required: x.proof_required === '1' || x.proof_required === 'on' || x.proof_required === true,
+    example: x.example, time: x.time,
+    resources: lines(x.resources).map((l) => { const [label, url] = l.split('|').map((p) => p.trim()); return { label, url: url || '' }; }),
+  });
+}
+
+/** Does closing this task need proof it does not have? A brief that asks for
+ *  proof is met by a file attached by the helper (now or before) or an https
+ *  link in what they wrote. */
+function proofMissing(brief, { files = 0, note = '' } = {}) {
+  if (!brief || brief.proof_required !== true) return false;
+  return !(files > 0 || /https:\/\/\S+/i.test(String(note || '')));
+}
+
+const { STARTERS } = require('./task-starters');
 
 module.exports = {
   LANES, LANE_KEYS, DAILY, REPEATS, GOALS, LOW, TITLE_MAX, TEXT_MAX, STARTERS,
+  shapeBrief, briefFromForm, proofMissing,
   cleanTemplate, lanesToFill, recurringDue, isWorkday, lowLanes, isoWeek,
 };

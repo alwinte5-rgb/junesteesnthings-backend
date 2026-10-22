@@ -86,7 +86,7 @@ test('#201 starter resources are seeded only by the run that creates the table',
   assert.doesNotMatch(src, /SELECT COUNT\(\*\)::int AS n FROM staff_resources/);
 });
 test('#201 a helper finishes only a started task; the week starts on the shop\'s Monday', () => {
-  assert.match(after("app.post('/admin/tasks/:id/done'", 2000), /assigned_to = \$2 AND started_at IS NOT NULL/);
+  assert.match(after("app.post('/admin/tasks/:id/done'", 4000), /assigned_to = \$2 AND started_at IS NOT NULL/);
   assert.match(src, /done_at >= \(\$1::date::timestamp AT TIME ZONE \$2\)/);
 });
 test('#201/#204 removing a resource needs a tick; the notice promises no listed manager', () => {

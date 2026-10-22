@@ -79,7 +79,9 @@ test('My Day: task text is escaped, a helper sees Start then Mark completed, and
   const details = src.slice(src.indexOf('function taskDetailsHtml('), src.indexOf('\n}\n', src.indexOf('function taskDetailsHtml(')));
   assert.match(page, /taskDetailsHtml\(t, actor, roster\)/);
   assert.match(details, /\$\{escEmail\(t\.description\)\}/);
-  assert.match(details, /\$\{escEmail\(t\.how_to\)\}/);
+  const brief = src.slice(src.indexOf('function taskBriefHtml('), src.indexOf('function taskDetailsHtml('));
+  assert.match(brief, /\$\{escEmail\(t\.how_to\)\}/, 'the steps, now inside the brief');
+  assert.match(details, /taskBriefHtml\(t, actor, \{ folded \}\)/);
   assert.match(details, /\$\{escEmail\(t\.done_note\)\}/);
   const action = src.slice(src.indexOf('function taskActionForm('), src.indexOf('function taskDoneForm('));
   assert.match(page, /taskActionForm\(t, '\/admin\/my-day', me != null\)/);
