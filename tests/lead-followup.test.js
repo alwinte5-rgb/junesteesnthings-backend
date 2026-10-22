@@ -66,3 +66,12 @@ test('the suggestion route: same permission as emailing a lead, rate-limited, no
   assert.match(route, /WHERE submission_id = \$1/);
   assert.doesNotMatch(route, /sendLeadEmail|sendEmail|INSERT/, 'it never sends or records anything');
 });
+
+test('Open leads show two sections: waiting for a reply first, then contacted (owner, 2026-10-22)', () => {
+  const at = src.indexOf("app.get('/admin/leads'");
+  const page = src.slice(at, src.indexOf('\n});', at));
+  const a = page.indexOf('id="to-answer">Waiting for a reply'), b = page.indexOf('id="contacted">Contacted, waiting on them');
+  assert.ok(a > 0 && b > a, 'waiting section comes before contacted');
+  assert.match(page, /const toAnswer = shown\.filter\(\(l\) => l\.lead_status === 'new'\)/);
+  assert.match(page, /const contacted = shown\.filter\(\(l\) => l\.lead_status === 'contacted'\)/);
+});
