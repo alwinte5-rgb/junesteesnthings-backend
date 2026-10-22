@@ -68,3 +68,26 @@ test('the designer product offers exactly the published sizes, from the smallest
   assert.strictEqual(Number(a.QTY.values.min_qty), SL.table().families.roll_label.sell_from);
   assert.deepStrictEqual(Object.keys(T.labelStages()), ['front']);
 });
+
+test('the product description names exactly the runs sold', () => {
+  const T = require('../tools/add-label-product');
+  const f = fams.roll_label;
+  const runs = [...new Set(f.sizes.flatMap((s) => f.prices[f.materials[0].key][s.key][''].map(([q]) => q)))];
+  const d = T.labelDescription(f);
+  for (const q of runs) assert.ok(d.includes(q.toLocaleString('en-US')), `${q} in "${d}"`);
+  assert.doesNotMatch(d, /\b250\b/, 'never a run under sell_from');
+});
+
+test('every material sent has a price, and every size key is unique', () => {
+  const f = fams.roll_label;
+  for (const m of f.materials) assert.ok(Object.keys(f.prices[m.key] || {}).length, m.key);
+  assert.deepStrictEqual(Object.keys(f.prices).sort(), f.materials.map((m) => m.key).sort());
+  assert.strictEqual(new Set(f.sizes.map((s) => s.key)).size, f.sizes.length);
+});
+
+test('built once per SinaLite table, rebuilt when it changes', () => {
+  assert.strictEqual(SL.designerFamilies(), SL.designerFamilies());
+  const before = SL.designerFamilies();
+  SL._setData(JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8')));
+  assert.notStrictEqual(SL.designerFamilies(), before);
+});

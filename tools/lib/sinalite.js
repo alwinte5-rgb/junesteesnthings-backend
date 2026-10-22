@@ -293,8 +293,12 @@ const DESIGNER = {
  * Shipping is inside every price (freight 0). An item with no table, or no
  * priced run, is left out, so the designer refuses it rather than sell at $0.
  */
+let designerBuilt = null, designerFrom = null;
 function designerFamilies() {
-  const t = table(), out = {};
+  const t = table();
+  /* Rebuilt only when the SinaLite table is (table() memoizes `built`). */
+  if (designerBuilt && designerFrom === t.families) return designerBuilt;
+  const out = {};
   for (const [key, d] of Object.entries(DESIGNER)) {
     const f = t.families[key];
     if (!f) continue;
@@ -304,6 +308,10 @@ function designerFamilies() {
       const dim = d.sizes[s.key];
       if (!dim) continue;
       const sk = `${dim[0]}x${dim[1]}`;
+      /* The key is inches only: a second size with the same inches (a 2x2
+         square beside the 2" circle) would overwrite the first's prices and
+         be cut as the wrong shape, so the first one mapped wins. */
+      if (sizes.some((x) => x.key === sk)) continue;
       let any = false;
       for (const m of f.materials) {
         const lad = ((f.prices[m.key] || {})[s.key] || {})[''];
@@ -321,11 +329,15 @@ function designerFamilies() {
       /* Business days all in: SinaLite's slowest turnaround plus inbound shipping. */
       turnaround_days: lead[1], wrap_in: 0, bleed_in: 0, markup: MARKUP,
       freight: 0, freight_by_size: {},
-      materials: f.materials.map((m) => ({ key: m.key, label: m.label, unit: 'piece', double: false })),
+      /* Only materials with a priced run: any other would be refused at every size. */
+      materials: f.materials.filter((m) => Object.keys(prices[m.key]).length)
+        .map((m) => ({ key: m.key, label: m.label, unit: 'piece', double: false })),
       upgrades: [], sizes, sheet_upgrades: {}, prices,
       runs_only: true, no_pool: true, supplier: 'sinalite',
     };
+    for (const m of f.materials) if (!Object.keys(prices[m.key]).length) delete out[key].prices[m.key];
   }
+  designerBuilt = out; designerFrom = t.families;
   return out;
 }
 

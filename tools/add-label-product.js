@@ -24,8 +24,14 @@ const { mysql, enjson, sq, mysqlUrlFrom } = require('./lib/db');
 
 const KEY = 'roll_label';
 const THUMB = 'https://www.jtees.net/assets/images/print/labels-jar.jpg';
-const DESCRIPTION = 'Waterproof white gloss labels on a roll for jars, bottles, candles and boxes, '
-  + 'printed in full color and gloss laminated. Design yours here, see it on a jar, and pick 500 or 1,000.';
+/** The runs come from the published table, so the text never promises a run that is not sold. */
+function labelDescription(fam) {
+  const runs = [...new Set(Object.values(fam.prices).flatMap((bySize) => Object.values(bySize).flatMap((c) => c[''].map(([q]) => q))))]
+    .sort((a, b) => a - b).map((q) => q.toLocaleString('en-US'));
+  const pick = runs.length > 1 ? runs.slice(0, -1).join(', ') + ' or ' + runs[runs.length - 1] : runs.join('');
+  return 'Waterproof white gloss labels on a roll for jars, bottles, candles and boxes, '
+    + 'printed in full color and gloss laminated. Design yours here, see it on a jar, and pick ' + pick + '.';
+}
 
 /** The options, in Lumise's attribute shape. Pure, so the test reads it. */
 function labelAttributes(fam) {
@@ -50,7 +56,7 @@ function labelStages() {
     edit_zone: { width: 360, height: 360, left: 0, top: 0, radius: '0' }, product_width: 500, product_height: 500 } };
 }
 
-module.exports = { labelAttributes, labelStages, DESCRIPTION, THUMB };
+module.exports = { labelAttributes, labelStages, labelDescription, THUMB };
 if (require.main !== module) return;
 
 const argv = process.argv.slice(2);
@@ -78,7 +84,7 @@ for (const s of fam.sizes) {
 }
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
-mysql(url, 'UPDATE lumise_products SET description=' + sq(DESCRIPTION) + ', price=0, attributes=' + sq(enjson(labelAttributes(fam)))
+mysql(url, 'UPDATE lumise_products SET description=' + sq(labelDescription(fam)) + ', price=0, attributes=' + sq(enjson(labelAttributes(fam)))
   + ', stages=' + sq(enjson(labelStages())) + ", printings='', thumbnail_url=" + sq(THUMB)
   + ", active=1, updated=NOW() WHERE id=" + Number(row.id) + " AND supplier='sinalite';");
 const after = mysql(url, 'SELECT id,active,supplier FROM lumise_products WHERE id=' + Number(row.id) + ';', { rows: true })[0];
