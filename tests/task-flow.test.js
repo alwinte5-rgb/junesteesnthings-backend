@@ -251,8 +251,8 @@ test('the brief travels with every task made from the backlog, and old rows are 
   assert.match(fn('async function makeRecurringTasks('), /t\.brief \? JSON\.stringify\(t\.brief\) : null/);
   assert.match(fn('async function makeAutoTasks('), /STARTERTASKS\.assetKitBrief\(e, \{ late: e\.ads <= now/);
   const bf = fn('async function backfillTaskBriefs(');
-  assert.match(bf, /WHERE track = \$1 AND title = \$2 AND brief IS NULL/, 'never overwrites a brief');
-  assert.match(bf, /st\.done_at IS NULL AND st\.brief IS NULL AND tt\.brief IS NOT NULL/);
+  assert.match(bf, /WHERE t\.track = \$1 AND t\.title = \$2 AND t\.brief IS NULL/, 'never overwrites a brief');
+  assert.match(bf, /st\.brief IS NULL AND tt\.brief IS NOT NULL/);
 });
 
 test('a late season kit says it is late instead of quoting a start date that has passed', () => {
@@ -274,4 +274,23 @@ test('the owner page: three tabs, one card per helper with their lanes, an empty
   assert.match(page, /TASK_SLOTS\.map\(/);
   assert.match(page, /Empty: nothing waiting in the/);
   assert.match(src, /title="The next helper with room in this lane gets this one first">Move to front</);
+});
+
+test('review fixes: a lone proof lock still locks, late and page-less kits read right, backfill keeps June\'s words', () => {
+  const lock = FLOW.shapeBrief({ proof_required: true });
+  assert.ok(lock && lock.proof_required && lock.proof.length > 10, 'ticking only the lock is not dropped');
+  const S = require('../tools/lib/task-starters');
+  const CAL = require('../tools/lib/marketing-calendar');
+  const xmas = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'christmas'), 2026);
+  assert.ok(S.assetKitBrief(xmas, { late: true, longDate: CAL.longDate }).brief.done.some((d) => /already late/.test(d)));
+  assert.ok(!S.assetKitBrief(xmas, { late: true, longDate: CAL.longDate }).brief.done.some((d) => /attached before/.test(d)));
+  const easter = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'easter'), 2027);
+  const k = S.assetKitBrief(easter, { late: false, longDate: CAL.longDate });
+  assert.match(k.description, /there is no page yet/);
+  assert.doesNotMatch(k.how_to, /open the Easter page/);
+  const bf = fn('async function backfillTaskBriefs(');
+  assert.match(bf, /o\.created_at = t\.created_at\) >= 3/, 'only rows the starter button made');
+  assert.match(bf, /st\.started_at IS NULL/, 'a started task keeps its rules');
+  const done = route("app.post('/admin/tasks/:id/done', requireAdmin");
+  assert.match(done, /WHERE id = \$1 AND assigned_to = \$2 AND started_at IS NOT NULL AND done_at IS NULL/, "another helper's task never answers with its brief");
 });

@@ -385,15 +385,18 @@ const STARTERS = {
 /** The brief for a season's asset kit (the marketing calendar's prep for the
  *  designer). `late` when the ads date has already passed. */
 function assetKitBrief(e, { late = false, longDate }) {
+  /* Some seasons have no page on jtees.net yet: the pictures are still made,
+     for the posts and for the page when it is built. */
+  const where = e.page ? `the ${e.name} page` : `the posts and a ${e.name} page later (there is no page yet)`;
   return {
-    description: `Make everything we need to sell ${e.name} ${e.year}: mockups for the ${e.name} page, three social posts and one email header. What we push this season: ${e.push}. The season opens ${longDate(e.season)} and the last day to order is ${longDate(e.orderBy)}. ${late
+    description: `Make everything we need to sell ${e.name} ${e.year}: mockups for ${where}, three social posts and one email header. What we push this season: ${e.push}. The season opens ${longDate(e.season)} and the last day to order is ${longDate(e.orderBy)}. ${late
       ? `Ads and emails were planned to start ${longDate(e.ads)}, so this kit is already late: do it before your other tasks.`
       : `Ads and emails start ${longDate(e.ads)}, so everything must be ready before then.`}`,
-    how_to: `1. Read the ${e.name} entry on the marketing calendar and open the ${e.name} page${e.page ? ` (${e.page})` : ''} to see what is already there.\n2. Mockups: make at least 6 pictures for the page, one for each thing we push (${e.push}). Real products we sell, our own photos where one fits. JPG, 1600 px, under 500 KB.\n3. Social posts: three 1080 x 1350 pictures with captions (what it is, one detail, "Request a quote at jtees.net", 3 to 5 local hashtags). Save them as drafts in COS Creator Studio.\n4. Email header: one 1200 x 600 picture, subject in the middle.\n5. Check every word against the shop rules.\n6. Attach everything here, grouped as page / social / email.`,
+    how_to: `1. Read the ${e.name} entry on the marketing calendar${e.page ? ` and open the ${e.name} page (${e.page}) to see what is already there` : ''}.\n2. Mockups: make at least 6 pictures for ${where}, one for each thing we push (${e.push}). Real products we sell, our own photos where one fits. JPG, 1600 px, under 500 KB.\n3. Social posts: three 1080 x 1350 pictures with captions (what it is, one detail, "Request a quote at jtees.net", 3 to 5 local hashtags). Save them as drafts in COS Creator Studio.\n4. Email header: one 1200 x 600 picture, subject in the middle.\n5. Check every word against the shop rules.\n6. Attach everything here, grouped as page / social / email.`,
     brief: {
       why: `Customers start looking for ${e.name} orders weeks before the day. If the page has few pictures and nothing is posted when the ads start, the ad money brings people to a page that does not convince them.`,
       gives: ['Her yes on the designs before the posts go out', 'Your COS Creator Studio login', 'Permission for any customer photo with a face or name'],
-      done: ['At least 6 page pictures covering everything we push this season', 'Three social posts saved as drafts in COS Creator Studio, with captions', 'One 1200 x 600 email header', 'Shop rules followed in every caption', `All of it attached before ${longDate(e.ads)}`],
+      done: [`At least 6 pictures for ${where}, covering everything we push this season`, 'Three social posts saved as drafts in COS Creator Studio, with captions', 'One 1200 x 600 email header', 'Shop rules followed in every caption', late ? 'All of it attached as soon as you can: it is already late' : `All of it attached before ${longDate(e.ads)}`],
       proof: 'Every file, grouped as page / social / email, and a screenshot of the drafts in COS Creator Studio.',
       proof_required: true,
       example: e.id === 'christmas'

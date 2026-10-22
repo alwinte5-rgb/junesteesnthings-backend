@@ -134,7 +134,9 @@ function shapeBrief(raw) {
     proof: many(o.proof, 600), proof_required: o.proof_required === true, example: many(o.example, 2000),
     time: one(o.time, 100), resources,
   };
-  const empty = !b.why && !b.gives.length && !b.done.length && !b.proof && !b.example && !b.time && !b.resources.length;
+  const empty = !b.why && !b.gives.length && !b.done.length && !b.proof && !b.example && !b.time && !b.resources.length && !b.proof_required;
+  /* A lock with nothing said about what to attach still says something. */
+  if (b.proof_required && !b.proof) b.proof = 'The finished work: the files, or a link to them.';
   return empty ? null : b;
 }
 

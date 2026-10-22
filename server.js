@@ -34423,7 +34423,7 @@ app.post('/admin/tasks/:id/done', requireAdmin, async (req, res) => {
     /* A task whose brief asks for proof closes only with it: a file from the
        helper (now or attached before) or a link in what they wrote. */
     if (staffId) {
-      const { rows: [cur] } = await pool.query('SELECT brief, files FROM staff_tasks WHERE id = $1', [id]);
+      const { rows: [cur] } = await pool.query('SELECT brief, files FROM staff_tasks WHERE id = $1 AND assigned_to = $2 AND started_at IS NOT NULL AND done_at IS NULL', [id, staffId]);
       const before = (cur && Array.isArray(cur.files) ? cur.files : []).filter((f) => f && f.by === staffId).length;
       if (cur && FLOW.proofMissing(cur.brief, { files: before + added.length, note })) {
         const b = FLOW.shapeBrief(cur.brief);
@@ -34759,7 +34759,8 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
         const overdue = mine.filter((t) => dueIso(t) && dueIso(t) < todayIso).length;
         const slots = TASK_SLOTS.map((sl) => {
           const list = mine.filter(sl.match);
-          if (!list.length && (sl.key === 'handed' || !flowRole)) return '';
+          /* The routine is made each work day, not drawn from the backlog: no "empty" note for it. */
+          if (!list.length && (sl.key === 'handed' || sl.key === 'daily' || !flowRole)) return '';
           return `<div class="tn-slot"><div class="tn-slot-h">${escEmail(sl.label)} <span class="muted">${escEmail(sl.hint)}</span></div>
             ${list.length ? list.map(slotRow).join('') : `<div class="tn-empty">Empty: nothing waiting in the ${escEmail(JOB_TRACKS[flowRole].label)} backlog. <a href="/admin/tasks?backlog=${encodeURIComponent(flowRole)}#backlog">Add some →</a></div>`}</div>`;
         }).join('');
@@ -34775,11 +34776,18 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
           open.filter((t) => t.assigned_to === r.id), role);
       }).join('');
       const anyone = open.filter((t) => t.assigned_to == null);
+      /* Still open but for someone no longer on the team (archived, removed):
+         shown so they can be closed, never lost. */
+      const shownIds = new Set(people.map((r) => r.id));
+      const orphans = open.filter((t) => t.assigned_to != null && !shownIds.has(t.assigned_to));
       body = `<details class="card" id="add"><summary><b>Hand out a task</b> <span class="muted">to one helper or anyone, with the details, files and an order</span></summary>
           ${await taskAddForm({ back: backTo, roster, owner: true })}</details>
         ${cards || `<div class="card">${emptyState('No active helpers yet.', '<a class="btn" href="/admin/staff">Add one</a>')}</div>`}
         ${anyone.length ? `<div class="card tn-card"><div class="tn-head"><b style="font-size:16px">Anyone</b> <span class="muted">${anyone.length} open, for whoever takes it</span></div>
-          <div class="tn-slot">${anyone.map(slotRow).join('')}</div></div>` : ''}`;
+          <div class="tn-slot">${anyone.map(slotRow).join('')}</div></div>` : ''}
+        ${orphans.length ? `<div class="card tn-card"><div class="tn-head"><b style="font-size:16px">No longer on the team</b> <span class="muted">${orphans.length} still open: close them or hand them to someone</span></div>
+          <div class="tn-slot">${orphans.map((t) => slotRow(t).replace('<span class="row-sub">', `<span class="row-sub">${escEmail(nameOf(roster, t.assigned_to))} &middot; `)).join('')}</div></div>` : ''}
+        ${open.length >= 400 ? '<p class="muted">Showing the first 400 open tasks.</p>' : ''}`;
     } else if (view === 'done') {
       const who = String(req.query.who || '');
       const whoId = /^\d{1,9}$/.test(who) ? Number(who) : null;
@@ -34992,22 +35000,29 @@ async function backfillTaskBriefs(now = new Date()) {
   for (const [track, list] of Object.entries(FLOW.STARTERS)) {
     for (const t of list) {
       const { rowCount } = await pool.query(
-        `UPDATE task_templates SET description = $3, how_to = $4, brief = $5::jsonb WHERE track = $1 AND title = $2 AND brief IS NULL`,
+        /* Only rows the "Add the starter tasks" button made: they were saved
+           in one transaction, so they share created_at with the rest of the
+           set. A row June typed with the same title keeps her words. */
+        `UPDATE task_templates t SET description = $3, how_to = $4, brief = $5::jsonb
+          WHERE t.track = $1 AND t.title = $2 AND t.brief IS NULL
+            AND (SELECT COUNT(*) FROM task_templates o WHERE o.track = t.track AND o.created_at = t.created_at) >= 3`,
         [track, t.title, t.description, t.how_to || null, JSON.stringify(FLOW.shapeBrief(t.brief))]);
       n += rowCount;
     }
   }
   const { rowCount: tasks } = await pool.query(
     `UPDATE staff_tasks st SET description = tt.description, how_to = tt.how_to, brief = tt.brief
-       FROM task_templates tt WHERE st.template_id = tt.id AND st.done_at IS NULL AND st.brief IS NULL AND tt.brief IS NOT NULL`);
-  const { rows: kits } = await pool.query(`SELECT id, auto_ref FROM staff_tasks WHERE auto_ref LIKE 'mcal:%' AND done_at IS NULL AND brief IS NULL`);
+       FROM task_templates tt WHERE st.template_id = tt.id AND st.done_at IS NULL AND st.started_at IS NULL
+        AND st.brief IS NULL AND tt.brief IS NOT NULL`);
+  /* A task already started keeps the rules it was started under. */
+  const { rows: kits } = await pool.query(`SELECT id, auto_ref FROM staff_tasks WHERE auto_ref LIKE 'mcal:%' AND done_at IS NULL AND started_at IS NULL AND brief IS NULL`);
   for (const k of kits) {
     const [, id, year] = String(k.auto_ref).split(':');
     const occ = MKT_CAL.OCCASIONS.find((o) => o.id === id);
     if (!occ || !/^\d{4}$/.test(year)) continue;
     const e = MKT_CAL.datesFor(occ, Number(year));
     const kit = STARTERTASKS.assetKitBrief(e, { late: e.ads <= now, longDate: MKT_CAL.longDate });
-    await pool.query('UPDATE staff_tasks SET description = $2, how_to = $3, brief = $4::jsonb WHERE id = $1 AND brief IS NULL',
+    await pool.query('UPDATE staff_tasks SET description = $2, how_to = $3, brief = $4::jsonb WHERE id = $1 AND brief IS NULL AND started_at IS NULL',
       [k.id, kit.description, kit.how_to, JSON.stringify(FLOW.shapeBrief(kit.brief))]);
   }
   if (n || tasks || kits.length) console.log(`task briefs: ${n} backlog rows, ${tasks + kits.length} open tasks written out`);
@@ -37052,7 +37067,7 @@ async function mailAboutHtml(t, actor, tasksById) {
   if (t.task_id) {
     const task = tasksById.get(t.task_id);
     /* A helper's tasks are on My Day; the owner's list is Tasks. */
-    return `task <a href="${actor.kind === 'staff' ? '/admin/my-day' : `/admin/tasks#task-${t.task_id}`}">${escEmail(task ? task.title : `#${t.task_id}`)}</a>`;
+    return `task <a href="${actor.kind === 'staff' ? '/admin/my-day' : `/admin/tasks${task && task.done_at ? '?view=done' : ''}#task-${Number(t.task_id)}`}">${escEmail(task ? task.title : `#${t.task_id}`)}</a>`;
   }
   return '';
 }
@@ -37120,7 +37135,7 @@ app.get('/admin/mailbox', requireAdmin, async (req, res) => {
     const { parts, msgs, seen } = await mailDetails(threads.map((t) => t.id));
     const taskIds = threads.map((t) => t.task_id).filter(Boolean);
     const tasksById = new Map(taskIds.length
-      ? (await pool.query('SELECT id, title FROM staff_tasks WHERE id = ANY($1)', [taskIds])).rows.map((r) => [r.id, r]) : []);
+      ? (await pool.query('SELECT id, title, done_at FROM staff_tasks WHERE id = ANY($1)', [taskIds])).rows.map((r) => [r.id, r]) : []);
     const rows = threads.map((t) => {
       const m = msgs.get(t.id);
       const last = m[m.length - 1];
@@ -37302,7 +37317,7 @@ app.get('/admin/mailbox/:id', requireAdmin, async (req, res) => {
     await notifyConvoRead(reader, `mb:${t.id}`);
     const [roster, { msgs, seen }] = await Promise.all([staffRoster(), mailDetails([t.id])]);
     const m = msgs.get(t.id);
-    const tasksById = new Map(t.task_id ? (await pool.query('SELECT id, title FROM staff_tasks WHERE id = $1', [t.task_id])).rows.map((r) => [r.id, r]) : []);
+    const tasksById = new Map(t.task_id ? (await pool.query('SELECT id, title, done_at FROM staff_tasks WHERE id = $1', [t.task_id])).rows.map((r) => [r.id, r]) : []);
     const about = await mailAboutHtml(t, actor, tasksById);
     const owner = reader === 'owner';
     const msgHtml = m.map((x) => {
