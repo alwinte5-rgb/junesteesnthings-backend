@@ -33,6 +33,8 @@ const STOPS = [
     what: 'What your week adds up to: hours, tasks done on time, and for sales the people you found, contacted and heard back from.' },
   { key: 'leads', title: 'Leads and Find leads with AI', href: '/admin/leads', minutes: 1, needs: 'leads.view',
     what: 'Everyone who asked about an order, oldest first, and the AI finder for new ones. A found lead counts once you have contacted it from its page.' },
+  { key: 'softleads', title: 'Software leads and its AI finder', href: '/admin/software-leads', minutes: 1, needs: 'software.leads',
+    what: 'Your prospects for our software: where you found each one, one real detail, a next step with a date, and every contact logged. A lead counts once a contact is logged. Overdue next steps come back to you as a task.' },
   { key: 'design', title: 'The Design board', href: '/admin/design', minutes: 1, needs: 'jobs.design',
     what: 'Every job waiting on artwork, with what the customer sent. Proofs go up from the job, and the customer approves them there.' },
   { key: 'schedule', title: 'Production schedule', href: '/admin/schedule', minutes: 1, needs: 'jobs.schedule',

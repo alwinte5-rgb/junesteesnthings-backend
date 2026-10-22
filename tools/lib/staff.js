@@ -32,6 +32,7 @@ const LEVELS = ['off', 'approval', 'on'];
 const PERMISSIONS = {
   'leads.view':            { group: 'Leads',      label: 'See leads and chats', levels: ['off', 'on'] },
   'leads.dismiss':         { group: 'Leads',      label: 'Dismiss leads and abandoned carts', levels: ['off', 'on'] },
+  'software.leads':        { group: 'Leads',      label: 'Software leads board (their own leads) and its AI finder', levels: ['off', 'on'] },
   'quotes.view':           { group: 'Quotes',     label: 'See the quote and production boards', levels: ['off', 'on'] },
   'quotes.draft':          { group: 'Quotes',     label: 'Build and edit quotes', levels: ['off', 'on'] },
   'quotes.send':           { group: 'Quotes',     label: 'Send quotes to customers', levels: ['approval', 'on'],
@@ -161,6 +162,13 @@ const PRESETS = {
     label: 'Team (no back office)',
     note: 'Team chat, the Playbook, Resources, their own training and the production schedule (read only). No quotes, prices or customer list.',
     perms: { 'kb.edit': 'approval', 'jobs.schedule': 'on' },
+  },
+  /* The Team preset plus the software leads board (plan PR 4): the software
+     sales agent's own prospects and the finder's software search. */
+  software: {
+    label: 'Software sales',
+    note: 'Team chat, the Playbook, Resources, their training and the production schedule, plus their own Software leads board and its AI finder.',
+    perms: { 'kb.edit': 'approval', 'jobs.schedule': 'on', 'software.leads': 'on' },
   },
   /* The Team preset plus read-only Finances: what a bookkeeper needs to
      close a month, and nothing that changes the books. */
@@ -383,6 +391,12 @@ const ROUTES = {
   'POST /admin/leads/add': 'leads.view',
   /* The AI lead finder (tools/lib/lead-finder.js): capped per helper per day. */
   'GET /admin/leads/find': 'leads.view',
+  'GET /admin/software-leads': 'software.leads',
+  'POST /admin/software-leads': 'software.leads',
+  'POST /admin/software-leads/:id': 'software.leads',
+  'POST /admin/software-leads/:id/log': 'software.leads',
+  'GET /admin/software-leads/find': 'software.leads',
+  'POST /admin/software-leads/find': 'software.leads',
   'POST /admin/leads/find': 'leads.view',
   'POST /admin/leads/call': 'leads.view',
   'POST /admin/quote/:code/note': 'quotes.view',

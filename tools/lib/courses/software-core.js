@@ -210,7 +210,7 @@ Quality first. A good day is 15 to 25 researched prospects contacted, not 200 co
 - Next step and its date. Every open lead has one
 - Notes from every message and call, with the date
 
-Until the software leads board is in the staff workspace, June gives you a shared Google Sheet with these same columns. Use only that sheet.
+All of this lives on **Software leads** in the back office (in the menu under Sales). Add each prospect there with the link where you found them and your one detail, and log every message and call on the lead. Its **Find leads with AI** button searches the web for people who post for several brands; check each result before you add it. A lead counts once a contact is logged.
 
 **Statuses, in order**
 

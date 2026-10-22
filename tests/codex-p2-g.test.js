@@ -33,7 +33,9 @@ test('#224 a trained helper moves to their own track\'s preset', () => {
   const on = (preset, track) => ctx.f({ perms: STAFF.presetPerms(preset), training_track: track });
   assert.strictEqual(on('training', 'sales'), 'supervised');
   assert.strictEqual(on('training', 'design'), 'design');
-  for (const t of ['content', 'ads', 'developer', 'software']) assert.strictEqual(on('training', t), 'team', t);
+  for (const t of ['content', 'ads', 'developer']) assert.strictEqual(on('training', t), 'team', t);
+  /* The software agent's own preset carries the software leads board (plan PR 4). */
+  assert.strictEqual(on('training', 'software'), 'software');
   assert.strictEqual(on('training', 'bookkeeper'), 'books');
   assert.strictEqual(on('design', 'design'), 'designer');
   assert.strictEqual(on('team', 'content'), null, 'Team is the last step');

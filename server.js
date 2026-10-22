@@ -69,6 +69,7 @@ const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const LEADPRICES = require('./tools/lib/lead-prices');
 const FINDER = require('./tools/lib/lead-finder');
+const SOFTLEADS = require('./tools/lib/software-leads');
 const STARTERTASKS = require('./tools/lib/task-starters');
 const PROJECTS = require('./tools/lib/task-projects');
 const FOLLOWUPS = require('./tools/lib/followups');
@@ -1380,6 +1381,45 @@ async function initStaffTables() {
     await pool.query(`ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS ${col}`);
   }
   await pool.query('CREATE INDEX IF NOT EXISTS staff_tasks_project_idx ON staff_tasks (project_id, step_no) WHERE project_id IS NOT NULL');
+  /* The software leads board (tools/lib/software-leads.js; plan PR 4): one
+     row per prospect for the shop's software, owned by the agent who found
+     it (rep_id), and its log. contacted_at is the first logged contact, which
+     is when a lead counts. One lead per product and website or email. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS software_leads (
+      id            SERIAL PRIMARY KEY,
+      product       TEXT NOT NULL,
+      company       TEXT NOT NULL,
+      contact       TEXT,
+      email         TEXT,
+      website       TEXT,
+      website_key   TEXT,
+      source_url    TEXT NOT NULL,
+      detail        TEXT NOT NULL,
+      plan          TEXT,
+      status        TEXT NOT NULL DEFAULT 'new',
+      next_step     TEXT,
+      next_on       DATE,
+      lost_why      TEXT,
+      rep_id        INTEGER,
+      finder_run_id INTEGER,
+      contacted_at  TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads (product, website_key) WHERE website_key IS NOT NULL');
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS software_leads_email_idx ON software_leads (product, email) WHERE email IS NOT NULL');
+  await pool.query('CREATE INDEX IF NOT EXISTS software_leads_rep_idx ON software_leads (rep_id, next_on)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS software_lead_notes (
+      id          SERIAL PRIMARY KEY,
+      lead_id     INTEGER NOT NULL,
+      staff_id    INTEGER,
+      kind        TEXT NOT NULL,
+      body        TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS software_lead_notes_lead_idx ON software_lead_notes (lead_id)');
   /* The tools the team works in (/admin/resources): links and how to get in,
      never a password. Started with what the playbook already names. */
   /* Seeded only by the run that creates the table: seeding whenever it was
@@ -2068,6 +2108,14 @@ async function initStaffTables() {
   if (firstGrant) {
     await pool.query(`UPDATE staff SET perms = COALESCE(perms, '{}'::jsonb) || '{"jobs.schedule":"on"}'::jsonb
                        WHERE NOT COALESCE(perms, '{}'::jsonb) ? 'jobs.schedule'`);
+  }
+  /* The software leads board (plan PR 4) for the software agents already on
+     the team, once; new ones get it from the Software sales preset. */
+  const { rowCount: softGrant } = await pool.query(
+    `INSERT INTO staff_perm_grants (grant_key) VALUES ('software.leads:2026-10-22') ON CONFLICT DO NOTHING`);
+  if (softGrant) {
+    await pool.query(`UPDATE staff SET perms = COALESCE(perms, '{}'::jsonb) || '{"software.leads":"on"}'::jsonb
+                       WHERE training_track = 'software' AND NOT COALESCE(perms, '{}'::jsonb) ? 'software.leads'`);
   }
   /* The timeclock (tools/lib/timeclock.js). One open shift per helper at a
      time; pings are minutes with activity (a page opened, a form sent, or
@@ -10923,6 +10971,7 @@ const ADMIN_NAV = [
   { key: 'delivery',   href: '/admin/delivery',      label: 'Delivery',   icon: 'clock' },
   { key: 'deliveryset', href: '/admin/delivery/settings', label: 'Delivery settings', icon: 'edit' },
   { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
+  { key: 'softleads',  href: '/admin/software-leads', label: 'Software leads', icon: 'inbox' },
   { key: 'reviews',    href: '/admin/reviews', label: 'Reviews',    icon: 'star',   badge: 'reviews' },
   { key: 'money',      href: FINANCES_PATH,    label: 'Finances',   icon: 'dollar' },
   { key: 'certificates', href: '/admin/certificates', label: 'Certificates', icon: 'cert', badge: 'certificates' },
@@ -10961,7 +11010,7 @@ const ADMIN_NAV = [
 const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
   { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'notifications', 'tasks', 'mailbox', 'chat'] },
-  { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers'] },
+  { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers', 'softleads'] },
   { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
@@ -32410,7 +32459,8 @@ async function leadProof(staffId, from, to) {
               COUNT(*) FILTER (WHERE first_contact >= $2 AND first_contact < $3
                                  AND (outcome IN ('quoted', 'won')
                                       OR EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = firsts.id AND q.status <> 'draft')))::int AS replied,
-              (SELECT COUNT(*) FROM lead_finder_runs WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3)::int AS runs
+              (SELECT COUNT(*) FROM lead_finder_runs WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3
+                AND COALESCE(ask->>'profile', 'shop') = 'shop')::int AS runs
          FROM firsts`, [staffId, from, to, CONTACT_KINDS, PROOF_NOTE_MIN]),
     pool.query(`SELECT started_at, ended_at FROM staff_shifts WHERE staff_id = $1 AND started_at >= $2 AND started_at < $3`, [staffId, from, to]),
   ]);
@@ -33830,6 +33880,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
          would take the find from them. */
       const { rows: [run] } = await pool.query(`SELECT id, staff_id, results FROM lead_finder_runs WHERE id = $1 AND status = 'done'
                                                    AND staff_id IS NOT DISTINCT FROM $2`, [runId, isStaff ? actor.id : null]);
+      /* A software search's results belong on the software board, never on Leads. */
+      if (run && run.results && (await pool.query(`SELECT 1 FROM lead_finder_runs WHERE id = $1 AND ask->>'profile' = 'software'`, [runId])).rows.length) run.results = [];
       found = run && Number.isInteger(idx) && idx >= 0 && idx < FINDER.MAX_LEADS && Array.isArray(run.results) ? run.results[idx] : null;
       if (!found) return back(res, '/admin/leads/find', 'err', 'That result is not in one of your searches.');
       /* Claimed before anything is saved, so two presses (or two tabs) cannot
@@ -34177,6 +34229,16 @@ function addLeadForm() {
    Runs are capped per helper and for the shop each day, counted from
    lead_finder_runs. */
 
+/* The finder's two homes: the shop's Leads, and the software leads board. */
+const FINDER_PAGES = {
+  shop: { path: '/admin/leads/find', back: '/admin/leads', backLabel: 'Back to Leads', nav: 'leads',
+    sub: 'Claude looks on the web for groups that order shirts. You check each one, add the good ones, and contact them.',
+    custom: 'If something else: what kind (e.g. dance studios)', note: 'Anything else (optional): e.g. spring sports, reunions this summer', area: 'Chicago, IL' },
+  software: { path: '/admin/software-leads/find', back: '/admin/software-leads', backLabel: 'Back to the board', nav: 'softleads',
+    sub: 'Claude looks on the web for people who post for several brands. You check each one, add the good ones to your board, and contact them.',
+    custom: 'If something else: who (e.g. real estate teams)', note: 'Anything else (optional): e.g. agencies with restaurant clients', area: 'United States' },
+};
+
 /** Runs made today on the shop's clock: by `staffId` and by everyone. */
 async function finderRunsToday(staffId) {
   const { rows: [n] } = await pool.query(
@@ -34192,18 +34254,19 @@ async function finderKnown(l) {
     || CREDIT.knownReason({ lead: await seenWebsite(FINDER.domainKey(l.website)) }, fmtDate);
 }
 
-function finderForm(ask, cap) {
+function finderForm(ask, cap, profile = 'shop') {
   const a = ask || {};
-  return `<form method="post" action="/admin/leads/find" class="card" style="display:grid;gap:10px"
+  const P = FINDER_PAGES[profile];
+  return `<form method="post" action="${P.path}" class="card" style="display:grid;gap:10px"
       onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Searching… this takes a minute or two'">
     <b>What kind of customer, where?</b>
     <div class="row" style="gap:8px;flex-wrap:wrap">
-      <select name="niche" required>${Object.entries(FINDER.NICHES).map(([k, n]) =>
+      <select name="niche" required>${Object.entries(FINDER.PROFILES[profile].niches).map(([k, n]) =>
         `<option value="${k}"${a.niche === k ? ' selected' : ''}>${escEmail(n.label)}</option>`).join('')}</select>
-      <input name="custom" maxlength="${FINDER.LIMITS.niche}" placeholder="If something else: what kind (e.g. dance studios)" value="${escEmail(a.custom || '')}" style="flex:1 1 220px">
-      <input name="area" maxlength="${FINDER.LIMITS.area}" required placeholder="Where: neighborhood, city or ZIP" value="${escEmail(a.area || 'Chicago, IL')}" style="flex:1 1 180px">
+      <input name="custom" maxlength="${FINDER.LIMITS.niche}" placeholder="${escEmail(P.custom)}" value="${escEmail(a.custom || '')}" style="flex:1 1 220px">
+      <input name="area" maxlength="${FINDER.LIMITS.area}" required placeholder="Where: neighborhood, city or ZIP" value="${escEmail(a.area || P.area)}" style="flex:1 1 180px">
     </div>
-    <input name="note" maxlength="${FINDER.LIMITS.note}" placeholder="Anything else (optional): e.g. spring sports, reunions this summer" value="${escEmail(a.note || '')}">
+    <input name="note" maxlength="${FINDER.LIMITS.note}" placeholder="${escEmail(P.note)}" value="${escEmail(a.note || '')}">
     <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
       <button type="submit"${cap.ok ? '' : ' disabled'}>Find leads</button>
       <span class="muted" style="font-size:13px">${cap.ok ? `${cap.left} search${cap.left === 1 ? '' : 'es'} left today` : escEmail(cap.why)}</span>
@@ -34217,10 +34280,18 @@ function finderForm(ask, cap) {
 function finderResultCard(run, l, i, known, mine = true) {
   const link = (u, label) => (u ? `<a href="${escEmail(u)}" target="_blank" rel="noopener noreferrer nofollow">${escEmail(label)}</a>` : '');
   const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } };
+  const soft = !!(run.ask && run.ask.profile === 'software');
   const action = l.lead_id === 0 ? '<span class="muted" style="font-size:13px">Being added…</span>'
+    : l.lead_id && soft ? `<a class="btn btn-ghost" href="/admin/software-leads#slead-${Number(l.lead_id)}">On your board →</a>`
     : l.lead_id ? `<a class="btn btn-ghost" href="/admin/leads#lead-${Number(l.lead_id)}">On Leads →</a>`
+    : known && soft ? `<span class="muted" style="font-size:13px">Already on the board.</span>`
     : known ? `<span class="muted" style="font-size:13px">Not yours to add: the shop already has them.</span>`
     : !mine ? '<span class="muted" style="font-size:13px">Only the helper who ran this search can add it.</span>'
+    : soft ? `<form method="post" action="/admin/software-leads" class="row" style="gap:6px;flex-wrap:wrap;margin:0" onsubmit="this.querySelector('button').disabled=true">
+        <input type="hidden" name="finder_run" value="${Number(run.id)}"><input type="hidden" name="finder_idx" value="${i}">
+        <select name="product">${Object.entries(SOFTLEADS.PRODUCTS).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select>
+        ${l.email ? '' : '<input name="email" type="email" maxlength="254" placeholder="Their email, if you found it" style="flex:1 1 180px">'}
+        <button type="submit" class="btn">Add to my board</button></form>`
     : `<form method="post" action="/admin/leads/add" class="row" style="gap:6px;flex-wrap:wrap;margin:0" onsubmit="this.querySelector('button').disabled=true">
         <input type="hidden" name="finder_run" value="${Number(run.id)}"><input type="hidden" name="finder_idx" value="${i}">
         ${l.email ? '' : '<input name="email" type="email" maxlength="254" placeholder="Their email, if you found it" style="flex:1 1 180px">'}
@@ -34236,7 +34307,13 @@ function finderResultCard(run, l, i, known, mine = true) {
     <div style="margin-top:8px">${action}</div></div>`;
 }
 
-app.get('/admin/leads/find', requireAdmin, async (req, res) => {
+app.get('/admin/leads/find', requireAdmin, (req, res) => finderPage(req, res, 'shop'));
+app.post('/admin/leads/find', requireAdmin, (req, res) => finderRun(req, res, 'shop'));
+
+/** The finder page for `profile` (FINDER_PAGES): the form, the run shown and
+ *  earlier runs of that profile. */
+async function finderPage(req, res, profile) {
+  const P = FINDER_PAGES[profile];
   try {
     const actor = currentActor() || OWNER_ACTOR;
     const owner = actor.kind !== 'staff';
@@ -34244,14 +34321,15 @@ app.get('/admin/leads/find', requireAdmin, async (req, res) => {
     const [today, roster, { rows: runs }] = await Promise.all([
       finderRunsToday(staffId), staffRoster(),
       pool.query(`SELECT id, staff_id, query, ask, status, results, searches, cost, error, created_at FROM lead_finder_runs
-                   WHERE ($1::int IS NULL OR staff_id = $1) ORDER BY id DESC LIMIT 20`, [staffId])]);
+                   WHERE ($1::int IS NULL OR staff_id = $1) AND COALESCE(ask->>'profile', 'shop') = $2 ORDER BY id DESC LIMIT 20`, [staffId, profile])]);
     const cap = FINDER.capCheck({ mine: today.mine, shop: today.shop, owner });
     const wanted = intIn(req.query.run);
     const run = wanted ? runs.find((r) => r.id === wanted) : runs[0];
     let shown = '';
     if (run && run.status === 'done') {
       const results = Array.isArray(run.results) ? run.results : [];
-      const known = await Promise.all(results.map((l) => (l.lead_id ? '' : finderKnown(l).catch(() => ''))));
+      const known = profile === 'software' ? await softBoardHas(results)
+        : await Promise.all(results.map((l) => (l.lead_id ? '' : finderKnown(l).catch(() => ''))));
       shown = `<h3 style="margin:18px 0 6px">${escEmail(run.query)} <span class="muted" style="font-weight:400;font-size:13px">&middot; ${
         escEmail(whenShort(run.created_at))} &middot; ${results.length} found${known.filter(Boolean).length ? `, ${known.filter(Boolean).length} already known` : ''}</span></h3>
         ${results.length ? `<div class="grid-cards">${results.map((l, i) => finderResultCard(run, l, i, known[i], run.staff_id === staffId)).join('')}</div>`
@@ -34261,27 +34339,29 @@ app.get('/admin/leads/find', requireAdmin, async (req, res) => {
     }
     const history = runs.length ? `<details class="card" style="margin-top:14px"><summary><b>Earlier searches</b> <span class="muted">${runs.length}</span></summary>
       <div class="rows" style="margin-top:8px">${runs.map((r) => `<div class="row-i"><span class="row-main" style="white-space:normal">
-        <a href="/admin/leads/find?run=${r.id}">${escEmail(r.query)}</a>
+        <a href="${P.path}?run=${r.id}">${escEmail(r.query)}</a>
         <div class="row-sub">${owner ? `${escEmail(r.staff_id ? nameOf(roster, r.staff_id) : 'Owner')} &middot; ` : ''}${escEmail(whenShort(r.created_at))} &middot; ${
           r.status === 'done' ? `${(r.results || []).length} found, ${(r.results || []).filter((l) => l.lead_id).length} added` : escEmail(r.status)}${
           owner ? ` &middot; ${r.searches} searches, about ${money(Number(r.cost))}` : ''}</div></span></div>`).join('')}</div></details>` : '';
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Find leads', `
-      ${pageHeader('Find leads with AI', 'Claude looks on the web for groups that order shirts. You check each one, add the good ones, and contact them.',
-        '<a class="btn btn-ghost" href="/admin/leads">Back to Leads</a>')}
+      ${pageHeader('Find leads with AI', escEmail(P.sub), `<a class="btn btn-ghost" href="${P.back}">${escEmail(P.backLabel)}</a>`)}
       ${flash(req.query)}
-      ${finderForm(run && run.ask, cap)}
+      ${finderForm(run && run.ask, cap, profile)}
       ${shown}
-      ${history}`, 'leads'));
+      ${history}`, P.nav));
   } catch (err) {
     console.error('lead finder page failed:', err.message);
-    res.status(500).send(adminPage('Find leads', '<div class="card"><div class="warn">Could not load the finder.</div></div>', 'leads'));
+    res.status(500).send(adminPage('Find leads', '<div class="card"><div class="warn">Could not load the finder.</div></div>', P.nav));
   }
-});
+}
 
-app.post('/admin/leads/find', requireAdmin, async (req, res) => {
-  const v = FINDER.validateRun(req.body);
-  if (v.error) return back(res, '/admin/leads/find', 'err', v.error);
+/** One finder run for `profile`: capped per helper and for the shop (both
+ *  profiles share the cap), saved to lead_finder_runs. */
+async function finderRun(req, res, profile) {
+  const P = FINDER_PAGES[profile];
+  const v = FINDER.validateRun(req.body, profile);
+  if (v.error) return back(res, P.path, 'err', v.error);
   const actor = currentActor() || OWNER_ACTOR;
   const owner = actor.kind !== 'staff';
   const staffId = owner ? null : actor.id;
@@ -34308,9 +34388,11 @@ app.post('/admin/leads/find', requireAdmin, async (req, res) => {
       await c.query('ROLLBACK').catch(() => {});
       throw e;
     } finally { c.release(); }
-    if (!cap.ok) return back(res, '/admin/leads/find', 'err', cap.why);
+    if (!cap.ok) return back(res, P.path, 'err', cap.why);
     /* Names the finder already brought in, so it does not spend searches on them again. */
-    const { rows: skip } = await pool.query(`SELECT name FROM submissions WHERE finder_run_id IS NOT NULL ORDER BY id DESC LIMIT 60`);
+    const { rows: skip } = await pool.query(profile === 'software'
+      ? `SELECT company AS name FROM software_leads ORDER BY id DESC LIMIT 60`
+      : `SELECT name FROM submissions WHERE finder_run_id IS NOT NULL ORDER BY id DESC LIMIT 60`);
     const today = new Date().toLocaleDateString('en-US', { timeZone: SHOP_TZ, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     let out;
     try {
@@ -34321,18 +34403,304 @@ app.post('/admin/leads/find', requireAdmin, async (req, res) => {
         [runId, FINDER.failureMessage(e), cost.searches, cost.dollars]);
       if (!e.code) reportError('lead-finder', e, `run ${runId}`).catch(() => {});
       console.error('lead finder failed:', e.message);
-      return back(res, `/admin/leads/find?run=${runId}`, 'err', FINDER.failureMessage(e));
+      return back(res, `${P.path}?run=${runId}`, 'err', FINDER.failureMessage(e));
     }
     await pool.query(`UPDATE lead_finder_runs SET status = 'done', results = $2::jsonb, searches = $3, cost = $4, finished_at = NOW() WHERE id = $1`,
       [runId, JSON.stringify(out.leads), out.searches, out.dollars]);
     logActivity(actor, 'lead finder run', { type: 'finder', id: runId }, { query: FINDER.describe(v.ask), found: out.leads.length, searches: out.searches });
-    return res.redirect(`/admin/leads/find?run=${runId}`);
+    return res.redirect(`${P.path}?run=${runId}`);
   } catch (err) {
     console.error('lead finder run failed:', err.message);
     if (runId) await pool.query(`UPDATE lead_finder_runs SET status = 'failed', error = 'Could not save the results.', finished_at = NOW() WHERE id = $1`, [runId]).catch(() => {});
-    return back(res, '/admin/leads/find', 'err', 'The search could not run. Try again in a moment.');
+    return back(res, P.path, 'err', 'The search could not run. Try again in a moment.');
+  }
+}
+
+/* ── Software leads board (tools/lib/software-leads.js; plan PR 4) ───────────
+   The board the software sales course promises: prospects for the shop's
+   software (COS, CartBook), each owned by the agent who found them, with a
+   next step and date while open and a log of every contact. A lead counts
+   once a contact is logged. The AI finder runs here with its software
+   profile; Add puts a result straight on the board. */
+
+const SOFT_PATH = '/admin/software-leads';
+
+/** May this person see and work this lead? The owner any; an agent their own. */
+function softLeadVisibleTo(l, actor) {
+  return !!l && (!actor || actor.kind !== 'staff' || l.rep_id === actor.id);
+}
+
+/** The lead for this request when it is theirs, or a refusal already sent. */
+async function softLeadFor(req, res) {
+  const id = intIn(req.params.id);
+  const { rows: [l] } = id ? await pool.query('SELECT * FROM software_leads WHERE id = $1', [id]) : { rows: [] };
+  if (!softLeadVisibleTo(l, currentActor())) {
+    back(res, SOFT_PATH, 'err', 'That lead is not on your board.');
+    return null;
+  }
+  return l;
+}
+
+/** Already on the board? The earliest lead with the same website domain or
+ *  email for this product, with whose it is. */
+async function softLeadSeen(lead) {
+  if (!lead.website_key && !lead.email) return null;
+  const { rows: [hit] } = await pool.query(
+    `SELECT id, company, rep_id FROM software_leads WHERE product = $1
+       AND ((website_key IS NOT NULL AND website_key = $2) OR (email IS NOT NULL AND email = $3)) ORDER BY id LIMIT 1`,
+    [lead.product, lead.website_key, lead.email]);
+  return hit || null;
+}
+
+/** For each finder result, 'on the board' when the board already has that
+ *  website or email under any product ('' otherwise): one query for the run. */
+async function softBoardHas(results) {
+  const keys = results.map((l) => FINDER.domainKey(l.website)).filter(Boolean);
+  const emails = results.map((l) => String(l.email || '').toLowerCase()).filter(Boolean);
+  const { rows } = keys.length || emails.length ? await pool.query(
+    'SELECT website_key, email FROM software_leads WHERE website_key = ANY($1::text[]) OR email = ANY($2::text[])', [keys, emails]).catch(() => ({ rows: [] })) : { rows: [] };
+  const k = new Set(rows.map((r) => r.website_key).filter(Boolean));
+  const e = new Set(rows.map((r) => r.email).filter(Boolean));
+  return results.map((l) => (l.lead_id ? '' : k.has(FINDER.domainKey(l.website)) || e.has(String(l.email || '').toLowerCase()) ? 'on the board' : ''));
+}
+
+function softLeadCard(l, notes, roster, { owner, today }) {
+  const st = SOFTLEADS.standing(l, today);
+  const on = PROJECTS.ymdOf(l.next_on);
+  const statusOpts = Object.entries(SOFTLEADS.STATUSES).map(([k, v]) => `<option value="${k}"${l.status === k ? ' selected' : ''}>${escEmail(v)}</option>`).join('');
+  const link = (u, label) => (u ? `<a href="${escEmail(u)}" target="_blank" rel="noopener noreferrer nofollow">${escEmail(label)}</a>` : '');
+  return `<div class="card" id="slead-${Number(l.id)}">
+    <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(l.company)}</b>
+      ${pill(SOFTLEADS.STATUSES[l.status] || l.status, l.status === 'won' ? 'green' : l.status === 'lost' ? 'neutral' : 'blue')}
+      ${st === 'due' ? pill(on < today ? 'next step overdue' : 'next step today', on < today ? 'red' : 'amber') : ''}
+      ${l.contacted_at ? '' : pill('not contacted yet', 'amber')}
+      <div class="row-sub" style="white-space:normal">${escEmail(SOFTLEADS.PRODUCTS[l.product] || l.product)}${l.plan ? ` &middot; ${escEmail(l.plan)}` : ''}${
+        l.contact ? ` &middot; ${escEmail(l.contact)}` : ''}${l.email ? ` &middot; ${escEmail(l.email)}` : ''}${owner ? ` &middot; ${escEmail(nameOf(roster, l.rep_id))}` : ''}</div></span></div>
+    <p style="margin:6px 0">${escEmail(l.detail)}</p>
+    <div class="muted" style="font-size:13px;display:flex;gap:12px;flex-wrap:wrap">${link(l.website, 'Website')}${link(l.source_url, 'Where it was found')}</div>
+    ${SOFTLEADS.OPEN.includes(l.status) ? `<div style="margin-top:6px"><b>Next:</b> ${escEmail(l.next_step || '')} <span class="muted">${on ? `&middot; ${escEmail(PROJECTS.withDay(on))}` : ''}</span></div>`
+      : l.status === 'lost' && l.lost_why ? `<div class="muted" style="margin-top:6px">Lost: ${escEmail(l.lost_why)}</div>` : ''}
+    ${notes.length ? `<details style="margin-top:6px"><summary class="muted" style="cursor:pointer">Log (${notes.length})</summary><div class="rows">${notes.map((n) =>
+      `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal">${pill(SOFTLEADS.KINDS[n.kind] || n.kind, n.kind === 'note' ? 'neutral' : 'blue')}
+        <span class="muted">${escEmail(whenShort(n.created_at))}${owner ? ` &middot; ${escEmail(nameOf(roster, n.staff_id))}` : ''}</span>
+        <div style="white-space:pre-wrap">${escEmail(n.body)}</div></span></div>`).join('')}</div></details>` : ''}
+    <details style="margin-top:8px"${!l.contacted_at ? ' open' : ''}><summary class="btn btn-ghost" style="display:inline-block">Log a contact or note</summary>
+      <form method="post" action="${SOFT_PATH}/${Number(l.id)}/log" class="pj-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px" onsubmit="this.querySelector('button').disabled=true">
+        <label style="margin:0">What <select name="kind">${Object.entries(SOFTLEADS.KINDS).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select></label>
+        <label style="margin:0;flex:1 1 100%">What you sent or what was said <textarea name="body" rows="3" required minlength="3" maxlength="${SOFTLEADS.LIMITS.note}"></textarea></label>
+        <button type="submit" class="btn">Save to the log</button></form></details>
+    <details style="margin-top:6px"><summary class="muted" style="cursor:pointer">Status and next step</summary>
+      <form method="post" action="${SOFT_PATH}/${Number(l.id)}" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:flex-end">
+        <label style="margin:0">Status <select name="status">${statusOpts}</select></label>
+        <label style="margin:0">Plan <input name="plan" maxlength="${SOFTLEADS.LIMITS.plan}" value="${escEmail(l.plan || '')}" placeholder="e.g. Agency, monthly"></label>
+        <label style="margin:0;flex:1 1 240px">Next step <input name="next_step" maxlength="${SOFTLEADS.LIMITS.nextStep}" value="${escEmail(l.next_step || '')}"></label>
+        <label style="margin:0">On <input type="date" name="next_on" value="${escEmail(on)}"></label>
+        <label style="margin:0;flex:1 1 240px">If lost, why <input name="lost_why" maxlength="${SOFTLEADS.LIMITS.lostWhy}" value="${escEmail(l.lost_why || '')}"></label>
+        <button type="submit" class="btn btn-ghost">Save</button></form></details></div>`;
+}
+
+app.get('/admin/software-leads', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const owner = actor.kind !== 'staff';
+    const me = owner ? null : actor.id;
+    const today = shopToday();
+    const view = ['open', 'won', 'lost'].includes(String(req.query.view)) ? String(req.query.view) : 'open';
+    const repFilter = owner ? intIn(req.query.rep) : me;
+    const statuses = view === 'open' ? SOFTLEADS.OPEN : [view];
+    const [roster, { rows: shown }, { rows: counts }] = await Promise.all([staffRoster(), pool.query(
+      `SELECT * FROM software_leads WHERE ($1::int IS NULL OR rep_id = $1) AND status = ANY($2::text[])
+        ORDER BY next_on NULLS LAST, updated_at DESC LIMIT 200`, [repFilter, statuses]),
+      pool.query(`SELECT status, COUNT(*)::int AS n, COUNT(*) FILTER (WHERE contacted_at IS NOT NULL)::int AS counted
+                    FROM software_leads WHERE ($1::int IS NULL OR rep_id = $1) GROUP BY status`, [repFilter])]);
+    /* The last 20 log entries of each lead shown, grouped once. */
+    const { rows: noteRows } = shown.length ? await pool.query(
+      `SELECT * FROM (SELECT n.*, ROW_NUMBER() OVER (PARTITION BY lead_id ORDER BY id DESC) AS k FROM software_lead_notes n
+         WHERE lead_id = ANY($1::int[])) x WHERE k <= 20 ORDER BY id DESC`, [shown.map((l) => l.id)]) : { rows: [] };
+    const notesBy = new Map();
+    for (const n of noteRows) { if (!notesBy.has(n.lead_id)) notesBy.set(n.lead_id, []); notesBy.get(n.lead_id).push(n); }
+    const t = { found: 0, counted: 0, ...Object.fromEntries(Object.keys(SOFTLEADS.STATUSES).map((k) => [k, 0])) };
+    for (const c of counts) { t.found += c.n; t.counted += c.counted; if (Object.hasOwn(t, c.status)) t[c.status] = c.n; }
+    const leads = shown;
+    const due = [], rest = [];
+    for (const l of shown) (SOFTLEADS.standing(l, today) === 'due' ? due : rest).push(l);
+    const card = (l) => softLeadCard(l, notesBy.get(l.id) || [], roster, { owner, today });
+    const chips = filterChips([
+      { label: 'Open', href: `${SOFT_PATH}${owner && repFilter ? `?rep=${repFilter}` : ''}`, on: view === 'open', count: t.new + t.contacted + t.replied + t.demo + t.trial },
+      { label: 'Won', href: `${SOFT_PATH}?view=won${owner && repFilter ? `&rep=${repFilter}` : ''}`, on: view === 'won', count: t.won },
+      { label: 'Lost', href: `${SOFT_PATH}?view=lost${owner && repFilter ? `&rep=${repFilter}` : ''}`, on: view === 'lost', count: t.lost },
+    ]);
+    const reps = owner ? filterChips([{ label: 'Everyone', href: SOFT_PATH, on: !repFilter },
+      ...roster.filter((r) => !r.archived_at && r.active && STAFF.levelOf(r, 'software.leads') !== 'off').map((r) => ({ label: r.name, href: `${SOFT_PATH}?rep=${r.id}`, on: repFilter === r.id }))]) : '';
+    const add = `<details class="card" id="add"${!t.found ? ' open' : ''}><summary><b>Add a lead you found</b> <span class="muted">company, where you found them and one real detail</span></summary>
+      <form method="post" action="${SOFT_PATH}" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:flex-end" onsubmit="this.querySelector('button[type=submit]').disabled=true">
+        <label style="margin:0">Product <select name="product">${Object.entries(SOFTLEADS.PRODUCTS).map(([k, v]) => `<option value="${k}">${escEmail(v)}</option>`).join('')}</select></label>
+        <label style="margin:0;flex:1 1 220px">Company <input name="company" required maxlength="${SOFTLEADS.LIMITS.company}"></label>
+        <label style="margin:0;flex:1 1 180px">Contact name <input name="contact" maxlength="${SOFTLEADS.LIMITS.contact}"></label>
+        <label style="margin:0;flex:1 1 200px">Email <input name="email" type="email" maxlength="${SOFTLEADS.LIMITS.email}"></label>
+        <label style="margin:0;flex:1 1 220px">Website <input name="website" maxlength="500" placeholder="https://..."></label>
+        <label style="margin:0;flex:1 1 260px">Where you found them <input name="source_url" required maxlength="500" placeholder="https://... (their page, a post, a listing)"></label>
+        <label style="margin:0;flex:1 1 100%">Your one detail <textarea name="detail" rows="2" required minlength="10" maxlength="${SOFTLEADS.LIMITS.detail}" placeholder="What you saw that makes them a fit: e.g. posts daily for 6 restaurant clients"></textarea></label>
+        <label style="margin:0">Plan <input name="plan" maxlength="${SOFTLEADS.LIMITS.plan}" value="Agency"></label>
+        <label style="margin:0;flex:1 1 220px">Next step <input name="next_step" maxlength="${SOFTLEADS.LIMITS.nextStep}" value="Send the first message"></label>
+        <label style="margin:0">On <input type="date" name="next_on" required value="${escEmail(today)}"></label>
+        <button type="submit" class="btn">Add to the board</button></form></details>`;
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Software leads', `
+      ${pageHeader('Software leads', `Found ${t.found} &middot; contacted ${t.counted} &middot; replied ${t.replied} &middot; demos ${t.demo} &middot; trials ${t.trial} &middot; won ${t.won}. A lead counts once a contact is logged on it.`,
+        `<a class="btn" href="${SOFT_PATH}/find">Find leads with AI</a>`)}
+      ${flash(req.query)}${reps}${chips}${add}
+      ${view === 'open' && due.length ? `<h3 style="margin:16px 0 6px">Next step due (${due.length})</h3>${due.map(card).join('')}` : ''}
+      ${rest.length ? `${view === 'open' && due.length ? '<h3 style="margin:16px 0 6px">Later</h3>' : ''}${rest.map(card).join('')}`
+        : !due.length ? `<div class="card">${emptyState(view === 'open' ? 'No open leads. Add one you found, or let the finder start a list.' : 'None yet.')}</div>` : ''}`, 'softleads'));
+  } catch (err) {
+    console.error('software leads page failed:', err.message);
+    res.status(500).send(adminPage('Software leads', '<div class="card"><div class="warn">Could not load the board.</div></div>', 'softleads'));
   }
 });
+
+app.post('/admin/software-leads', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = actor.kind === 'staff' ? actor.id : null;
+  let input = b;
+  let finder = null;
+  try {
+    /* A finder result: taken from the run, which must be this person's. */
+    const runId = intIn(b.finder_run);
+    if (runId) {
+      const idx = /^\d{1,2}$/.test(String(b.finder_idx)) ? Number(b.finder_idx) : -1;
+      const { rows: [run] } = await pool.query(`SELECT id, staff_id, ask, results FROM lead_finder_runs WHERE id = $1 AND status = 'done'`, [runId]);
+      const found = run && run.staff_id === me && run.ask && run.ask.profile === 'software' && Array.isArray(run.results) && idx >= 0 ? run.results[idx] : null;
+      if (!found) return back(res, `${SOFT_PATH}/find`, 'err', 'That search result is not yours to add.');
+      if (found.lead_id) return back(res, `${SOFT_PATH}#slead-${Number(found.lead_id)}`, 'ok', 'Already on your board.');
+      /* Claimed before anything is saved (lead_id 0 = being added), as on Leads,
+         so two presses cannot both add it; a refusal below gives it back. */
+      const { rowCount: claimed } = await pool.query(
+        `UPDATE lead_finder_runs SET results = jsonb_set(results, ARRAY[$2::text, 'lead_id'], '0'::jsonb)
+          WHERE id = $1 AND NOT (results -> $2::int ? 'lead_id')`, [runId, idx]);
+      if (!claimed) return back(res, `${SOFT_PATH}/find?run=${runId}`, 'err', 'That one is already being added.');
+      finder = { runId, idx };
+      input = { product: b.product || 'cos', company: found.name, email: found.email || b.email, website: found.website,
+        source_url: found.source_url || found.website || found.social, detail: [found.why_fit, found.kind, found.city].filter(Boolean).join(' · '),
+        plan: 'Agency', next_step: 'Send the first message', next_on: shopToday() };
+    }
+    const unclaim = () => (finder ? pool.query(`UPDATE lead_finder_runs SET results = results #- ARRAY[$2::text, 'lead_id']
+        WHERE id = $1 AND results -> $2::int ->> 'lead_id' = '0'`, [finder.runId, String(finder.idx)]).catch(() => {}) : null);
+    const v = SOFTLEADS.shapeNew(input);
+    if (v.error) await unclaim();
+    if (v.error) return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err', v.error);
+    const seen = await softLeadSeen(v.lead);
+    if (seen) await unclaim();
+    if (seen) {
+      return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err',
+        `${seen.company} is already on the board${seen.rep_id === me ? ' (yours)' : seen.rep_id ? `, with ${nameOf(await staffRoster(), seen.rep_id)}` : ''}.`);
+    }
+    const l = v.lead;
+    const { rows: [row] } = await pool.query(
+      `INSERT INTO software_leads (product, company, contact, email, website, website_key, source_url, detail, plan, status, next_step, next_on, rep_id, finder_run_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'new', $10, $11::date, $12, $13)
+       ON CONFLICT DO NOTHING RETURNING id`,
+      [l.product, l.company, l.contact, l.email, l.website, l.website_key, l.source_url, l.detail, l.plan, l.next_step, l.next_on, me, finder ? finder.runId : null]);
+    if (!row) {
+      await unclaim();
+      return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err', `${l.company} is already on the board.`);
+    }
+    if (finder) {
+      await pool.query(`UPDATE lead_finder_runs SET results = jsonb_set(results, ARRAY[$2::text, 'lead_id'], to_jsonb($3::int)) WHERE id = $1`,
+        [finder.runId, String(finder.idx), row.id]).catch((e) => console.error('finder mark failed:', e.message));
+    }
+    logActivity(actor, 'software lead added', { type: 'software_lead', id: row.id }, { company: l.company });
+    return back(res, `${SOFT_PATH}#slead-${row.id}`, 'ok', `${l.company} is on your board. It counts once you log your first contact.`);
+  } catch (err) {
+    console.error('software lead add failed:', err.message);
+    return back(res, `${SOFT_PATH}#add`, 'err', 'Could not add the lead.');
+  }
+});
+
+/* Registered before /:id, which would take "find" as an id. The finder with its software profile: the shop's finder page and run, the
+   results added to this board instead of Leads. */
+app.get('/admin/software-leads/find', requireAdmin, (req, res) => finderPage(req, res, 'software'));
+app.post('/admin/software-leads/find', requireAdmin, (req, res) => finderRun(req, res, 'software'));
+
+app.post('/admin/software-leads/:id', requireAdmin, async (req, res) => {
+  try {
+    const l = await softLeadFor(req, res);
+    if (!l) return;
+    const v = SOFTLEADS.shapeUpdate(req.body);
+    if (v.error) return back(res, `${SOFT_PATH}#slead-${l.id}`, 'err', v.error);
+    const c = v.change;
+    /* Contacted and beyond means a contact happened: it is logged first, which
+       is also what makes the lead count. Lost is allowed without one. */
+    if (!l.contacted_at && !['new', 'lost'].includes(c.status)) {
+      return back(res, `${SOFT_PATH}#slead-${l.id}`, 'err', 'Log the contact first (Log a contact or note), then move the lead on.');
+    }
+    await pool.query(
+      `UPDATE software_leads SET status = $2, plan = $3, next_step = $4, next_on = $5::date, lost_why = $6, updated_at = NOW() WHERE id = $1`,
+      [l.id, c.status, c.plan, c.next_step, c.next_on, c.lost_why]);
+    if (c.status !== l.status) logActivity(currentActor() || OWNER_ACTOR, 'software lead status', { type: 'software_lead', id: l.id }, { from: l.status, to: c.status });
+    return back(res, `${SOFT_PATH}#slead-${l.id}`, 'ok', 'Saved.');
+  } catch (err) {
+    console.error('software lead update failed:', err.message);
+    return back(res, SOFT_PATH, 'err', 'Could not save that.');
+  }
+});
+
+/* A contact or a note on the log. The first contact is what makes the lead
+   count, and a new lead becomes Contacted. */
+app.post('/admin/software-leads/:id/log', requireAdmin, async (req, res) => {
+  try {
+    const l = await softLeadFor(req, res);
+    if (!l) return;
+    const v = SOFTLEADS.shapeEntry(req.body);
+    if (v.error) return back(res, `${SOFT_PATH}#slead-${l.id}`, 'err', v.error);
+    const actor = currentActor() || OWNER_ACTOR;
+    const by = actor.kind === 'staff' ? actor.id : null;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('INSERT INTO software_lead_notes (lead_id, staff_id, kind, body) VALUES ($1, $2, $3, $4)', [l.id, by, v.entry.kind, v.entry.body]);
+      if (v.entry.contact) {
+        await client.query(`UPDATE software_leads SET contacted_at = COALESCE(contacted_at, NOW()),
+                              status = CASE WHEN status = 'new' THEN 'contacted' ELSE status END, updated_at = NOW() WHERE id = $1`, [l.id]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { client.release(); }
+    return back(res, `${SOFT_PATH}#slead-${l.id}`, 'ok', v.entry.contact && !l.contacted_at ? 'Logged. This lead now counts for you. Set the next step and date.' : 'Logged.');
+  } catch (err) {
+    console.error('software lead log failed:', err.message);
+    return back(res, SOFT_PATH, 'err', 'Could not save that.');
+  }
+});
+
+/** Agents whose next steps are past due get one task a day to work them
+ *  (plan PR 4: overdue next steps become tasks), while none is open. */
+async function softLeadTasks(now = new Date()) {
+  const today = shopToday(now);
+  const { rows } = await pool.query(
+    `SELECT l.rep_id, s.perms, COUNT(*)::int AS n FROM software_leads l JOIN staff s ON s.id = l.rep_id
+      WHERE s.active AND s.archived_at IS NULL AND l.status = ANY($1::text[]) AND l.next_on < $2::date
+        AND NOT EXISTS (SELECT 1 FROM staff_tasks t WHERE t.assigned_to = l.rep_id AND t.auto_ref LIKE 'slead:%' AND t.done_at IS NULL)
+      GROUP BY l.rep_id, s.perms`, [SOFTLEADS.OPEN, today]);
+  let made = 0;
+  /* Only agents who can still open the board: the task points there. */
+  for (const r of rows.filter((x) => STAFF.levelOf({ kind: 'staff', perms: x.perms }, 'software.leads') !== 'off')) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO staff_tasks (title, assigned_to, business, description, goal, auto_ref, due_on, brief)
+       VALUES ($1, $2, 'cos', $3, 'sales', $4, $5::date, $6::jsonb) ON CONFLICT DO NOTHING`,
+      [`Software leads: ${r.n} next step${r.n === 1 ? '' : 's'} overdue`, r.rep_id,
+        'Work every lead on your Software leads board whose next step is past its date: do the step, log it, and set the next step and date. Close any that are lost, saying why.',
+        `slead:${r.rep_id}:${today}`, today,
+        JSON.stringify(FLOW.shapeBrief({ why: 'A follow-up a day late is how most software deals are lost: the prospect moves on.',
+          done: ['No lead on your board has a next step dated before today'], proof: 'The board shows no overdue next steps.',
+          time: 'About 30 minutes', resources: [{ label: 'Software leads', url: SOFT_PATH }] }))]);
+    made += rowCount;
+  }
+  return made;
+}
 
 /* ── Tasks ────────────────────────────────────────────────────────────────── */
 
@@ -35530,6 +35898,7 @@ async function taskFlowSweep() {
      UPDATE task_templates SET used_at = NULL, used_by = NULL WHERE id IN (SELECT template_id FROM gone) AND repeat = 'none'`,
     [FLOW.LANE_KEYS]).catch((e) => console.error('backlog return failed:', e.message));
   made += await makeAutoTasks(helpers).catch((e) => { console.error('auto tasks failed:', e.message); return 0; });
+  made += await softLeadTasks().catch((e) => { console.error('software lead tasks failed:', e.message); return 0; });
   if (made) notifyNow();
   return made ? `${made} handed out` : '';
 }

@@ -29,7 +29,7 @@ const TRACKS = {
     note: 'Sales and fees, expenses and receipts, job costs, refunds and disputes, Illinois sales tax, the month-end close and the summary for June.' },
   developer: { label: 'Developer', short: 'Developer', role: 'Developer', preset: 'team',
     note: 'The stack, shipping through pull requests, outages and roll-backs, secrets and safe code, payment code, tests and Claude Code, apps.' },
-  software: { label: 'Software sales', short: 'Software sales', role: 'Software Sales Agent', preset: 'team', channel: true,
+  software: { label: 'Software sales', short: 'Software sales', role: 'Software Sales Agent', preset: 'software', channel: true,
     note: 'Our apps and their top plans, finding agencies, first messages and follow-ups, discovery and the demo, objections and approved offers, trials and setup, pay and the weekly report.' },
 };
 
