@@ -26351,8 +26351,9 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
         + 'their quantity. Show the garment and the print separately, then the per-piece total, and the order total when the '
         + 'quantity is known. Say it is an estimate and the exact price comes on their written quote; sales tax is extra. '
         + 'When it depends on something they have not said (sizes, print size, ink colors), give the price for the likely choice and say so. '
-        + 'Garments: price the one they picked or named, then also offer the cheapest garment in the list that suits the job '
-        + '(same kind of garment, takes the same print, comes in their color), so they can choose; at most three options per item. '
+        + 'Garments: price the one they picked or named. For a t-shirt, lead with the shop\'s pick, marked in the list: '
+        + '"our regular tee" for a regular order, "our tee for uniform orders" when it is for staff or uniforms; '
+        + 'offer it beside the one they named (same kind of garment, takes the same print, comes in their color), so they can choose; at most three options per item. '
         + 'Colors: say a garment comes in a color only when that color is in its colors list; if the color they want is not listed, '
         + 'say so and name the closest listed ones. Give each garment you name its link from the list, on its own line, so they can see it. '
       : '')
