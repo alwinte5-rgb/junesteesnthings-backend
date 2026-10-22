@@ -26267,7 +26267,8 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
     const fillIn = (prices
       ? 'Prices: when they ask what it costs, or the quantity and item are clear, work it out from <price_list> only: '
         + 'per piece = the garment (plus its size upcharge, less its volume break) + the print at each location (the first '
-        + 'location at the method\'s first-location price, each further one at its additional-location price), at the band for '
+        + 'location at the method\'s first-location price, each further one at its additional-location price; a method priced '
+        + 'per location, such as screen printing, charges that price again at every location), at the band for '
         + 'their quantity. Show the garment and the print separately, then the per-piece total, and the order total when the '
         + 'quantity is known. Say it is an estimate and the exact price comes on their written quote; sales tax is extra. '
         + 'When it depends on something they have not said (sizes, print size, ink colors), give the price for the likely choice and say so. '

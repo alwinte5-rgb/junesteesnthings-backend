@@ -72,6 +72,8 @@ test('the sheet quotes the designer to the cent: B+C 3001 + one DTF print at 1 p
   assert.doesNotMatch(s, /Extra Large Logo|Screen Printing — 1 Color/);
   assert.doesNotMatch(s, /Screens: \$/, 'the screen fee only once it bills');
   assert.match(P.priceSheet(CAT, 'x', { screenFee: 25 }), /Screens: \$25\.00 per screen/);
+  // No screen printing in the list, no screen-printing rule either (code review).
+  assert.doesNotMatch(P.priceSheet({ ...CAT, methods: [DTF] }, 'tees'), /white base/);
 });
 
 test('no catalogue, no price list: the reply falls back to [June to fill in]', () => {

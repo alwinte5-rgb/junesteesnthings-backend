@@ -123,8 +123,13 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
   if (tiers.length) lines.push(`Garment volume break: ${tiers.map((t) => `${t.pct}% off at ${t.min}+`).join(', ')}; none below ${tiers[0].min}.`);
 
   lines.push('', 'Prints and other items (ranges are piece counts):');
-  for (const m of methods) lines.push(...methodLines(m));
-  lines.push('Screen printing: every garment gets a white base, so price a design one ink color up (a 1-color design uses the 2-color price).');
+  let screen = false;
+  for (const m of methods) {
+    const ml = methodLines(m);
+    lines.push(...ml);
+    if (ml.length && m.type === 'color') screen = true;
+  }
+  if (screen) lines.push('Screen printing: every garment gets a white base, so price a design one ink color up (a 1-color design uses the 2-color price).');
   if (screenFee > 0) lines.push(`Screens: ${money(screenFee)} per screen, once per order (one screen per ink color plus the white base, per location).`);
   const extras = (addons || []).filter((a) => a && a.label && a.kind === 'per_piece' && Number(a.rate) > 0);
   if (extras.length) lines.push('', 'Add-ons per piece:', ...extras.map((a) => `- ${a.label}: ${money(a.rate)}${a.note ? ` (${a.note})` : ''}`));
