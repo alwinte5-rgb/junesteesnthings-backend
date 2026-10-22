@@ -153,7 +153,8 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const add = src.slice(src.indexOf("app.post('/admin/leads/add'"), src.indexOf("app.post('/admin/quote/:code/note'"));
   assert.match(add, /FROM lead_finder_runs WHERE id = \$1 AND status = 'done'/);
-  assert.match(add, /!isStaff \|\| run\.staff_id === actor\.id/);
+  assert.match(add, /AND staff_id IS NOT DISTINCT FROM \$2`, \[runId, isStaff \? actor\.id : null\]/, "only your own runs, the owner's too");
+  assert.match(add, /WHERE id = \$1 AND NOT \(results -> \$2::int \? 'lead_id'\)/, 'claimed before saving, so it is added once');
   assert.match(add, /const phone = found \? '' :/, 'a phone found online is not saved');
   assert.match(add, /if \(known\) \{/, 'a known customer is refused, not saved');
 });

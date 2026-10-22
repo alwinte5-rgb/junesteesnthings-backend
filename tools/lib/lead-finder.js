@@ -24,7 +24,7 @@ const MAX_LEADS = 15;
 /* Searches Claude may run in one go. $10 per 1,000 searches (2026-10). */
 const MAX_SEARCHES = 8;
 /* The server-side search loop can pause a long turn; it is resumed this many times. */
-const MAX_RESUMES = 3;
+const MAX_RESUMES = 2;
 const PRICE = { input: 4 / 1e6, output: 20 / 1e6, search: 10 / 1000 };
 /* Runs a day: each helper, and the whole shop together. */
 const CAPS = { perHelper: 10, shop: 40 };
@@ -233,7 +233,10 @@ function failureMessage(err) {
 /** Run one search. `client` is for tests. Throws; failureMessage() words it.
  *  Returns { leads, searches, dollars }. */
 async function findLeads(ask, { client, today = '', skip = [] } = {}) {
-  const c = client || new Anthropic({ timeout: 4 * 60 * 1000 });
+  /* The browser waits for the whole run, so it is kept to a few minutes:
+     no SDK retries (a failed run says so and can be run again) and a short
+     timeout per turn. */
+  const c = client || new Anthropic({ timeout: 2 * 60 * 1000, maxRetries: 0 });
   const messages = [{ role: 'user', content: askMessage(ask, { today, skip }) }];
   const total = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
                   server_tool_use: { web_search_requests: 0 } };
