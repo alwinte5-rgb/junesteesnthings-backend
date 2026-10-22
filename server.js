@@ -32271,7 +32271,7 @@ async function helperScore(staffId, from, to) {
                   COUNT(*) FILTER (WHERE done_by = $1 AND done_at >= $2 AND done_at < $3)::int AS done,
                   COUNT(*) FILTER (WHERE done_by = $1 AND done_at >= $2 AND done_at < $3
                                    AND (due_on IS NULL OR done_at::date <= due_on))::int AS on_time,
-                  COUNT(*) FILTER (WHERE assigned_to = $1 AND done_at IS NULL AND due_on < CURRENT_DATE)::int AS overdue
+                  COUNT(*) FILTER (WHERE assigned_to = $1 AND done_at IS NULL AND due_on < CURRENT_DATE AND ${TASK_STEP_NOW})::int AS overdue
                   FROM staff_tasks`, [staffId, from, to]),
     pool.query(`SELECT COALESCE(SUM(p.amount - COALESCE(p.fee, 0)), 0)::float AS collected
                   FROM quote_payments p JOIN quotes q ON q.code = p.quote_code
@@ -35019,6 +35019,10 @@ async function makeRecurringTasks(helper, shifts, templates, now = new Date()) {
    task-projects.js has the steps, the dates and the timeline). */
 
 const PROJECT_FILES_MAX = 30;
+/* An open project: not archived, and a step still to do or no steps yet
+   (the owner is still adding them). One rule for every list and the calendar. */
+const PROJECT_OPEN = `p.archived_at IS NULL AND (NOT EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id)
+  OR EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id AND t.done_at IS NULL))`;
 const KIT_REPLACED = 'Replaced by its project: the same work, step by step, on the project page.';
 
 /** A project's steps in order. */
@@ -35065,12 +35069,23 @@ async function saveProject(p, { assignedTo = null, createdBy = null } = {}) {
  *  made once every step of the last is completed. A season whose old kit was
  *  already finished is not made again, unless it has its own written steps
  *  (Christmas 2026). An open old kit for the season is closed in its favour. */
+/** Today's date in the shop's time zone, as YYYY-MM-DD. */
+const shopToday = (now = new Date()) => now.toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+
 async function makeAutoTasks(roster, now = new Date()) {
   const designer = roster.filter((r) => r.active && !r.archived_at && r.training_track === 'design').sort((a, b) => a.id - b.id)[0];
   if (!designer) return 0;
+  /* The old one-task kits nobody started give way to projects (each season
+     comes back as one); a kit the designer already started is theirs to
+     finish, and holds the next season back like an open project does. */
+  await pool.query(`UPDATE staff_tasks SET done_at = NOW(), done_note = $2
+                     WHERE assigned_to = $1 AND auto_ref LIKE 'mcal:%' AND project_id IS NULL AND done_at IS NULL AND started_at IS NULL`,
+  [designer.id, KIT_REPLACED]);
   const { rows: busy } = await pool.query(
-    `SELECT 1 FROM task_projects p WHERE p.auto_ref LIKE 'mcal:%' AND p.archived_at IS NULL
-        AND EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id AND t.done_at IS NULL) LIMIT 1`);
+    `SELECT 1 FROM task_projects p WHERE p.assigned_to = $1 AND p.auto_ref LIKE 'mcal:%' AND ${PROJECT_OPEN}
+     UNION ALL
+     SELECT 1 FROM staff_tasks WHERE assigned_to = $1 AND auto_ref LIKE 'mcal:%' AND done_at IS NULL
+     LIMIT 1`, [designer.id]);
   if (busy.length) return 0;
   const [{ rows: made0 }, { rows: kitsDone }] = await Promise.all([
     pool.query(`SELECT auto_ref FROM task_projects WHERE auto_ref LIKE 'mcal:%'`),
@@ -35081,12 +35096,10 @@ async function makeAutoTasks(roster, now = new Date()) {
   for (const e of MKT_CAL.dueNow(now).sort((a, b) => a.ads - b.ads)) {
     const ref = `mcal:${e.id}:${e.year}`;
     if (had.has(ref) || (finished.has(ref) && !PROJECTS.SEASON_PRESETS[`${e.id}:${e.year}`])) continue;
-    const p = PROJECTS.seasonProject(e, { now, longDate: MKT_CAL.longDate });
+    const p = PROJECTS.seasonProject(e, { now, today: shopToday(now), longDate: MKT_CAL.longDate });
     if (!p) continue;
     const id = await saveProject(p, { assignedTo: designer.id });
-    if (!id) return 0;
-    await pool.query('UPDATE staff_tasks SET done_at = NOW(), done_note = $2 WHERE auto_ref = $1 AND done_at IS NULL', [ref, KIT_REPLACED]);
-    return p.steps.length;
+    return id ? p.steps.length : 0;
   }
   return 0;
 }
@@ -35130,19 +35143,18 @@ function projectCard(p, steps, roster, { owner, today }) {
 /** The open projects for someone (null = everyone, for the owner), as cards. */
 async function projectCards(me, roster) {
   const { rows: projects } = await pool.query(
-    `SELECT * FROM task_projects WHERE archived_at IS NULL AND ($1::int IS NULL OR assigned_to = $1) ORDER BY created_at DESC LIMIT 30`, [me]);
+    `SELECT * FROM task_projects p WHERE ${PROJECT_OPEN} AND ($1::int IS NULL OR p.assigned_to = $1) ORDER BY p.created_at DESC LIMIT 30`, [me]);
   if (!projects.length) return { html: '', open: 0 };
   const { rows: steps } = await pool.query('SELECT * FROM staff_tasks WHERE project_id = ANY($1::int[]) ORDER BY step_no, id', [projects.map((p) => p.id)]);
   const today = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
-  /* Open = a step still to do, or no steps yet (June is still adding them). */
-  const open = projects.filter((p) => { const mine = steps.filter((s) => s.project_id === p.id); return !mine.length || mine.some((s) => !s.done_at); });
+  const open = projects;
   return { html: open.map((p) => projectCard(p, steps.filter((s) => s.project_id === p.id), roster, { owner: me == null, today })).join(''), open: open.length };
 }
 
 /** The seasons a project can take its steps from: the calendar's next ones
  *  whose last day to order is still ahead. */
 function projectSeasonOptions(now = new Date()) {
-  const today = MKT_CAL.ymd(now);
+  const today = shopToday(now);
   return MKT_CAL.upcoming(now).filter((e) => MKT_CAL.ymd(e.orderBy) >= today).slice(0, 12);
 }
 
@@ -35155,8 +35167,7 @@ app.get('/admin/projects', requireAdmin, async (req, res) => {
     const { rows: finished } = await pool.query(
       `SELECT p.id, p.title, p.archived_at FROM task_projects p
         WHERE ($1::int IS NULL OR p.assigned_to = $1)
-          AND (p.archived_at IS NOT NULL OR (EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id)
-                AND NOT EXISTS (SELECT 1 FROM staff_tasks t WHERE t.project_id = p.id AND t.done_at IS NULL)))
+          AND NOT (${PROJECT_OPEN})
         ORDER BY p.created_at DESC LIMIT 20`, [me]);
     const form = me == null ? `<details class="card" id="new"><summary><b>Start a project</b> <span class="muted">for one helper, from a season of the marketing calendar or from scratch</span></summary>
       <form method="post" action="/admin/projects" class="pj-form">
@@ -35197,16 +35208,17 @@ app.post('/admin/projects', requireAdmin, async (req, res) => {
     if (season) {
       const e = projectSeasonOptions().find((x) => `${x.id}:${x.year}` === season);
       if (!e) return back(res, backTo, 'err', 'That season is not open any more. Pick another.');
-      p = PROJECTS.seasonProject(e, { longDate: MKT_CAL.longDate });
+      p = PROJECTS.seasonProject(e, { today: shopToday(), longDate: MKT_CAL.longDate });
       if (!p) return back(res, backTo, 'err', 'That season\'s last day to order has passed.');
     }
+    if (String(b.key_date || '').trim() && !PROJECTS.validDate(b.key_date)) return back(res, backTo, 'err', 'That key date is not a real date.');
     const title = text(b.title, PROJECTS.TITLE_MAX).replace(/\s+/g, ' ') || p.title;
     if (!title) return back(res, backTo, 'err', 'Give the project a title, or pick a season.');
     const id = await saveProject({
       ...p, title,
       summary: text(b.summary, 2000) || p.summary || null,
-      key_date: isoDate(b.key_date) || p.key_date || null,
-      key_label: text(b.key_label, 60) || p.key_label || (isoDate(b.key_date) ? 'Key date' : null),
+      key_date: PROJECTS.validDate(b.key_date) || p.key_date || null,
+      key_label: text(b.key_label, 60) || p.key_label || (PROJECTS.validDate(b.key_date) ? 'Key date' : null),
     }, { assignedTo: assignTo });
     if (!id) return back(res, backTo, 'err', 'There is already a project for that season. Open it from the list.');
     notifyNow();
@@ -35260,7 +35272,7 @@ app.get('/admin/projects/:id', requireAdmin, async (req, res) => {
           <button type="submit" class="btn btn-ghost">Save</button></form></details>` : '';
       return `<div class="card pj-step is-${s.state}" id="step-${Number(s.id)}">
         <div class="pj-step-h"><span><span class="pj-step-n">Step ${Number(s.step_no)} of ${states.length}</span><br><b style="font-size:16px">${escEmail(s.title)}</b> ${status}</span>
-          <span class="muted">${b && b.time ? `${escEmail(b.time)} &middot; ` : ''}${due ? `due ${escEmail(PROJECTS.withDay(due))}` : ''} ${!s.done_at && due && due < today ? pill('overdue', 'red') : ''}</span></div>
+          <span class="muted">${b && b.time ? `${escEmail(b.time)} &middot; ` : ''}${due ? `due ${escEmail(PROJECTS.withDay(due))}` : ''} ${s.state !== 'locked' && !s.done_at && due && due < today ? pill('overdue', 'red') : ''}</span></div>
         ${s.state === 'locked' ? `${s.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(s.description)}</div>` : ''}${taskBriefHtml(s, actor, { folded: true })}`
           : taskDetailsHtml({ ...s, project_id: null }, actor, roster, { folded: s.state === 'done' })}
         ${action}${edit}</div>`;
@@ -38253,7 +38265,7 @@ async function taskNotices(roster) {
   const [waiting, done] = await Promise.all([
     notifyPart('tasks waiting', pool.query(
       `SELECT id, title, due_on, assigned_to, created_by, created_at FROM staff_tasks
-        WHERE done_at IS NULL AND started_at IS NULL ORDER BY id DESC`)),
+        WHERE done_at IS NULL AND started_at IS NULL AND ${TASK_STEP_NOW} ORDER BY id DESC`)),
     notifyPart('tasks done', pool.query(
       `SELECT id, title, done_by FROM staff_tasks
         WHERE done_by IS NOT NULL AND lane IS DISTINCT FROM 'daily'

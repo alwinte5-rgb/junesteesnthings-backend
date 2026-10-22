@@ -50,7 +50,16 @@ const RULES_DONE = 'Checked against the campaign rules at the top of this page';
 /* ── Dates (calendar dates as YYYY-MM-DD, worked in UTC) ─────────────────── */
 
 const ymd = (t) => new Date(t).toISOString().slice(0, 10);
-const parse = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`)) ? Date.parse(`${s}T00:00:00Z`) : null);
+/* A real calendar date only: Date.parse rolls 2026-02-31 over to March,
+   which Postgres refuses, so the day must come back as written. */
+const parse = (s) => {
+  const v = String(s || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const t = Date.parse(`${v}T00:00:00Z`);
+  return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== v ? null : t;
+};
+/** The date as YYYY-MM-DD when it is a real one, else null. */
+const validDate = (s) => (parse(String(s || '').trim()) == null ? null : String(s).trim());
 const isWeekend = (t) => [0, 6].includes(new Date(t).getUTCDay());
 
 /** The first Monday-to-Friday day on or after `iso`. */
@@ -259,8 +268,9 @@ function dateSteps(steps, firstIso) {
 /** The project the calendar makes for a season, or null for a season whose
  *  last order day has passed. `now` decides the first step's day: the preset's
  *  own first day, or the next work day when that has gone by. */
-function seasonProject(e, { now = new Date(), longDate }) {
-  const today = ymd(now);
+function seasonProject(e, { now = new Date(), today: todayIso, longDate }) {
+  /* `today` is the shop's own date (Chicago); UTC runs a day ahead every evening. */
+  const today = validDate(todayIso) || ymd(now);
   if (ymd(e.orderBy) < today) return null;
   const preset = SEASON_PRESETS[`${e.id}:${e.year}`];
   const next = addWorkDays(today, 1);
@@ -339,7 +349,7 @@ function timelineSvg(project, steps, { today, compact = false } = {}) {
   for (let t = t0; t <= t1 - DAY; t += step * DAY) ticks.push(t);
   const color = (s) => {
     if (s.state === 'done') return '#16a34a';
-    if (ymdOf(s.due_on) < today) return '#dc2626';
+    if (s.state !== 'locked' && ymdOf(s.due_on) < today) return '#dc2626';
     return s.state === 'current' ? '#E0107A' : '#94a3b8';
   };
   const out = [`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${escHtml(`Timeline: ${project.title}`)}" style="width:100%;height:auto;display:block" font-family="inherit">`];
@@ -386,5 +396,5 @@ function ymdOf(v) {
 
 module.exports = {
   RULES, RULES_DONE, CHRISTMAS_2026, SEASON_PRESETS, STEP_MAX, TITLE_MAX,
-  addWorkDays, workdayOnOrAfter, seasonSteps, seasonProject, dateSteps, stepStates, canStart, shapeStepEdit, timelineSvg, ymdOf, withDay,
+  addWorkDays, workdayOnOrAfter, validDate, seasonSteps, seasonProject, dateSteps, stepStates, canStart, shapeStepEdit, timelineSvg, ymdOf, withDay,
 };

@@ -49,6 +49,19 @@ test('Christmas 2026 is the written-out project, dated from Oct 23 to Oct 30', (
   }
 });
 
+test('the shop\'s own date decides, not UTC', () => {
+  /* 9pm in Chicago on Oct 22 is already Oct 23 in UTC. */
+  const evening = new Date(Date.UTC(2026, 9, 23, 2));
+  const p = P.seasonProject(season('valentines', 2027), { now: evening, today: '2026-10-22', longDate: CAL.longDate });
+  assert.strictEqual(p.steps[0].due_on, '2026-10-23');
+});
+
+test('a locked step past its date is not painted overdue', () => {
+  const svg = P.timelineSvg({ title: 't' }, [{ id: 1, step_no: 1, title: 'a', starts_on: '2026-10-20', due_on: '2026-10-20' },
+    { id: 2, step_no: 2, title: 'b', starts_on: '2026-10-21', due_on: '2026-10-21' }], { today: '2026-10-26' });
+  assert.strictEqual((svg.match(/fill="#dc2626"/g) || []).length, 1, 'only the step now is late');
+});
+
 test('a preset whose first day has passed starts on the next work day instead', () => {
   const later = new Date(Date.UTC(2026, 9, 28, 18));
   const p = P.seasonProject(season('christmas', 2026), { now: later, longDate: CAL.longDate });
@@ -90,6 +103,9 @@ test('a step edit needs a title and dates in order', () => {
   assert.match(P.shapeStepEdit({ title: '', starts_on: '2026-10-26', due_on: '2026-10-27' }).error, /title/);
   assert.match(P.shapeStepEdit({ title: 'x', starts_on: '2026-10-27', due_on: '2026-10-26' }).error, /before/);
   assert.match(P.shapeStepEdit({ title: 'x', starts_on: '26/10', due_on: '2026-10-26' }).error, /date/);
+  assert.match(P.shapeStepEdit({ title: 'x', starts_on: '2026-02-31', due_on: '2026-03-02' }).error, /date/, 'Feb 31 is not a date');
+  assert.strictEqual(P.validDate('2026-04-31'), null);
+  assert.strictEqual(P.validDate('2026-04-30'), '2026-04-30');
 });
 
 test('the timeline escapes every word and marks today and the key date', () => {
@@ -122,6 +138,20 @@ test('a later step cannot be started early, and lists show only the step now', (
   assert.match(route("app.get('/admin/my-day', requireAdmin"), /AND \$\{TASK_STEP_NOW\}/);
   assert.match(route("app.get('/admin/tasks', requireAdmin"), /AND \$\{TASK_STEP_NOW\}/);
   assert.match(route("app.get('/admin/dashboard', requireAdmin"), /AND \$\{TASK_STEP_NOW\}/);
+});
+
+test('the calendar never closes a started kit, and waits on it like an open project', () => {
+  const at = src.indexOf('async function makeAutoTasks(');
+  const a = src.slice(at, src.indexOf('\n}\n', at));
+  assert.match(a, /AND done_at IS NULL AND started_at IS NULL`/);
+  assert.match(a, /WHERE p\.assigned_to = \$1 AND p\.auto_ref LIKE 'mcal:%' AND \$\{PROJECT_OPEN\}/);
+  assert.match(a, /SELECT 1 FROM staff_tasks WHERE assigned_to = \$1 AND auto_ref LIKE 'mcal:%' AND done_at IS NULL/);
+  assert.match(a, /today: shopToday\(now\)/);
+});
+
+test('locked steps send no bell and count as no one\'s overdue', () => {
+  assert.match(src, /WHERE done_at IS NULL AND started_at IS NULL AND \$\{TASK_STEP_NOW\} ORDER BY id DESC/);
+  assert.match(src, /due_on < CURRENT_DATE AND \$\{TASK_STEP_NOW\}\)::int AS overdue/);
 });
 
 test('a project is saved whole or not at all, once per season', () => {

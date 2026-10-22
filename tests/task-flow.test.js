@@ -119,10 +119,10 @@ test('the designer gets each season\'s project once, from the marketing calendar
   assert.match(a, /`mcal:\$\{e\.id\}:\$\{e\.year\}`/);
   assert.match(a, /r\.training_track === 'design'/);
   /* One season at a time: four seasons in prep never land at once. */
-  assert.match(a, /EXISTS \(SELECT 1 FROM staff_tasks t WHERE t\.project_id = p\.id AND t\.done_at IS NULL\) LIMIT 1/);
+  assert.match(a, /AND \$\{PROJECT_OPEN\}/);
   assert.match(a, /if \(busy\.length\) return 0;/);
   /* The old one-task kit for the season gives way to its project. */
-  assert.match(a, /UPDATE staff_tasks SET done_at = NOW\(\), done_note = \$2 WHERE auto_ref = \$1 AND done_at IS NULL/);
+  assert.match(a, /UPDATE staff_tasks SET done_at = NOW\(\), done_note = \$2/);
   /* The seasonal work comes from the calendar, so no starter repeats it. */
   for (const x of FLOW.STARTERS.design) assert.doesNotMatch(x.title, /asset kit/i);
 });
