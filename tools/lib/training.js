@@ -285,6 +285,12 @@ const PAGE_TIPS = {
   playbook: 'Ready-made replies and how we do things. Type a question in plain words, or a /shortcut. Copy a reply and adjust it to the customer.',
   resources: 'The tools you work in, with a link to each and how to get in. June shares any login you need here, one view each: save it in your own password manager.',
   training: 'Your training path. Reading steps you tick yourself, work steps tick when you do the work, and the owner signs off the rest.',
+  mailbox: 'Conversations about one job or one task, kept with it. Start one from a job or with "Message about this task", so the next person finds it there.',
+  notifications: 'Everything new for you, newest first: tasks, messages, approvals. The bell at the top counts what you have not opened. Turn on sound and pop-ups from My Day.',
+  clock: 'Clock in when you start and out when you stop, breaks included. Your pay comes from these hours.',
+  mystats: 'What your week adds up to: hours, tasks done on time, and for sales the people found, contacted and answered. Only real, logged work counts.',
+  design: 'Every job waiting on artwork, with what the customer sent. Put proofs up from the job, and ask in the job when something is unclear.',
+  schedule: 'Every job in hand and the day it is due. Check it at the start of a shift so nothing due soon surprises you.',
 };
 
 /* Every quiz lives in its course (tools/lib/courses) and joins this list,
