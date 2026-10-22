@@ -67,6 +67,7 @@ const ZIPSTREAM = require('./tools/lib/zip-stream');
 const { Readable, pipeline } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
+const LEADPRICES = require('./tools/lib/lead-prices');
 const FOLLOWUPS = require('./tools/lib/followups');
 const INBOUND = require('./tools/lib/inbound-email');
 const RELAY = require('./tools/lib/text-relay');
@@ -26258,9 +26259,22 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
     /* The last time the shop reached them, not the last internal note. */
     const lastOut = notes.find((n) => CONTACT_KINDS.includes(n.kind));
     const days = lastOut ? Math.max(0, Math.round((now - new Date(lastOut.created_at)) / 86400000)) : null;
-    const fillIn = 'Where an answer needs a fact you were not given (a price, a turnaround, whether the shop carries an item '
+    /* The list prices, so the reply can say what it costs (owner, 2026-10-22:
+       "but you know the prices"): the catalogue the quote form and the designer
+       price from, the garment volume break, the screen fee once it bills. */
+    const prices = LEADPRICES.priceSheet(await getCatalog().catch(() => null), l.description, {
+      blankTiers: BLANK_TIERS, screenFee: SCREEN_FEES_LIVE ? SCREEN_FEE_RATE : 0, addons: ADDONS });
+    const fillIn = (prices
+      ? 'Prices: when they ask what it costs, or the quantity and item are clear, work it out from <price_list> only: '
+        + 'per piece = the garment (plus its size upcharge, less its volume break) + the print at each location (the first '
+        + 'location at the method\'s first-location price, each further one at its additional-location price), at the band for '
+        + 'their quantity. Show the garment and the print separately, then the per-piece total, and the order total when the '
+        + 'quantity is known. Say it is an estimate and the exact price comes on their written quote; sales tax is extra. '
+        + 'When it depends on something they have not said (sizes, print size, ink colors), give the price for the likely choice and say so. '
+      : '')
+      + 'Where an answer needs a fact you were not given (a price that is not in the list, a turnaround, whether the shop carries an item '
       + 'or takes a kind of job), write [June to fill in: what is needed] at that spot in the reply and list it under ask_shop. '
-      + 'No prices or dates of your own, no pressure.';
+      + 'No discounts, rush fees or dates of your own, no pressure.';
     const note = lastOut
       ? `This is a lead, not an order yet: no quote has been made. The shop wrote to them ${days} day${days === 1 ? '' : 's'} ago and they have not replied. `
         + 'Write a short, warm follow-up email. If their enquiry asked anything the shop has not answered yet, answer it first. '
@@ -26280,7 +26294,7 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
     const out = await REPLYCOACH.suggestReply({
       job: { code: 'enquiry #' + l.id, name: l.name, status: lastOut ? 'enquiry, contacted, waiting on them' : 'new enquiry, not answered yet',
              today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }), items: [], files: [], pictures: pictures.length },
-      history, playbook, ask, money: false, pictures,
+      history, playbook, ask, money: false, pictures, prices,
       shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})` } });
     return res.json({ subject: out.subject, reply: out.reply, ask_shop: out.ask_shop });
   } catch (err) {
