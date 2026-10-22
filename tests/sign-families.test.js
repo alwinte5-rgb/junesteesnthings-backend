@@ -90,7 +90,7 @@ test('the products carry the option ids the designer reads', () => {
 
 test('/api/pricing-rules publishes the families', () => {
   const route = src.slice(src.indexOf("app.get('/api/pricing-rules'"), src.indexOf("app.get('/api/pricing-rules'") + 3500);
-  assert.match(route, /signs: SIGN_FAMILIES\.signsTable\(\)/);
+  assert.match(route, /const t = SIGN_FAMILIES\.signsTable\(\);/);
   assert.ok(JSON.stringify(F.signsTable()).length < 60000, 'small enough for every page');
 });
 

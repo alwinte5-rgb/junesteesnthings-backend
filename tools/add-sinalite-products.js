@@ -98,7 +98,9 @@ const author = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIM
 for (const p of PRODUCTS) {
   const h = have.get(p.key);
   if (h) {
-    mysql(url, 'UPDATE lumise_products SET name=' + sq(p.name) + ', description=' + sq(p.description) +
+    /* An active row is sold in the designer (add-label-product.js wrote its
+       customer description): keep that, only rename it. */
+    mysql(url, 'UPDATE lumise_products SET name=' + sq(p.name) + ', description=IF(active=1, description, ' + sq(p.description) + ')' +
       ", supplier='sinalite', price=0, updated=NOW() WHERE id=" + Number(h.id) + ';');
   } else {
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +

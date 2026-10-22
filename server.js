@@ -7655,8 +7655,13 @@ app.get('/api/pricing-rules', requireInternalKey, (_req, res) => {
     banner: SIGNAGE.bannerTable(),
     /* Every other sign family the designer sells (tools/lib/sign-families.js):
        stock ladders precomputed, area families as rates the designer runs
-       through the one shared formula. */
-    signs: SIGN_FAMILIES.signsTable(),
+       through the one shared formula. SinaLite items the designer sells
+       (roll labels) ride along as stock families, priced as a staff quote
+       prices them (sinalite.js designerFamilies). */
+    signs: (() => {
+      const t = SIGN_FAMILIES.signsTable();
+      return { ...t, families: { ...t.families, ...SINALITE.designerFamilies() } };
+    })(),
     /* SinaLite items (tools/lib/sinalite.js): stock ladders in the same shape
        as a sign family, shipping inside each price, each with its minimum and
        the date SinaLite's (sale) prices were read. */
