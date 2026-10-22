@@ -132,6 +132,7 @@ test('light tees are never offered; the Gildan 5000 leads a tee order and the Gi
   assert.match(sheet, /- Gildan 8000 Adult DryBlend 50\/50 Tee \(our tee for uniform orders\): \$6\.90/);
   assert.match(sheet, /- Gildan 5000 Unisex Heavy Cotton T-Shirt \(our regular tee\): \$6\.40/);
   assert.doesNotMatch(sheet, /Light Cotton/);
+  assert.strictEqual(P.shopPick(BLEND, 'do you have the 8000 in red?'), '', 'the uniform label is for uniform enquiries');
 });
 
 test('the reply leads with the shop\'s pick, checks colors against the list, and links what it names', () => {

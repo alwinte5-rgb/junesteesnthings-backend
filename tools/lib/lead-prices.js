@@ -121,11 +121,12 @@ function pickProducts(products, asked) {
   return out;
 }
 
-/** What the shop says about a garment in the list: its pick for regular or uniform orders. */
-function shopPick(p) {
+/** What the shop says about a garment in the list: its pick for regular orders,
+ *  and on a uniform enquiry its pick for uniforms. */
+function shopPick(p, asked) {
   if (CHILD.test(p.name)) return '';
   if (REGULAR_TEE.test(p.name)) return 'our regular tee';
-  if (UNIFORM_TEE.test(p.name)) return 'our tee for uniform orders';
+  if (UNIFORM_TEE.test(p.name) && UNIFORM.test(String(asked || ''))) return 'our tee for uniform orders';
   return '';
 }
 
@@ -157,7 +158,7 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
       const can = (p.printing_ids || []).map((id) => byId.get(Number(id))).filter(Boolean)
         .map((m) => String(m.title).split(' — ')[0]).filter((t, i, a) => a.indexOf(t) === i);
       const colours = colourList(p, asked);
-      const pick = shopPick(p);
+      const pick = shopPick(p, asked);
       lines.push(`- ${p.name}${pick ? ` (${pick})` : ''}: ${money(p.price)}${up.length ? ` (${up.join(', ')})` : ''}${can.length ? `; can take: ${can.join(', ')}` : ''}`
         + `; link: ${productLink(p.id)}; colors: ${colours || 'not listed'}`);
     }
