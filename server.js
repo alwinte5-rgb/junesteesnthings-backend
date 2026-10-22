@@ -72,6 +72,7 @@ const FINDER = require('./tools/lib/lead-finder');
 const SOFTLEADS = require('./tools/lib/software-leads');
 const STARTERTASKS = require('./tools/lib/task-starters');
 const PROJECTS = require('./tools/lib/task-projects');
+const PLANNER = require('./tools/lib/project-planner');
 const FOLLOWUPS = require('./tools/lib/followups');
 const INBOUND = require('./tools/lib/inbound-email');
 const RELAY = require('./tools/lib/text-relay');
@@ -1381,6 +1382,11 @@ async function initStaffTables() {
     await pool.query(`ALTER TABLE staff_tasks ADD COLUMN IF NOT EXISTS ${col}`);
   }
   await pool.query('CREATE INDEX IF NOT EXISTS staff_tasks_project_idx ON staff_tasks (project_id, step_no) WHERE project_id IS NOT NULL');
+  /* A project's guide, in plain markdown (PROJECTS.guideHtml): written with
+     the owner, or by the AI planner, and shown on the project page so the
+     helper never needs a link to an outside document. */
+  await pool.query('ALTER TABLE task_projects ADD COLUMN IF NOT EXISTS guide TEXT');
+  await pool.query(`UPDATE task_projects SET guide = $1 WHERE auto_ref = 'mcal:christmas:2026' AND guide IS NULL`, [PROJECTS.CHRISTMAS_2026.guide]);
   /* The software leads board (tools/lib/software-leads.js; plan PR 4): one
      row per prospect for the shop's software, owned by the agent who found
      it (rep_id), and its log. contacted_at is the first logged contact, which
@@ -35408,9 +35414,10 @@ async function saveProject(p, { assignedTo = null, createdBy = null } = {}) {
   try {
     await client.query('BEGIN');
     const { rows: [proj] } = await client.query(
-      `INSERT INTO task_projects (title, summary, guide_url, assigned_to, key_date, key_label, auto_ref, created_by)
-       VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8) ON CONFLICT (auto_ref) DO NOTHING RETURNING id`,
-      [p.title, p.summary || null, p.guide_url || null, assignedTo, p.key_date || null, p.key_label || null, p.auto_ref || null, createdBy]);
+      `INSERT INTO task_projects (title, summary, guide_url, assigned_to, key_date, key_label, auto_ref, created_by, guide)
+       VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8, $9) ON CONFLICT (auto_ref) DO NOTHING RETURNING id`,
+      [p.title, p.summary || null, p.guide_url || null, assignedTo, p.key_date || null, p.key_label || null, p.auto_ref || null, createdBy,
+        p.guide ? String(p.guide).slice(0, PROJECTS.GUIDE_MAX) : null]);
     if (!proj) {
       await client.query('ROLLBACK');
       return null;
@@ -35488,6 +35495,15 @@ const PROJECT_CSS = `<style>
 .pj-rules li{margin:3px 0;line-height:1.45}
 .pj-form{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:8px}
 .pj-form label{margin:0}
+.gd{line-height:1.55;margin-top:8px}
+.gd .gd-h{margin:16px 0 6px;font-size:16px}
+.gd ul,.gd ol{margin:4px 0 10px 20px;padding:0}
+.gd .gd-check{list-style:none;margin-left:0}
+.gd p{margin:6px 0}
+.gd-table{overflow-x:auto;margin:6px 0 12px}
+.gd-table table{border-collapse:collapse;font-size:13.5px;min-width:480px}
+.gd-table th,.gd-table td{border:1px solid #e5e7eb;padding:6px 8px;text-align:left;vertical-align:top}
+.gd-table th{background:#f7f8fb}
 </style>`;
 
 /** May this person open the project? The owner any; a helper their own. */
@@ -35540,17 +35556,22 @@ app.get('/admin/projects', requireAdmin, async (req, res) => {
           AND NOT (${PROJECT_OPEN})
         ORDER BY p.created_at DESC LIMIT 20`, [me]);
     const form = me == null ? `<details class="card" id="new"><summary><b>Start a project</b> <span class="muted">for one helper, from a season of the marketing calendar or from scratch</span></summary>
-      <form method="post" action="/admin/projects" class="pj-form">
+      <form method="post" action="/admin/projects" class="pj-form" id="pj-new" onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;if(this.season.value==='ai'){b.textContent='Writing the plan… about a minute';try{sessionStorage.setItem('pj-ask',JSON.stringify({title:this.title.value,summary:this.summary.value,key_date:this.key_date.value,key_label:this.key_label.value}))}catch(e){}}">
         <label style="flex:1 1 260px">Title <input name="title" maxlength="${PROJECTS.TITLE_MAX}" placeholder="Leave empty to use the season's"></label>
         <label>For <select name="assigned_to" required><option value="">Pick a helper</option>${roster.filter((r) => r.active && !r.archived_at).map((r) =>
           `<option value="${Number(r.id)}">${escEmail(r.name)}</option>`).join('')}</select></label>
-        <label>Steps from <select name="season"><option value="">No season: I add the steps</option>${projectSeasonOptions().map((e) =>
+        <label>Steps from <select name="season"><option value="">Nothing: I add the steps myself</option><option value="ai">Plan it with AI from what I describe below</option>${projectSeasonOptions().map((e) =>
           `<option value="${escEmail(`${e.id}:${e.year}`)}">${escEmail(`${e.name} ${e.year} (order by ${MKT_CAL.shortDate(e.orderBy)})`)}</option>`).join('')}</select></label>
         <label>Key date <input type="date" name="key_date"></label>
         <label>It is the <input name="key_label" maxlength="60" placeholder="Last day to order"></label>
-        <label style="flex:1 1 100%">What it is for <textarea name="summary" rows="2" maxlength="2000" placeholder="One or two lines on the goal"></textarea></label>
-        <button type="submit" class="btn">Start the project</button></form>
-      <p class="muted" style="margin-top:6px">The marketing calendar starts each coming season's project for the designer by itself, one at a time.</p></details>` : '';
+        <label style="flex:1 1 100%">What it is for <textarea name="summary" rows="4" maxlength="3000" placeholder="What you want done and why, the date that matters, what to sell or make, anything to avoid. With Plan it with AI, the more you say the better the plan: e.g. 'Valentine's campaign for couples and Galentine's groups: matching tees and custom glassware, launch Jan 5, last order Jan 30, no discounts.'"></textarea></label>
+        <button type="submit" class="btn">Start the project</button>
+        <span class="muted" style="font-size:12.5px">With Plan it with AI, Claude writes the guide and the two-hour steps in about a minute. You can change any of it afterwards.</span></form>
+      <p class="muted" style="margin-top:6px">The marketing calendar starts each coming season's project for the designer by itself, one at a time.</p></details>
+      <script>/* A plan that did not come back keeps what the owner typed. */
+      (function(){try{var f=document.getElementById('pj-new'),s=sessionStorage.getItem('pj-ask');if(!f||!s)return;sessionStorage.removeItem('pj-ask');
+      if(!/[?&]err=/.test(location.search))return;var a=JSON.parse(s);['title','summary','key_date','key_label'].forEach(function(k){if(f[k]&&!f[k].value&&a[k])f[k].value=a[k]});
+      f.season.value='ai';f.closest('details').open=true}catch(e){}})();</script>` : '';
     res.send(adminPage('Projects', `${PROJECT_CSS}
       ${pageHeader('Projects', 'Big work split into steps of about two hours, done one at a time.',
         me == null ? '<a class="btn btn-ghost" href="/admin/tasks">Tasks</a>' : '<a class="btn btn-ghost" href="/admin/my-day">My Day</a>')}
@@ -35564,6 +35585,32 @@ app.get('/admin/projects', requireAdmin, async (req, res) => {
   }
 });
 
+/** Count one AI planner call toward today's cap, or refuse it when the cap is
+ *  reached. Under an advisory lock, so two submits at once cannot both pass;
+ *  failed calls count too, because each one is paid for. */
+async function reservePlannerCall(title) {
+  const actor = currentActor() || OWNER_ACTOR;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('project-planner-cap'))");
+    const { rows: [n] } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM staff_activity WHERE action = 'project plan asked of AI'
+         AND created_at >= (date_trunc('day', NOW() AT TIME ZONE $1) AT TIME ZONE $1)`, [SHOP_TZ]);
+    if (n.n >= PLANNER.DAILY_CAP) { await client.query('ROLLBACK'); return false; }
+    await client.query(
+      `INSERT INTO staff_activity (staff_id, action, subject_type, subject_id, detail) VALUES ($1, 'project plan asked of AI', 'project', NULL, $2)`,
+      [actor && actor.kind === 'staff' ? actor.id : null, JSON.stringify({ title: title || null })]);
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 app.post('/admin/projects', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const backTo = '/admin/projects#new';
@@ -35575,18 +35622,42 @@ app.post('/admin/projects', requireAdmin, async (req, res) => {
     if (!helper) return back(res, backTo, 'err', 'That helper is not active.');
     let p = { title: '', steps: [] };
     const season = String(b.season || '');
-    if (season) {
+    /* Checked before any paid planner call, and once for every path. */
+    if (String(b.key_date || '').trim() && !PROJECTS.validDate(b.key_date)) return back(res, backTo, 'err', 'That key date is not a real date.');
+    if (season === 'ai') {
+      /* Plan it with AI: Claude writes the guide and the steps from what the
+         owner typed (tools/lib/project-planner.js), capped a day for the shop. */
+      const v = PLANNER.validateAsk(b);
+      if (v.error) return back(res, backTo, 'err', v.error);
+      if (!(await reservePlannerCall(v.ask.title))) return back(res, backTo, 'err', `The planner has written ${PLANNER.DAILY_CAP} plans today. More tomorrow.`);
+      const start = PROJECTS.addWorkDays(shopToday(), 1);
+      const track = JOB_TRACKS[helper.training_track] || {};
+      let plan;
+      try {
+        plan = await PLANNER.planProject(v.ask, {
+          today: new Date().toLocaleDateString('en-US', { timeZone: SHOP_TZ, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+          role: track.role || track.label || '', roleNote: track.note || '', start,
+          keyDate: PROJECTS.validDate(b.key_date) ? PROJECTS.withDay(PROJECTS.validDate(b.key_date)) : '', keyLabel: text(b.key_label, 60),
+        });
+      } catch (e) {
+        if (!e.code) reportError('project-planner', e).catch(() => {});
+        console.error('project planner failed:', e.message);
+        return back(res, backTo, 'err', PLANNER.failureMessage(e));
+      }
+      logActivity(currentActor() || OWNER_ACTOR, 'project planned with AI', { type: 'project', id: null }, { title: plan.title, steps: plan.steps.length });
+      p = { title: plan.title, summary: plan.summary, guide: plan.guide, steps: PROJECTS.dateSteps(plan.steps, start) };
+    } else if (season) {
       const e = projectSeasonOptions().find((x) => `${x.id}:${x.year}` === season);
       if (!e) return back(res, backTo, 'err', 'That season is not open any more. Pick another.');
       p = PROJECTS.seasonProject(e, { today: shopToday(), longDate: MKT_CAL.longDate });
       if (!p) return back(res, backTo, 'err', 'That season\'s last day to order has passed.');
     }
-    if (String(b.key_date || '').trim() && !PROJECTS.validDate(b.key_date)) return back(res, backTo, 'err', 'That key date is not a real date.');
     const title = text(b.title, PROJECTS.TITLE_MAX).replace(/\s+/g, ' ') || p.title;
     if (!title) return back(res, backTo, 'err', 'Give the project a title, or pick a season.');
     const id = await saveProject({
       ...p, title,
-      summary: text(b.summary, 2000) || p.summary || null,
+      /* With AI the box held the brief for Claude; the project keeps Claude's short summary. */
+      summary: season === 'ai' ? (p.summary || null) : (text(b.summary, 3000) || p.summary || null),
       key_date: PROJECTS.validDate(b.key_date) || p.key_date || null,
       key_label: text(b.key_label, 60) || p.key_label || (PROJECTS.validDate(b.key_date) ? 'Key date' : null),
     }, { assignedTo: assignTo });
@@ -35649,6 +35720,15 @@ app.get('/admin/projects/:id', requireAdmin, async (req, res) => {
     };
     const rules = `<details class="card pj-rules" open><summary><b>Campaign rules</b> <span class="muted">the same for every campaign: check each step against them</span></summary>
       ${PROJECTS.RULES.map((g) => `<div class="tb-h">${escEmail(g.head)}</div><ul>${g.items.map((x) => `<li>${escEmail(x)}</li>`).join('')}</ul>`).join('')}</details>`;
+    /* The guide lives on the project, so the helper reads it with their own
+       sign-in; the owner can rewrite it here. */
+    const guideCard = p.guide || (owner && !p.archived_at) ? `<details class="card pj-guide" id="guide"${p.guide && !owner ? ' open' : ''}>
+      <summary><b>The guide</b> <span class="muted">${p.guide ? 'what this project is for, what to make and how' : 'none yet'}</span></summary>
+      <div class="gd">${PROJECTS.guideHtml(p.guide)}</div>
+      ${owner && !p.archived_at ? `<details style="margin-top:10px"><summary class="muted" style="cursor:pointer">${p.guide ? 'Edit the guide' : 'Write a guide'}</summary>
+        <form method="post" action="/admin/projects/${Number(p.id)}/guide-text" style="margin-top:8px">
+          <textarea name="guide" rows="16" maxlength="${PROJECTS.GUIDE_MAX}" style="width:100%" placeholder="## Headings, - bullets, 1. numbered, - [ ] checklist, | table | rows |, **bold**">${escEmail(p.guide || '')}</textarea>
+          <button type="submit" class="btn btn-ghost" style="margin-top:6px">Save the guide</button></form></details>` : ''}</details>` : '';
     const filesCard = `<div class="card" id="files"><h2 class="card-title">Files for this project <span class="muted">${files.length || ''}</span></h2>
       ${files.length ? `<div class="rows">${files.map((f) => `<div class="row-i"><span class="row-main"><a href="/admin/projects/${Number(p.id)}/file/${f.n}">&#128206; ${escEmail(f.name || 'File')}</a></span>
         <span class="row-end"><a class="btn btn-ghost" href="/admin/projects/${Number(p.id)}/file/${f.n}">Download</a></span></div>`).join('')}</div>`
@@ -35681,7 +35761,7 @@ app.get('/admin/projects/:id', requireAdmin, async (req, res) => {
         ${owner && !p.archived_at ? `<form method="post" action="/admin/projects/${Number(p.id)}/guide" class="pj-form">
           <label style="flex:1 1 320px">Guide link (a shared doc, https) <input name="guide_url" type="url" maxlength="500" value="${escEmail(p.guide_url || '')}" placeholder="https://..."></label>
           <button type="submit" class="btn btn-ghost">Save</button></form>` : ''}</div>` : ''}
-      ${filesCard}${rules}
+      ${guideCard}${filesCard}${rules}
       ${states.map(stepCard).join('')}
       ${addStep}${archive}${TASK_UPLOAD_JS}`, owner ? 'tasks' : 'myday'));
   } catch (err) {
@@ -35702,6 +35782,22 @@ app.post('/admin/projects/:id/guide', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('project guide failed:', err.message);
     return back(res, `/admin/projects/${id}`, 'err', 'Could not save the link.');
+  }
+});
+
+/* The owner writes or rewrites the guide (empty removes it). A removed guide
+   is stored as '' rather than NULL, so the startup seed (initStaffTables)
+   never brings the Christmas guide back. */
+app.post('/admin/projects/:id/guide-text', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  if (!id) return res.redirect('/admin/projects');
+  const guide = String((req.body || {}).guide || '').replace(/\r\n?/g, '\n').trim().slice(0, PROJECTS.GUIDE_MAX);
+  try {
+    const { rowCount } = await pool.query('UPDATE task_projects SET guide = $2 WHERE id = $1 AND archived_at IS NULL', [id, guide]);
+    return back(res, `/admin/projects/${id}#guide`, rowCount ? 'ok' : 'err', rowCount ? (guide ? 'Guide saved.' : 'Guide removed.') : 'That project is archived or gone.');
+  } catch (err) {
+    console.error('project guide text failed:', err.message);
+    return back(res, `/admin/projects/${id}#guide`, 'err', 'Could not save the guide.');
   }
 });
 

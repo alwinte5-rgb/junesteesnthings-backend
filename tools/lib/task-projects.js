@@ -10,6 +10,8 @@
  * designer (seasonSteps), replacing the old single "Asset kit" task; Christmas
  * 2026 has its own hand-written steps (CHRISTMAS_2026). */
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { escHtml } = require('./html-escape');
 
 const DAY = 86400000;
@@ -36,7 +38,7 @@ const RULES = [
   { head: 'Words', items: [
     'Turnaround is 7 to 14 business days. Never rush, fast, same-day or 24 hours.',
     'No free shipping, anywhere. Free pickup by appointment is fine.',
-    'Visits by appointment only. Lakeview, Chicago, never Oak Lawn.',
+    'Visits by appointment only. We are in Lakeview, Chicago.',
     'Phone (773) 900-4592, Instagram @jtees228, website jtees.net only.',
     'Every last-call piece names the last day to order.',
   ] },
@@ -109,6 +111,8 @@ const CHRISTMAS_2026 = {
   first: '2026-10-23',
   key_date: '2026-11-24',
   key_label: 'Last day to order',
+  /* The campaign guide written with the owner (also the Word copy she shares). */
+  guide: fs.readFileSync(path.join(__dirname, 'guides', 'christmas-2026.md'), 'utf8'),
   steps: [
     step(0, 'Fix the "Christmas at June\'s Tees" logo',
       'Turn your logo into two designs: our seasonal badge, and the fill-in family design we sell.',
@@ -149,14 +153,14 @@ const CHRISTMAS_2026 = {
         time: 'About 2 hours',
         resources: [xmasPage],
       }),
-    step(2, 'Six flat product mockups',
+    step(2, 'Seven flat product mockups',
       'One clean product picture for each thing we push this Christmas, 1080 x 1350.',
-      '1. Family shirt set: adult, kid, toddler and onesie side by side.\n2. Office holiday party tee.\n3. Photo socks with a family photo.\n4. Personalized Santa sack with a child\'s name.\n5. Custom glassware: a set of 2 glasses with names.\n6. A holiday saying tee ("I\'m So Good Santa Came Twice").\nPlain background, the print easy to read, logo small in a corner.',
+      '1. Family shirt set: adult, kid, toddler and onesie side by side.\n2. Photo pillow: a family photo with names and the year, front on (one of our best Christmas sellers).\n3. Office holiday party tee.\n4. Photo socks with a family photo.\n5. Personalized Santa sack with a child\'s name.\n6. Custom glassware: a set of 2 glasses with names.\n7. A holiday saying tee ("I\'m So Good Santa Came Twice").\nPlain background, the print easy to read, logo small in a corner.',
       {
         why: 'The lifestyle photo stops people scrolling; the flat mockup shows them exactly what they get. The posts and the website grid use these.',
         gives: ['The real-order photos in this project\'s Files, as the standard to match'],
-        done: ['6 mockups, 1080 x 1350, one per product above', 'Only products we sell', RULES_DONE],
-        proof: 'The 6 mockups.',
+        done: ['7 mockups, 1080 x 1350, one per product above', 'Only products we sell', RULES_DONE],
+        proof: 'The 7 mockups.',
         proof_required: true,
         example: 'Santa sack flat on a cream background, "Maya" in red script, a little snow, logo bottom left.',
         time: 'About 2 hours',
@@ -260,7 +264,7 @@ function seasonSteps(e, { longDate }) {
  *  the same day (about two hours of work). */
 function dateSteps(steps, firstIso) {
   return steps.map((s, i) => {
-    const day = addWorkDays(firstIso, s.offset);
+    const day = addWorkDays(firstIso, Number.isInteger(s.offset) ? s.offset : Number.isInteger(s.day) ? s.day : i);
     return { title: s.title, description: s.description, how_to: s.how_to, brief: s.brief, step_no: i + 1, starts_on: day, due_on: day };
   });
 }
@@ -276,7 +280,7 @@ function seasonProject(e, { now = new Date(), today: todayIso, longDate }) {
   const next = addWorkDays(today, 1);
   if (preset) {
     const first = preset.first > next ? preset.first : next;
-    return { title: preset.title, summary: preset.summary, key_date: preset.key_date, key_label: preset.key_label,
+    return { title: preset.title, summary: preset.summary, guide: preset.guide || null, key_date: preset.key_date, key_label: preset.key_label,
       auto_ref: `mcal:${e.id}:${e.year}`, steps: dateSteps(preset.steps, first) };
   }
   return {
@@ -320,6 +324,70 @@ function shapeStepEdit(body = {}) {
   if (parse(starts) == null || parse(due) == null) return { ok: false, error: 'Pick a start and a due date.' };
   if (due < starts) return { ok: false, error: 'The due date is before the start date.' };
   return { ok: true, step: { title, starts_on: starts, due_on: due } };
+}
+
+/* ── The guide ────────────────────────────────────────────────────────────── */
+
+const GUIDE_MAX = 20000;
+
+/** A project's guide (plain markdown) as HTML: ## and ### headings, - and 1.
+ *  lists, - [ ] checklists, | tables |, **bold** and https links. Everything
+ *  is escaped first; only these marks become tags, so nothing typed or
+ *  written by the planner can add markup of its own. */
+function guideHtml(md) {
+  const text = String(md || '').replace(/\r\n?/g, '\n').slice(0, GUIDE_MAX);
+  if (!text.trim()) return '';
+  const inline = (raw) => escHtml(raw)
+    .replace(/\*\*([^*]{1,300})\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]]{1,200})\]\((https:\/\/[^\s()"'<>]{1,500})\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  /* Line by line, so a heading, a lead-in line, a list and a table may sit
+     together without blank lines between them (the planner does not always
+     leave them). Consecutive lines of one kind form one block. */
+  const kindOf = (l) => {
+    const t = l.trim();
+    if (!t) return 'blank';
+    if (/^#{1,4}\s+\S/.test(t)) return 'h';
+    if (/^\|.*\|$/.test(t)) return 'table';
+    if (/^- \[[ xX]\] /.test(t)) return 'check';
+    if (/^[-*] /.test(t)) return 'ul';
+    if (/^\d+\. /.test(t)) return 'ol';
+    return 'p';
+  };
+  const cells = (l) => l.trim().slice(1, -1).split('|').map((c) => c.trim());
+  /* A separator row is cells of three or more dashes (colons allowed); a data
+     row of single dashes or blanks is kept. */
+  const isSep = (l) => cells(l).every((c) => /^:?-{3,}:?$/.test(c));
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length;) {
+    const kind = kindOf(lines[i]);
+    if (kind === 'blank') { i += 1; continue; }
+    if (kind === 'h') {
+      const [, hashes, body] = /^(#{1,4})\s+(.+)$/.exec(lines[i].trim());
+      const n = hashes.length <= 2 ? 3 : 4;
+      out.push(`<h${n} class="gd-h">${inline(body)}</h${n}>`);
+      i += 1;
+      continue;
+    }
+    const group = [];
+    while (i < lines.length && kindOf(lines[i]) === kind) { group.push(lines[i].trim()); i += 1; }
+    if (kind === 'table') {
+      const rows = group.filter((l) => !isSep(l)).map(cells);
+      if (!rows.length) continue;
+      const [head, ...body] = rows;
+      out.push(`<div class="gd-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${
+        body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+    } else if (kind === 'check') {
+      out.push(`<ul class="gd-check">${group.map((l) => `<li>${/^- \[[xX]\]/.test(l) ? '☑' : '☐'} ${inline(l.replace(/^- \[[ xX]\] /, ''))}</li>`).join('')}</ul>`);
+    } else if (kind === 'ul') {
+      out.push(`<ul>${group.map((l) => `<li>${inline(l.replace(/^[-*] /, ''))}</li>`).join('')}</ul>`);
+    } else if (kind === 'ol') {
+      out.push(`<ol>${group.map((l) => `<li>${inline(l.replace(/^\d+\. /, ''))}</li>`).join('')}</ol>`);
+    } else {
+      out.push(`<p>${group.map(inline).join('<br>')}</p>`);
+    }
+  }
+  return out.join('');
 }
 
 /* ── The timeline ─────────────────────────────────────────────────────────── */
@@ -395,6 +463,6 @@ function ymdOf(v) {
 }
 
 module.exports = {
-  RULES, RULES_DONE, CHRISTMAS_2026, SEASON_PRESETS, STEP_MAX, TITLE_MAX,
+  RULES, RULES_DONE, CHRISTMAS_2026, SEASON_PRESETS, STEP_MAX, TITLE_MAX, GUIDE_MAX, guideHtml,
   addWorkDays, workdayOnOrAfter, validDate, seasonSteps, seasonProject, dateSteps, stepStates, canStart, shapeStepEdit, timelineSvg, ymdOf, withDay,
 };
