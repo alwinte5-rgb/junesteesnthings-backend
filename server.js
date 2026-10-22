@@ -68,6 +68,7 @@ const { Readable, pipeline } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const LEADPRICES = require('./tools/lib/lead-prices');
+const FINDER = require('./tools/lib/lead-finder');
 const FOLLOWUPS = require('./tools/lib/followups');
 const INBOUND = require('./tools/lib/inbound-email');
 const RELAY = require('./tools/lib/text-relay');
@@ -1264,6 +1265,34 @@ async function initStaffTables() {
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS lead_notes_sub_idx ON lead_notes (submission_id, created_at)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS lead_notes_quote_idx ON lead_notes (quote_code, created_at)`);
+  /* The AI lead finder (tools/lib/lead-finder.js): one row per search, with
+     what came back, so the owner sees what each helper looked for and what it
+     cost, and the daily caps count from here. A run is written as 'running'
+     before Claude is asked, so two presses cannot both slip under the cap. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lead_finder_runs (
+      id           SERIAL PRIMARY KEY,
+      staff_id     INTEGER,
+      business     TEXT NOT NULL DEFAULT 'jtees',
+      query        TEXT NOT NULL,
+      ask          JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status       TEXT NOT NULL DEFAULT 'running',
+      results      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      searches     INTEGER NOT NULL DEFAULT 0,
+      cost         NUMERIC(10,4) NOT NULL DEFAULT 0,
+      error        TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finished_at  TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS lead_finder_runs_when_idx ON lead_finder_runs (created_at)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS lead_finder_runs_staff_idx ON lead_finder_runs (staff_id, created_at)`);
+  /* A found lead's own website, and its domain (FINDER.domainKey) so the same
+     organisation is not registered twice under two links; and the finder run
+     it came from. */
+  for (const col of ['website TEXT', 'website_key TEXT', 'finder_run_id INTEGER']) {
+    await pool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col}`);
+  }
+  await pool.query(`CREATE INDEX IF NOT EXISTS submissions_website_key_idx ON submissions (website_key) WHERE website_key IS NOT NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS staff_tasks (
       id             SERIAL PRIMARY KEY,
@@ -3740,6 +3769,17 @@ async function seenProfile(key, beforeId = null) {
         AND created_at > NOW() - make_interval(days => $1) AND ($2::int IS NULL OR id < $2)
       ORDER BY id LIMIT 200`, [CREDIT.KNOWN_LEAD_DAYS, beforeId, handle]);
   return rows.find((r) => CREDIT.profileKey(r.profile_url) === key) || null;
+}
+
+/** The earliest recent lead with this website domain (FINDER.domainKey), or
+ *  null; only leads before `beforeId` when given. */
+async function seenWebsite(key, beforeId = null) {
+  if (!key) return null;
+  const { rows: [r] } = await pool.query(
+    `SELECT id, created_at FROM submissions
+      WHERE website_key = $1 AND created_at > NOW() - make_interval(days => $2) AND ($3::int IS NULL OR id < $3)
+      ORDER BY id LIMIT 1`, [key, CREDIT.KNOWN_LEAD_DAYS, beforeId]);
+  return r || null;
 }
 
 /** Salespeople a customer might name: active helpers who may draft quotes. */
@@ -26680,7 +26720,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
 
     res.send(adminPage('Leads', `
       ${pageHeader('Leads', 'Every enquiry: the website form, embroidery requests and tawk.to chats that left an email.',
-        '<a class="btn" href="/admin/quote/new">New quote</a>')}
+        '<a class="btn btn-ghost" href="/admin/leads/find">Find leads with AI</a> <a class="btn" href="/admin/quote/new">New quote</a>')}
       ${flash(req.query)}
       ${tiles}
       ${logCallForm()}
@@ -32238,6 +32278,7 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
     const range = periodRange(period);
     const roster = await staffRoster({ activeOnly: true });
     const scores = await Promise.all(roster.map((s) => helperScore(s.id, range.from, range.to)));
+    const proofs = await Promise.all(roster.map((s) => leadProof(s.id, range.from, range.to)));
     const trainings = await Promise.all(roster.map((s) => trainingFor(s.id).catch(() => null)));
     const { rows: [counts] } = await pool.query(
       `SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')::int AS approvals,
@@ -32266,6 +32307,9 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
           { label: 'Accepted', value: String(x.accepted), tone: 'green', sub: `conversion ${conv}` },
           { label: 'Tasks done', value: String(x.tasksDone), tone: x.overdue ? 'amber' : 'green',
             sub: `${x.onTime} on time &middot; ${x.overdue} overdue` },
+          { label: 'Leads found', value: String(proofs[i].found), tone: 'blue',
+            sub: `${proofs[i].contacted} contacted &middot; ${proofs[i].replied} answered${proofs[i].perHour == null ? '' : ` &middot; ${proofs[i].perHour.toFixed(1)}/clocked h`}${
+              proofs[i].runs ? ` &middot; ${proofs[i].runs} AI searches` : ''}` },
           { label: 'Collected', value: money(x.collected), tone: 'gold', sub: 'on quotes they sent, less refunds and fees' },
           { label: 'Hours', value: x.hours ? String(x.hours) : '—', tone: 'gray',
             sub: x.hours ? `${money(x.collected / x.hours)} per hour` : 'enter from TimeProof below' },
@@ -32304,12 +32348,43 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
    owner's Team page reads, plus training, finding new customers, upsells and
    activity. A helper only ever sees their own; the owner sees anyone's with
    ?staff= (ROUTES: any). */
+/** Proof that finding leads was real work (owner, 2026-10-21: "a lead counts
+ *  only when contacted + logged"). For [from, to): leads they found, found
+ *  leads they FIRST contacted in the period (a call, email, text, chat or DM
+ *  logged on the lead by them, with a few words on what happened), how many
+ *  of those answered (quoted or won, or a quote made), finder
+ *  runs, and contacts per clocked hour from the timeclock. */
+const PROOF_NOTE_MIN = 10;
+async function leadProof(staffId, from, to) {
+  const edge = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? TEAM.localMidnight(v, SHOP_TZ) : v);
+  from = edge(from); to = edge(to);
+  const [{ rows: [x] }, { rows: shifts }] = await Promise.all([
+    pool.query(
+      `WITH firsts AS (
+         SELECT s.id, s.outcome,
+                (SELECT MIN(n.created_at) FROM lead_notes n WHERE n.submission_id = s.id AND n.staff_id = $1
+                    AND n.kind = ANY($4) AND length(trim(n.body)) >= $5) AS first_contact
+           FROM submissions s WHERE s.rep_id = $1)
+       SELECT (SELECT COUNT(*) FROM submissions WHERE rep_id = $1 AND created_at >= $2 AND created_at < $3)::int AS found,
+              (SELECT COUNT(*) FROM submissions WHERE rep_id = $1 AND created_at >= $2 AND created_at < $3 AND finder_run_id IS NOT NULL)::int AS from_finder,
+              COUNT(*) FILTER (WHERE first_contact >= $2 AND first_contact < $3)::int AS contacted,
+              COUNT(*) FILTER (WHERE first_contact >= $2 AND first_contact < $3
+                                 AND (outcome IN ('quoted', 'won')
+                                      OR EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = firsts.id AND q.status <> 'draft')))::int AS replied,
+              (SELECT COUNT(*) FROM lead_finder_runs WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3)::int AS runs
+         FROM firsts`, [staffId, from, to, CONTACT_KINDS, PROOF_NOTE_MIN]),
+    pool.query(`SELECT started_at, ended_at FROM staff_shifts WHERE staff_id = $1 AND started_at >= $2 AND started_at < $3`, [staffId, from, to]),
+  ]);
+  const clocked = shifts.reduce((n, sh) => n + TIMECLOCK.shiftMinutes(sh), 0) / 60;
+  return { ...x, clocked, perHour: clocked >= 0.5 ? x.contacted / clocked : null };
+}
+
 async function myStatsExtras(staffId, from, to) {
   const edge = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? TEAM.localMidnight(v, SHOP_TZ) : v);
   from = edge(from); to = edge(to);
   const { rows: [x] } = await pool.query(
     `SELECT (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1 AND created_at >= $2 AND created_at < $3
-               AND action IN ('lead registered as theirs', 'found lead was already known'))::int AS prospects,
+               AND action = 'lead registered as theirs')::int AS prospects,
             (SELECT COUNT(*) FROM submissions s WHERE s.rep_id = $1 AND s.created_at >= $2 AND s.created_at < $3)::int AS rep_leads,
             (SELECT COUNT(*) FROM submissions s WHERE s.rep_id = $1 AND s.created_at >= $2 AND s.created_at < $3
                AND EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND q.status <> 'draft'))::int AS rep_quoted,
@@ -32336,7 +32411,8 @@ app.get('/admin/my-stats', requireAdmin, async (req, res) => {
     }
     const period = ['week', 'last', 'month'].includes(String(req.query.period)) ? String(req.query.period) : 'week';
     const range = periodRange(period);
-    const [x, e, p] = await Promise.all([helperScore(staffId, range.from, range.to), myStatsExtras(staffId, range.from, range.to), trainingFor(staffId)]);
+    const [x, e, p, lp] = await Promise.all([helperScore(staffId, range.from, range.to), myStatsExtras(staffId, range.from, range.to), trainingFor(staffId),
+      leadProof(staffId, range.from, range.to)]);
     const who = roster.find((r) => r.id === staffId) || {};
     const role = TRAINING.salesRoleOf(who.sales_role);
     const conv = x.convBase ? `${Math.round(100 * x.convWon / x.convBase)}%` : '—';
@@ -32366,10 +32442,12 @@ app.get('/admin/my-stats', requireAdmin, async (req, res) => {
         { label: 'Upsells applied', value: String(e.upsells), tone: 'blue' },
       ])}
       ${section('Finding new customers', [
-        { label: 'Prospects registered', value: String(e.prospects), tone: 'blue', sub: '"I found this customer" on Leads' },
-        { label: 'Your leads', value: String(e.rep_leads), tone: 'navy' },
+        { label: 'Found', value: String(lp.found), tone: 'blue', sub: `new to the shop${lp.from_finder ? ` · ${lp.from_finder} from the AI finder` : ''}` },
+        { label: 'Contacted', value: String(lp.contacted), tone: lp.contacted ? 'green' : 'gray', sub: 'first contact logged on the lead' },
+        { label: 'Answered', value: String(lp.replied), tone: 'navy', sub: lp.contacted ? `${Math.round(100 * lp.replied / lp.contacted)}% of those contacted` : 'of those contacted' },
+        { label: 'Contacts per hour', value: lp.perHour == null ? '—' : lp.perHour.toFixed(1), tone: 'gray', sub: lp.clocked ? `${lp.clocked.toFixed(1)} h clocked` : 'from the timeclock' },
         { label: 'Reached a quote', value: String(e.rep_quoted), tone: 'green', sub: `${reach} of your leads` },
-      ], role === 'leadgen' ? 'Your main numbers as Lead Generation.' : '')}
+      ], `${role === 'leadgen' ? 'Your main numbers as Lead Generation. ' : ''}A found lead counts once you have contacted them and logged it on the lead. <a href="/admin/leads/find">Find leads with AI →</a>`)}
       ${section('Money', [
         { label: 'Collected', value: money(x.collected), tone: 'gold', sub: 'on sales credited to you, less refunds and fees' },
         { label: 'Hours', value: x.hours ? String(x.hours) : '—', tone: 'gray', sub: 'from TimeProof' },
@@ -33699,56 +33777,114 @@ app.post('/admin/lead/:id/outcome', requireAdmin, async (req, res) => {
    scored the same way. */
 app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   const b = req.body || {};
-  const name = text(b.name, 200);
-  const email = text(b.email, 254).toLowerCase();
-  const phone = text(b.phone, 40);
-  const description = text(b.description, 4000);
-  const platform = SOCIAL_PLATFORMS.includes(b.platform) ? b.platform : 'Other';
-  const profile = text(b.profile_url, 300);
+  const actor = currentActor();
+  const isStaff = !!(actor && actor.kind === 'staff');
+  /* Added from an AI finder result (/admin/leads/find): the lead is read from
+     the run as it was saved, never from the form, and only from a run of the
+     helper's own. The form may add an email or phone they looked up. */
+  let found = null;
+  const runId = intIn(b.finder_run);
+  if (runId) {
+    const idx = Number.parseInt(b.finder_idx, 10);
+    try {
+      /* Only from a run of your own: the owner adding from a helper's run
+         would take the find from them. */
+      const { rows: [run] } = await pool.query(`SELECT id, staff_id, results FROM lead_finder_runs WHERE id = $1 AND status = 'done'
+                                                   AND staff_id IS NOT DISTINCT FROM $2`, [runId, isStaff ? actor.id : null]);
+      found = run && Number.isInteger(idx) && idx >= 0 && idx < FINDER.MAX_LEADS && Array.isArray(run.results) ? run.results[idx] : null;
+      if (!found) return back(res, '/admin/leads/find', 'err', 'That result is not in one of your searches.');
+      /* Claimed before anything is saved, so two presses (or two tabs) cannot
+         both add it. lead_id 0 = being added; a refusal below gives it back. */
+      const { rowCount } = await pool.query(
+        `UPDATE lead_finder_runs SET results = jsonb_set(results, ARRAY[$2::text, 'lead_id'], '0'::jsonb)
+          WHERE id = $1 AND NOT (results -> $2::int ? 'lead_id')`, [runId, idx]);
+      if (!rowCount) return back(res, `/admin/leads/find?run=${runId}`, 'err', 'That one is already on Leads.');
+    } catch (err) {
+      console.error('finder add lookup failed:', err.message);
+      return back(res, '/admin/leads/find', 'err', 'Could not add the lead.');
+    }
+    found = { ...found, run: runId, idx };
+  }
+  /* Gives a finder result back when it was not added after all. */
+  const unclaim = () => (found ? pool.query(`UPDATE lead_finder_runs SET results = results #- ARRAY[$2::text, 'lead_id']
+      WHERE id = $1 AND results -> $2::int ->> 'lead_id' = '0'`, [found.run, found.idx]).catch(() => {}) : null);
+  const name = text(found ? found.name : b.name, 200);
+  const email = (text(b.email, 254) || (found ? text(found.email, 254) : '')).toLowerCase();
+  /* A number found online is never called or texted (sales course lg3), so a
+     finder lead's phone is used only to check the shop's records, never saved. */
+  const phone = found ? '' : text(b.phone, 40);
+  const checkPhone = phone || (found ? text(found.phone, 40) : '');
+  const description = found ? FINDER.leadDescription(found) : text(b.description, 4000);
+  const profile = found ? text(found.social || found.source_url, 300) : text(b.profile_url, 300);
+  const socialHost = found && CREDIT.profileKey(profile) ? String(CREDIT.profileKey(profile)).split(/[/:]/)[0] : '';
+  const platform = found ? ({ facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok' }[socialHost.split('.')[0]] || 'Other')
+    : SOCIAL_PLATFORMS.includes(b.platform) ? b.platform : 'Other';
   /* A recognised social profile (or @handle) first; any other https link is
      still kept as a note of where they were found. */
   const profileUrl = CREDIT.profileUrlIn(profile, platform) || (/^https:\/\/[^\s<>"']+$/i.test(profile) ? profile : null);
   const profileId = CREDIT.profileKey(profileUrl);
-  if (!name && !email && !phone && !profileUrl) return back(res, '/admin/leads', 'err', 'A lead needs a name, contact or profile link.');
-  if (email && !STAFF.EMAIL_RE.test(email)) return back(res, '/admin/leads', 'err', 'That email does not look right.');
+  /* Their own website: the finder's, or a plain link typed as the profile.
+     Its domain is how the same organisation is recognised under two links. */
+  /* Never the page it was found on: a listing or news site is not theirs. */
+  const website = (found ? FINDER.safeUrl(found.website) : !profileId && profileUrl ? FINDER.safeUrl(profileUrl) : '') || null;
+  const websiteKey = FINDER.domainKey(website);
+  if (!name && !email && !phone && !profileUrl) { await unclaim(); return back(res, '/admin/leads', 'err', 'A lead needs a name, contact or profile link.'); }
+  if (email && !STAFF.EMAIL_RE.test(email)) { await unclaim(); return back(res, found ? `/admin/leads/find?run=${found.run}` : '/admin/leads', 'err', 'That email does not look right.'); }
   try {
-    const actor = currentActor();
-    const isStaff = !!(actor && actor.kind === 'staff');
     /* A helper says where it came from; the shop's records decide whether a
        "found" lead really is theirs (tools/lib/sales-credit.js). */
-    const origin = String(b.origin || '');
+    const origin = found ? 'found' : String(b.origin || '');
     if (isStaff && !['shop', 'found'].includes(origin)) {
       return back(res, '/admin/leads', 'err', 'Say where the lead came from: they contacted the shop, or you found them.');
     }
     const foundIt = isStaff && origin === 'found';
-    if (foundIt && !email && !FRAUD.phoneKey(phone) && !profileId) {
+    /* A website alone is enough only for a finder lead: its domain is checked
+       below, and the owner confirms it like a profile-only lead. */
+    if (foundIt && !email && !FRAUD.phoneKey(phone) && !profileId && !(found && websiteKey)) {
+      await unclaim();
       return back(res, '/admin/leads', 'err', `A lead you found needs their email, phone or profile link (${CREDIT.PROFILE_HOSTS.slice(0, 3).join(', ')} and the like), so it can be checked against the shop’s leads.`);
     }
-    const known = foundIt ? (CREDIT.knownReason(await seenCustomer({ email, phone }), fmtDate)
-      || CREDIT.knownReason({ lead: await seenProfile(profileId) }, fmtDate)) : '';
-    const profileOnly = foundIt && !email && !FRAUD.phoneKey(phone) && !!profileId;
+    const known = foundIt ? (CREDIT.knownReason(await seenCustomer({ email, phone: checkPhone }), fmtDate)
+      || CREDIT.knownReason({ lead: await seenProfile(profileId) }, fmtDate)
+      || CREDIT.knownReason({ lead: await seenWebsite(websiteKey) }, fmtDate)) : '';
+    /* Someone the shop already has is not a new lead, so it is not saved
+       again (it used to be, as a shop lead, and counted as a prospect). The
+       attempt is still logged for the owner. */
+    if (known) {
+      await unclaim();
+      logActivity(actor, 'found lead refused: already known', { type: 'lead', id: null }, { reason: known, name });
+      return back(res, found ? `/admin/leads/find?run=${found.run}` : '/admin/leads', 'err', `Not added: ${known}. The shop already has them.`);
+    }
+    const profileOnly = foundIt && !email && !FRAUD.phoneKey(phone) && !!(profileId || websiteKey);
     const label = CREDIT.classifyLead({ by: isStaff ? 'staff' : 'owner', staffId: isStaff ? actor.id : null, foundIt, known, profileOnly });
+    if (label.sale_type === 'pending' && websiteKey && !profileId) {
+      label.reason = 'Found by the salesperson with the AI finder, known only by a website; waiting for the owner to check the shop does not already know them';
+    }
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
       : platform === 'Phone' ? 'phone' : 'manual';
     const { rows: [l] } = await pool.query(
       `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to,
-                                sale_type, sale_type_reason, rep_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+                                sale_type, sale_type_reason, rep_id, website, website_key, finder_run_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
       [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
-       isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id]);
+       isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id, website, websiteKey, found ? found.run : null]);
+    if (found) {
+      await pool.query(`UPDATE lead_finder_runs SET results = jsonb_set(results, ARRAY[$2::text, 'lead_id'], to_jsonb($3::int)) WHERE id = $1`,
+        [found.run, found.idx, l.id]);
+    }
     /* Two helpers registering the same customer at the same moment both pass
        the check above. The first one saved wins: a later row that finds an
        earlier lead for this contact turns into a shop lead. */
     if (label.sale_type === 'rep' || label.sale_type === 'pending') {
       const e = FRAUD.emailKey(email);
-      const p = FRAUD.phoneKey(phone);
+      const p = FRAUD.phoneKey(checkPhone);
       const { rows: [first] } = await pool.query(
         `SELECT id, created_at FROM submissions s
           WHERE s.id < $3 AND s.created_at > NOW() - make_interval(days => $4)
             AND ((s.email IS NOT NULL AND $1 <> '' AND lower(trim(s.email)) = $1)
                  OR ($2 <> '' AND right(regexp_replace(COALESCE(s.phone, ''), '\\D', '', 'g'), 10) = $2))
           ORDER BY s.id LIMIT 1`, [e || '', p || '', l.id, CREDIT.KNOWN_LEAD_DAYS]);
-      const earlier = first || await seenProfile(profileId, l.id);
+      const earlier = first || await seenProfile(profileId, l.id) || await seenWebsite(websiteKey, l.id);
       if (earlier) {
         label.sale_type = 'shop';
         label.rep_id = null;
@@ -33759,14 +33895,15 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     }
     if (foundIt) {
       logActivity(actor, label.sale_type === 'shop' ? 'found lead was already known' : 'lead registered as theirs',
-        { type: 'lead', id: l.id }, { reason: label.reason });
+        { type: 'lead', id: l.id }, { reason: label.reason, ...(found ? { finder_run: found.run } : {}) });
       return back(res, `/admin/leads#lead-${l.id}`, label.sale_type === 'shop' ? 'err' : 'ok',
-        label.sale_type === 'rep' ? 'Registered as your lead.'
-          : label.sale_type === 'pending' ? 'Saved as your lead, waiting for June to confirm: with only a profile, the shop cannot check its customers. Add their email or phone when you have it.'
+        label.sale_type === 'rep' ? 'Registered as your lead. It counts once you contact them and log it.'
+          : label.sale_type === 'pending' ? `Saved as your lead, waiting for June to confirm: with only a ${websiteKey && !profileId ? 'website' : 'profile'}, the shop cannot check its customers. Add their email or phone when you have it.`
           : `Saved as a shop lead: ${label.reason}.`);
     }
     return res.redirect(`/admin/leads#lead-${l.id}`);
   } catch (err) {
+    await unclaim();
     console.error('add lead failed:', err.message);
     return back(res, '/admin/leads', 'err', 'Could not add the lead.');
   }
@@ -33992,6 +34129,171 @@ function addLeadForm() {
       <button type="submit">Add lead</button>
     </form></details>`;
 }
+
+/* ── AI lead finder (tools/lib/lead-finder.js) ─────────────────────────────
+   A helper asks for a kind of customer in an area; Claude searches the web and
+   lists organisations with where it found them. Add puts one on Leads through
+   "I found this customer" (POST /admin/leads/add with the run and its index),
+   so it is checked against the shop's customers and credited like any other.
+   Runs are capped per helper and for the shop each day, counted from
+   lead_finder_runs. */
+
+/** Runs made today on the shop's clock: by `staffId` and by everyone. */
+async function finderRunsToday(staffId) {
+  const { rows: [n] } = await pool.query(
+    `SELECT COUNT(*) FILTER (WHERE staff_id IS NOT DISTINCT FROM $1)::int AS mine, COUNT(*)::int AS shop
+       FROM lead_finder_runs WHERE created_at >= (date_trunc('day', NOW() AT TIME ZONE $2) AT TIME ZONE $2)`, [staffId, SHOP_TZ]);
+  return n;
+}
+
+/** Why the shop already has this result ('' when it is new). */
+async function finderKnown(l) {
+  return CREDIT.knownReason(await seenCustomer({ email: l.email, phone: l.phone }), fmtDate)
+    || CREDIT.knownReason({ lead: await seenProfile(CREDIT.profileKey(l.social)) }, fmtDate)
+    || CREDIT.knownReason({ lead: await seenWebsite(FINDER.domainKey(l.website)) }, fmtDate);
+}
+
+function finderForm(ask, cap) {
+  const a = ask || {};
+  return `<form method="post" action="/admin/leads/find" class="card" style="display:grid;gap:10px"
+      onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Searching… this takes a minute or two'">
+    <b>What kind of customer, where?</b>
+    <div class="row" style="gap:8px;flex-wrap:wrap">
+      <select name="niche" required>${Object.entries(FINDER.NICHES).map(([k, n]) =>
+        `<option value="${k}"${a.niche === k ? ' selected' : ''}>${escEmail(n.label)}</option>`).join('')}</select>
+      <input name="custom" maxlength="${FINDER.LIMITS.niche}" placeholder="If something else: what kind (e.g. dance studios)" value="${escEmail(a.custom || '')}" style="flex:1 1 220px">
+      <input name="area" maxlength="${FINDER.LIMITS.area}" required placeholder="Where: neighborhood, city or ZIP" value="${escEmail(a.area || 'Chicago, IL')}" style="flex:1 1 180px">
+    </div>
+    <input name="note" maxlength="${FINDER.LIMITS.note}" placeholder="Anything else (optional): e.g. spring sports, reunions this summer" value="${escEmail(a.note || '')}">
+    <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <button type="submit"${cap.ok ? '' : ' disabled'}>Find leads</button>
+      <span class="muted" style="font-size:13px">${cap.ok ? `${cap.left} search${cap.left === 1 ? '' : 'es'} left today` : escEmail(cap.why)}</span>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin:0">Claude searches the web and lists up to ${FINDER.MAX_LEADS} places with where it found them.
+      Check each one before you add it: AI can be wrong. A lead counts for you once you contact them and it is logged on the lead
+      (an email sent from Leads, or a call or DM note saying what happened).</p>
+  </form>`;
+}
+
+function finderResultCard(run, l, i, known, mine = true) {
+  const link = (u, label) => (u ? `<a href="${escEmail(u)}" target="_blank" rel="noopener noreferrer nofollow">${escEmail(label)}</a>` : '');
+  const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } };
+  const action = l.lead_id === 0 ? '<span class="muted" style="font-size:13px">Being added…</span>'
+    : l.lead_id ? `<a class="btn btn-ghost" href="/admin/leads#lead-${Number(l.lead_id)}">On Leads →</a>`
+    : known ? `<span class="muted" style="font-size:13px">Not yours to add: the shop already has them.</span>`
+    : !mine ? '<span class="muted" style="font-size:13px">Only the helper who ran this search can add it.</span>'
+    : `<form method="post" action="/admin/leads/add" class="row" style="gap:6px;flex-wrap:wrap;margin:0" onsubmit="this.querySelector('button').disabled=true">
+        <input type="hidden" name="finder_run" value="${Number(run.id)}"><input type="hidden" name="finder_idx" value="${i}">
+        ${l.email ? '' : '<input name="email" type="email" maxlength="254" placeholder="Their email, if you found it" style="flex:1 1 180px">'}
+        <button type="submit" class="btn">Add to my leads</button></form>`;
+  return `<div class="card" id="found-${i}">
+    <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(l.name)}</b>
+      ${known ? pill(known, 'amber') : l.lead_id ? pill('Added', 'green') : ''}
+      <div class="row-sub" style="white-space:normal">${escEmail([l.kind, l.city].filter(Boolean).join(' · '))}</div></span></div>
+    ${l.why_fit ? `<p style="margin:6px 0">${escEmail(l.why_fit)}</p>` : ''}
+    <div class="muted" style="font-size:13px;display:flex;gap:12px;flex-wrap:wrap">
+      ${link(l.website, host(l.website))}${l.email ? `<span>${escEmail(l.email)}</span>` : ''}
+      ${link(l.social, 'Social profile')}${l.source_url && l.source_url !== l.website ? link(l.source_url, `Found on ${host(l.source_url)}`) : ''}</div>
+    <div style="margin-top:8px">${action}</div></div>`;
+}
+
+app.get('/admin/leads/find', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const owner = actor.kind !== 'staff';
+    const staffId = owner ? null : actor.id;
+    const [today, roster, { rows: runs }] = await Promise.all([
+      finderRunsToday(staffId), staffRoster(),
+      pool.query(`SELECT id, staff_id, query, ask, status, results, searches, cost, error, created_at FROM lead_finder_runs
+                   WHERE ($1::int IS NULL OR staff_id = $1) ORDER BY id DESC LIMIT 20`, [staffId])]);
+    const cap = FINDER.capCheck({ mine: today.mine, shop: today.shop, owner });
+    const wanted = intIn(req.query.run);
+    const run = wanted ? runs.find((r) => r.id === wanted) : runs[0];
+    let shown = '';
+    if (run && run.status === 'done') {
+      const results = Array.isArray(run.results) ? run.results : [];
+      const known = await Promise.all(results.map((l) => (l.lead_id ? '' : finderKnown(l).catch(() => ''))));
+      shown = `<h3 style="margin:18px 0 6px">${escEmail(run.query)} <span class="muted" style="font-weight:400;font-size:13px">&middot; ${
+        escEmail(whenShort(run.created_at))} &middot; ${results.length} found${known.filter(Boolean).length ? `, ${known.filter(Boolean).length} already known` : ''}</span></h3>
+        ${results.length ? `<div class="grid-cards">${results.map((l, i) => finderResultCard(run, l, i, known[i], run.staff_id === staffId)).join('')}</div>`
+          : `<div class="card">${emptyState('Nothing usable came back. Try a wider area or different words.')}</div>`}`;
+    } else if (run && run.status === 'failed') {
+      shown = `<div class="card"><div class="warn">${escEmail(run.error || 'That search did not finish.')}</div></div>`;
+    }
+    const history = runs.length ? `<details class="card" style="margin-top:14px"><summary><b>Earlier searches</b> <span class="muted">${runs.length}</span></summary>
+      <div class="rows" style="margin-top:8px">${runs.map((r) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <a href="/admin/leads/find?run=${r.id}">${escEmail(r.query)}</a>
+        <div class="row-sub">${owner ? `${escEmail(r.staff_id ? nameOf(roster, r.staff_id) : 'Owner')} &middot; ` : ''}${escEmail(whenShort(r.created_at))} &middot; ${
+          r.status === 'done' ? `${(r.results || []).length} found, ${(r.results || []).filter((l) => l.lead_id).length} added` : escEmail(r.status)}${
+          owner ? ` &middot; ${r.searches} searches, about ${money(Number(r.cost))}` : ''}</div></span></div>`).join('')}</div></details>` : '';
+    res.set('Cache-Control', 'no-store');
+    res.send(adminPage('Find leads', `
+      ${pageHeader('Find leads with AI', 'Claude looks on the web for groups that order shirts. You check each one, add the good ones, and contact them.',
+        '<a class="btn btn-ghost" href="/admin/leads">Back to Leads</a>')}
+      ${flash(req.query)}
+      ${finderForm(run && run.ask, cap)}
+      ${shown}
+      ${history}`, 'leads'));
+  } catch (err) {
+    console.error('lead finder page failed:', err.message);
+    res.status(500).send(adminPage('Find leads', '<div class="card"><div class="warn">Could not load the finder.</div></div>', 'leads'));
+  }
+});
+
+app.post('/admin/leads/find', requireAdmin, async (req, res) => {
+  const v = FINDER.validateRun(req.body);
+  if (v.error) return back(res, '/admin/leads/find', 'err', v.error);
+  const actor = currentActor() || OWNER_ACTOR;
+  const owner = actor.kind !== 'staff';
+  const staffId = owner ? null : actor.id;
+  let runId = null;
+  try {
+    /* The cap is checked and the run claimed under one shop-wide lock, so two
+       presses at once cannot both find a run left. */
+    const c = await pool.connect();
+    let cap;
+    try {
+      await c.query('BEGIN');
+      await c.query('SELECT pg_advisory_xact_lock($1, $2)', [7305, 0]);
+      const { rows: [n] } = await c.query(
+        `SELECT COUNT(*) FILTER (WHERE staff_id IS NOT DISTINCT FROM $1)::int AS mine, COUNT(*)::int AS shop
+           FROM lead_finder_runs WHERE created_at >= (date_trunc('day', NOW() AT TIME ZONE $2) AT TIME ZONE $2)`, [staffId, SHOP_TZ]);
+      cap = FINDER.capCheck({ mine: n.mine, shop: n.shop, owner });
+      if (cap.ok) {
+        ({ rows: [{ id: runId }] } = await c.query(
+          `INSERT INTO lead_finder_runs (staff_id, query, ask) VALUES ($1, $2, $3::jsonb) RETURNING id`,
+          [staffId, FINDER.describe(v.ask), JSON.stringify(v.ask)]));
+      }
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally { c.release(); }
+    if (!cap.ok) return back(res, '/admin/leads/find', 'err', cap.why);
+    /* Names the finder already brought in, so it does not spend searches on them again. */
+    const { rows: skip } = await pool.query(`SELECT name FROM submissions WHERE finder_run_id IS NOT NULL ORDER BY id DESC LIMIT 60`);
+    const today = new Date().toLocaleDateString('en-US', { timeZone: SHOP_TZ, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    let out;
+    try {
+      out = await FINDER.findLeads(v.ask, { today, skip: skip.map((r) => r.name) });
+    } catch (e) {
+      const cost = e.cost || { searches: 0, dollars: 0 };
+      await pool.query(`UPDATE lead_finder_runs SET status = 'failed', error = $2, searches = $3, cost = $4, finished_at = NOW() WHERE id = $1`,
+        [runId, FINDER.failureMessage(e), cost.searches, cost.dollars]);
+      if (!e.code) reportError('lead-finder', e, `run ${runId}`).catch(() => {});
+      console.error('lead finder failed:', e.message);
+      return back(res, `/admin/leads/find?run=${runId}`, 'err', FINDER.failureMessage(e));
+    }
+    await pool.query(`UPDATE lead_finder_runs SET status = 'done', results = $2::jsonb, searches = $3, cost = $4, finished_at = NOW() WHERE id = $1`,
+      [runId, JSON.stringify(out.leads), out.searches, out.dollars]);
+    logActivity(actor, 'lead finder run', { type: 'finder', id: runId }, { query: FINDER.describe(v.ask), found: out.leads.length, searches: out.searches });
+    return res.redirect(`/admin/leads/find?run=${runId}`);
+  } catch (err) {
+    console.error('lead finder run failed:', err.message);
+    if (runId) await pool.query(`UPDATE lead_finder_runs SET status = 'failed', error = 'Could not save the results.', finished_at = NOW() WHERE id = $1`, [runId]).catch(() => {});
+    return back(res, '/admin/leads/find', 'err', 'The search could not run. Try again in a moment.');
+  }
+});
 
 /* ── Tasks ────────────────────────────────────────────────────────────────── */
 
@@ -37779,10 +38081,12 @@ async function trainingFacts(staffId) {
                 email note below), and emails, texts and DMs on a lead. */
              + (SELECT COUNT(*) FROM staff_approvals WHERE requested_by = $1 AND kind = 'lead_email' AND status <> 'approved')
              + (SELECT COUNT(*) FROM lead_notes WHERE staff_id = $1 AND kind IN ('email', 'text', 'social', 'chat')))::int AS messages,
-            /* Customers they registered as found on Leads, whether or not the
-               shop already knew them: the work of finding them is the same. */
+            /* Customers they registered as found on Leads that were new to the
+               shop. Someone the shop already had is refused at Add and no
+               longer counts (plan PR 3: finding a known customer again is
+               not finding a customer). */
             (SELECT COUNT(*) FROM staff_activity WHERE staff_id = $1
-                AND action IN ('lead registered as theirs', 'found lead was already known'))::int AS prospects`,
+                AND action = 'lead registered as theirs')::int AS prospects`,
     [staffId]);
   const [{ rows: q }, { rows: [pr] }, { rows: ex }] = await Promise.all([
     pool.query('SELECT quiz_key, COUNT(*)::int AS n FROM staff_quiz_attempts WHERE staff_id = $1 AND passed AND archived_at IS NULL GROUP BY quiz_key', [staffId]),

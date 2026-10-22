@@ -252,7 +252,16 @@ On **Leads**, open **Add a lead** and choose **I found this customer**. Then:
 - **Link:** the page that shows why they need shirts: the events page, the registration page, the ribbon cutting
 - **What they asked for:** why now, and the date. "Spring season starts April 6, about 120 players, coordinator listed on the board page"
 
-Register before you send anything. If the shop already knew them, it stays a shop lead and the page tells you why. When two people register the same new customer, the first one wins.`,
+Register before you send anything. If the shop already knows them, they are not added and the page tells you why. When two people register the same new customer, the first one wins.
+
+**The AI finder**
+
+**Leads → Find leads with AI** does the first search for you: pick a kind of customer and an area, and Claude lists up to 15 places from the web with the page it found each one on. Treat it as a starting list, not a finished one:
+
+- Open the source link and check the place is real and alive, as above. AI can be wrong
+- Press **Add to my leads** on the good ones. A website is enough to register a finder lead; add the email when you find it, and June confirms leads with no email
+- Places the shop already has are marked, and cannot be added
+- A found lead counts for you only once you contact them and it is logged on the lead: an email sent from Leads, or a DM note saying what happened. A list of names you never wrote to counts for nothing`,
     }],
     practice: [
       { key: 'do:prospects-10', type: 'do', fact: 'prospects', need: 10, minutes: 30,

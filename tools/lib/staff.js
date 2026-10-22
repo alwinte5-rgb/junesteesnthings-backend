@@ -381,6 +381,9 @@ const ROUTES = {
   'POST /admin/lead/:id/assign': 'leads.view',
   'POST /admin/lead/:id/outcome': 'leads.view',
   'POST /admin/leads/add': 'leads.view',
+  /* The AI lead finder (tools/lib/lead-finder.js): capped per helper per day. */
+  'GET /admin/leads/find': 'leads.view',
+  'POST /admin/leads/find': 'leads.view',
   'POST /admin/leads/call': 'leads.view',
   'POST /admin/quote/:code/note': 'quotes.view',
   'GET /admin/tasks': 'owner',

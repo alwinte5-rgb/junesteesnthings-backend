@@ -150,7 +150,7 @@ const STARTERS = {
   sales: [
     daily('sales', 'Daily leads: find 10, contact 5',
       'Find 10 new possible customers (schools, teams, churches, reunions, local businesses) and register each one on Leads with where you found them. Send a personal first message to the 5 best.',
-      '1. Leads → I found this customer, for each one, with the link where you found them.\n2. Write each first message from the lead\'s page so it is logged.\n3. A lead counts once it has been contacted.'),
+      '1. Leads → Find leads with AI for a starting list, or search yourself; Add the good ones (or Leads → I found this customer, with the link where you found them).\n2. Write each first message from the lead\'s page so it is logged.\n3. A lead counts once it has been contacted.'),
     daily('sales', 'Follow up every quote with no answer for 3 days',
       'Open each quote that was sent more than 3 days ago with no reply and follow up personally, once.',
       '1. Open the quotes sent more than 3 days ago that have no reply.\n2. Use "Ask Claude how to reply" for a draft, then make it your own.\n3. Log what you sent.'),

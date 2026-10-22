@@ -151,10 +151,13 @@ test('only the owner relabels, with a reason, and never after it is paid', () =>
 test('a helper must say where a hand-added lead came from, and the records decide', () => {
   const r = route("app.post('/admin/leads/add', requireAdmin");
   assert.match(r, /if \(isStaff && !\['shop', 'found'\]\.includes\(origin\)\)/);
-  assert.match(r, /CREDIT\.knownReason\(await seenCustomer\(\{ email, phone \}\), fmtDate\)/);
+  assert.match(r, /CREDIT\.knownReason\(await seenCustomer\(\{ email, phone: /);
   assert.match(r, /CREDIT\.knownReason\(\{ lead: await seenProfile\(profileId\) \}, fmtDate\)/, 'a profile is checked too');
+  assert.match(r, /CREDIT\.knownReason\(\{ lead: await seenWebsite\(websiteKey\) \}, fmtDate\)/, 'and the website domain');
   assert.match(r, /A lead you found needs their email, phone or profile link/, 'nothing to check means nothing to claim');
-  assert.match(r, /if \(foundIt && !email && !FRAUD\.phoneKey\(phone\) && !profileId\)/);
+  assert.match(r, /if \(foundIt && !email && !FRAUD\.phoneKey\(phone\) && !profileId && !\(found && websiteKey\)\)/,
+    'a website alone is enough only for a finder lead');
+  assert.match(r, /if \(known\) \{\s+await unclaim\(\);\s+logActivity\(actor, 'found lead refused: already known'/, 'a known customer is refused, not saved');
 });
 
 test('labels show wherever a lead or sale is listed', () => {
