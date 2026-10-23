@@ -5,15 +5,23 @@
  *   railway run -s MySQL node tools/add-shop-mugs.js --apply    # write
  *
  * Owner, 2026-10-23: the shop buys Make Market sublimation mugs at Michaels
- * (in-store pickup, no shipping) and prints them with the existing
- * "Sublimation" method. Priced from Michaels' REGULAR price, never a sale
- * price, through the garment rule in lib/markup.js (lower of x2 and +$8).
+ * (in-store pickup, no shipping) and prints them in house. Priced from
+ * Michaels' REGULAR price, never a sale price, through the garment rule in
+ * lib/markup.js (lower of x2 and +$8), plus the Sublimation method's printing.
+ *
+ * ONE ALL-IN PRICE (owner, same day: "the printing comes with it. It doesn't
+ * have to be separate"). Each item gets its own method, "All-in — <item>",
+ * whose bands are the blank's price plus the Sublimation band, and the product
+ * is stored at $0 — the big head cutout pattern. The designer shows "From $X
+ * each" for it (jt-print-compat.php, designer #156) and the quote form adds
+ * nothing on top of a $0 product. The Sublimation method's bands are read at
+ * run time, so re-running this after a sublimation reprice carries it through.
  *
  * Tagged `supplier = 'shop'`: the designer's catalogue feed (jt-catalog.php)
  * publishes those rows to the quote form even while inactive, and the daily
  * S&S sync lists them as the shop's own products, never looked up.
  */
-const { mysqlUrlFrom, mysql, sq, enjson, encodePrintings } = require('./lib/db');
+const { mysqlUrlFrom, mysql, sq, enjson, dejson, encodePrintings } = require('./lib/db');
 const { sellPrice } = require('./lib/markup');
 
 const APPLY = process.argv.includes('--apply');
@@ -22,13 +30,13 @@ if (!url) { console.error('usage: railway run -s MySQL node tools/add-shop-mugs.
 
 const SUBLIMATION = 'Sublimation — Polyester Only';
 const MUGS = [
-  { name: 'White Ceramic Sublimation Mug — 11.8 oz', regular: 3.49, designer: true,
+  { name: 'White Ceramic Sublimation Mug — 11.8 oz', short: 'Mug 11.8 oz', regular: 3.49, designer: true,
     desc: 'All-white ceramic mug, 11.8 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: names, photos, logos.' },
-  { name: 'White Ceramic Sublimation Mug — 15 oz', regular: 4.99, designer: true,
+  { name: 'White Ceramic Sublimation Mug — 15 oz', short: 'Mug 15 oz', regular: 4.99, designer: true,
     desc: 'All-white ceramic mug, 15 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: names, photos, logos.' },
-  { name: 'White Skinny Sublimation Tumbler with Straw — 18.5 oz', regular: 9.99,
+  { name: 'White Skinny Sublimation Tumbler with Straw — 18.5 oz', short: 'Skinny Tumbler 18.5 oz', regular: 9.99,
     desc: 'All-white stainless skinny tumbler with lid and straw, 18.5 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color, all the way around.' },
-  { name: 'Glow-in-the-Dark Sublimation Tumbler — 20 oz', regular: 15.49,
+  { name: 'Glow-in-the-Dark Sublimation Tumbler — 20 oz', short: 'Glow Tumbler 20 oz', regular: 15.49,
     desc: 'Sublimation tumbler that glows in the dark, 20 oz, with lid and straw (Make Market, from Michaels). Printed in our shop in full color, all the way around.' },
 ];
 
@@ -51,35 +59,54 @@ const ONE_SIZE = { QTYS: { id: 'QTYS', name: 'Quantity per Size', type: 'quantit
 const MUG_THUMB = 'https://design.jtees.net/core/raws/products/cup_back.png';
 const CATEGORY = { slug: 'custom-mugs-drinkware', name: 'Mugs & Drinkware', order: 8 };
 
-const method = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(SUBLIMATION) + ';', { rows: true });
+const method = mysql(url, 'SELECT id, active, calculate FROM lumise_printings WHERE title=' + sq(SUBLIMATION) + ';', { rows: true });
 if (method.length !== 1) { console.error('expected one "' + SUBLIMATION + '" method, found ' + method.length + ' — refusing'); process.exit(1); }
-const printings = encodePrintings([method[0].id]);
+const subBands = ((dejson(method[0].calculate) || {}).values || {}).front || {};
+const ceilings = Object.keys(subBands).map(Number).filter((c) => c > 0).sort((a, b) => a - b);
+if (!ceilings.length || ceilings.some((c) => !(Number(subBands[c].price) > 0))) { console.error('Sublimation has no usable price bands — refusing'); process.exit(1); }
+/* Band ceilings -> all-in price each: the blank plus that band's printing. */
+const allIn = (blank) => Object.fromEntries(ceilings.map((c) => [String(c), { price: (blank + Number(subBands[c].price)).toFixed(2) }]));
+const methodTitle = (m) => 'All-in — ' + m.short + ' (printing included)';
 const authorRow = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0];
 if (!authorRow) { console.error('no active product to take the author from — refusing'); process.exit(1); }
 
-console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — printed with method #' + method[0].id + ' ' + SUBLIMATION + '\n');
+console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — all-in = blank + ' + SUBLIMATION + ' (#' + method[0].id + ')\n');
+console.log('  ' + 'item'.padEnd(24) + ceilings.map((c, i) => ((i ? ceilings[i - 1] + 1 : 1) + '-' + c).padStart(9)).join(''));
 for (const m of MUGS) {
   m.price = sellPrice(m.regular);
   const have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
   if (have.length > 1) { console.error('  ' + have.length + ' products are named "' + m.name + '" — refusing'); process.exit(1); }
   m.id = have.length ? have[0].id : null;
   m.active = m.designer ? 1 : 0;
-  console.log('  ' + (m.id ? 'update #' + m.id : 'create') + '  $' + m.regular.toFixed(2) + ' regular -> $' + m.price.toFixed(2) +
-    (m.designer ? '  LIVE in the designer, ' + CATEGORY.name : '  quote only') + '  ' + m.name);
+  m.bands = allIn(m.price);
+  console.log('  ' + m.short.padEnd(24) + ceilings.map((c) => ('$' + m.bands[c].price).padStart(9)).join('') +
+    '   (blank $' + m.price.toFixed(2) + ' from $' + m.regular.toFixed(2) + ' regular; ' + (m.designer ? 'LIVE in the designer' : 'quote only') + ')');
 }
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
 for (const m of MUGS) {
+  const title = methodTitle(m);
+  const calc = enjson({ multi: false, type: 'fixed', show_detail: '1', values: { front: m.bands } });
+  const desc = m.desc + ' Price includes the printing.';
+  const have = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(title) + ';', { rows: true });
+  if (have.length > 1) { console.error('  ' + have.length + ' methods are titled "' + title + '" — refusing'); process.exit(1); }
+  if (have.length) mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(calc) + ', active=1, description=' + sq(desc) + ', updated=NOW() WHERE id=' + Number(have[0].id) + ';');
+  else mysql(url, 'INSERT INTO lumise_printings (title,active,calculate,thumbnail,upload,description,author,created,updated) VALUES (' +
+    sq(title) + ',1,' + sq(calc) + ",'',''," + sq(desc) + ',' + sq(authorRow.author) + ',NOW(),NOW());');
+  m.methodId = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(title) + ';', { rows: true })[0].id;
+  m.printings = encodePrintings([m.methodId]);
+}
+for (const m of MUGS) {
   if (m.id) {
-    mysql(url, 'UPDATE lumise_products SET price=' + sq(m.price.toFixed(2)) + ', supplier_cost=' + sq(m.regular.toFixed(2)) +
-      ", supplier='shop', active=" + m.active + ', description=' + sq(m.desc) + ', printings=' + sq(printings) +
+    mysql(url, "UPDATE lumise_products SET price='0.00', supplier_cost=" + sq(m.regular.toFixed(2)) +
+      ", supplier='shop', active=" + m.active + ', description=' + sq(m.desc) + ', printings=' + sq(m.printings) +
       ', updated=NOW() WHERE id=' + Number(m.id) + ';');
   } else {
     /* The same columns tools/add-table-cover.js writes for a quote-only row. */
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +
       'printings,thumbnail_url,active,`order`,author,created,updated) VALUES (' +
-      sq(m.name) + ',' + sq(m.desc) + ',' + sq(m.price.toFixed(2)) + ',' + sq(m.regular.toFixed(2)) + ",'shop'," +
-      sq(enjson({})) + ',' + sq(enjson({})) + ',' + sq(printings) + ",''," + m.active + ',999,' + sq(authorRow.author) + ',NOW(),NOW());');
+      sq(m.name) + ',' + sq(m.desc) + ",'0.00'," + sq(m.regular.toFixed(2)) + ",'shop'," +
+      sq(enjson({})) + ',' + sq(enjson({})) + ',' + sq(m.printings) + ",''," + m.active + ',999,' + sq(authorRow.author) + ',NOW(),NOW());');
   }
 }
 
@@ -105,8 +132,11 @@ for (const m of MUGS.filter((x) => x.designer)) {
 let bad = 0;
 for (const m of MUGS) {
   const v = mysql(url, 'SELECT id, price, active, supplier, printings FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
-  const ok = v.length === 1 && Number(v[0].price) === Number(m.price.toFixed(2)) && Number(v[0].active) === m.active && v[0].supplier === 'shop' && v[0].printings === printings;
+  const ok = v.length === 1 && Number(v[0].price) === 0 && Number(v[0].active) === m.active && v[0].supplier === 'shop' && v[0].printings === m.printings;
   if (!ok) bad++;
-  console.log('  verified #' + (v[0] && v[0].id) + ' $' + (v[0] && v[0].price) + ' ' + m.name + ': ' + (ok ? 'match' : 'DOES NOT MATCH'));
+  const vm = mysql(url, 'SELECT calculate FROM lumise_printings WHERE id=' + Number(m.methodId) + ';', { rows: true })[0];
+  const okM = vm && JSON.stringify(((dejson(vm.calculate) || {}).values || {}).front) === JSON.stringify(m.bands);
+  if (!okM) bad++;
+  console.log('  verified #' + (v[0] && v[0].id) + ' (method #' + m.methodId + ') ' + m.name + ': ' + (ok && okM ? 'match' : 'DOES NOT MATCH'));
 }
 if (bad) process.exit(1);
