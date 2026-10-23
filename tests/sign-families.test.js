@@ -69,13 +69,16 @@ test('the area formula: whole feet for sqft, exact for sqin, limits refuse', () 
   assert.strictEqual(F.areaPrice(W, oww, 4, 24), null, 'under the minimum');
 });
 
-test('stretched canvas: Stretcher Bar Warehouse bars, wrap allowance, no brace under 44in', () => {
-  // 16x20: print on 22x26 -> 2ft x 3ft = 6 sqft x $4.98, bars 2x$4.59 + 2x$5.67.
-  assert.strictEqual(Math.round(F.stretchedCanvasCost(16, 20) * 100) / 100, Math.round((6 * 4.98 + 2 * 4.59 + 2 * 5.67) * 100) / 100);
+test('stretched canvas: Blick bars, priced on the face plus the 3in wrap (owner, 2026-10-20)', () => {
+  // 24x18 face: printed 30x24 -> 3ft x 2ft = 6 sqft x $4.98, bars 2x$10.18 + 2x$7.36 (Blick).
+  assert.strictEqual(Math.round(F.stretchedCanvasCost(24, 18) * 100) / 100, Math.round((6 * 4.98 + 2 * 10.18 + 2 * 7.36) * 100) / 100);
+  // The customer's size is the face; the wrap is added, never counted in it.
+  assert.ok(F.FAMILIES.stretched_canvas.sizes.some(([w, h]) => w === 24 && h === 18), 'sold as 24x18');
   for (const [w, h] of F.FAMILIES.stretched_canvas.sizes) {
-    assert.ok(F.STRETCHER_BAR[w] && F.STRETCHER_BAR[h], `bars for ${w}x${h}`);
+    assert.ok(F.STRETCHER_BAR[w] && F.STRETCHER_BAR[h], `Blick sells bars for ${w}x${h}`);
     assert.ok(Math.max(w, h) <= 44, 'no size needs a brace');
   }
+  assert.strictEqual(F.stretchedCanvasCost(14, 11), null, 'a size Blick has no bars for is not priced');
 });
 
 test('the products carry the option ids the designer reads', () => {

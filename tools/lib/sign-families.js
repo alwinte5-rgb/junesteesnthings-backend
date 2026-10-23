@@ -32,13 +32,18 @@ const cat = require('./signs365-catalog').CATALOG;
 const evenUp = sg.evenUp;
 const labourEach = (kind) => sg.labourCost(kind, 1);
 
-/* Stretcher bars, per bar, Stretcher Bar Warehouse 1-1/2" heavy duty radiata
-   pine, single bars (bought per job; owner 2026-10-07). Read 2026-10-08. Their
-   box of 20 is only ~3% less. They brace bars over 44", so no standard size
-   below needs one. Shipping from them is not included (tiered flat rate). */
-const STRETCHER_BAR = { 8: 3.35, 10: 3.40, 11: 3.46, 12: 3.65, 14: 4.05, 16: 4.59, 18: 5.13, 20: 5.67,
-  24: 6.75, 30: 8.37, 36: 9.99, 40: 11.07 };
+/* Stretcher bars, per bar: Blick "Best Heavy Duty Stretcher Bars", 1-1/2"
+   deep, 2" wide (item 07230-10NN), single bars bought per job until volume
+   justifies a bulk order (owner, 2026-10-20). Prices read 2026-10-20 from
+   Blick's item pages; Blick lists no 8", 10", 11", 14" or 16" in this line, so
+   the canvas sizes use only these lengths. Pickup at the Chicago store: no
+   shipping. Was Stretcher Bar Warehouse (2026-10-08). */
+const STRETCHER_BAR = { 12: 5.98, 18: 7.36, 20: 8.76, 24: 10.18, 30: 13.46, 36: 16.24, 40: 19.23 };
 const CANVAS_WRAP_IN = 3;   // 1.5" depth + 1.5" to staple, each side
+/* The customer buys the FACE size (what shows from the front); the print is
+   the face plus the wrap on every side, so a 24x18 is printed at 30x24 and
+   billed for that (owner, 2026-10-20: "make sure the 3in bleed is a factor ...
+   customer sizing should not include the 3in"). */
 
 /** Supplier cost of a stretched gallery-wrap canvas at WxH inches. */
 function stretchedCanvasCost(w, h) {
@@ -204,7 +209,8 @@ const FAMILIES = {
        the same size (stretchedCanvasCost). */
     wrap_in: CANVAS_WRAP_IN,
     note: 'Gallery-wrapped on 1-1/2" bars, ready to hang.',
-    sizes: [[10, 8], [14, 11], [12, 12], [20, 16], [24, 18], [30, 20], [36, 24], [40, 30]],
+    /* Face sizes from Blick bar lengths (owner, 2026-10-20). */
+    sizes: [[12, 12], [18, 12], [24, 18], [30, 20], [30, 24], [36, 24], [40, 30]],
     materials: [m('canvas', 'Canvas, gallery wrapped 1-1/2"', 'item', null)],
     upgrades: [],
   },
