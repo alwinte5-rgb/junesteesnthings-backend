@@ -47,6 +47,7 @@ const ONLY_DTF = process.argv.includes('--only-dtf');
 /* `--only-emb-logos` writes the logo run rates (#8-#11) alone, so an
    embroidery band change cannot also move names, digitizing or screen print. */
 const ONLY_EMB_LOGOS = process.argv.includes('--only-emb-logos');
+if (ONLY_DTF && ONLY_EMB_LOGOS) { console.error('  --only-dtf and --only-emb-logos cannot be used together'); process.exit(2); }
 const BACKUP_DIR = path.join(os.homedir(), 'jtees-backups');
 
 /** Snapshot lumise_printings before writing. This is live pricing; there is no
