@@ -352,7 +352,44 @@ function leadDescription(l) {
     l.source_url ? `Found by the AI finder on ${l.source_url}` : 'Found by the AI finder'].filter(Boolean).join('\n').slice(0, 4000);
 }
 
+/** How many found leads the finder page lists at once. */
+const OPEN_LIST = 60;
+
+/** The finder's running list: every result from `runs` (newest run first,
+ *  each { id, status, results }) that has not been contacted yet, so a new
+ *  search adds to it instead of replacing it. A result leaves once the lead
+ *  it became is in `contacted` (a Set of lead ids). The same organisation
+ *  found twice is listed once, the copy already added winning, then the
+ *  newest; once one copy is contacted, every copy leaves. Returns { items: [{ run, l, i }], more } with at most `limit`. */
+function openFinds(runs, contacted = new Set(), limit = OPEN_LIST) {
+  const keyOf = (l) => domainKey(l.website) || `name:${String(l.name || '').trim().toLowerCase()}`;
+  const done = (run) => run && run.status === 'done' && Array.isArray(run.results);
+  const isLead = (l) => l && typeof l === 'object';
+  /* Contacted: it leaves, and so does any other copy of it, older or newer. */
+  const gone = new Set((runs || []).filter(done).flatMap((run) => run.results
+    .filter((l) => isLead(l) && l.lead_id && contacted.has(Number(l.lead_id))).map(keyOf)));
+  const byKey = new Map();
+  const order = [];
+  for (const run of runs || []) {
+    if (!done(run)) continue;
+    run.results.forEach((l, i) => {
+      if (!isLead(l)) return;
+      const key = keyOf(l);
+      if (gone.has(key)) return;
+      const had = byKey.get(key);
+      if (had) {
+        if (l.lead_id && !had.l.lead_id) Object.assign(had, { run, l, i });
+        return;
+      }
+      const item = { run, l, i };
+      byKey.set(key, item);
+      order.push(item);
+    });
+  }
+  return { items: order.slice(0, limit), more: Math.max(0, order.length - limit) };
+}
+
 module.exports = { MODEL, MAX_LEADS, MAX_SEARCHES, MAX_RESUMES, PRICE, CAPS, LIMITS, NICHES, SYSTEM, REPORT_TOOL, SHARED_HOSTS,
-  SOFTWARE_NICHES, SOFTWARE_SYSTEM, PROFILES, profileOf,
+  SOFTWARE_NICHES, SOFTWARE_SYSTEM, PROFILES, profileOf, OPEN_LIST,
   validateRun, describe, askMessage, safeUrl, domainKey, shapeLead, shapeLeads, costOf, failureMessage, findLeads, capCheck,
-  leadDescription };
+  leadDescription, openFinds };
