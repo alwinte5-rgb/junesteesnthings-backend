@@ -24,7 +24,11 @@
  */
 const { businessMinutesBetween, zoned, DEFAULT_HOURS } = require('./team-metrics');
 
-const WINDOW_MS = 3 * 86400000;
+/* Five days, not three: the 24h text waits for working hours, so a lead from
+   Thursday evening turns a day old on Friday night and is first mentioned on
+   Monday at 9, 87 hours after it came in. A 3-day window dropped exactly the
+   leads left waiting longest (code review, 2026-10-22). */
+const WINDOW_MS = 5 * 86400000;
 const FIRST_MINS = 120;
 const SECOND_MS = 24 * 3600000;
 
@@ -60,7 +64,10 @@ function nudgeText({ first, second }, { now = Date.now(), sourceLabel = (s) => s
   const who = all.slice(0, 4).map((l) => `${firstName(l.name)} (${sourceLabel(l.source)}, ${hoursAgo(l, now)}h)`).join(', ');
   const more = all.length > 4 ? ` +${all.length - 4} more` : '';
   const head = all.length === 1 ? '1 lead is still waiting for a reply' : `${all.length} leads are still waiting for a reply`;
-  return `June's Tees: ${head}: ${who}${more}.${second.length ? ' Over a day old: reply today or they go elsewhere.' : ''}${link ? ' ' + link : ''}`.slice(0, 320);
+  /* Cut the words, never the link: a long list used to end in half a URL. */
+  const tail = link ? ' ' + link : '';
+  const words = `June's Tees: ${head}: ${who}${more}.${second.length ? ' Over a day old: reply today or they go elsewhere.' : ''}`;
+  return words.slice(0, Math.max(0, 320 - tail.length)) + tail;
 }
 
 module.exports = { dueNudges, nudgeText, inWorkingHours, WINDOW_MS, FIRST_MINS, SECOND_MS };
