@@ -1969,11 +1969,13 @@ async function initStaffTables() {
        'manual', so the Phone calls filter missed them. */
     "UPDATE submissions SET source = 'phone' WHERE platform = 'Phone' AND source = 'manual'",
     /* Calls and walk-ins added by hand before Add a lead began saving them as
-       answered (2026-10-23) are not texted about as waiting once this ships.
+       answered (merged 2026-10-23 ~04:30 UTC; the range ends there, so a
+       restart never stamps a lead added since) are not texted about as
+       waiting once this ships.
        Only the nudge stamps: their place on the Leads page is unchanged. A
        logged call (Log a call) carries a 'call' note and is left alone. */
     `UPDATE submissions s SET unanswered_2h_at = COALESCE(s.unanswered_2h_at, NOW()), unanswered_24h_at = COALESCE(s.unanswered_24h_at, NOW())
-      WHERE s.created_at >= '2026-10-13' AND s.created_at < '2026-10-24' AND s.platform IN ('Phone', 'Walk-in')
+      WHERE s.created_at >= '2026-10-13' AND s.created_at < '2026-10-23T04:30:00Z' AND s.platform IN ('Phone', 'Walk-in')
         AND s.first_response_at IS NULL AND s.unanswered_24h_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = 'call')`,
     /* A cash or Zelle payment a helper recorded waits for the owner's
