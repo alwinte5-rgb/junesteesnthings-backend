@@ -1966,6 +1966,19 @@ async function initStaffTables() {
        that this lead was still waiting, after 2 working hours and after 24h. */
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS unanswered_2h_at TIMESTAMPTZ',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS unanswered_24h_at TIMESTAMPTZ',
+    /* Phone leads added by hand before source 'phone' existed were saved as
+       'manual', so the Phone calls filter missed them. */
+    "UPDATE submissions SET source = 'phone' WHERE platform = 'Phone' AND source = 'manual'",
+    /* Calls and walk-ins added by hand before Add a lead began saving them as
+       answered (merged 2026-10-23 ~04:30 UTC; the range ends there, so a
+       restart never stamps a lead added since) are not texted about as
+       waiting once this ships.
+       Only the nudge stamps: their place on the Leads page is unchanged. A
+       logged call (Log a call) carries a 'call' note and is left alone. */
+    `UPDATE submissions s SET unanswered_2h_at = COALESCE(s.unanswered_2h_at, NOW()), unanswered_24h_at = COALESCE(s.unanswered_24h_at, NOW())
+      WHERE s.created_at >= '2026-10-13' AND s.created_at < '2026-10-23T04:30:00Z' AND s.platform IN ('Phone', 'Walk-in')
+        AND s.first_response_at IS NULL AND s.unanswered_24h_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = 'call')`,
     /* A cash or Zelle payment a helper recorded waits for the owner's
        "Confirm received" before it counts for commission (tools/lib/fraud-signals.js).
        recorded_by is the staff id, NULL meaning the owner. */
@@ -17284,12 +17297,15 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
  */
 /** Operational alert to the shop. Never throws — an alert must not be able to
  *  fail a webhook and cause Stripe to retry a payment that already banked. */
-async function alertShop(subject, innerHtml) {
+/* `urgent` sends at once instead of holding for the daily summary; `rethrow`
+   lets a caller that must know (and retry) see a failed send. */
+async function alertShop(subject, innerHtml, { urgent = false, rethrow = false } = {}) {
   return sendEmail({
     to: SHOP_EMAIL,
     subject,
+    urgent,
     html: `<div style="font-family:system-ui,sans-serif;max-width:560px">${innerHtml}</div>`,
-  }).catch((e) => console.error('shop alert failed:', e.message));
+  }).catch((e) => { console.error('shop alert failed:', e.message); if (rethrow) throw e; });
 }
 
 /* ── Error alerting: one funnel, two sinks ────────────────────────
@@ -26475,7 +26491,7 @@ const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email)
  *  quote), or 'dismissed' (and why). A quote wins over a dismissal: a lead let
  *  go and then quoted anyway did become work. A quote still held for the
  *  owner's approval does not count: the customer has not heard anything. */
-async function leadsWithStatus() {
+async function leadsWithStatus({ since = null } = {}) {
   const { rows } = await pool.query(
     `SELECT s.*,
             -- the newest: after a redo the card opens the redo, not the first (Codex #140)
@@ -26486,7 +26502,8 @@ async function leadsWithStatus() {
             (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
               WHERE submission_id = s.id AND kind = ANY($1) ORDER BY created_at DESC LIMIT 1) n) AS last_contact
        FROM submissions s
-      ORDER BY s.created_at DESC`, [CONTACT_KINDS]);
+      ${since ? 'WHERE s.created_at >= $2' : ''}
+      ORDER BY s.created_at DESC`, since ? [CONTACT_KINDS, new Date(since)] : [CONTACT_KINDS]);
   /* 'contacted': someone has answered them (a call, email, text or chat was
      logged, or an outcome set) and the next move is theirs. Not 'new', so the
      board, the badge and the speed-to-lead texts stop asking for a reply. */
@@ -26498,33 +26515,70 @@ async function leadsWithStatus() {
 }
 
 /** Speed to lead (tools/lib/lead-nudges.js): one text to the owner naming the
- *  leads still waiting 2 working hours, or a day, after they came in. Stamped
- *  per lead BEFORE sending, so a crash between the two can only lose a text,
- *  never repeat one. */
+ *  leads still waiting 2 working hours, or a day, after they came in.
+ *
+ *  Claimed (stamped) in one short transaction, then sent. If neither the text
+ *  nor the email goes, the stamps this sweep wrote are taken back, so the next
+ *  sweep tries again; it used to stamp and lose the nudge for good (code
+ *  review, 2026-10-22). No lock is held across the send. */
 async function nudgeUnansweredLeads(now = Date.now()) {
   if (!NUDGE.inWorkingHours(now)) return '';
-  const due = NUDGE.dueNudges(await leadsWithStatus(), now);
+  /* Only the window's leads: every lead ever stored, each matched against
+     every quote, was read once an hour to look at the last few days. */
+  const due = NUDGE.dueNudges(await leadsWithStatus({ since: now - NUDGE.WINDOW_MS }), now);
   if (!due.first.length && !due.second.length) return '';
   const firstIds = due.first.map((l) => l.id), secondIds = due.second.map((l) => l.id);
-  /* Claimed with IS NULL guards: a second worker running the same sweep gets
-     no rows back and sends nothing. */
-  const { rows: c1 } = firstIds.length ? await pool.query(
-    `UPDATE submissions SET unanswered_2h_at = NOW() WHERE id = ANY($1) AND unanswered_2h_at IS NULL RETURNING id`, [firstIds]) : { rows: [] };
-  const { rows: c2 } = secondIds.length ? await pool.query(
-    `UPDATE submissions SET unanswered_24h_at = NOW(), unanswered_2h_at = COALESCE(unanswered_2h_at, NOW())
-      WHERE id = ANY($1) AND unanswered_24h_at IS NULL RETURNING id`, [secondIds]) : { rows: [] };
+  /* Still waiting at the moment of the claim, not only when the list was read:
+     a reply, dismissal, outcome or quote (linked or matched, as on the Leads
+     page) in between takes the lead out. */
+  const stillWaiting = `s.first_response_at IS NULL AND s.dismissed_at IS NULL AND s.outcome IS NULL
+      AND NOT EXISTS (SELECT 1 FROM quotes q WHERE (q.from_submission_id = s.id OR ${LEAD_QUOTE_MATCH})
+                        AND q.status NOT IN ('held', 'draft'))`;
+  const stamp = new Date(now);
+  const client = await pool.connect();
+  let c1, c2;
+  try {
+    await client.query('BEGIN');
+    ({ rows: c1 } = firstIds.length ? await client.query(
+      `UPDATE submissions s SET unanswered_2h_at = $2 WHERE s.id = ANY($1) AND s.unanswered_2h_at IS NULL AND ${stillWaiting} RETURNING s.id`,
+      [firstIds, stamp]) : { rows: [] });
+    ({ rows: c2 } = secondIds.length ? await client.query(
+      `UPDATE submissions s SET unanswered_24h_at = $2, unanswered_2h_at = COALESCE(s.unanswered_2h_at, $2)
+        WHERE s.id = ANY($1) AND s.unanswered_24h_at IS NULL AND ${stillWaiting} RETURNING s.id`, [secondIds, stamp]) : { rows: [] });
+    await client.query('COMMIT');
+  } catch (err) {
+    /* A connection that cannot even roll back is thrown away, not pooled. */
+    const dead = await client.query('ROLLBACK').then(() => null, (e) => e);
+    client.release(dead || undefined);
+    throw err;
+  }
+  client.release();
   const got = new Set([...c1, ...c2].map((r) => r.id));
   const claimed = { first: due.first.filter((l) => got.has(l.id)), second: due.second.filter((l) => got.has(l.id)) };
   const body = NUDGE.nudgeText(claimed, { now, sourceLabel: (s) => (LEAD_SOURCES[s] || LEAD_SOURCES.form)[0],
     link: `${PUBLIC_BASE_URL}/admin/leads` });
   if (!body) return '';
   /* Texted when Twilio is set up; otherwise (or if the text fails) the same
-     words by email, so the nudge is never just a log line. */
+     words by email, so the nudge is never just a log line. Urgent: a customer
+     is waiting, so never held for the daily summary (owner, 2026-10-19), where
+     a held email would read as sent. Rethrown, so a failure is retried. */
   const sent = await sendOwnerSms(body).catch((e) => { console.error('lead nudge text failed:', e.message); return false; });
   if (!sent) {
-    await alertShop(`⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
-      `<p style="font-size:15px">${escEmail(body)}</p>
-       <p><a href="${PUBLIC_BASE_URL}/admin/leads" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Leads</a></p>`);
+    try {
+      await alertShop(`⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
+        `<p style="font-size:15px">${escEmail(body)}</p>
+         <p><a href="${PUBLIC_BASE_URL}/admin/leads" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Leads</a></p>`,
+        { urgent: true, rethrow: true });
+    } catch (err) {
+      /* Only the stamps written at `stamp`: a 2h stamp from an earlier sweep
+         stays. If this too fails, the error below still reaches the error
+         digest, so the owner hears that nudges are failing. */
+      await pool.query(
+        `UPDATE submissions SET unanswered_2h_at = CASE WHEN unanswered_2h_at = $2 THEN NULL ELSE unanswered_2h_at END,
+                                unanswered_24h_at = CASE WHEN unanswered_24h_at = $2 THEN NULL ELSE unanswered_24h_at END
+          WHERE id = ANY($1)`, [[...got], stamp]).catch((e) => console.error('lead nudge unclaim failed:', e.message));
+      throw err;
+    }
   }
   return `${got.size} waiting lead${got.size === 1 ? '' : 's'} ${sent ? 'texted' : 'emailed'} to the owner`;
 }
@@ -34012,12 +34066,22 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     }
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
       : platform === 'Phone' ? 'phone' : 'manual';
+    /* A call or a walk-in the shop took, added here, was a conversation: it
+       is answered, so it leaves the waiting list and the owner is not texted
+       that the caller is still waiting (a missed call has its own form, Log a
+       call, "I missed it"). Answered by the shop, not by the helper who typed
+       it in: first_response_by stays empty, so it adds nothing to anyone's
+       reply-time figures. A lead a helper found is theirs to reach, and is
+       left waiting as before. */
+    const spoken = !foundIt && (platform === 'Phone' || platform === 'Walk-in');
     const { rows: [l] } = await pool.query(
       `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to,
-                                sale_type, sale_type_reason, rep_id, website, website_key, finder_run_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+                                sale_type, sale_type_reason, rep_id, website, website_key, finder_run_id,
+                                first_response_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+               CASE WHEN $15::boolean THEN NOW() END) RETURNING id`,
       [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
-       isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id, website, websiteKey, found ? found.run : null]);
+       isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id, website, websiteKey, found ? found.run : null, spoken]);
     if (found) {
       await pool.query(`UPDATE lead_finder_runs SET results = jsonb_set(results, ARRAY[$2::text, 'lead_id'], to_jsonb($3::int)) WHERE id = $1`,
         [found.run, found.idx, l.id]);
