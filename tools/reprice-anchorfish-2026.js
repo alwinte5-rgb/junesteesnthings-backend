@@ -44,6 +44,9 @@ const APPLY = process.argv.includes('--apply');
 /* `--only-dtf` writes method #1 alone, so a DTF band change cannot also move
    embroidery or screen print. */
 const ONLY_DTF = process.argv.includes('--only-dtf');
+/* `--only-emb-logos` writes the logo run rates (#8-#11) alone, so an
+   embroidery band change cannot also move names, digitizing or screen print. */
+const ONLY_EMB_LOGOS = process.argv.includes('--only-emb-logos');
 const BACKUP_DIR = path.join(os.homedir(), 'jtees-backups');
 
 /** Snapshot lumise_printings before writing. This is live pricing; there is no
@@ -250,7 +253,10 @@ const EMB_PRICE = { chest: 20.00, fullBack: 75.00 };
 const EMB_TAPER = [   // band ceiling, dollars added to the anchor price
   [  11, 10 ],        // chest $30.00, full back $85.00
   [  24,  8 ],        // $28.00 / $83.00
-  [  49,  5 ],        // $25.00 / $80.00
+  [  35,  5 ],        // $25.00 / $80.00
+  /* 25-49 split at 36 to match DTF's bands (owner, 2026-10-23): a quote
+     showing every other price drop at 36 left embroidery flat until 50. */
+  [  49,  3.5 ],      // $23.50 / $78.50
   [  74,  2 ],        // $22.00 / $77.00
   [  99,  1 ],        // $21.00 / $76.00
   [1000,  0 ],        // $20.00 / $75.00 — the agreed floor
@@ -445,7 +451,7 @@ function emit(id, m, tiers) {
 const logoIds = Object.entries(EMB_METHODS).filter(([, m]) => !m.name);
 const nameIds = Object.entries(EMB_METHODS).filter(([, m]) => m.name);
 
-let hdr = bandHeader(FL.map((f) => EMB_CEIL[f]), 1);
+let hdr = bandHeader(EMB_TAPER.map(([c]) => c), 1);
 console.log(hdr);
 console.log('  ' + '-'.repeat(hdr.length));
 for (const [id, m] of logoIds) {
@@ -585,6 +591,12 @@ if (ONLY_DTF) {
   const dtf = stmts.filter((q) => / WHERE id=1;$/.test(q));
   if (dtf.length !== 1) { console.error('  --only-dtf found ' + dtf.length + ' DTF statements, expected 1'); process.exit(3); }
   stmts.splice(0, stmts.length, ...dtf);
+}
+if (ONLY_EMB_LOGOS) {
+  const ids = Object.keys(EMB_METHODS).filter((id) => !EMB_METHODS[id].name);
+  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')));
+  if (emb.length !== ids.length) { console.error('  --only-emb-logos found ' + emb.length + ' statements, expected ' + ids.length); process.exit(3); }
+  stmts.splice(0, stmts.length, ...emb);
 }
 
 console.log('\n\n' + stmts.length + ' UPDATE statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
