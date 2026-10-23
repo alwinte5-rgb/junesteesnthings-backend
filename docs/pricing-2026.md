@@ -62,12 +62,18 @@ Chest logo $20.00, full back $75.00, sizes between fitted on the vendor sheet.
 Tapers to the anchors at 100+, lifted below that so embroidery is never
 cheaper than DTF on a small run.
 
-  id   item                 1-11      12-24      25-49      50-74      75-99    100-149   150-1000
+  id   item                 1-11      12-24      25-35      36-49      50-74      75-99   100-1000
   --------------------------------------------------------------------------------------------------
-    8  Small Logo (     $30.00     $28.00     $25.00     $22.00     $21.00     $20.00
-    9  Medium Logo      $41.00     $39.00     $36.00     $33.00     $32.00     $31.00
-   10  Large Logo (     $52.00     $50.00     $47.00     $44.00     $43.00     $42.00
-   11  Full Back (≤     $85.00     $83.00     $80.00     $77.00     $76.00     $75.00
+    8  Small Logo (     $30.00     $28.00     $25.00     $23.50     $22.00     $21.00     $20.00
+    9  Medium Logo      $41.00     $39.00     $36.00     $34.50     $33.00     $32.00     $31.00
+   10  Large Logo (     $52.00     $50.00     $47.00     $45.50     $44.00     $43.00     $42.00
+   11  Full Back (≤     $85.00     $83.00     $80.00     $78.50     $77.00     $76.00     $75.00
+
+  25-49 split at 36 (owner, 2026-10-23) to match the DTF bands, halfway
+  between 25-35 and 50-74. Applied with
+  `tools/reprice-anchorfish-2026.js --only-emb-logos --apply`. (The header
+  above used to read 25-49 ... 100-149, 150-1000 over six prices: the tool
+  printed the vendor's quantity rows, not its own bands.)
 
   NAMES & TEXT — own bands, shallow taper. Each name is a separate setup.
   id   item                  1-5       6-11      12-24      25-49      50-74      75-99   100-1000
