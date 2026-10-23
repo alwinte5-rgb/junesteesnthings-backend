@@ -34,11 +34,30 @@ const GARMENT_MARKUP = (() => {
   return v;
 })();
 
+/* The markup is capped in DOLLARS (owner, 2026-10-23): a blank sells for the
+ * LOWER of cost x GARMENT_MARKUP and cost + GARMENT_CAP. Doubling a $3 tee adds
+ * $3; doubling a $28 garment-dyed hoodie added $28, which put the blank alone
+ * above other shops' printed price. Cheap blanks are untouched (2x is under the
+ * cap until the cost reaches the cap), and every blank above it earns the same
+ * $8. Customers said price was why quotes were not accepted. */
+const GARMENT_CAP = (() => {
+  const v = parseFloat(process.env.JT_GARMENT_CAP || '8');
+  if (!Number.isFinite(v) || v < 0) {
+    throw new Error('JT_GARMENT_CAP must be a number >= 0, got ' +
+      JSON.stringify(process.env.JT_GARMENT_CAP));
+  }
+  return v;
+})();
+
 /** Sell price for a blank costing `cost`, rounded to the cent. */
-const sellPrice = (cost) => Math.round(Number(cost) * GARMENT_MARKUP * 100) / 100;
+const sellPrice = (cost) => {
+  const c = Number(cost);
+  return Math.round(Math.min(c * GARMENT_MARKUP, c + GARMENT_CAP) * 100) / 100;
+};
 
-/** What an extended size adds, from its real cost difference. Never negative. */
+/** What an extended size adds: its own sell price less the base size's, so a
+ *  2XL is priced by the same rule as the base. Never negative. */
 const sizeUpcharge = (sizeCost, baseCost) =>
-  Math.max(0, Math.round((Number(sizeCost) - Number(baseCost)) * GARMENT_MARKUP * 100) / 100);
+  Math.max(0, Math.round((sellPrice(sizeCost) - sellPrice(baseCost)) * 100) / 100);
 
-module.exports = { GARMENT_MARKUP, sellPrice, sizeUpcharge };
+module.exports = { GARMENT_MARKUP, GARMENT_CAP, sellPrice, sizeUpcharge };

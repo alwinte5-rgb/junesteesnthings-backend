@@ -79,7 +79,7 @@ test('stages: one per placement, front first, drawn on that side\'s photo', () =
 
 test('the inventory flags a quarter-zip that still offers a full front, and a missing photo', () => {
   const enc = (o) => Buffer.from(encodeURIComponent(JSON.stringify(o))).toString('base64');
-  const p = { name: 'Comfort Colors 1580 Garment-Dyed Quarter-Zip', price: '40.00', cost: '20.00', printings: '',
+  const p = { name: 'Comfort Colors 1580 Garment-Dyed Quarter-Zip', price: '28.00', cost: '20.00', printings: '',
     stages: enc({ front: { label: 'Front' }, back: { label: 'Back' } }),
     attributes: enc({ COL: { type: 'product_color', values: { options: [{ title: 'Blue', value: '#1' }] } }, QTYS: { type: 'q' } }),
     variations: '' };
