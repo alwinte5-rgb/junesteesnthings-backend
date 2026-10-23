@@ -12,8 +12,9 @@
  *
  * Each is stamped on the lead (unanswered_2h_at / unanswered_24h_at), so a
  * restart or a second worker never repeats one. Only leads from the last 3
- * days are considered, so switching this on does not text the owner about
- * the whole backlog, and the texts go out only during working hours — a lead
+ * WORKING days (and at most a week) are considered, so switching this on does
+ * not text the owner about the whole backlog, and the texts go out only during
+ * working hours — a lead
  * that crossed 24h at 3am is mentioned at 9. All leads due in one sweep share
  * ONE text.
  *
@@ -24,11 +25,14 @@
  */
 const { businessMinutesBetween, zoned, DEFAULT_HOURS } = require('./team-metrics');
 
-/* Five days, not three: the 24h text waits for working hours, so a lead from
-   Thursday evening turns a day old on Friday night and is first mentioned on
-   Monday at 9, 87 hours after it came in. A 3-day window dropped exactly the
-   leads left waiting longest (code review, 2026-10-22). */
-const WINDOW_MS = 5 * 86400000;
+/* Three WORKING days, not three calendar days: the 24h text waits for working
+   hours, so a lead from Thursday evening turns a day old on Friday night and
+   is first mentioned on Monday at 9, 87 hours after it came in. A calendar
+   window dropped exactly the leads left waiting longest; widening it would
+   instead have texted the whole 3-5 day backlog on the first sweep (code
+   review, 2026-10-22). WINDOW_MS is only the outer cap the query reads. */
+const WINDOW_WORK_MINS = 3 * 8 * 60;
+const WINDOW_MS = 7 * 86400000;
 const FIRST_MINS = 120;
 const SECOND_MS = 24 * 3600000;
 
@@ -47,6 +51,7 @@ function dueNudges(leads, now = Date.now()) {
     if (l.source === 'chat') continue;
     const created = new Date(l.created_at).getTime();
     if (!Number.isFinite(created) || now - created > WINDOW_MS || now < created) continue;
+    if (businessMinutesBetween(created, now) > WINDOW_WORK_MINS) continue;
     if (!l.unanswered_24h_at && now - created >= SECOND_MS) second.push(l);
     else if (!l.unanswered_2h_at && businessMinutesBetween(created, now) >= FIRST_MINS) first.push(l);
   }
@@ -61,13 +66,19 @@ const firstName = (n) => String(n || 'Someone').trim().split(/\s+/)[0].slice(0, 
 function nudgeText({ first, second }, { now = Date.now(), sourceLabel = (s) => s, link = '' } = {}) {
   const all = [...second, ...first];
   if (!all.length) return '';
-  const who = all.slice(0, 4).map((l) => `${firstName(l.name)} (${sourceLabel(l.source)}, ${hoursAgo(l, now)}h)`).join(', ');
-  const more = all.length > 4 ? ` +${all.length - 4} more` : '';
   const head = all.length === 1 ? '1 lead is still waiting for a reply' : `${all.length} leads are still waiting for a reply`;
-  /* Cut the words, never the link: a long list used to end in half a URL. */
+  const urgent = second.length ? ' Over a day old: reply today or they go elsewhere.' : '';
   const tail = link ? ' ' + link : '';
-  const words = `June's Tees: ${head}: ${who}${more}.${second.length ? ' Over a day old: reply today or they go elsewhere.' : ''}`;
-  return words.slice(0, Math.max(0, 320 - tail.length)) + tail;
+  /* Fewer names, never a cut sentence or link: the list is what gives way
+     when it is too long, so the day-old warning and the link always arrive
+     whole (code review, 2026-10-22). */
+  for (let n = Math.min(4, all.length); n >= 0; n--) {
+    const who = all.slice(0, n).map((l) => `${firstName(l.name)} (${sourceLabel(l.source)}, ${hoursAgo(l, now)}h)`).join(', ');
+    const more = all.length > n ? `${n ? ' ' : ''}+${all.length - n} more` : '';
+    const body = `June's Tees: ${head}: ${who}${more}.${urgent}${tail}`;
+    if (body.length <= 320 || n === 0) return body.slice(0, 320);
+  }
+  return '';
 }
 
-module.exports = { dueNudges, nudgeText, inWorkingHours, WINDOW_MS, FIRST_MINS, SECOND_MS };
+module.exports = { dueNudges, nudgeText, inWorkingHours, WINDOW_MS, WINDOW_WORK_MINS, FIRST_MINS, SECOND_MS };

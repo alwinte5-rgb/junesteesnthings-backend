@@ -40,7 +40,7 @@ test('a day old: the second text, once', () => {
   assert.strictEqual(N.dueNudges([lead({ unanswered_2h_at: 'x' })], WED_11 + 3600000).first.length, 0, 'first is not repeated');
 });
 
-test('answered, quoted, let go, a live chat, or older than 5 days: no text', () => {
+test('answered, quoted, let go, a live chat, or older than 3 working days: no text', () => {
   const thu10 = at('2026-10-08T15:00:00Z');
   for (const o of [{ first_response_at: 'x' }, { lead_status: 'quoted' }, { lead_status: 'dismissed' },
                    { outcome: 'not_fit' }, { source: 'chat' }]) {
@@ -84,43 +84,49 @@ test('server: calls are leads, nudges are claimed before sending, in the hourly 
   assert.match(server, /ADD COLUMN IF NOT EXISTS unanswered_2h_at TIMESTAMPTZ/);
   assert.match(server, /ADD COLUMN IF NOT EXISTS unanswered_24h_at TIMESTAMPTZ/);
   const fn = server.slice(server.indexOf('async function nudgeUnansweredLeads('), server.indexOf('/** The leads nobody has answered'));
-  assert.ok(fn.indexOf('unanswered_2h_at IS NULL AND ${stillWaiting} RETURNING id') < fn.indexOf('sendOwnerSms('), 'claimed before the text');
+  assert.ok(fn.indexOf('unanswered_2h_at IS NULL AND ${stillWaiting}') < fn.indexOf('sendOwnerSms('), 'claimed before the text');
   assert.match(fn, /if \(!NUDGE\.inWorkingHours\(now\)\) return '';/);
   assert.match(server, /await step\('unanswered leads', nudgeUnansweredLeads\);/);
-  assert.match(fn, /if \(!sent\) \{\s+await sendEmail\(\{ to: SHOP_EMAIL,/, 'no Twilio (production today): the same words by email');
+  assert.match(fn, /if \(!sent\) \{[^]*?sendEmail\(\{ to: SHOP_EMAIL,/, "no Twilio (production today): the same words by email");
 });
 
 test('a lead that turns a day old on a weekend still gets its 24h text on Monday', () => {
   const thu6pm = at('2026-10-08T23:00:00Z'), mon930 = at('2026-10-12T14:30:00Z');   // 87.5h later
   const l = lead({ created_at: new Date(thu6pm).toISOString(), unanswered_2h_at: new Date(thu6pm).toISOString() });
   assert.strictEqual(N.dueNudges([l], mon930).second.length, 1);
-  assert.ok(N.WINDOW_MS > mon930 - thu6pm);
 });
 
-test('a long list is cut before the link, never through it', () => {
+test('the window is working days, so a deploy does not text the 3-5 day backlog', () => {
+  const mon9 = at('2026-10-05T14:00:00Z'), fri10 = at('2026-10-09T15:00:00Z');       // 4 working days + 1h
+  assert.strictEqual(N.dueNudges([lead({ created_at: new Date(mon9).toISOString() })], fri10).second.length, 0);
+  const tue10 = at('2026-10-06T15:00:00Z');                                           // 3 working days - 1h
+  assert.strictEqual(N.dueNudges([lead({ created_at: new Date(tue10).toISOString() })], fri10).second.length, 1);
+});
+
+test('a long list loses names, never the day-old warning or the link', () => {
   const link = 'https://www.jtees.net/admin/leads';
   const long = Array.from({ length: 6 }, (_, i) => lead({ id: i, name: 'Bartholomewwwwwwwwww' + i, source: 'offline' }));
   const body = N.nudgeText({ first: long.slice(3), second: long.slice(0, 3) },
     { now: WED_11 + 30 * 3600000, sourceLabel: () => 'Offline message', link });
   assert.ok(body.length <= 320, String(body.length));
-  assert.ok(body.endsWith(' ' + link), body);
+  assert.ok(body.endsWith('. Over a day old: reply today or they go elsewhere. ' + link), body);
+  assert.match(body, /\+\d more\./);
 });
 
-test('server: a failed send leaves the leads to try again, and only waiting leads are claimed', () => {
+test('server: claims commit before the send, a failed send gives them back, matched quotes count', () => {
   const fn = server.slice(server.indexOf('async function nudgeUnansweredLeads('), server.indexOf('/** The leads nobody has answered'));
-  const begin = fn.indexOf("client.query('BEGIN')"), commit = fn.indexOf("client.query('COMMIT')");
-  assert.ok(begin > 0 && begin < fn.indexOf('sendOwnerSms(') && fn.indexOf('sendEmail(') < commit, 'send inside the claim');
-  assert.match(fn, /catch \(err\) \{\s+await client\.query\('ROLLBACK'\)/);
+  assert.ok(fn.indexOf("client.query('COMMIT')") < fn.indexOf('sendOwnerSms('), 'no lock held across the send');
+  assert.ok(fn.indexOf('sendEmail(') < fn.indexOf('THEN NULL ELSE unanswered_2h_at END'), 'unclaimed after a failed email');
   assert.doesNotMatch(fn, /alertShop\(/, 'alertShop swallows a failed email');
-  assert.match(fn, /first_response_at IS NULL AND dismissed_at IS NULL AND outcome IS NULL/);
-  assert.match(fn, /NOT EXISTS \(SELECT 1 FROM quotes q WHERE q\.from_submission_id = submissions\.id/);
-  assert.match(fn, /leadsWithStatus\(\{ since: now - NUDGE\.WINDOW_MS \}\)/);
-  assert.match(server, /\$\{since \? 'WHERE s\.created_at >= \$2' : ''\}/);
+  assert.match(fn, /q\.from_submission_id = s\.id OR \$\{LEAD_QUOTE_MATCH\}/);
+  assert.match(fn, /s\.first_response_at IS NULL AND s\.dismissed_at IS NULL AND s\.outcome IS NULL/);
+  assert.match(fn, /since: now - NUDGE\.WINDOW_MS/);
 });
 
-test('server: calls and walk-ins added by hand are answered; logged calls need ten digits; old phone leads refiled', () => {
-  assert.match(server, /const spoken = !found && \(platform === 'Phone' \|\| platform === 'Walk-in'\);/);
-  assert.match(server, /CASE WHEN \$15::boolean THEN NOW\(\) END, CASE WHEN \$15::boolean THEN \$8::int END/);
-  assert.match(server, /if \(phone && phone\.replace\(\/\\D\/g, ''\)\.length < 10\) \{/);
+test('server: a call or walk-in the shop took is not nudged, and not counted as answered', () => {
+  const add = server.slice(server.indexOf("app.post('/admin/leads/add'"), server.indexOf("app.post('/admin/leads/add'") + 9000);
+  assert.match(add, /const spoken = !foundIt &&/);
+  assert.match(add, /unanswered_2h_at, unanswered_24h_at\)/);
+  assert.doesNotMatch(add, /first_response_at/, 'no reply was logged');
   assert.match(server, /UPDATE submissions SET source = 'phone' WHERE platform = 'Phone' AND source = 'manual'/);
 });
