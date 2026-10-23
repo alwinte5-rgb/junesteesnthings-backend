@@ -64,6 +64,15 @@ const NON_STOCK = ['DS', 'CN'];
    signal for a person, not a reason to hide a product a customer wants. */
 const LOCAL_STOCK_WARN = 500;
 
+/* SOLD OUT: no core-size piece at any S&S warehouse, dropship and Canada
+   included. Switched off on the run that sees it and back on the run S&S has
+   stock again (owner, 2026-10-22: "14 days is a long time. What if somebody
+   buys"). A Comfort Colors 4017 sat live at 0 stock because only a style S&S
+   stops PRICING was ever switched off. More than SOLD_OUT_MAX of them in one
+   run reads as a feed problem, not a sell-out: none are switched off and the
+   run is held for a person. */
+const SOLD_OUT_MAX = 10;
+
 /* ── S&S API ─────────────────────────────────────────────────────────────── */
 
 /* S&S throttles a sustained bulk sweep: 60 back-to-back calls measured 10x 503.
@@ -179,12 +188,13 @@ async function sizeCosts(ssa, styleId) {
    * reads it, so the return to list when a sale ends is not mistaken for a
    * feed glitch.
    */
-  let homeQty = 0, farQty = 0;
+  let homeQty = 0, farQty = 0, allQty = 0;
   for (const r of rows) {
     /* Stock is judged on CORE sizes only: a style with nothing but 4XL in
        Illinois is not locally stocked for any order a customer will place. */
     if (!CORE_SIZES.includes(r.sizeName) || !pieceCost(r)) continue;
     for (const w of r.warehouses || []) {
+      allQty += Number(w.qty) || 0;
       if (w.warehouseAbbr === HOME_WAREHOUSE) homeQty += w.qty;
       else if (!NON_STOCK.includes(w.warehouseAbbr)) farQty += w.qty;
     }
@@ -195,7 +205,7 @@ async function sizeCosts(ssa, styleId) {
   /* The earliest end date of any core-size sale, for the report. */
   const ends = rows.filter((r) => CORE_SIZES.includes(r.sizeName) && r.saleExpiration)
     .map((r) => String(r.saleExpiration).slice(0, 10)).sort()[0] || null;
-  return { bySize, listBySize, homeQty, farQty, saleEnds: ends, colours: colourStock(rows) };
+  return { bySize, listBySize, homeQty, farQty, allQty, saleEnds: ends, colours: colourStock(rows) };
 }
 
 /* The base cost the markup applies to — cheapest CORE size, else cheapest size —
@@ -282,6 +292,8 @@ process.stdin.on('end', async () => {
      CLOSEOUT_MIN (lib/ssa-costs closedColours); and the products left with
      none, retired for good. */
   const droppedColours = [], retired = [];
+  /* Live products with no core-size stock anywhere (SOLD_OUT_MAX above). */
+  const soldOut = [];
 
   for (const p of products) {
     let style, bySize;
@@ -296,6 +308,10 @@ process.stdin.on('end', async () => {
     }
     if (!bySize) { missing.push(p); continue; }
 
+    /* Only a live 'ssa' row is switched off: a staged row is already off the
+       storefront, and revival reads 'ssa' rows only. Bella+Canvas is bought
+       at SanMar when S&S has none (lib/ssa-costs atSanMar). */
+    if (!bySize.allQty && p.supplier === 'ssa' && !atSanMar(p.name)) soldOut.push(p);
     if (bySize.homeQty < LOCAL_STOCK_WARN) {
       lowLocal.push({ p, home: bySize.homeQty, far: bySize.farQty });
     }
@@ -393,6 +409,10 @@ process.stdin.on('end', async () => {
   for (const p of stale) {
     stmts.push(`UPDATE lumise_products SET active=0, ssa_auto_off=NOW() WHERE id=${p.id};`);
   }
+  const soldOutHeld = soldOut.length > SOLD_OUT_MAX;
+  if (!soldOutHeld) {
+    for (const p of soldOut) stmts.push(`UPDATE lumise_products SET active=0, ssa_auto_off=NOW() WHERE id=${p.id};`);
+  }
 
   /* Bring back only what THIS TOOL switched off.
    *
@@ -414,7 +434,7 @@ process.stdin.on('end', async () => {
       const style = await resolveStyle(ssa, p);
       if (!style) continue;
       const bySize = await sizeCosts(ssa, style.id);
-      if (!bySize) continue;
+      if (!bySize || !bySize.allQty) continue;     // priced but still sold out: stays off
       const cost = money(baseCost(bySize.bySize));
       revived.push({ p, cost });
       stmts.push(`UPDATE lumise_products SET active=1, ssa_auto_off=NULL, ` +
@@ -510,6 +530,14 @@ process.stdin.on('end', async () => {
     }
     console.log();
   }
+  if (soldOut.length) {
+    console.log(soldOutHeld
+      ? 'SKIPPED — ' + soldOut.length + ' products read as SOLD OUT at S&S, more than ' + SOLD_OUT_MAX +
+        ' in one run: looks like a feed problem, none switched off. Check S&S.'
+      : 'SOLD OUT AT S&S — switched off until stock returns (' + soldOut.length + ')');
+    for (const p of soldOut) console.log('  #' + String(p.id).padStart(3) + '  ' + p.name);
+    console.log();
+  }
   if (revived.length) {
     console.log('BACK IN STOCK — reactivating (' + revived.length + ')');
     for (const r of revived) console.log('  #' + String(r.p.id).padStart(3) + '  ' + r.p.name);
@@ -517,7 +545,7 @@ process.stdin.on('end', async () => {
   }
 
   console.log(unchanged.length + ' already correct · ' + repriced.length + ' repriced · ' + resized.length + ' sizes rebuilt · ' +
-    stale.length + ' deactivating · ' + revived.length + ' reactivating · ' +
+    stale.length + ' deactivating · ' + (soldOutHeld ? 0 : soldOut.length) + ' sold out · ' + revived.length + ' reactivating · ' +
     droppedColours.length + ' with colours dropped · ' + retired.length + ' retired');
   console.log('\n' + stmts.length + ' statements' + (APPLY ? ' — APPLYING' : ' — dry run, pass --apply to write'));
 
@@ -529,6 +557,7 @@ process.stdin.on('end', async () => {
       unreadable: unreadable.map(row),
       suspicious: suspicious.map((s) => ({ ...row(s.p), newCost: s.cost, newPrice: s.price, move: s.move, saleEnds: s.saleEnds || null })),
       droppedColours: droppedColours.map((d) => ({ ...row(d.p), colours: d.colours, left: d.left })),
+      soldOut: soldOut.map(row), soldOutHeld,
     }, null, 1));
   }
   if (!APPLY || !stmts.length) process.exit(0);

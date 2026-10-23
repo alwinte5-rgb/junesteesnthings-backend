@@ -31118,7 +31118,7 @@ async function runSupplierSync() {
          refused to write, a product deactivated, or a failed run. A quiet
          "nothing changed" email every day trains you to ignore the alert. */
       const notable = out.split('\n').filter((l) =>
-        /SKIPPED|DEACTIVATING|NOT ON S&S|BACK IN STOCK/.test(l));
+        /SKIPPED|DEACTIVATING|NOT ON S&S|BACK IN STOCK|SOLD OUT|DISCONTINUED COLOURS|RETIRED/.test(l));
       /* A failure now retries hourly, so alert on the first one of the day
          only — otherwise a broken sync sends 24 identical emails and gets
          filtered, which is how the last one went unread for a fortnight. */
