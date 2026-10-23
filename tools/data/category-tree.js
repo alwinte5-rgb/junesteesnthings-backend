@@ -1,5 +1,5 @@
 /* The shop's category tree (owner, 2026-10-19: "the list needs to tighten and
- * then go deeper"; tree approved as proposed). Seven groups at the top, each
+ * then go deeper"; tree approved as proposed). Groups at the top, each
  * opening into specific garments (Women's added 2026-10-20); style details (garment-dyed, heavyweight,
  * women's fit ...) are filters on the list, not categories.
  *
@@ -54,7 +54,9 @@ module.exports = [
     { slug: 'custom-caps', name: 'Caps', match: (p) => p.cls === 'cap' && !/beanie|knit|trucker|mesh|dad|unstructured|relaxed/i.test(p.name) },
   ] },
   { slug: 'custom-tote-bags', name: 'Bags & Totes', order: 7, match: (p) => p.cls === 'bag' },
+  /* Mugs and tumblers printed in house (owner, 2026-10-23). */
+  { slug: 'custom-mugs-drinkware', name: 'Mugs & Drinkware', order: 8, match: (p) => /\b(mugs?|tumblers?)\b/i.test(p.name) },
   /* Signs keep their own categories, moved under one group; filed by hand. */
-  { slug: 'custom-signs-displays', name: 'Signs & Displays', order: 8, manual: true,
+  { slug: 'custom-signs-displays', name: 'Signs & Displays', order: 9, manual: true,
     adopt: ['custom-banners', 'custom-yard-rigid-signs', 'custom-window-wall-floor-graphics', 'custom-vehicle-graphics-magnets', 'custom-photo-panels-canvas', 'custom-big-head-cutouts'] },
 ];

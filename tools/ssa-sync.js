@@ -297,7 +297,9 @@ process.stdin.on('end', async () => {
 
   for (const p of products) {
     let style, bySize;
-    if (!p.supplier && !Number(p.sid)) { ownProducts.push(p); continue; }
+    /* Supplies bought at retail (supplier 'shop': Michaels mugs) are the
+       shop's own too: no S&S style to look up (tools/add-shop-mugs.js). */
+    if ((!p.supplier || p.supplier === 'shop') && !Number(p.sid)) { ownProducts.push(p); continue; }
     try {
       style = await resolveStyle(ssa, p);
       if (!style) { unresolved.push(p); continue; }
