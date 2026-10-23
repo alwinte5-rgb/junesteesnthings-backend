@@ -33993,7 +33993,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     if (foundIt) {
       logActivity(actor, label.sale_type === 'shop' ? 'found lead was already known' : 'lead registered as theirs',
         { type: 'lead', id: l.id }, { reason: label.reason, ...(found ? { finder_run: found.run } : {}) });
-      return back(res, `/admin/leads#lead-${l.id}`, label.sale_type === 'shop' ? 'err' : 'ok',
+      return back(res, found ? `/admin/leads/find#found-${found.run}-${found.idx}` : `/admin/leads#lead-${l.id}`, label.sale_type === 'shop' ? 'err' : 'ok',
         label.sale_type === 'rep' ? 'Registered as your lead. It counts once you contact them and log it.'
           : label.sale_type === 'pending' ? `Saved as your lead, waiting for June to confirm: with only a ${websiteKey && !profileId ? 'website' : 'profile'}, the shop cannot check its customers. Add their email or phone when you have it.`
           : `Saved as a shop lead: ${label.reason}.`);
@@ -34260,6 +34260,19 @@ async function finderKnown(l) {
     || CREDIT.knownReason({ lead: await seenWebsite(FINDER.domainKey(l.website)) }, fmtDate);
 }
 
+/** Of the leads the finder's results became (`ids`), the ones still waiting
+ *  for a first contact. A lead that has been contacted, answered, let go or
+ *  deleted is not in the set, so it leaves the finder's list. */
+async function finderStillOpen(ids, profile) {
+  if (!ids.length) return new Set();
+  const { rows } = await pool.query(profile === 'software'
+    ? `SELECT id FROM software_leads WHERE id = ANY($1::int[]) AND contacted_at IS NULL AND status = 'new'`
+    : `SELECT s.id FROM submissions s WHERE s.id = ANY($1::int[]) AND s.first_response_at IS NULL AND s.outcome IS NULL
+          AND s.dismissed_at IS NULL AND NOT EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = ANY($2))`,
+    profile === 'software' ? [ids] : [ids, CONTACT_KINDS]);
+  return new Set(rows.map((r) => r.id));
+}
+
 function finderForm(ask, cap, profile = 'shop') {
   const a = ask || {};
   const P = FINDER_PAGES[profile];
@@ -34302,7 +34315,7 @@ function finderResultCard(run, l, i, known, mine = true) {
         <input type="hidden" name="finder_run" value="${Number(run.id)}"><input type="hidden" name="finder_idx" value="${i}">
         ${l.email ? '' : '<input name="email" type="email" maxlength="254" placeholder="Their email, if you found it" style="flex:1 1 180px">'}
         <button type="submit" class="btn">Add to my leads</button></form>`;
-  return `<div class="card" id="found-${i}">
+  return `<div class="card" id="found-${Number(run.id)}-${i}">
     <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(l.name)}</b>
       ${known ? pill(known, 'amber') : l.lead_id ? pill('Added', 'green') : ''}
       <div class="row-sub" style="white-space:normal">${escEmail([l.kind, l.city].filter(Boolean).join(' · '))}</div></span></div>
@@ -34324,20 +34337,58 @@ async function finderPage(req, res, profile) {
     const actor = currentActor() || OWNER_ACTOR;
     const owner = actor.kind !== 'staff';
     const staffId = owner ? null : actor.id;
-    const [today, roster, { rows: runs }] = await Promise.all([
+    const [today, roster, { rows: runs }, { rows: own }] = await Promise.all([
       finderRunsToday(staffId), staffRoster(),
       pool.query(`SELECT id, staff_id, query, ask, status, results, searches, cost, error, created_at FROM lead_finder_runs
-                   WHERE ($1::int IS NULL OR staff_id = $1) AND COALESCE(ask->>'profile', 'shop') = $2 ORDER BY id DESC LIMIT 20`, [staffId, profile])]);
+                   WHERE ($1::int IS NULL OR staff_id = $1) AND COALESCE(ask->>'profile', 'shop') = $2 ORDER BY id DESC LIMIT 20`, [staffId, profile]),
+      /* The running list: this person's own searches, the ones they can add from. */
+      pool.query(`SELECT id, staff_id, ask, status, results FROM lead_finder_runs
+                   WHERE staff_id IS NOT DISTINCT FROM $1 AND COALESCE(ask->>'profile', 'shop') = $2 AND status = 'done'
+                   ORDER BY id DESC LIMIT 300`, [staffId, profile])]);
     const cap = FINDER.capCheck({ mine: today.mine, shop: today.shop, owner });
     const wanted = intIn(req.query.run);
-    const run = wanted ? runs.find((r) => r.id === wanted) : runs[0];
+    /* No run asked for: every lead found and not yet contacted, newest first,
+       so a new search adds to the list instead of replacing it. */
+    const run = wanted ? runs.find((r) => r.id === wanted) : runs[0] && runs[0].status === 'failed' && runs[0].staff_id === staffId ? runs[0] : null;
     let shown = '';
+    if (!wanted) {
+      const added = [...new Set(own.flatMap((r) => (Array.isArray(r.results) ? r.results : []).map((l) => Number(l && l.lead_id)).filter((n) => n > 0)))];
+      const open = await finderStillOpen(added, profile);
+      const contacted = new Set(added.filter((id) => !open.has(id)));
+      const { items } = FINDER.openFinds(own, contacted, Infinity);
+      /* One the shop already has cannot be added, so it is not kept on the
+         list. Checked a few at a time, newest first, and only until the list
+         is full, so a long list does not take the whole database pool. */
+      const list = [];
+      let left = 0, k = 0;
+      if (profile === 'software') {
+        const known = await softBoardHas(items.map((x) => x.l));
+        items.forEach((x, n) => { if (known[n]) left++; else list.push(x); });
+        k = items.length;
+      } else {
+        for (; k < items.length && list.length < FINDER.OPEN_LIST; k += 6) {
+          const chunk = items.slice(k, k + 6);
+          const known = await Promise.all(chunk.map((x) => (x.l.lead_id ? '' : finderKnown(x.l).catch(() => ''))));
+          chunk.forEach((x, n) => { if (known[n]) left++; else list.push(x); });
+        }
+        k = Math.min(k, items.length);
+      }
+      const more = Math.max(0, list.length - FINDER.OPEN_LIST) + (items.length - k);
+      list.splice(FINDER.OPEN_LIST);
+      const waiting = list.filter((x) => x.l.lead_id).length;
+      shown = `<h3 style="margin:18px 0 6px" id="found">Your found leads <span class="muted" style="font-weight:400;font-size:13px">&middot; ${list.length}${
+        waiting ? `, ${waiting} added and waiting for a first contact` : ''}${left ? ` &middot; ${left} ${profile === 'software' ? 'already on the board' : 'the shop already has'} left out` : ''}</span></h3>
+        <p class="muted" style="font-size:13px;margin:0 0 8px">Each search adds to this list. A lead stays here until you contact them and log it on the lead.</p>
+        ${list.length ? `<div class="grid-cards">${list.map((x) => finderResultCard(x.run, x.l, x.i, '', true)).join('')}</div>`
+          : `<div class="card">${emptyState(own.length ? 'Every lead you found has been contacted. Run a new search for more.' : 'No leads yet. Pick a kind of customer and an area above.')}</div>`}
+        ${more ? `<p class="muted" style="font-size:13px">${more} older ${more === 1 ? 'lead' : 'leads'} not shown yet: contact the ones above and ${more === 1 ? 'it moves' : 'they move'} up.</p>` : ''}`;
+    }
     if (run && run.status === 'done') {
       const results = Array.isArray(run.results) ? run.results : [];
       const known = profile === 'software' ? await softBoardHas(results)
         : await Promise.all(results.map((l) => (l.lead_id ? '' : finderKnown(l).catch(() => ''))));
       shown = `<h3 style="margin:18px 0 6px">${escEmail(run.query)} <span class="muted" style="font-weight:400;font-size:13px">&middot; ${
-        escEmail(whenShort(run.created_at))} &middot; ${results.length} found${known.filter(Boolean).length ? `, ${known.filter(Boolean).length} already known` : ''}</span></h3>
+        escEmail(whenShort(run.created_at))} &middot; ${results.length} found${known.filter(Boolean).length ? `, ${known.filter(Boolean).length} already known` : ''}</span> <a href="${P.path}#found" style="font-size:13px;font-weight:400">Back to your list</a></h3>
         ${results.length ? `<div class="grid-cards">${results.map((l, i) => finderResultCard(run, l, i, known[i], run.staff_id === staffId)).join('')}</div>`
           : `<div class="card">${emptyState('Nothing usable came back. Try a wider area or different words.')}</div>`}`;
     } else if (run && run.status === 'failed') {
@@ -34353,7 +34404,7 @@ async function finderPage(req, res, profile) {
     res.send(adminPage('Find leads', `
       ${pageHeader('Find leads with AI', escEmail(P.sub), `<a class="btn btn-ghost" href="${P.back}">${escEmail(P.backLabel)}</a>`)}
       ${flash(req.query)}
-      ${finderForm(run && run.ask, cap, profile)}
+      ${finderForm((run || runs[0] || {}).ask, cap, profile)}
       ${shown}
       ${history}`, P.nav));
   } catch (err) {
@@ -34395,10 +34446,17 @@ async function finderRun(req, res, profile) {
       throw e;
     } finally { c.release(); }
     if (!cap.ok) return back(res, P.path, 'err', cap.why);
-    /* Names the finder already brought in, so it does not spend searches on them again. */
-    const { rows: skip } = await pool.query(profile === 'software'
+    /* Names the finder already brought in, on this person's list first, so a
+       new search adds different ones instead of spending searches on them again. */
+    const { rows: listed } = await pool.query(
+      `SELECT r.l->>'name' AS name FROM (SELECT id, jsonb_array_elements(results) AS l FROM lead_finder_runs
+          WHERE staff_id IS NOT DISTINCT FROM $1 AND COALESCE(ask->>'profile', 'shop') = $2 AND status = 'done' AND jsonb_typeof(results) = 'array'
+          ORDER BY id DESC LIMIT 300) r WHERE NOT (r.l ? 'lead_id') AND r.l->>'name' IS NOT NULL
+        GROUP BY 1 ORDER BY MAX(r.id) DESC LIMIT 30`, [staffId, profile]);
+    const { rows: brought } = await pool.query(profile === 'software'
       ? `SELECT company AS name FROM software_leads ORDER BY id DESC LIMIT 60`
       : `SELECT name FROM submissions WHERE finder_run_id IS NOT NULL ORDER BY id DESC LIMIT 60`);
+    const skip = [...listed, ...brought].filter((r) => r.name);
     const today = new Date().toLocaleDateString('en-US', { timeZone: SHOP_TZ, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     let out;
     try {
@@ -34414,7 +34472,7 @@ async function finderRun(req, res, profile) {
     await pool.query(`UPDATE lead_finder_runs SET status = 'done', results = $2::jsonb, searches = $3, cost = $4, finished_at = NOW() WHERE id = $1`,
       [runId, JSON.stringify(out.leads), out.searches, out.dollars]);
     logActivity(actor, 'lead finder run', { type: 'finder', id: runId }, { query: FINDER.describe(v.ask), found: out.leads.length, searches: out.searches });
-    return res.redirect(`${P.path}?run=${runId}`);
+    return back(res, `${P.path}#found`, 'ok', `Found ${out.leads.length}. They are added to your list below, apart from any the shop already has.`);
   } catch (err) {
     console.error('lead finder run failed:', err.message);
     if (runId) await pool.query(`UPDATE lead_finder_runs SET status = 'failed', error = 'Could not save the results.', finished_at = NOW() WHERE id = $1`, [runId]).catch(() => {});
@@ -34617,7 +34675,8 @@ app.post('/admin/software-leads', requireAdmin, async (req, res) => {
         [finder.runId, String(finder.idx), row.id]).catch((e) => console.error('finder mark failed:', e.message));
     }
     logActivity(actor, 'software lead added', { type: 'software_lead', id: row.id }, { company: l.company });
-    return back(res, `${SOFT_PATH}#slead-${row.id}`, 'ok', `${l.company} is on your board. It counts once you log your first contact.`);
+    return back(res, finder ? `${SOFT_PATH}/find#found-${finder.runId}-${finder.idx}` : `${SOFT_PATH}#slead-${row.id}`, 'ok',
+      `${l.company} is on your board. It counts once you log your first contact.`);
   } catch (err) {
     console.error('software lead add failed:', err.message);
     return back(res, `${SOFT_PATH}#add`, 'err', 'Could not add the lead.');

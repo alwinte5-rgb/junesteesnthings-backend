@@ -158,3 +158,41 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
   assert.match(add, /const phone = found \? '' :/, 'a phone found online is not saved');
   assert.match(add, /if \(known\) \{/, 'a known customer is refused, not saved');
 });
+
+test('a new search adds to the list; a lead leaves it once contacted', () => {
+  const r = (id, results, status = 'done') => ({ id, status, results });
+  const a = lead({ name: 'Alpha League', website: 'https://alpha.org/' });
+  const b = lead({ name: 'Bravo Club', website: 'https://bravo.org/' });
+  const c = lead({ name: 'Charlie Band', website: '' });
+  const older = r(1, [a, { ...b, lead_id: 41 }]);
+  const newer = r(2, [c, lead({ name: 'Alpha again', website: 'https://www.alpha.org/join' })]);
+  const names = (o) => o.items.map((x) => x.l.name);
+  /* Nothing contacted: both searches are listed, newest first, Alpha once. */
+  assert.deepStrictEqual(names(F.openFinds([newer, older])), ['Charlie Band', 'Alpha again', 'Bravo Club']);
+  /* Added but not contacted stays; contacted goes. */
+  assert.deepStrictEqual(names(F.openFinds([newer, older], new Set([41]))), ['Charlie Band', 'Alpha again']);
+  /* The copy already added wins over a newer duplicate, and keeps its run and index for Add. */
+  const dup = F.openFinds([r(3, [lead({ name: 'Bravo', website: 'https://bravo.org/x' })]), older]);
+  const bravo = dup.items.find((x) => /Bravo/.test(x.l.name));
+  assert.deepStrictEqual([bravo.run.id, bravo.i, bravo.l.lead_id], [1, 1, 41]);
+  /* Once one copy is contacted, a newer copy found again leaves too. */
+  assert.deepStrictEqual(names(F.openFinds([r(7, [lead({ name: 'Bravo again', website: 'https://www.bravo.org/' })]), older], new Set([41]))), ['Alpha League']);
+  /* Failed runs and junk rows are skipped; the list is capped with a count of the rest. */
+  assert.deepStrictEqual(F.openFinds([r(4, null, 'failed'), r(5, [null, 'x'])]).items, []);
+  const many = r(6, Array.from({ length: 5 }, (_, i) => lead({ name: `L${i}`, website: `https://l${i}.org/` })));
+  assert.deepStrictEqual([F.openFinds([many], new Set(), 3).items.length, F.openFinds([many], new Set(), 3).more], [3, 2]);
+});
+
+test('the finder page keeps the list; searches and adds come back to it', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const page = src.slice(src.indexOf('async function finderPage('), src.indexOf('async function finderRun('));
+  assert.match(page, /FINDER\.openFinds\(own, contacted, Infinity\)/);
+  assert.match(page, /list\.length < FINDER\.OPEN_LIST; k \+= 6/, "known checks run a few at a time, not 180 at once");
+  assert.match(page, /WHERE staff_id IS NOT DISTINCT FROM \$1 AND COALESCE\(ask->>'profile', 'shop'\) = \$2 AND status = 'done'/, 'only your own runs');
+  const run = src.slice(src.indexOf('async function finderRun('), src.indexOf('/* ── Software leads board'));
+  assert.ok(!/res\.redirect\(`\$\{P\.path\}\?run=\$\{runId\}`\)/.test(run), 'a finished search opens the list, not that one run');
+  const add = src.slice(src.indexOf("app.post('/admin/leads/add'"), src.indexOf("app.post('/admin/quote/:code/note'"));
+  assert.match(add, /found \? `\/admin\/leads\/find#found-\$\{found\.run\}-\$\{found\.idx\}`/, 'adding from the finder stays on the finder');
+  const open = src.slice(src.indexOf('async function finderStillOpen('), src.indexOf('function finderForm('));
+  for (const w of ['first_response_at IS NULL', 'outcome IS NULL', 'dismissed_at IS NULL', 'lead_notes', 'contacted_at IS NULL']) assert.ok(open.includes(w), w);
+});
