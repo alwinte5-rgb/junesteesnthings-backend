@@ -115,6 +115,7 @@ const RUSH = require('./tools/lib/rush');
 const CONTRACTS = require('./tools/lib/contracts');
 const CHAN = require('./tools/lib/team-channels');
 const MB = require('./tools/lib/mailbox');
+const CLOCKNOTE = require('./tools/lib/clockin-note');
 const NOTIFY = require('./tools/lib/notifications');
 const FLOW = require('./tools/lib/task-flow');
 const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
@@ -32767,12 +32768,64 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
   }
 });
 
+/** The clock-in note (tools/lib/clockin-note.js): the first clock-in of the
+ *  shop's day posts a Mailbox conversation from the helper to the owner with
+ *  their open tasks and projects. Once a day: the subject ends with the date and
+ *  a second clock-in (back from lunch) finds it under the same lock. Returns
+ *  the thread id, or null when today's note already exists. */
+async function sendClockInNote(staffId) {
+  const { rows: [me] } = await pool.query('SELECT id, name FROM staff WHERE id = $1 AND active AND archived_at IS NULL', [staffId]);
+  if (!me) return null;
+  const today = TIMECLOCK.dayOf(new Date(), SHOP_TZ);
+  const author = `staff:${me.id}`;
+  const subject = MB.cleanSubject(CLOCKNOTE.subjectFor(me.name, today));
+  const [{ rows: tasks }, { rows: projects }] = await Promise.all([
+    pool.query(
+      `SELECT title, (SELECT tp.title FROM task_projects tp WHERE tp.id = staff_tasks.project_id) AS project_title
+         FROM staff_tasks
+        WHERE assigned_to = $1 AND done_at IS NULL AND ${TASK_STEP_NOW}
+          AND (starts_on IS NULL OR starts_on <= $2::date)
+        ORDER BY (started_at IS NULL), due_on NULLS LAST, ${TASK_LANE_ORDER}, created_at
+        LIMIT 50`, [me.id, today]),
+    pool.query(
+      `SELECT tp.title FROM task_projects tp
+        WHERE tp.assigned_to = $1 AND tp.archived_at IS NULL
+          AND EXISTS (SELECT 1 FROM staff_tasks s WHERE s.project_id = tp.id AND s.done_at IS NULL)
+        ORDER BY tp.key_date NULLS LAST, tp.id LIMIT 20`, [me.id]),
+  ]);
+  const body = CLOCKNOTE.buildBody({ name: me.name, tasks, projects }).slice(0, TEAM_CHAT_MAX);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`clockin-note:${me.id}`]);
+    const { rows: [had] } = await client.query(
+      `SELECT id FROM mail_threads WHERE created_by = $1 AND right(subject, length($2::text)) = $2::text LIMIT 1`,
+      [author, CLOCKNOTE.subjectTail(today)]);
+    if (had) { await client.query('ROLLBACK'); return null; }
+    const { rows: [t] } = await client.query(
+      'INSERT INTO mail_threads (subject, created_by) VALUES ($1, $2) RETURNING id', [subject, author]);
+    for (const r of ['owner', author]) {
+      await client.query('INSERT INTO mail_participants (thread_id, reader) VALUES ($1, $2) ON CONFLICT DO NOTHING', [t.id, r]);
+    }
+    const added = await addMailMessage(client, { threadId: t.id, author, body });
+    if (added.error) { await client.query('ROLLBACK'); console.error('clock-in note refused:', added.error); return null; }
+    await client.query('COMMIT');
+    notifyNow();
+    return t.id;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally { client.release(); }
+}
+
 app.post('/admin/clock/in', requireAdmin, async (req, res) => {
   const actor = currentActor();
   if (!actor || actor.kind !== 'staff') return res.redirect('/admin/timeclock');
   const to = safeAdminPath((req.body || {}).back, '/admin/clock');
   try {
     await pool.query('INSERT INTO staff_shifts (staff_id, start_ip) VALUES ($1, $2)', [actor.id, String(clientIp(req) || '').slice(0, 64) || null]);
+    /* The note never holds up or undoes the clock-in itself. */
+    sendClockInNote(actor.id).catch((e) => console.error('clock-in note failed:', e.message));
     return back(res, to, 'ok', 'Clocked in.');
   } catch (err) {
     if (err.code === '23505') return back(res, to, 'ok', 'You are already on the clock.');
