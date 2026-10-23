@@ -21,10 +21,16 @@ function dayLabel(ymd) {
   return `${DAYS[dt.getUTCDay()]} ${MONTHS[m - 1]} ${d}`;
 }
 
-/** The subject for one helper's note on one day. It doubles as the once-a-day
- *  key: a second clock-in that day finds a conversation with this subject. */
+/** The end of every note's subject on one day, whatever the helper's name:
+ *  the once-a-day key, so a rename on the day cannot send a second one. */
+function subjectTail(ymd) {
+  return `: today's tasks (${dayLabel(ymd)})`;
+}
+
+/** The subject for one helper's note on one day. */
 function subjectFor(name, ymd) {
-  return `${String(name || 'Helper').trim() || 'Helper'}: today's tasks (${dayLabel(ymd)})`;
+  /* The name is capped so the Mailbox's subject limit never cuts the date off. */
+  return `${String(name || 'Helper').trim().slice(0, 60) || 'Helper'}${subjectTail(ymd)}`;
 }
 
 function oneLine(v) {
@@ -56,7 +62,7 @@ function buildBody({ name, tasks = [], projects = [] }) {
     return out;
   };
   return [
-    'Good morning! I am about to clock in. Here are the tasks on my priority today!',
+    'Good morning! I just clocked in. Here are the tasks on my priority today!',
     '',
     'Tasks for Today:',
     ...list(loose, MAX_TASKS, 'Nothing assigned yet'),
@@ -70,4 +76,4 @@ function buildBody({ name, tasks = [], projects = [] }) {
   ].join('\n');
 }
 
-module.exports = { MAX_TASKS, MAX_PROJECTS, dayLabel, subjectFor, buildBody };
+module.exports = { MAX_TASKS, MAX_PROJECTS, dayLabel, subjectTail, subjectFor, buildBody };

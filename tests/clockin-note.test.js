@@ -33,7 +33,7 @@ test('the body follows the helper\'s own morning message', () => {
     projects: ['Christmas 2026: Print the Magic of Christmas'],
   });
   assert.strictEqual(body, [
-    'Good morning! I am about to clock in. Here are the tasks on my priority today!',
+    'Good morning! I just clocked in. Here are the tasks on my priority today!',
     '',
     'Tasks for Today:',
     '• EZ Clean Flyer Updates',
@@ -82,6 +82,9 @@ test('the subject carries the date, composed from parts', () => {
   assert.strictEqual(NOTE.dayLabel('2026-10-23'), 'Fri Oct 23');
   assert.strictEqual(NOTE.subjectFor('Eleazar', '2026-10-23'), "Eleazar: today's tasks (Fri Oct 23)");
   assert.strictEqual(NOTE.subjectFor('', '2026-01-05'), "Helper: today's tasks (Mon Jan 5)");
+  assert.ok(NOTE.subjectFor('Renamed Person', '2026-10-23').endsWith(NOTE.subjectTail('2026-10-23')));
+  const long = NOTE.subjectFor('x'.repeat(500), '2026-10-23');
+  assert.ok(long.length <= 120 && long.endsWith(NOTE.subjectTail('2026-10-23')), 'a long name never cuts the date off');
 });
 
 test('clock-in sends the note without waiting on it or failing because of it', () => {
@@ -98,7 +101,8 @@ test('the note is once a day, only to the owner, and only from a working helper'
   const fn = block('async function sendClockInNote(');
   assert.match(fn, /WHERE id = \$1 AND active AND archived_at IS NULL/);
   assert.match(fn, /pg_advisory_xact_lock\(hashtext\(\$1\)\)', \[`clockin-note:\$\{me\.id\}`\]/);
-  assert.match(fn, /WHERE created_by = \$1 AND subject = \$2/);
+  assert.match(fn, /WHERE created_by = \$1 AND right\(subject, length\(\$2::text\)\) = \$2::text/);
+  assert.match(fn, /CLOCKNOTE\.subjectTail\(today\)/);
   assert.match(fn, /for \(const r of \['owner', author\]\)/);
   assert.match(fn, /assigned_to = \$1 AND done_at IS NULL AND \$\{TASK_STEP_NOW\}/);
   assert.match(fn, /addMailMessage\(client,/);

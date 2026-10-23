@@ -32770,7 +32770,7 @@ app.get('/admin/clock', requireAdmin, async (req, res) => {
 
 /** The clock-in note (tools/lib/clockin-note.js): the first clock-in of the
  *  shop's day posts a Mailbox conversation from the helper to the owner with
- *  their open tasks and projects. Once a day: the subject carries the date and
+ *  their open tasks and projects. Once a day: the subject ends with the date and
  *  a second clock-in (back from lunch) finds it under the same lock. Returns
  *  the thread id, or null when today's note already exists. */
 async function sendClockInNote(staffId) {
@@ -32799,7 +32799,8 @@ async function sendClockInNote(staffId) {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`clockin-note:${me.id}`]);
     const { rows: [had] } = await client.query(
-      'SELECT id FROM mail_threads WHERE created_by = $1 AND subject = $2 LIMIT 1', [author, subject]);
+      `SELECT id FROM mail_threads WHERE created_by = $1 AND right(subject, length($2::text)) = $2::text LIMIT 1`,
+      [author, CLOCKNOTE.subjectTail(today)]);
     if (had) { await client.query('ROLLBACK'); return null; }
     const { rows: [t] } = await client.query(
       'INSERT INTO mail_threads (subject, created_by) VALUES ($1, $2) RETURNING id', [subject, author]);
