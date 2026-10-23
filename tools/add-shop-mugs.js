@@ -39,6 +39,7 @@ console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — printed with method #' + me
 for (const m of MUGS) {
   m.price = sellPrice(m.regular);
   const have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
+  if (have.length > 1) { console.error('  ' + have.length + ' products are named "' + m.name + '" — refusing'); process.exit(1); }
   m.id = have.length ? have[0].id : null;
   console.log('  ' + (m.id ? 'update #' + m.id : 'create') + '  $' + m.regular.toFixed(2) + ' regular -> $' + m.price.toFixed(2) + '  ' + m.name);
 }
@@ -60,7 +61,7 @@ for (const m of MUGS) {
 let bad = 0;
 for (const m of MUGS) {
   const v = mysql(url, 'SELECT id, price, active, supplier, printings FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
-  const ok = v.length === 1 && Number(v[0].price) === m.price && v[0].active === '0' && v[0].supplier === 'shop' && v[0].printings === printings;
+  const ok = v.length === 1 && Number(v[0].price) === Number(m.price.toFixed(2)) && Number(v[0].active) === 0 && v[0].supplier === 'shop' && v[0].printings === printings;
   if (!ok) bad++;
   console.log('  verified #' + (v[0] && v[0].id) + ' $' + (v[0] && v[0].price) + ' ' + m.name + ': ' + (ok ? 'match' : 'DOES NOT MATCH'));
 }
