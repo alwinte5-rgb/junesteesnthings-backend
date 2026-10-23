@@ -26533,11 +26533,12 @@ async function nudgeUnansweredLeads(now = Date.now()) {
         WHERE s.id = ANY($1) AND s.unanswered_24h_at IS NULL AND ${stillWaiting} RETURNING s.id`, [secondIds, stamp]) : { rows: [] });
     await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    /* A connection that cannot even roll back is thrown away, not pooled. */
+    const dead = await client.query('ROLLBACK').then(() => null, (e) => e);
+    client.release(dead || undefined);
     throw err;
-  } finally {
-    client.release();
   }
+  client.release();
   const got = new Set([...c1, ...c2].map((r) => r.id));
   const claimed = { first: due.first.filter((l) => got.has(l.id)), second: due.second.filter((l) => got.has(l.id)) };
   const body = NUDGE.nudgeText(claimed, { now, sourceLabel: (s) => (LEAD_SOURCES[s] || LEAD_SOURCES.form)[0],
@@ -26549,7 +26550,9 @@ async function nudgeUnansweredLeads(now = Date.now()) {
   const sent = await sendOwnerSms(body).catch((e) => { console.error('lead nudge text failed:', e.message); return false; });
   if (!sent) {
     try {
-      await sendEmail({ to: SHOP_EMAIL, subject: `⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
+      /* urgent: a customer is waiting, so never held for the daily summary
+         (owner, 2026-10-19), and a held email would read as sent. */
+      await sendEmail({ to: SHOP_EMAIL, urgent: true, subject: `⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
         html: `<div style="font-family:system-ui,sans-serif;max-width:560px"><p style="font-size:15px">${escEmail(body)}</p>
          <p><a href="${PUBLIC_BASE_URL}/admin/leads" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Leads</a></p></div>` });
     } catch (err) {
@@ -33995,18 +33998,20 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     }
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
       : platform === 'Phone' ? 'phone' : 'manual';
-    /* A call or a walk-in the shop took, added here, was a conversation: the
-       owner is not texted that the caller is still waiting (a missed call has
-       its own form, Log a call, "I missed it"). It is NOT marked answered:
-       no reply was logged, and the reply-time figures must not count one. A
-       lead a helper found is theirs to reach, and is left as it was. */
+    /* A call or a walk-in the shop took, added here, was a conversation: it
+       is answered, so it leaves the waiting list and the owner is not texted
+       that the caller is still waiting (a missed call has its own form, Log a
+       call, "I missed it"). Answered by the shop, not by the helper who typed
+       it in: first_response_by stays empty, so it adds nothing to anyone's
+       reply-time figures. A lead a helper found is theirs to reach, and is
+       left waiting as before. */
     const spoken = !foundIt && (platform === 'Phone' || platform === 'Walk-in');
     const { rows: [l] } = await pool.query(
       `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to,
                                 sale_type, sale_type_reason, rep_id, website, website_key, finder_run_id,
-                                unanswered_2h_at, unanswered_24h_at)
+                                first_response_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-               CASE WHEN $15::boolean THEN NOW() END, CASE WHEN $15::boolean THEN NOW() END) RETURNING id`,
+               CASE WHEN $15::boolean THEN NOW() END) RETURNING id`,
       [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
        isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id, website, websiteKey, found ? found.run : null, spoken]);
     if (found) {

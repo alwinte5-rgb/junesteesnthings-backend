@@ -51,9 +51,10 @@ function dueNudges(leads, now = Date.now()) {
     if (l.source === 'chat') continue;
     const created = new Date(l.created_at).getTime();
     if (!Number.isFinite(created) || now - created > WINDOW_MS || now < created) continue;
-    if (businessMinutesBetween(created, now) > WINDOW_WORK_MINS) continue;
+    const worked = businessMinutesBetween(created, now);
+    if (worked > WINDOW_WORK_MINS) continue;
     if (!l.unanswered_24h_at && now - created >= SECOND_MS) second.push(l);
-    else if (!l.unanswered_2h_at && businessMinutesBetween(created, now) >= FIRST_MINS) first.push(l);
+    else if (!l.unanswered_2h_at && worked >= FIRST_MINS) first.push(l);
   }
   return { first, second };
 }
@@ -74,11 +75,10 @@ function nudgeText({ first, second }, { now = Date.now(), sourceLabel = (s) => s
      whole (code review, 2026-10-22). */
   for (let n = Math.min(4, all.length); n >= 0; n--) {
     const who = all.slice(0, n).map((l) => `${firstName(l.name)} (${sourceLabel(l.source)}, ${hoursAgo(l, now)}h)`).join(', ');
-    const more = all.length > n ? `${n ? ' ' : ''}+${all.length - n} more` : '';
-    const body = `June's Tees: ${head}: ${who}${more}.${urgent}${tail}`;
+    const more = all.length > n ? ` +${all.length - n} more` : '';
+    const body = n ? `June's Tees: ${head}: ${who}${more}.${urgent}${tail}` : `June's Tees: ${head}.${urgent}${tail}`;
     if (body.length <= 320 || n === 0) return body.slice(0, 320);
   }
-  return '';
 }
 
 module.exports = { dueNudges, nudgeText, inWorkingHours, WINDOW_MS, WINDOW_WORK_MINS, FIRST_MINS, SECOND_MS };
