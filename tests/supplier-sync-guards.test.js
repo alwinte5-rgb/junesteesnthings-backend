@@ -213,8 +213,8 @@ test('the catalogue photo is the garment, never the model shot', () => {
    as NOT ON S&S, so the "needs a look" email went out daily for nothing. */
 test('shop-made products are skipped before any S&S lookup', () => {
   const src = read('tools/ssa-sync.js');
-  const skip = src.indexOf("if (!p.supplier && !Number(p.sid)) { ownProducts.push(p); continue; }");
-  assert.ok(skip !== -1, 'no-supplier products must be set aside');
+  const skip = src.indexOf("if ((!p.supplier || p.supplier === 'shop') && !Number(p.sid)) { ownProducts.push(p); continue; }");
+  assert.ok(skip !== -1, 'no-supplier and shop-bought (Michaels mugs) products must be set aside');
   assert.ok(skip < src.indexOf('style = await resolveStyle(ssa, p);'), 'before the lookup, not after it');
 });
 
