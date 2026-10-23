@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* White sublimation mugs from Michaels, printed in house, quote form only.
+/* White sublimation mugs and tumblers from Michaels, printed in house, quote form only.
  *
  *   railway run -s MySQL node tools/add-shop-mugs.js            # dry run
  *   railway run -s MySQL node tools/add-shop-mugs.js --apply    # write
@@ -27,6 +27,10 @@ const MUGS = [
     desc: 'All-white ceramic mug, 11.8 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: names, photos, logos.' },
   { name: 'White Ceramic Sublimation Mug — 15 oz', regular: 4.99,
     desc: 'All-white ceramic mug, 15 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: names, photos, logos.' },
+  { name: 'White Skinny Sublimation Tumbler with Straw — 18.5 oz', regular: 9.99,
+    desc: 'All-white stainless skinny tumbler with lid and straw, 18.5 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color, all the way around.' },
+  { name: 'Glow-in-the-Dark Sublimation Tumbler — 20 oz', regular: 15.49,
+    desc: 'Sublimation tumbler that glows in the dark, 20 oz, with lid and straw (Make Market, from Michaels). Printed in our shop in full color, all the way around.' },
 ];
 
 const method = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(SUBLIMATION) + ';', { rows: true });
