@@ -87,7 +87,7 @@ test('server: calls are leads, nudges are claimed before sending, in the hourly 
   assert.ok(fn.indexOf('unanswered_2h_at IS NULL AND ${stillWaiting}') < fn.indexOf('sendOwnerSms('), 'claimed before the text');
   assert.match(fn, /if \(!NUDGE\.inWorkingHours\(now\)\) return '';/);
   assert.match(server, /await step\('unanswered leads', nudgeUnansweredLeads\);/);
-  assert.match(fn, /if \(!sent\) \{[^]*?sendEmail\(\{ to: SHOP_EMAIL,/, "no Twilio (production today): the same words by email");
+  assert.match(fn, /if \(!sent\) \{[^]*?alertShop\(/, "no Twilio (production today): the same words by email");
 });
 
 test('a lead that turns a day old on a weekend still gets its 24h text on Monday', () => {
@@ -114,18 +114,21 @@ test('a long list loses names, never the day-old warning or the link', () => {
   const none = N.nudgeText({ first: [], second: Array.from({ length: 6 }, (_, i) => lead({ id: i, name: 'X'.repeat(20) })) },
     { now: WED_11 + 30 * 3600000, sourceLabel: () => 'S'.repeat(200), link });
   assert.ok(none.startsWith("June's Tees: 6 leads are still waiting for a reply. Over a day old"), none);
+  const longLink = 'https://' + 'x'.repeat(300) + '.example/admin/leads';
+  const cut = N.nudgeText({ first: [], second: [lead()] }, { now: WED_11 + 30 * 3600000, link: longLink });
+  assert.ok(cut.endsWith(' ' + longLink) || cut === (' ' + longLink).slice(-320), 'the link is never the part that is cut');
 });
 test('server: the nudge email is never held for the daily summary, and a dead connection is not pooled', () => {
   const fn = server.slice(server.indexOf('async function nudgeUnansweredLeads('), server.indexOf('/** The leads nobody has answered'));
-  assert.match(fn, /sendEmail\(\{ to: SHOP_EMAIL, urgent: true,/);
+  assert.match(fn, /\{ urgent: true, rethrow: true \}/);
+  assert.match(server, /if \(rethrow\) throw e;/);
   assert.match(fn, /client\.release\(dead \|\| undefined\)/);
 });
 
 test('server: claims commit before the send, a failed send gives them back, matched quotes count', () => {
   const fn = server.slice(server.indexOf('async function nudgeUnansweredLeads('), server.indexOf('/** The leads nobody has answered'));
   assert.ok(fn.indexOf("client.query('COMMIT')") < fn.indexOf('sendOwnerSms('), 'no lock held across the send');
-  assert.ok(fn.indexOf('sendEmail(') < fn.indexOf('THEN NULL ELSE unanswered_2h_at END'), 'unclaimed after a failed email');
-  assert.doesNotMatch(fn, /alertShop\(/, 'alertShop swallows a failed email');
+  assert.ok(fn.indexOf('alertShop(') < fn.indexOf('THEN NULL ELSE unanswered_2h_at END'), 'unclaimed after a failed email');
   assert.match(fn, /q\.from_submission_id = s\.id OR \$\{LEAD_QUOTE_MATCH\}/);
   assert.match(fn, /s\.first_response_at IS NULL AND s\.dismissed_at IS NULL AND s\.outcome IS NULL/);
   assert.match(fn, /since: now - NUDGE\.WINDOW_MS/);

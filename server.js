@@ -1968,6 +1968,14 @@ async function initStaffTables() {
     /* Phone leads added by hand before source 'phone' existed were saved as
        'manual', so the Phone calls filter missed them. */
     "UPDATE submissions SET source = 'phone' WHERE platform = 'Phone' AND source = 'manual'",
+    /* Calls and walk-ins added by hand before Add a lead began saving them as
+       answered (2026-10-23) are not texted about as waiting once this ships.
+       Only the nudge stamps: their place on the Leads page is unchanged. A
+       logged call (Log a call) carries a 'call' note and is left alone. */
+    `UPDATE submissions s SET unanswered_2h_at = COALESCE(s.unanswered_2h_at, NOW()), unanswered_24h_at = COALESCE(s.unanswered_24h_at, NOW())
+      WHERE s.created_at >= '2026-10-13' AND s.created_at < '2026-10-24' AND s.platform IN ('Phone', 'Walk-in')
+        AND s.first_response_at IS NULL AND s.unanswered_24h_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = 'call')`,
     /* A cash or Zelle payment a helper recorded waits for the owner's
        "Confirm received" before it counts for commission (tools/lib/fraud-signals.js).
        recorded_by is the staff id, NULL meaning the owner. */
@@ -17286,12 +17294,15 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
  */
 /** Operational alert to the shop. Never throws — an alert must not be able to
  *  fail a webhook and cause Stripe to retry a payment that already banked. */
-async function alertShop(subject, innerHtml) {
+/* `urgent` sends at once instead of holding for the daily summary; `rethrow`
+   lets a caller that must know (and retry) see a failed send. */
+async function alertShop(subject, innerHtml, { urgent = false, rethrow = false } = {}) {
   return sendEmail({
     to: SHOP_EMAIL,
     subject,
+    urgent,
     html: `<div style="font-family:system-ui,sans-serif;max-width:560px">${innerHtml}</div>`,
-  }).catch((e) => console.error('shop alert failed:', e.message));
+  }).catch((e) => { console.error('shop alert failed:', e.message); if (rethrow) throw e; });
 }
 
 /* ── Error alerting: one funnel, two sinks ────────────────────────
@@ -26545,18 +26556,20 @@ async function nudgeUnansweredLeads(now = Date.now()) {
     link: `${PUBLIC_BASE_URL}/admin/leads` });
   if (!body) return '';
   /* Texted when Twilio is set up; otherwise (or if the text fails) the same
-     words by email, so the nudge is never just a log line. sendEmail, not
-     alertShop: alertShop swallows a failed send, and this one must throw. */
+     words by email, so the nudge is never just a log line. Urgent: a customer
+     is waiting, so never held for the daily summary (owner, 2026-10-19), where
+     a held email would read as sent. Rethrown, so a failure is retried. */
   const sent = await sendOwnerSms(body).catch((e) => { console.error('lead nudge text failed:', e.message); return false; });
   if (!sent) {
     try {
-      /* urgent: a customer is waiting, so never held for the daily summary
-         (owner, 2026-10-19), and a held email would read as sent. */
-      await sendEmail({ to: SHOP_EMAIL, urgent: true, subject: `⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
-        html: `<div style="font-family:system-ui,sans-serif;max-width:560px"><p style="font-size:15px">${escEmail(body)}</p>
-         <p><a href="${PUBLIC_BASE_URL}/admin/leads" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Leads</a></p></div>` });
+      await alertShop(`⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
+        `<p style="font-size:15px">${escEmail(body)}</p>
+         <p><a href="${PUBLIC_BASE_URL}/admin/leads" style="background:#1848B8;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Leads</a></p>`,
+        { urgent: true, rethrow: true });
     } catch (err) {
-      /* Only the stamps written at `stamp`: a 2h stamp from an earlier sweep stays. */
+      /* Only the stamps written at `stamp`: a 2h stamp from an earlier sweep
+         stays. If this too fails, the error below still reaches the error
+         digest, so the owner hears that nudges are failing. */
       await pool.query(
         `UPDATE submissions SET unanswered_2h_at = CASE WHEN unanswered_2h_at = $2 THEN NULL ELSE unanswered_2h_at END,
                                 unanswered_24h_at = CASE WHEN unanswered_24h_at = $2 THEN NULL ELSE unanswered_24h_at END

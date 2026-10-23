@@ -51,6 +51,7 @@ function dueNudges(leads, now = Date.now()) {
     if (l.source === 'chat') continue;
     const created = new Date(l.created_at).getTime();
     if (!Number.isFinite(created) || now - created > WINDOW_MS || now < created) continue;
+    if (l.unanswered_24h_at) continue;                // both texts sent: nothing left to work out
     const worked = businessMinutesBetween(created, now);
     if (worked > WINDOW_WORK_MINS) continue;
     if (!l.unanswered_24h_at && now - created >= SECOND_MS) second.push(l);
@@ -76,8 +77,8 @@ function nudgeText({ first, second }, { now = Date.now(), sourceLabel = (s) => s
   for (let n = Math.min(4, all.length); n >= 0; n--) {
     const who = all.slice(0, n).map((l) => `${firstName(l.name)} (${sourceLabel(l.source)}, ${hoursAgo(l, now)}h)`).join(', ');
     const more = all.length > n ? ` +${all.length - n} more` : '';
-    const body = n ? `June's Tees: ${head}: ${who}${more}.${urgent}${tail}` : `June's Tees: ${head}.${urgent}${tail}`;
-    if (body.length <= 320 || n === 0) return body.slice(0, 320);
+    const words = n ? `June's Tees: ${head}: ${who}${more}.${urgent}` : `June's Tees: ${head}.${urgent}`;
+    if (words.length + tail.length <= 320 || n === 0) return words.slice(0, Math.max(0, 320 - tail.length)) + tail;
   }
 }
 
