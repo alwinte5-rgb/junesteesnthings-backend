@@ -114,12 +114,21 @@ Applied with `tools/reprice-anchorfish-2026.js --only-dtf --apply`, then
 
   stage                   1-4       5-11      12-24      25-35      36-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
   -------------------------------------------------------------------------------------------------------------------------------------------
-  main print           $20.75     $18.75     $16.75     $14.75     $13.00     $11.00      $9.50      $7.55      $6.10      $4.90      $4.00
+  main print           $20.75     $18.75     $14.00     $13.00     $12.00     $11.00      $9.50      $7.55      $6.10      $4.90      $4.00
   add. location         $5.95      $5.50      $5.25      $5.00      $4.80      $4.60      $4.20      $3.50      $3.10      $2.75      $2.55
 
+  2026-10-23 (owner): 12-24 / 25-35 / 36-49 main cut from $16.75 / $14.75 /
+  $13.00 to $14.00 / $13.00 / $12.00; customers named price as the reason
+  quotes were not accepted. 50+ unchanged.
   History: 1-4 / 5-11 set by the owner 2026-10-15 (was 1-3 $26.05 / 4-11 $23.20);
   1-4 main $23.20 -> $20.75 2026-10-17; the 2026-10-19 re-cut above (was
   5-11 $20.75/$5.90, 12-24 $18.30/$5.85, 25-49 $15.75/$5.25, 50-99 $11.90/$4.95).
+
+GARMENTS (2026-10-23, owner): a blank sells for the LOWER of cost x 2 and
+cost + $8 (tools/lib/markup.js, JT_GARMENT_CAP). Blanks costing under $8 still
+double; dearer ones earn a flat $8 (Gildan 18500 $26.28 -> $21.14, Comfort
+Colors 1567 $56.92 -> $36.46). Size upcharges follow the same rule. Applied
+with `railway run -s MySQL node tools/reprice-garments.js --apply`.
 
 DTF Printing — Oversized (up to 252 sq in), added 2026-10-17 by
 tools/add-dtf-oversized.js. A print over the standard 132 sq in (a 12x18 or

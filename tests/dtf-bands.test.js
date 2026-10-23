@@ -22,7 +22,7 @@ test('every DTF band is a real break, at the owner\'s 2026-10-19 prices', () => 
   const main = Object.fromEntries(Object.entries(v.id).map(([q, p]) => [q, p.price]));
   const add = Object.fromEntries(Object.entries(v.mr8a5dlx).map(([q, p]) => [q, p.price]));
   assert.deepStrictEqual(['4', '11', '24', '35', '49', '99'].map((q) => main[q]),
-    ['20.75', '18.75', '16.75', '14.75', '13.00', '11.00']);
+    ['20.75', '18.75', '14.00', '13.00', '12.00', '11.00']);
   assert.deepStrictEqual(['4', '11', '24', '35', '49', '99'].map((q) => add[q]),
     ['5.95', '5.50', '5.25', '5.00', '4.80', '4.60']);
   assert.strictEqual(main['3'], undefined, 'the old 1-3 band is gone');

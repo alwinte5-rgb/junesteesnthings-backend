@@ -35,7 +35,7 @@ test('costBySize applies the buffer per row', () => {
 
 test('sizeOptions makes a size list with values and today\'s extra charges', () => {
   const before = { multiple_options: [{ title: 'S', price: '', default: '' }, { title: 'L', price: '', default: '1' }, { title: '2XL', price: '', default: '' }, { title: '6XL', price: '9.00' }] };
-  const after = sizeOptions(before, { S: 10, L: 10, '2XL': 12 }, 10);
+  const after = sizeOptions(before, { S: 3, L: 3, '2XL': 5 }, 3);
   assert.strictEqual(after.type, 'multiple');
   assert.strictEqual(after.min_qty, '1');
   assert.deepStrictEqual(after.multiple_options.map((o) => [o.title, o.value, o.price, o.default]),
@@ -43,7 +43,7 @@ test('sizeOptions makes a size list with values and today\'s extra charges', () 
     'defaults kept; a size S&S no longer prices keeps its charge');
   /* Idempotent: running it again on its own output changes nothing, so the
      daily sync does not rewrite every product every day. */
-  assert.deepStrictEqual(sizeOptions(after, { S: 10, L: 10, '2XL': 12 }, 10), after);
+  assert.deepStrictEqual(sizeOptions(after, { S: 3, L: 3, '2XL': 5 }, 3), after);
 });
 
 test('one size stays a single quantity box', () => {

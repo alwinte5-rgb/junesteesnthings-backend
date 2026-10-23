@@ -31,7 +31,7 @@ test('a thin description is flagged', () => {
 const rows = (spec) => spec.flatMap(([size, cost]) => [{ sizeName: size, customerPrice: cost, colorFrontImage: 'Images/Color/111_f_fm.jpg' }]);
 
 test('upcharges must match the S&S cost difference x markup', () => {
-  const prods = rows([['S', 10], ['M', 10], ['L', 10], ['XL', 10], ['2XL', 12]]);
+  const prods = rows([['S', 3], ['M', 3], ['L', 3], ['XL', 3], ['2XL', 5]]);
   const p = (up) => ({ name: 'Gildan 5000 Tee', thumb: '', attributes: qty({ type: 'multiple', multiple_options: opts([['S', ''], ['2XL', up]]) }) });
   assert.strictEqual(ssaChecks(p('4.00'), { title: 'Tee' }, prods).upcharges, 'ok');
   assert.strictEqual(ssaChecks(p(''), { title: 'Tee' }, prods).upcharges, '2XL +0 (S&S: +4.00)');

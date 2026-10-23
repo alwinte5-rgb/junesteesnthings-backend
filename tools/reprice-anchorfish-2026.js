@@ -200,12 +200,16 @@ const SP_INSERTS = [
    markups: one markup cannot hold both columns on a $2 / 25-cent ladder.
    Anchorfish's cost is the same across 1-11 and across 25-49, so the splits
    are pricing decisions; tools/lib/dtf-oversized.js keys the same ceilings. */
+/* 12-49 CUT (owner, 2026-10-23): $16.75 / $14.75 / $13.00 -> $14.00 / $13.00 /
+   $12.00 on the main print. Price was the reason quotes were not accepted, and
+   12-49 is where the inquiries land. 50+ is unchanged, so every band still
+   drops at least $1. */
 const DTF = {
     1: { ceil:   4, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 20.75 } },
     5: { ceil:  11, mk: 3.30, v: [5.00, 7.03, 9.38, 1.80], fix: { 1: 18.75, 3: 5.50 } },
-   12: { ceil:  24, mk: 3.25, v: [3.23, 5.63, 7.50, 1.80], fix: { 1: 16.75, 3: 5.25 } },
-   25: { ceil:  35, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50], fix: { 1: 14.75, 3: 5.00 } },
-   36: { ceil:  49, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50], fix: { 1: 13.00, 3: 4.80 } },
+   12: { ceil:  24, mk: 3.25, v: [3.23, 5.63, 7.50, 1.80], fix: { 1: 14.00, 3: 5.25 } },
+   25: { ceil:  35, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50], fix: { 1: 13.00, 3: 5.00 } },
+   36: { ceil:  49, mk: 3.50, v: [2.58, 4.50, 6.00, 1.50], fix: { 1: 12.00, 3: 4.80 } },
    50: { ceil:  99, mk: 3.30, v: [2.73, 3.60, 4.80, 1.50], fix: { 1: 11.00, 3: 4.60 } },
   100: { ceil: 249, mk: 3.10, v: [1.65, 3.06, 4.08, 1.35] },
   250: { ceil: 499, mk: 2.90, v: [1.47, 2.60, 3.47, 1.20] },

@@ -3,6 +3,7 @@
  *
  *   node tools/reprice-garments.js --vars=~/.jtees-art.json
  *   node tools/reprice-garments.js --vars=~/.jtees-art.json --apply
+ *   railway run -s MySQL node tools/reprice-garments.js [--apply]
  *
  * Changing lib/markup.js only changes what the SYNC writes next time. The 102
  * products already in the catalogue keep whatever they were priced at until
@@ -19,10 +20,13 @@
  * 2). Verified first — the run refuses if the catalogue does not actually sit
  * at that multiple, because dividing by the wrong one silently rescales
  * everything.
+ *
+ * Staged products (supplier='ssa-staged', active=0) are repriced too: the
+ * quote form sells them.
  */
 const fs = require('fs');
-const { mysql, dejson, enjson, sq } = require('./lib/db');
-const { GARMENT_MARKUP, sellPrice } = require('./lib/markup');
+const { mysql, mysqlUrlFrom, dejson, enjson, sq } = require('./lib/db');
+const { GARMENT_MARKUP, GARMENT_CAP, sellPrice, sizeUpcharge } = require('./lib/markup');
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
@@ -30,21 +34,25 @@ const fi = argv.indexOf('--from');
 const FROM = fi > -1 ? parseFloat(argv[fi + 1]) : 2.0;
 const varsFile = ((argv.find((a) => a.startsWith('--vars=')) || '').split('=').slice(1).join('=') || '')
   .replace(/^~/, process.env.HOME);
-if (!varsFile) { console.error('usage: reprice-garments.js --vars=<file> [--from 2] [--apply]'); process.exit(2); }
+const envUrl = mysqlUrlFrom();
+if (!varsFile && !envUrl) { console.error('usage: reprice-garments.js --vars=<file> [--from 2] [--apply], or under railway run -s MySQL'); process.exit(2); }
 if (!Number.isFinite(FROM) || FROM < 1) { console.error('--from must be >= 1'); process.exit(2); }
 
-const env = JSON.parse(fs.readFileSync(varsFile, 'utf8'));
-const url = env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
+const url = envUrl || (() => {
+  const env = JSON.parse(fs.readFileSync(varsFile, 'utf8'));
+  return env.MYSQL_PUBLIC_URL || env.MYSQL_URL;
+})();
+const WHERE = "(active=1 OR supplier='ssa-staged') AND supplier_cost > 0";
 
 const rows = mysql(url,
   'SELECT id,name,supplier_cost,price,attributes FROM lumise_products ' +
-  'WHERE active=1 AND supplier_cost > 0 ORDER BY id;', { rows: true });
+  'WHERE ' + WHERE + ' ORDER BY id;', { rows: true });
 
 /* Refuse if the catalogue is not where --from says it is. Dividing upcharges by
    a multiple they were never built at rescales every extended size silently. */
 const off = rows.filter((r) => Math.abs(Number(r.price) / Number(r.supplier_cost) - FROM) > 0.02);
-console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — markup ' + FROM + ' -> ' + GARMENT_MARKUP +
-  ' across ' + rows.length + ' products\n');
+console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — markup ' + FROM + ' -> lower of x' + GARMENT_MARKUP +
+  ' and cost + $' + GARMENT_CAP + ' across ' + rows.length + ' products\n');
 if (off.length) {
   console.error('  ' + off.length + ' product(s) are NOT at x' + FROM + ' — pass the right --from:');
   for (const r of off.slice(0, 8))
@@ -69,7 +77,8 @@ for (const r of rows) {
       const cur = parseFloat(o.price);
       if (!Number.isFinite(cur) || cur <= 0) continue;      // no upcharge on this size
       const diff = cur / FROM;                              // back to the real cost difference
-      const next = Math.round(diff * GARMENT_MARKUP * 100) / 100;
+      const base = Number(r.supplier_cost);
+      const next = sizeUpcharge(base + diff, base);
       if (next !== cur) { o.price = String(next.toFixed(2)); changedUp++; }
     }
     a.values = JSON.stringify(vals);
@@ -96,10 +105,9 @@ for (const w of writes)
   mysql(url, 'UPDATE lumise_products SET price=' + w.price + ', attributes=' + sq(w.attrs) +
     ' WHERE id=' + w.id + ';');
 
-const after = mysql(url,
-  'SELECT COUNT(*) n, ROUND(AVG(price/supplier_cost),3) mult FROM lumise_products ' +
-  'WHERE active=1 AND supplier_cost > 0;', { rows: true });
-console.log('  verified: ' + after[0].n + ' products now at x' + after[0].mult);
-if (Math.abs(Number(after[0].mult) - GARMENT_MARKUP) > 0.02) {
-  console.error('  WRITE DID NOT TAKE'); process.exitCode = 1;
+const after = mysql(url, 'SELECT id, supplier_cost, price FROM lumise_products WHERE ' + WHERE + ';', { rows: true });
+const wrong = after.filter((r) => Math.abs(Number(r.price) - sellPrice(r.supplier_cost)) > 0.01);
+console.log('  verified: ' + (after.length - wrong.length) + ' of ' + after.length + ' products at the new rule');
+if (wrong.length) {
+  console.error('  WRITE DID NOT TAKE on #' + wrong.slice(0, 10).map((r) => r.id).join(', #')); process.exitCode = 1;
 }
