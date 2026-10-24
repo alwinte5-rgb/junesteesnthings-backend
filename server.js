@@ -34088,6 +34088,14 @@ async function finderSaveOnce(runId, idx, save) {
     c.release();
   }
 }
+/** Claims finder result `idx` of run `runId` for its card (FINDER_CLAIM_SQL). Returns
+ *  unclaim(), which gives the claim back, only this request's; another add's live claim
+ *  is left alone, and then there is nothing to give back. Shared by Leads and the board. */
+async function finderClaim(runId, idx) {
+  const token = crypto.randomBytes(9).toString('hex');
+  const { rowCount } = await pool.query(FINDER_CLAIM_SQL, [runId, idx, token]);
+  return () => (rowCount ? pool.query(FINDER_UNCLAIM_SQL, [runId, String(idx), token]).catch(() => {}) : null);
+}
 /** True when finderSaveOnce gave up waiting for another add of the same result. */
 const finderBusy = (e) => !!(e && e.finderBusy);
 
@@ -34102,7 +34110,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
      the run as it was saved, never from the form, and only from a run of the
      helper's own. The form may add an email or phone they looked up. */
   let found = null;
-  let claimToken = '';
+  /* Gives a finder result back when it was not added after all. */
+  let unclaim = () => null;
   const runId = intIn(b.finder_run);
   if (runId) {
     const idx = finderIdxIn(b.finder_idx);
@@ -34116,20 +34125,15 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
       found = run && idx >= 0 && Array.isArray(run.results) ? run.results[idx] : null;
       if (!found) return back(res, '/admin/leads/find', 'err', 'That result is not in one of your searches.');
       if (found.lead_id) return back(res, `/admin/leads#lead-${Number(found.lead_id)}`, 'ok', 'That one is already on Leads.');
-      /* Claimed for the card (FINDER_CLAIM_SQL); a refusal below gives it back. Another add's
-         live claim is left alone and this one goes ahead unclaimed. */
-      claimToken = crypto.randomBytes(9).toString('hex');
-      const { rowCount } = await pool.query(
-        FINDER_CLAIM_SQL, [runId, idx, claimToken]);
-      if (!rowCount) claimToken = '';
+      /* Claimed for the card; a refusal below gives it back. Another add's live claim is
+         left alone and this one goes ahead unclaimed. */
+      unclaim = await finderClaim(runId, idx);
     } catch (err) {
       console.error('finder add lookup failed:', err.message);
       return back(res, '/admin/leads/find', 'err', 'Could not add the lead.');
     }
     found = { ...found, run: runId, idx };
   }
-  /* Gives a finder result back when it was not added after all. */
-  const unclaim = () => (found && claimToken ? pool.query(FINDER_UNCLAIM_SQL, [found.run, found.idx, claimToken]).catch(() => {}) : null);
   const name = text(found ? found.name : b.name, 200);
   const email = (text(b.email, 254) || (found ? text(found.email, 254) : '')).toLowerCase();
   /* A number found online is never called or texted (sales course lg3), so a
@@ -34882,16 +34886,13 @@ app.post('/admin/software-leads', requireAdmin, async (req, res) => {
       const found = run && run.staff_id === me && run.ask && run.ask.profile === 'software' && Array.isArray(run.results) && idx >= 0 ? run.results[idx] : null;
       if (!found) return back(res, `${SOFT_PATH}/find`, 'err', 'That search result is not yours to add.');
       if (found.lead_id) return back(res, `${SOFT_PATH}#slead-${Number(found.lead_id)}`, 'ok', 'Already on your board.');
-      /* Claimed for the card (FINDER_CLAIM_SQL), as on Leads; a refusal below gives it back. */
-      const token = crypto.randomBytes(9).toString('hex');
-      const { rowCount: claimed } = await pool.query(
-        FINDER_CLAIM_SQL, [runId, idx, token]);
-      finder = { runId, idx, token: claimed ? token : '' };
+      /* Claimed for the card, as on Leads; a refusal below gives it back. */
+      unclaim = await finderClaim(runId, idx);
+      finder = { runId, idx };
       input = { product: b.product || 'cos', company: found.name, email: found.email || b.email, website: found.website,
         source_url: found.source_url || found.website || found.social, detail: [found.why_fit, found.kind, found.city].filter(Boolean).join(' · '),
         plan: 'Agency', next_step: 'Send the first message', next_on: shopToday() };
     }
-    unclaim = () => (finder && finder.token ? pool.query(FINDER_UNCLAIM_SQL, [finder.runId, String(finder.idx), finder.token]).catch(() => {}) : null);
     const v = SOFTLEADS.shapeNew(input);
     if (v.error) await unclaim();
     if (v.error) return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err', v.error);
