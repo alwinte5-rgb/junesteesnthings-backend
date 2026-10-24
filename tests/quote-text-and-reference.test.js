@@ -40,15 +40,21 @@ test('"Email and text it": same permission and refusals, each part reported as i
   assert.match(r, /q\.status === 'held' \|\| q\.status === 'draft' \|\| q\.cancelled_at/);
   assert.match(r, /Number\(q\.paid_amount\) > 0/);
   assert.ok(r.indexOf('Number(q.paid_amount) > 0') < r.indexOf('emailQuote(q)'), 'refused before anything goes');
+  assert.ok(r.indexOf('isValidEmail') > -1 && r.indexOf('isValidEmail') < r.indexOf('emailQuote(q)'), 'no email: refused before anything goes');
+  assert.ok(r.indexOf("quoteTextWay(q)") > -1 && r.indexOf("quoteTextWay(q)") < r.indexOf('emailQuote(q)'), 'no shop text: refused before anything goes');
   assert.match(r, /await emailQuote\(q\)[\s\S]*await textQuote\(q\)/, 'the text goes even when the email did not');
   assert.match(r, /r\.ok && status === 'sent' \? 'ok' : 'err'/, 'success only when both went');
 });
 
 test('the send buttons show only to someone allowed to press them', () => {
-  const ready = after("const mayEmail = !!q.email && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/email');", 4000);
-  assert.match(ready, /mayEmail && textByShop && STAFF\.mayUseRoute\(actor, 'POST', '\/admin\/quote\/:code\/send'\)/);
+  const ready = after("const mayEmail = !!q.email && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/email');", 7000);
+  assert.match(ready, /mayBoth = mayEmail && textByShop && STAFF\.mayUseRoute\(actor, 'POST', '\/admin\/quote\/:code\/send'\)/);
   assert.match(ready, /\$\{mayEmail \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/email"/, 'no Email button a helper is refused on');
-  assert.doesNotMatch(ready.slice(0, ready.indexOf('Copy message')), /\$\{q\.email \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/email"/);
+  const copy = ready.indexOf('Copy message');
+  assert.ok(copy > -1, 'the send card ends before the message card');
+  assert.doesNotMatch(ready.slice(0, copy), /\$\{q\.email \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/email"/);
+  assert.match(src, /const smsHref = maySent \? quoteSmsHref\(q, req\.get\('user-agent'\)\) : '';/, 'no Messages link that marks it sent for someone who may not');
+  assert.match(ready, /\$\{maySent \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/delivered"/, 'no "I sent it another way" they are refused on');
   assert.match(src, /const mayBoth = !!q\.email && mayEmail && textWay === 'shop' && may\('\/admin\/quote\/:code\/send'\);/);
 });
 

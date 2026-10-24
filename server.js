@@ -15556,7 +15556,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const emailed = null;
 
     const msgs = quoteMessages(q);
-    const smsHref = quoteSmsHref(q, req.get('user-agent'));
+    /* Messages and "I sent it another way" mark it sent (/delivered): only for
+       someone who may, as on the job page. */
+    const maySent = STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/delivered');
+    const smsHref = maySent ? quoteSmsHref(q, req.get('user-agent')) : '';
     /* From the shop's number when they agreed to texts (2026-10-19); the
        Messages link stays for everyone else. */
     const mayText = STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/text');
@@ -15567,7 +15570,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        customers" was shown Email and sent to a refusal page on the tap. */
     const mayEmail = !!q.email && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/email');
     /* Both at once (2026-10-24), when both can go from the shop. */
-    const bothForm = (label) => mayEmail && textByShop && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/send')
+    const mayBoth = mayEmail && textByShop && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/send');
+    const bothForm = (label) => mayBoth
       ? `<form method="POST" action="/admin/quote/${code}/send" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
             <button type="submit" style="width:100%">${label} to ${escEmail(q.email)} and ${escEmail(q.phone)}</button></form>` : '';
     /* Asked first, before any way to send shows (designFeesToAsk). */
@@ -15597,12 +15601,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
             later from the job page.</p>
           ${bothForm('Email and text it')}
           ${mayEmail ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
-            <button type="submit"${bothForm('x') ? ' class="btn-ghost"' : ''} style="width:100%">Email it to ${escEmail(q.email)}</button></form>` : ''}
+            <button type="submit"${mayBoth ? ' class="btn-ghost"' : ''} style="width:100%">Email it to ${escEmail(q.email)}</button></form>` : ''}
           ${textForm(' class="btn-ghost"')}
           ${smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center;margin-bottom:8px" href="${escEmail(smsHref)}"
             onclick="markSent()">${textByShop ? 'Text it from my phone instead' : 'Text it (opens Messages)'}</a>` : ''}
-          <form method="POST" action="/admin/quote/${code}/delivered" style="margin:0 0 8px">
-            <button type="submit" class="btn-ghost" style="width:100%">I sent it another way</button></form>
+          ${maySent ? `<form method="POST" action="/admin/quote/${code}/delivered" style="margin:0 0 8px">
+            <button type="submit" class="btn-ghost" style="width:100%">I sent it another way</button></form>` : ''}
           <a class="btn btn-ghost" style="display:block;text-align:center" href="/admin/production/${code}">Not yet</a>
         </div>` : (mayEmail || textByShop || smsHref) ? `<div class="card">${bothForm(`Email and text ${existingQuote ? 'the updated quote' : 'it'}`)}${mayEmail ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
           <button type="submit" class="btn btn-ghost" style="width:100%">Email ${existingQuote ? 'the updated quote' : 'it'} to ${escEmail(q.email)}</button>
@@ -21192,7 +21196,10 @@ async function textQuote(q) {
   const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: q.code,
     ref: `quote-text:${q.code}:r${q.revision || 1}:${Math.floor(Date.now() / 60000)}`, msg: quoteTextMsg(q) });
   if (status === 'sent') {
-    await pool.query('UPDATE quotes SET sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]);
+    /* The text went: a failed write here must not tell staff it did not, or
+       they send it again. */
+    await pool.query('UPDATE quotes SET sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id])
+      .catch((e) => reportError('quote-text', e, `marking quote ${q.code} sent`).catch(() => {}));
     if (q.from_submission_id) await markLeadResponded(q.from_submission_id, currentActor()).catch(() => {});
     logActivity(currentActor() || OWNER_ACTOR, 'quote texted', { type: 'quote', id: q.code }, {});
   }
@@ -21223,6 +21230,12 @@ app.post('/admin/quote/:code/send', requireAdmin, async (req, res) => {
     if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) return err('That quote is not with the customer, so it was not sent.');
     if (Number(q.paid_amount) > 0) {
       return err('This job already has a payment on it, so the "accept and pay" quote was not sent. Send a message from the job instead.');
+    }
+    /* Both halves must be able to go before either does, so a stale page
+       never sends half and reports an error. */
+    if (!q.email || !isValidEmail(String(q.email).trim())) return err('There is no valid email address on this quote, so nothing was sent. Text it instead.');
+    if ((await quoteTextWay(q).catch(() => '')) !== 'shop') {
+      return err('This quote cannot be texted from the shop number (no usable phone, or they have not agreed to texts), so nothing was sent. Email it instead.');
     }
     const r = await emailQuote(q);
     if (r.ok) logActivity(currentActor() || OWNER_ACTOR, 'quote emailed', { type: 'quote', id: code }, {});
