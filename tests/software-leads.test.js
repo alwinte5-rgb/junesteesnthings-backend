@@ -86,10 +86,12 @@ test('a finder result is added once, from the agent\'s own software run', () => 
   assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, token\]\)/, 'claimed before saving (the claim Leads uses)');
   assert.ok(add.indexOf('await finderHold(res, runId, idx)') > -1, 'one add of a result at a time, as on Leads');
   assert.strictEqual((add.match(/await finderSavedLead\('software_leads'/g) || []).length, 1, 'linked under the hold, before the claim');
-  assert.match(add, /Number\(b\.finder_idx\) < FINDER\.MAX_LEADS/, 'the result index is capped');
+  assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'the result index is checked as on Leads');
+  const at = add.indexOf("await finderSavedLead('software_leads', runId, idx, found)");
+  assert.ok(at > -1 && at < add.indexOf('await softLeadSeen(v.lead)'), 'linked before the board refuses it as already there');
   assert.strictEqual(SL.shapeCompany('  Pixel   Pals\tAgency '), 'Pixel Pals Agency', 'found again by the name as it was saved');
   assert.strictEqual(SL.shapeCompany('x'.repeat(300)).length, SL.LIMITS.company);
-  assert.ok(add.indexOf("finderSavedLead('software_leads', finder.runId") < add.indexOf('await softLeadSeen(v.lead)'));
+
   assert.match(add, /const unclaim = /);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
 });

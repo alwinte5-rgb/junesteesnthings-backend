@@ -156,11 +156,15 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
   assert.match(add, /AND staff_id IS NOT DISTINCT FROM \$2`, \[runId, isStaff \? actor\.id : null\]/, "only your own runs, the owner's too");
   assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, claimToken\]\)/, 'claimed before saving, so it is added once');
   const helper = src.slice(src.indexOf('async function finderSavedLead('), src.indexOf('/* A lead that did not come through the website'));
-  assert.match(helper, /FROM submissions WHERE finder_run_id = \$1 AND lower\(trim\(name\)\) = lower\(trim\(\$2\)\) AND website_key IS NOT DISTINCT FROM \$3/, 'by the run, the name and the website, so two places of one name are not mixed up');
+  assert.match(helper, /FROM submissions WHERE finder_run_id = \$1\s+AND CASE WHEN \$3::text IS NOT NULL THEN website_key = \$3 ELSE website_key IS NULL AND lower\(trim\(name\)\) = lower\(trim\(\$2\)\) END/,
+    'by the website when there is one (it survives a rename), else by name; two places of one name are not mixed up');
   /* One add of a result at a time, on a session lock that a dead process gives back by itself. */
-  assert.match(helper, /pg_try_advisory_lock\(\$1::bigint\)/);
-  assert.match(helper, /if \(finderHolds >= FINDER_HOLDS_MAX\) return 'full';/, 'the hold never takes the pool');
-  assert.match(helper, /catch \(e\) \{ c\.release\(true\); \}/, 'a failed unlock destroys the connection, freeing the lock');
+  assert.match(helper, /pg_try_advisory_lock\(7306, \$1\)/, 'two keys, as every other advisory lock here');
+  assert.match(helper, /if \(finderHolds >= FINDER_HOLDS_MAX\) \{\s+const turn = await new Promise/, 'past the cap an add waits its turn, it is not refused');
+  assert.match(helper, /Promise\.race\(\[pending, /, 'never waits for ever on a busy pool');
+  assert.match(helper, /pending\.then\(\(late\) => late\.release\(\)/, 'a connection that comes too late is handed back');
+  assert.match(helper, /catch \(e\) \{ c\.release\(true\); \}\s+free\(\);/, 'a failed unlock destroys the connection, freeing the lock');
+  assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'one index check for both routes');
   assert.match(helper, /const finderHeld = \(fn\) => async \(req, res, next\) => \{\s+try \{ await fn\(req, res, next\); \} finally \{/, 'released when the handler is done, not when the browser goes');
   assert.ok(!/res\.once\('close'/.test(helper));
   assert.match(src, /app\.post\('\/admin\/leads\/add', requireAdmin, finderHeld\(async/);
@@ -238,4 +242,13 @@ test('a claim left by a request that died is given back after a while', () => {
   assert.match(src, /floor\(extract\(epoch FROM NOW\(\)\)\)::bigint AS db_now\s+FROM lead_finder_runs WHERE created_at/, 'read once, with the day counts');
   assert.match(src, /const dbNow = Number\(today\.db_now\);/);
   assert.strictEqual((src.match(/finderResultCard\([^)]*, dbNow\)\)/g) || []).length, 2, 'both card lists pass the database clock');
+});
+
+test('a finder result index is whole digits under the cap', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const def = /const finderIdxIn = (\(v\) => [^;]+);/.exec(src);
+  assert.ok(def, 'finderIdxIn is defined');
+  const finderIdxIn = new Function('FINDER', `return ${def[1]}`)(F);
+  assert.deepStrictEqual(['0', '3', String(F.MAX_LEADS - 1)].map(finderIdxIn), [0, 3, F.MAX_LEADS - 1]);
+  for (const bad of ['3abc', '-1', '', ' 3', '1.5', String(F.MAX_LEADS), '99', '100', undefined, null]) assert.strictEqual(finderIdxIn(bad), -1, String(bad));
 });

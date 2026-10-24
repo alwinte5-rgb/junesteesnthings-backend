@@ -33955,18 +33955,22 @@ const FINDER_LINK_SQL = `UPDATE lead_finder_runs
   WHERE id = $1 AND COALESCE(results -> $2::int ->> 'lead_id', '0') = '0'`;
 /** The lead already saved from finder result `l` (index `idx` of run
  *  `runId`) on Leads ('submissions') or the board ('software_leads'), linked
- *  to the result; null when there is none. Found by the run, the name as that
- *  table saves it and the website domain, all from the saved run, never the
+ *  to the result; null when there is none. Found by the run and the website
+ *  domain when the result has one (it survives the lead being renamed), else
+ *  by the name as that table saves it; both from the saved run, never the
  *  form, so two places of one name in a run are not mixed up. Checked under
  *  the hold, before the claim: a lead an earlier add saved (it died before
  *  marking the result, or its mark failed) is linked, never saved twice. */
 async function finderSavedLead(table, runId, idx, l) {
   const soft = table === 'software_leads';
   const name = soft ? SOFTLEADS.shapeCompany(l.name) : text(l.name, 200);
+  const key = FINDER.domainKey(FINDER.safeUrl(l.website)) || null;
   const { rows: [saved] } = await pool.query(soft
-    ? `SELECT id FROM software_leads WHERE finder_run_id = $1 AND lower(company) = lower($2) AND website_key IS NOT DISTINCT FROM $3 ORDER BY id LIMIT 1`
-    : `SELECT id FROM submissions WHERE finder_run_id = $1 AND lower(trim(name)) = lower(trim($2)) AND website_key IS NOT DISTINCT FROM $3 ORDER BY id LIMIT 1`,
-    [runId, name, FINDER.domainKey(FINDER.safeUrl(l.website)) || null]);
+    ? `SELECT id FROM software_leads WHERE finder_run_id = $1
+          AND CASE WHEN $3::text IS NOT NULL THEN website_key = $3 ELSE website_key IS NULL AND lower(company) = lower($2) END ORDER BY id LIMIT 1`
+    : `SELECT id FROM submissions WHERE finder_run_id = $1
+          AND CASE WHEN $3::text IS NOT NULL THEN website_key = $3 ELSE website_key IS NULL AND lower(trim(name)) = lower(trim($2)) END ORDER BY id LIMIT 1`,
+    [runId, name, key]);
   if (saved) await pool.query(FINDER_LINK_SQL, [runId, String(idx), saved.id]);
   return saved || null;
 }
@@ -33976,33 +33980,52 @@ async function finderSavedLead(table, runId, idx, l) {
    has finished, and a process that dies mid-add drops its connection, which
    frees the lock by itself (the claim's two minutes are only for the card).
    The hold takes a connection of its own while the add uses others, so at
-   most FINDER_HOLDS_MAX run at once and the pool always has room left. */
-const FINDER_HOLDS_MAX = 3;
+   most FINDER_HOLDS_MAX run at once and the pool always has room left; an add
+   past that waits its turn (up to FINDER_HOLD_WAIT_MS) rather than failing. */
+const FINDER_HOLDS_MAX = 4;
+const FINDER_HOLD_WAIT_MS = 15000;
 let finderHolds = 0;
-/** Takes the hold for result `idx` of run `runId`: 'held', 'busy' (another
- *  add of this result has it) or 'full'. Released by finderHeld() when the
- *  handler is done. */
+const finderHoldWaiters = [];
+/** A finder result's index from a form, or -1: whole digits, under MAX_LEADS. */
+const finderIdxIn = (v) => (/^\d{1,2}$/.test(String(v)) && Number(v) < FINDER.MAX_LEADS ? Number(v) : -1);
+/** Takes the hold for result `idx` (finderIdxIn) of run `runId`: 'held',
+ *  'busy' (another add of this result has it) or 'full' (no slot or no
+ *  connection in time). Released by finderHeld() when the handler is done. */
 async function finderHold(res, runId, idx) {
-  if (!Number.isSafeInteger(runId) || runId <= 0 || runId > 9e6 || !Number.isInteger(idx) || idx < 0 || idx >= 100) return 'busy';
-  if (finderHolds >= FINDER_HOLDS_MAX) return 'full';
-  finderHolds++;
-  /* The one-key lock space; every other advisory lock here uses two keys or hashtext (within 2^31). */
-  const key = 7306 * 1e9 + runId * 100 + idx;
-  let c;
+  if (finderHolds >= FINDER_HOLDS_MAX) {
+    const turn = await new Promise((resolve) => {
+      const w = { resolve };
+      w.timer = setTimeout(() => { finderHoldWaiters.splice(finderHoldWaiters.indexOf(w), 1); resolve(false); }, FINDER_HOLD_WAIT_MS);
+      finderHoldWaiters.push(w);
+    });
+    if (!turn) return 'full';
+  } else {
+    finderHolds++;
+  }
+  /* A slot is ours from here; handed to the next waiter, or given back, when done. */
+  const free = () => {
+    const w = finderHoldWaiters.shift();
+    if (w) { clearTimeout(w.timer); w.resolve(true); } else finderHolds--;
+  };
+  let c = null;
   try {
-    c = await pool.connect();
-    if (!(await c.query('SELECT pg_try_advisory_lock($1::bigint) AS ok', [key])).rows[0].ok) {
-      c.release(); finderHolds--; return 'busy';
+    /* No waiting for ever on a busy pool: a connection that comes too late is handed straight back. */
+    const pending = pool.connect();
+    c = await Promise.race([pending, new Promise((r) => setTimeout(() => r(null), FINDER_HOLD_WAIT_MS))]);
+    if (!c) { pending.then((late) => late.release(), () => {}); free(); return 'full'; }
+    /* Two keys, as every other advisory lock here (7301..7311). */
+    if (!(await c.query('SELECT pg_try_advisory_lock(7306, $1) AS ok', [runId * 100 + idx])).rows[0].ok) {
+      c.release(); free(); return 'busy';
     }
   } catch (e) {
     if (c) c.release(true);
-    finderHolds--;
+    free();
     throw e;
   }
   res.locals.finderRelease = async () => {
     /* A failed unlock destroys the connection, which frees the lock with it. */
-    try { await c.query('SELECT pg_advisory_unlock($1::bigint)', [key]); c.release(); } catch (e) { c.release(true); }
-    finderHolds--;
+    try { await c.query('SELECT pg_advisory_unlock(7306, $1)', [runId * 100 + idx]); c.release(); } catch (e) { c.release(true); }
+    free();
   };
   return 'held';
 }
@@ -34031,7 +34054,7 @@ app.post('/admin/leads/add', requireAdmin, finderHeld(async (req, res) => {
   let claimToken = '';
   const runId = intIn(b.finder_run);
   if (runId) {
-    const idx = Number.parseInt(b.finder_idx, 10);
+    const idx = finderIdxIn(b.finder_idx);
     try {
       /* Only from a run of your own: the owner adding from a helper's run
          would take the find from them. */
@@ -34039,7 +34062,7 @@ app.post('/admin/leads/add', requireAdmin, finderHeld(async (req, res) => {
                                                    AND staff_id IS NOT DISTINCT FROM $2`, [runId, isStaff ? actor.id : null]);
       /* A software search's results belong on the software board, never on Leads. */
       if (run && run.results && (await pool.query(`SELECT 1 FROM lead_finder_runs WHERE id = $1 AND ask->>'profile' = 'software'`, [runId])).rows.length) run.results = [];
-      found = run && Number.isInteger(idx) && idx >= 0 && idx < FINDER.MAX_LEADS && Array.isArray(run.results) ? run.results[idx] : null;
+      found = run && idx >= 0 && Array.isArray(run.results) ? run.results[idx] : null;
       if (!found) return back(res, '/admin/leads/find', 'err', 'That result is not in one of your searches.');
       if (found.lead_id) return back(res, `/admin/leads#lead-${Number(found.lead_id)}`, 'ok', 'That one is already on Leads.');
       const hold = await finderHold(res, runId, idx);
@@ -34789,7 +34812,7 @@ app.post('/admin/software-leads', requireAdmin, finderHeld(async (req, res) => {
     /* A finder result: taken from the run, which must be this person's. */
     const runId = intIn(b.finder_run);
     if (runId) {
-      const idx = /^\d{1,2}$/.test(String(b.finder_idx)) && Number(b.finder_idx) < FINDER.MAX_LEADS ? Number(b.finder_idx) : -1;
+      const idx = finderIdxIn(b.finder_idx);
       const { rows: [run] } = await pool.query(`SELECT id, staff_id, ask, results FROM lead_finder_runs WHERE id = $1 AND status = 'done'`, [runId]);
       const found = run && run.staff_id === me && run.ask && run.ask.profile === 'software' && Array.isArray(run.results) && idx >= 0 ? run.results[idx] : null;
       if (!found) return back(res, `${SOFT_PATH}/find`, 'err', 'That search result is not yours to add.');
