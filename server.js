@@ -22501,7 +22501,6 @@ function askAttrs(q, ask) {
   return ask ? ` data-ask="${escEmail(q.code + ':' + ask.kind)}" data-ask-text="${escEmail(ask.text)}"` : '';
 }
 
-/** Milestone emails already sent, per quote code: code -> Set of kinds. */
 /** The furthest step a job has reached that the customer is told about. */
 function milestoneReached(q) {
   return q.shipped_at ? 'milestone:ready' : q.production_at ? 'milestone:production' : null;
@@ -22524,6 +22523,7 @@ async function textedMilestones(codes) {
   return out;
 }
 
+/** Milestone emails already sent, per quote code: code -> Set of kinds. */
 async function sentMilestones(codes) {
   const out = new Map();
   if (!codes.length) return out;
@@ -22655,7 +22655,8 @@ app.post('/admin/quote/:code/milestone-text', requireAdmin, async (req, res) => 
     const k = milestoneReached(q);
     if (!k) return back('text_err', 'no-step');
     const before = k === 'milestone:ready' ? { ...q, shipped_at: null } : { ...q, production_at: null };
-    const out = await notifyQuoteMilestone(before, q, { textOnly: true });
+    // undefined: notifyQuoteMilestone found no step to tell, which a retry will not change.
+    const out = (await notifyQuoteMilestone(before, q, { textOnly: true })) || 'no-step';
     return out === 'sent' ? back('texted', code) : back('text_err', Object.hasOwn(MILESTONE_TEXT_ERRORS, out) ? out : 'failed');
   } catch (err) {
     console.error(`milestone text for ${code} failed:`, err.message);
