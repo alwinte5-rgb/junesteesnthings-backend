@@ -33955,18 +33955,23 @@ const finderIdxIn = (v) => (/^\d{1,2}$/.test(String(v)) && Number(v) < FINDER.MA
 
 /** The lead already saved from result `idx` of run `runId` on Leads
  *  ('submissions') or the board ('software_leads'), linked to the result
- *  (through `db`, a pool or a client); null when there is none. Found by the
- *  run and the website domain `key` alone when no other result of the run has
- *  that domain (`keyUnique`; it survives a rename), else by the domain and
- *  `name` exactly as that table saved it, so two places of one name or one
- *  domain are not mixed up. All of it from the saved run, never the form. */
-async function finderSavedLead(db, table, runId, idx, name, key, keyUnique) {
-  const col = table === 'software_leads' ? 'company' : 'name';
-  const { rows: [saved] } = await db.query(
-    `SELECT id FROM ${table === 'software_leads' ? 'software_leads' : 'submissions'} WHERE finder_run_id = $1
-        AND CASE WHEN $3::text IS NOT NULL AND $4::boolean THEN website_key = $3
-                 ELSE website_key IS NOT DISTINCT FROM $3 AND lower(trim(${col})) = lower(trim($2)) END ORDER BY id LIMIT 1`,
-    [runId, String(name || ''), key || null, !!keyUnique]);
+ *  (through `db`, a pool or a client); null when there is none. `id` is what
+ *  that result was saved with, all worked out from the saved run, never the
+ *  form: { key, keyUnique, text, source }. Found by the website domain alone
+ *  when no other result of the run shares it (it survives a rename), else by
+ *  the domain and the text written from the result (the lead's description
+ *  on Leads; the detail and where it was found on the board), which differ
+ *  between results, so two places of one name, one domain or no name at all
+ *  are never merged into one lead. */
+async function finderSavedLead(db, table, runId, idx, id) {
+  const { rows: [saved] } = await db.query(table === 'software_leads'
+    ? `SELECT id FROM software_leads WHERE finder_run_id = $1
+          AND (($3::text IS NOT NULL AND $4::boolean AND website_key = $3)
+               OR (website_key IS NOT DISTINCT FROM $3 AND detail = $2 AND source_url IS NOT DISTINCT FROM $5)) ORDER BY id LIMIT 1`
+    : `SELECT id FROM submissions WHERE finder_run_id = $1
+          AND (($3::text IS NOT NULL AND $4::boolean AND website_key = $3)
+               OR (website_key IS NOT DISTINCT FROM $3 AND description = $2 AND $5::text IS NULL)) ORDER BY id LIMIT 1`,
+    [runId, String(id.text || ''), id.key || null, !!id.keyUnique, id.source || null]);
   if (saved) await db.query(FINDER_LINK_SQL, [runId, String(idx), saved.id]);
   return saved || null;
 }
@@ -33979,15 +33984,18 @@ async function finderSavedLead(db, table, runId, idx, name, key, keyUnique) {
  *  the second finds the first's lead; a process that dies mid-way rolls back
  *  and frees the lock. The lock lasts milliseconds, on the connection doing
  *  the work. Returns { saved } or { row } (row null when save refused). */
-async function finderSaveOnce(table, runId, idx, name, key, keyUnique, save) {
+async function finderSaveOnce(table, runId, idx, id, save) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
-    /* Never waits for ever on an add that is stuck: lock_timeout throws 55P03 (finderBusy). */
-    await c.query("SET LOCAL lock_timeout = '10s'");
+    /* Never waits long on an add that is stuck: lock_timeout throws 55P03 (finderBusy). The
+       limit covers this lock only and is lifted after it, so a slow row lock later is not
+       mistaken for another add of this result. */
+    await c.query("SET LOCAL lock_timeout = '5s'");
     /* Class 7306 is the finder's alone; the two-key form is its own space, apart from the one-key hashtext locks. */
     await c.query('SELECT pg_advisory_xact_lock(7306, hashtext($1))', [`${runId}:${idx}`]);
-    const saved = await finderSavedLead(c, table, runId, idx, name, key, keyUnique);
+    await c.query('SET LOCAL lock_timeout = DEFAULT');
+    const saved = await finderSavedLead(c, table, runId, idx, id);
     if (saved) { await c.query('COMMIT'); return { saved }; }
     const row = await save(c);
     if (row) await c.query(FINDER_LINK_SQL, [runId, String(idx), row.id]);
@@ -34088,14 +34096,14 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     const known = foundIt ? (CREDIT.knownReason(await seenCustomer({ email, phone: checkPhone }), fmtDate)
       || CREDIT.knownReason({ lead: await seenProfile(profileId) }, fmtDate)
       || CREDIT.knownReason({ lead: await seenWebsite(websiteKey) }, fmtDate)) : '';
-    /* The name exactly as it is saved below, to find it again. */
     const savedName = name || (profileUrl ? 'Social lead' : 'Lead');
     /* Someone the shop already has is not a new lead, so it is not saved
        again (it used to be, as a shop lead, and counted as a prospect). The
        attempt is still logged for the owner. */
     /* Known because another add of this same result saved it (a double press,
        or one that died before linking): link it, never refuse it. */
-    const savedBefore = known && found ? await finderSavedLead(pool, 'submissions', found.run, found.idx, savedName, websiteKey, found.keyUnique) : null;
+    const finderId = found ? { key: websiteKey, keyUnique: found.keyUnique, text: description || null } : null;
+    const savedBefore = known && found ? await finderSavedLead(pool, 'submissions', found.run, found.idx, finderId) : null;
     if (savedBefore) return back(res, `/admin/leads#lead-${savedBefore.id}`, 'ok', 'That one is already on Leads.');
     if (known) {
       await unclaim();
@@ -34118,7 +34126,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     let l;
     if (found) {
       /* One lead per finder result (finderSaveOnce): an add that lost the race links to the one that won. */
-      const once = await finderSaveOnce('submissions', found.run, found.idx, savedName, websiteKey, found.keyUnique, insert);
+      const once = await finderSaveOnce('submissions', found.run, found.idx, finderId, insert);
       if (once.saved) return back(res, `/admin/leads#lead-${once.saved.id}`, 'ok', 'That one is already on Leads.');
       l = once.row;
     } else {
@@ -34813,8 +34821,8 @@ app.post('/admin/software-leads', requireAdmin, async (req, res) => {
     if (v.error) return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err', v.error);
     const seen = await softLeadSeen(v.lead);
     /* Already on the board because another add of this same result saved it: link it, never refuse it. */
-    const savedBefore = seen && finder
-      ? await finderSavedLead(pool, 'software_leads', finder.runId, finder.idx, v.lead.company, v.lead.website_key, finder.keyUnique) : null;
+    const finderId = finder ? { key: v.lead.website_key, keyUnique: finder.keyUnique, text: v.lead.detail, source: v.lead.source_url } : null;
+    const savedBefore = seen && finder ? await finderSavedLead(pool, 'software_leads', finder.runId, finder.idx, finderId) : null;
     if (savedBefore) return back(res, `${SOFT_PATH}#slead-${savedBefore.id}`, 'ok', 'Already on your board.');
     if (seen) await unclaim();
     if (seen) {
@@ -34830,7 +34838,7 @@ app.post('/admin/software-leads', requireAdmin, async (req, res) => {
     let row;
     if (finder) {
       /* One lead per finder result (finderSaveOnce), as on Leads. */
-      const once = await finderSaveOnce('software_leads', finder.runId, finder.idx, l.company, l.website_key, finder.keyUnique, insert);
+      const once = await finderSaveOnce('software_leads', finder.runId, finder.idx, finderId, insert);
       if (once.saved) return back(res, `${SOFT_PATH}#slead-${once.saved.id}`, 'ok', 'Already on your board.');
       row = once.row;
     } else {

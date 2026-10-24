@@ -163,12 +163,15 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
     assert.ok(once.includes(step), step);
   }
   assert.ok(once.indexOf('pg_advisory_xact_lock') < once.indexOf('finderSavedLead(c, ') && once.indexOf('finderSavedLead(c, ') < once.indexOf('save(c)'), 'locked, then looked, then saved');
-  assert.match(add, /finderSaveOnce\('submissions', found\.run, found\.idx, savedName, websiteKey, found\.keyUnique, insert\)/, 'a finder lead is saved only through it');
-  assert.ok(once.includes("SET LOCAL lock_timeout = '10s'"), 'never waits for ever on a stuck add');
-  /* Found again by the website alone when it is unique in the run (it survives a rename), else by website and name as saved. */
-  assert.match(helpers, /WHEN \$3::text IS NOT NULL AND \$4::boolean THEN website_key = \$3\s+ELSE website_key IS NOT DISTINCT FROM \$3 AND lower\(trim\(\$\{col\}\)\) = lower\(trim\(\$2\)\)/);
+  assert.match(add, /finderSaveOnce\('submissions', found\.run, found\.idx, finderId, insert\)/, 'a finder lead is saved only through it');
+  assert.ok(once.indexOf("SET LOCAL lock_timeout = '5s'") < once.indexOf('pg_advisory_xact_lock') && once.indexOf('pg_advisory_xact_lock') < once.indexOf("SET LOCAL lock_timeout = DEFAULT"),
+    'a short wait for this lock only, never for ever and never blamed on another add when a row lock is slow');
+  /* Found again by the website alone when it is unique in the run (it survives a rename), else by website and the
+     description written from that result, never by a name two results can share ('Social lead', a chain). */
+  assert.match(helpers, /\$3::text IS NOT NULL AND \$4::boolean AND website_key = \$3\)\s+OR \(website_key IS NOT DISTINCT FROM \$3 AND description = \$2 AND \$5::text IS NULL\)/);
+  assert.match(add, /const finderId = found \? \{ key: websiteKey, keyUnique: found\.keyUnique, text: description \|\| null \} : null;/);
   assert.match(add, /const savedName = name \|\| \(profileUrl \? 'Social lead' : 'Lead'\);/);
-  assert.match(add, /const savedBefore = known && found \? await finderSavedLead\(pool, /, 'looked for only when refusing, not on every add');
+  assert.match(add, /const savedBefore = known && found \? await finderSavedLead\(pool, 'submissions', found\.run, found\.idx, finderId\)/, 'looked for only when refusing, not on every add');
   assert.ok(add.indexOf('const savedBefore = known && found') < add.indexOf('if (known) {'), 'an earlier save of it is linked, not refused as known');
   assert.match(add, /if \(!rowCount\) claimToken = '';/, "another add's live claim is left alone, this one goes ahead unclaimed");
   assert.match(add, /const phone = found \? '' :/, 'a phone found online is not saved');
