@@ -4567,8 +4567,15 @@ function inTextingHours(now = new Date()) {
    orderUpdate: the same rule for an update on their own order (in production,
    ready, shipped) to the phone they gave for it. Owner, 2026-10-23: "them
    giving me their phone numbers is consent". Until then these needed a ticked
-   box, which most customers never saw, so they got the email only. A STOP or
-   an unticked box is still a no. */
+   box, which most customers never saw, so they got the email only. Only a
+   STOP (a reply, or Twilio's 21610) stops them: an unticked box on a form is
+   not the customer saying no to hearing about their own order. */
+async function saidStop(phone) {
+  const { rows: [r] } = await pool.query(
+    `SELECT source FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [phone]);
+  return !!r && ['sms-reply:stop', 'twilio:21610'].includes(r.source);
+}
+
 async function neverAsked(phone, kind) {
   if (kind === 'marketing') return false;
   const { rows } = await pool.query('SELECT 1 FROM sms_consents WHERE phone = $1 LIMIT 1', [phone]);
@@ -4580,7 +4587,10 @@ async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToCon
   if (!to) return 'no-phone';
   try {
     const c = await smsConsentFor(to);
-    if (!(kind === 'marketing' ? c.marketing : c.transactional) && !((replyToContact || orderUpdate) && await neverAsked(to, kind))) return 'no-consent';
+    const allowed = (kind === 'marketing' ? c.marketing : c.transactional)
+      || (replyToContact && await neverAsked(to, kind))
+      || (orderUpdate && kind === 'transactional' && !(await saidStop(to)));
+    if (!allowed) return 'no-consent';
     if (!smsConfigured()) {
       console.log(`sendCustomerSms: skipped ${msg.template} for ${ref} — Twilio not configured`);
       return 'unconfigured';
@@ -8565,7 +8575,7 @@ async function sendClientEmail({ quote, kind, ...mail }) {
    Until 2026-09-28 these were texts only, and texting was not switched on, so
    a customer heard nothing between paying and their order arriving; one
    collecting in person was never told it was ready. */
-async function notifyQuoteMilestone(before, after) {
+async function notifyQuoteMilestone(before, after, { textOnly = false } = {}) {
   if (!before || !after) return;
   const newly = (c) => !before[c] && after[c];
   const code = after.code;
@@ -8623,9 +8633,11 @@ async function notifyQuoteMilestone(before, after) {
     return;
   }
 
-  if (after.phone) {
-    sendCustomerSms({ phone: after.phone, kind: 'transactional', ref: 'quote:' + code, msg: text, quote: code, orderUpdate: true });
-  }
+  const textArgs = { phone: after.phone, kind: 'transactional', ref: 'quote:' + code, msg: text, quote: code, orderUpdate: true };
+  /* The board's "Text the update": the text alone, for a step whose email went
+     out before order texts did (2026-10-23). The answer is shown, so it waits. */
+  if (textOnly) return after.phone ? sendCustomerSms(textArgs) : 'no-phone';
+  if (after.phone) sendCustomerSms(textArgs);
   if (!after.email) return 'no-email';
   const { rows } = await pool.query(
     `SELECT 1 FROM client_emails WHERE quote_code = $1 AND kind = $2 AND status = 'sent' LIMIT 1`, [code, kind]);
@@ -22489,6 +22501,28 @@ function askAttrs(q, ask) {
   return ask ? ` data-ask="${escEmail(q.code + ':' + ask.kind)}" data-ask-text="${escEmail(ask.text)}"` : '';
 }
 
+/** The furthest step a job has reached that the customer is told about. */
+function milestoneReached(q) {
+  return q.shipped_at ? 'milestone:ready' : q.production_at ? 'milestone:production' : null;
+}
+
+/** Milestone texts already sent (or on their way), per quote code: code ->
+ *  Set of kinds. A failed one does not count: the dedupe lets it be sent again. */
+async function textedMilestones(codes) {
+  const out = new Map();
+  if (!codes.length) return out;
+  const { rows } = await pool.query(
+    `SELECT DISTINCT quote_code, template FROM sms_messages
+      WHERE quote_code = ANY($1) AND ref = 'quote:' || quote_code AND status <> 'failed'
+        AND (template IN ('in-production', 'ready') OR template LIKE 'shipped%')`, [codes])
+    .catch(() => ({ rows: [] }));
+  for (const r of rows) {
+    if (!out.has(r.quote_code)) out.set(r.quote_code, new Set());
+    out.get(r.quote_code).add(r.template === 'in-production' ? 'milestone:production' : 'milestone:ready');
+  }
+  return out;
+}
+
 /** Milestone emails already sent, per quote code: code -> Set of kinds. */
 async function sentMilestones(codes) {
   const out = new Map();
@@ -22599,6 +22633,36 @@ async function moveJobToStage(code, target, { notify = true, keepLater = false, 
   }
   return after;
 }
+
+/* What the board says when "Text the update" did not send. */
+const MILESTONE_TEXT_ERRORS = {
+  'no-phone': 'There is no usable phone number on that job.',
+  'no-consent': 'That number texted STOP, so it cannot be texted.',
+  duplicate: 'That update was already texted.',
+  unconfigured: 'Texting is not set up on the server.',
+  failed: 'The text did not send. Try again in a minute.',
+  'no-step': 'That job has no update to text yet.',
+  approval: 'Customer texts from your account go to the owner first: send it from the job page.',
+};
+app.post('/admin/quote/:code/milestone-text', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+  const back = (k, v) => res.redirect(`/admin/production?${k}=${encodeURIComponent(v)}`);
+  if (actorLevel('customers.message') !== 'on') return back('text_err', 'approval');
+  try {
+    const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!q || q.cancelled_at || ['draft', 'held'].includes(String(q.status || ''))) return back('text_err', 'no-step');
+    const k = milestoneReached(q);
+    if (!k) return back('text_err', 'no-step');
+    const before = k === 'milestone:ready' ? { ...q, shipped_at: null } : { ...q, production_at: null };
+    // undefined: notifyQuoteMilestone found no step to tell, which a retry will not change.
+    const out = (await notifyQuoteMilestone(before, q, { textOnly: true })) || 'no-step';
+    return out === 'sent' ? back('texted', code) : back('text_err', Object.hasOwn(MILESTONE_TEXT_ERRORS, out) ? out : 'failed');
+  } catch (err) {
+    console.error(`milestone text for ${code} failed:`, err.message);
+    return back('text_err', 'failed');
+  }
+});
 
 app.post('/admin/quote/:code/stage', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
@@ -23420,6 +23484,9 @@ async function renderBoard(VIEW, req, res) {
 
     /* Which milestone emails each board job has had, so a card's move only
        asks about an email that would really be sent. */
+    const boardTexted = VIEW === 'work'
+      ? await textedMilestones(rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at && q.phone).map(q => q.code))
+      : new Map();
     const boardSent = VIEW === 'work'
       ? await sentMilestones(rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at).map(q => q.code))
       : new Map();
@@ -23448,11 +23515,17 @@ async function renderBoard(VIEW, req, res) {
       ${(() => {
         /* What an Apply from a "Record a payment" panel did. The code is shown
            only once it reads as one; an error is picked from a fixed list. */
+        const texted = String(req.query.texted || '').toUpperCase();
+        const textErr = Object.hasOwn(MILESTONE_TEXT_ERRORS, String(req.query.text_err || ''))
+          ? MILESTONE_TEXT_ERRORS[String(req.query.text_err)] : '';
+        const textNote = (QUOTE_CODE_RE.test(texted) ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">
+            Texted the update for <b>${texted}</b>.</div>` : '') +
+          (textErr ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(textErr)}</div>` : '');
         const applied = String(req.query.applied || '').toUpperCase();
         const failed = APPLY_ERRORS[String(req.query.apply_err || '')];
         return (QUOTE_CODE_RE.test(applied) ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">
             The Stripe payment is on quote <b>${applied}</b> now.</div>` : '') +
-          (failed ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(failed)}</div>` : '');
+          (failed ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(failed)}</div>` : '') + textNote;
       })()}
       <p style="margin-bottom:14px">
         <a class="btn" href="/admin/quote/new">New quote</a>
@@ -23623,6 +23696,15 @@ async function renderBoard(VIEW, req, res) {
                   <button type="submit" class="kbtn kbtn-next" title="${escEmail(act.hint)}">
                     ✓ ${escEmail(act.label)}</button>
                 </form>` : ''}
+                ${(() => {
+                  /* A step reached before order texts went out (2026-10-23)
+                     was emailed only: one tap texts it now. */
+                  const k = q.phone && milestoneReached(q);
+                  if (!k || (boardTexted.get(q.code) || new Set()).has(k)) return '';
+                  return `<form method="POST" action="/admin/quote/${q.code}/milestone-text" style="margin:6px 0 0">
+                    <button type="submit" class="kbtn kbtn-sm" style="width:100%">📱 Text ${escEmail(
+                      String(q.name || '').trim().split(/\s+/)[0] || 'them')} the update</button></form>`;
+                })()}
                 <div class="kmove">
                   ${c.i > 0 ? `<form method="POST" action="/admin/quote/${q.code}/stage" data-stageform>
                     <input type="hidden" name="stage" value="${JOB_STAGES[c.i-1].key}">
