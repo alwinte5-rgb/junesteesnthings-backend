@@ -15563,6 +15563,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     const textByShop = mayText && (await quoteTextWay(q).catch(() => '')) === 'shop';
     const textForm = (cls) => textByShop ? `<form method="POST" action="/admin/quote/${code}/text" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
             <button type="submit"${cls} style="width:100%">Text it to ${escEmail(q.phone)}</button></form>` : '';
+    /* Only the buttons this person may press: a helper without "message
+       customers" was shown Email and sent to a refusal page on the tap. */
+    const mayEmail = !!q.email && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/email');
+    /* Both at once (2026-10-24), when both can go from the shop. */
+    const bothForm = (label) => mayEmail && textByShop && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/send')
+      ? `<form method="POST" action="/admin/quote/${code}/send" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
+            <button type="submit" style="width:100%">${label} to ${escEmail(q.email)} and ${escEmail(q.phone)}</button></form>` : '';
     /* Asked first, before any way to send shows (designFeesToAsk). */
     const ask = !q.sent_to_customer_at ? designFeesToAsk(q.items, await getCatalog().catch(() => null)) : { fees: [] };
     const askDesign = ask.fees;
@@ -15588,15 +15595,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           <b>Send it to the customer?</b>
           <p class="muted" style="margin:4px 0 10px">Nothing has gone to them yet. Choose how, or leave it and send it
             later from the job page.</p>
-          ${q.email ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px">
-            <button type="submit" style="width:100%">Email it to ${escEmail(q.email)}</button></form>` : ''}
+          ${bothForm('Email and text it')}
+          ${mayEmail ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
+            <button type="submit"${bothForm('x') ? ' class="btn-ghost"' : ''} style="width:100%">Email it to ${escEmail(q.email)}</button></form>` : ''}
           ${textForm(' class="btn-ghost"')}
           ${smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center;margin-bottom:8px" href="${escEmail(smsHref)}"
             onclick="markSent()">${textByShop ? 'Text it from my phone instead' : 'Text it (opens Messages)'}</a>` : ''}
           <form method="POST" action="/admin/quote/${code}/delivered" style="margin:0 0 8px">
             <button type="submit" class="btn-ghost" style="width:100%">I sent it another way</button></form>
           <a class="btn btn-ghost" style="display:block;text-align:center" href="/admin/production/${code}">Not yet</a>
-        </div>` : (q.email || textByShop || smsHref) ? `<div class="card">${q.email ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px">
+        </div>` : (mayEmail || textByShop || smsHref) ? `<div class="card">${bothForm(`Email and text ${existingQuote ? 'the updated quote' : 'it'}`)}${mayEmail ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
           <button type="submit" class="btn btn-ghost" style="width:100%">Email ${existingQuote ? 'the updated quote' : 'it'} to ${escEmail(q.email)}</button>
         </form>` : ''}${textForm(' class="btn-ghost"')}${!textByShop && smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center" href="${escEmail(smsHref)}">Text ${existingQuote ? 'the updated quote' : 'it'} (opens Messages)</a>` : ''}</div>` : ''}
       <div class="card" data-after-design${askDesign.length ? ' style="display:none"' : ''}>
@@ -21174,6 +21182,61 @@ function quoteTextControl(q, way, smsHref, look) {
       asLink ? 'text the quote from your phone' : 'Text it from your phone'}</a>`;
 }
 
+/* Texts the quote from the shop's number and, when it went, marks it with the
+   customer. Returns sendCustomerSms's status. Shared by the text route and
+   "Email and text it". */
+async function textQuote(q) {
+  /* The button disables itself on the tap; behind that, one text per
+     revision a minute (the dedupe key), so an edited quote can go again
+     straight away. */
+  const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: q.code,
+    ref: `quote-text:${q.code}:r${q.revision || 1}:${Math.floor(Date.now() / 60000)}`, msg: quoteTextMsg(q) });
+  if (status === 'sent') {
+    await pool.query('UPDATE quotes SET sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]);
+    if (q.from_submission_id) await markLeadResponded(q.from_submission_id, currentActor()).catch(() => {});
+    logActivity(currentActor() || OWNER_ACTOR, 'quote texted', { type: 'quote', id: q.code }, {});
+  }
+  /* sendCustomerSms only logs a failure: the digest has to hear of it here. */
+  if (status === 'failed') reportError('quote-text', new Error(`quote text to ${q.code} was not accepted by Twilio`), `quote ${q.code}`).catch(() => {});
+  return status;
+}
+/* Why a quote text did not go, by textQuote's status. */
+const QUOTE_TEXT_NOT_SENT = {
+  'no-phone': 'There is no usable phone number on this quote, so it was not texted.',
+  'no-consent': 'They have not agreed to texts, so it was not sent from the shop number. Use "text it from your phone" instead.',
+  unconfigured: 'Texting is not switched on, so it was not sent. Use "text it from your phone" instead.',
+  duplicate: 'That text went out a moment ago, so it was not sent twice.',
+};
+
+/* Email and text the quote in one tap (owner, 2026-10-24: "send quotes via
+   text and email at the same time"). The same refusals as each on its own;
+   then each goes, or fails, by itself, and the page says which did. */
+app.post('/admin/quote/:code/send', requireAdmin, async (req, res) => {
+  if (actorLevel('quotes.view') !== 'on') return res.status(403).send('Not available to your account.');
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  const back = `/admin/production/${code}`;
+  const err = (m) => res.redirect(`${back}?err=${encodeURIComponent(m)}`);
+  try {
+    const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!q) return res.redirect('/admin/quotes');
+    if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) return err('That quote is not with the customer, so it was not sent.');
+    if (Number(q.paid_amount) > 0) {
+      return err('This job already has a payment on it, so the "accept and pay" quote was not sent. Send a message from the job instead.');
+    }
+    const r = await emailQuote(q);
+    if (r.ok) logActivity(currentActor() || OWNER_ACTOR, 'quote emailed', { type: 'quote', id: code }, {});
+    const status = await textQuote(q);
+    const said = [r.ok ? `Emailed to ${r.to}.` : `The email did not go: ${r.error}.`,
+      status === 'sent' ? `Texted to ${q.phone}.` : QUOTE_TEXT_NOT_SENT[status] || 'The text did not go, and the error has been logged.'].join(' ');
+    return res.redirect(`${back}?${r.ok && status === 'sent' ? 'ok' : 'err'}=${encodeURIComponent(said)}`);
+  } catch (e) {
+    console.error('quote send route failed:', e.message);
+    reportError('quote-send', e, `quote ${code}`).catch(() => {});
+    return err('Sending did not finish. Check the job page to see what went, then try again.');
+  }
+});
+
 app.post('/admin/quote/:code/text', requireAdmin, async (req, res) => {
   if (actorLevel('quotes.view') !== 'on') return res.status(403).send('Not available to your account.');
   const code = String(req.params.code || '').toUpperCase();
@@ -21187,25 +21250,9 @@ app.post('/admin/quote/:code/text', requireAdmin, async (req, res) => {
     if (Number(q.paid_amount) > 0) {
       return err('This job already has a payment on it, so the "accept and pay" quote text was not sent. Send a message from the job instead.');
     }
-    /* The button disables itself on the tap; behind that, one text per
-       revision a minute (the dedupe key), so an edited quote can go again
-       straight away. */
-    const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
-      ref: `quote-text:${code}:r${q.revision || 1}:${Math.floor(Date.now() / 60000)}`, msg: quoteTextMsg(q) });
-    if (status === 'sent') {
-      await pool.query('UPDATE quotes SET sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]);
-      if (q.from_submission_id) await markLeadResponded(q.from_submission_id, currentActor()).catch(() => {});
-      logActivity(currentActor() || OWNER_ACTOR, 'quote texted', { type: 'quote', id: code }, {});
-      return res.redirect(`${back}?ok=${encodeURIComponent('Quote texted to ' + q.phone + '.')}`);
-    }
-    /* sendCustomerSms only logs a failure: the digest has to hear of it here. */
-    if (status === 'failed') reportError('quote-text', new Error(`quote text to ${code} was not accepted by Twilio`), `quote ${code}`).catch(() => {});
-    return err({
-      'no-phone': 'There is no usable phone number on this quote, so it was not texted.',
-      'no-consent': 'They have not agreed to texts, so it was not sent from the shop number. Use "text it from your phone" instead.',
-      unconfigured: 'Texting is not switched on, so it was not sent. Use "text it from your phone" instead.',
-      duplicate: 'That text went out a moment ago, so it was not sent twice.',
-    }[status] || 'The text did not go, and the error has been logged. Try again, or email it.');
+    const status = await textQuote(q);
+    if (status === 'sent') return res.redirect(`${back}?ok=${encodeURIComponent('Quote texted to ' + q.phone + '.')}`);
+    return err(QUOTE_TEXT_NOT_SENT[status] || 'The text did not go, and the error has been logged. Try again, or email it.');
   } catch (e) {
     console.error('quote text route failed:', e.message);
     reportError('quote-text', e, `quote ${code}`).catch(() => {});
@@ -23901,6 +23948,8 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const textWay = mayText ? await quoteTextWay(q).catch(() => '') : '';
     const textSms = maySent ? quoteSmsHref(q, req.get('user-agent')) : '';
     const textLink = quoteTextControl(q, textWay, textSms, 'link'), textButton = quoteTextControl(q, textWay, textSms, 'button');
+    /* Email and text it in one tap (2026-10-24), when both can go from the shop. */
+    const mayBoth = !!q.email && mayEmail && textWay === 'shop' && may('/admin/quote/:code/send');
     const stepRows = cl.steps.map((st) => {
       const inner = `<span class="step-tick" style="color:${st.done ? '#047857' : '#9ca3af'}">${st.done ? '☑' : '☐'}</span>
         <span class="step-label" style="color:${st.done ? '#6b7280' : '#111827'};${st.done ? 'text-decoration:line-through' : 'font-weight:600'}">${st.label}</span>
@@ -23979,8 +24028,10 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
         <span class="muted">Saving a quote does not send it.</span>
         <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
-          ${q.email && mayEmail ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:0">
-            <button type="submit">Email it to ${escEmail(q.email)}</button></form>` : ''}
+          ${mayBoth ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/send" style="margin:0" onsubmit="this.querySelector('button').disabled=true">
+            <button type="submit">Email and text it</button></form>` : ''}
+          ${q.email && mayEmail ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:0" onsubmit="this.querySelector('button').disabled=true">
+            <button type="submit"${mayBoth ? ' class="btn-ghost"' : ''}>Email it to ${escEmail(q.email)}</button></form>` : ''}
           ${textButton}
           ${maySent ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/delivered" style="margin:0">
             <button type="submit" class="btn-ghost">I sent it another way</button></form>` : ''}

@@ -26,9 +26,30 @@ test('the text route refuses what the email route refuses, and records only a se
   assert.match(r, /actorLevel\('quotes\.view'\) !== 'on'/);
   assert.match(r, /q\.status === 'held' \|\| q\.status === 'draft' \|\| q\.cancelled_at/);
   assert.match(r, /Number\(q\.paid_amount\) > 0/);
-  assert.match(r, /kind: 'transactional'/);
-  const sent = r.indexOf("if (status === 'sent')");
-  assert.ok(sent > -1 && r.indexOf('sent_to_customer_at') > sent, 'marked sent only after the text went');
+  assert.match(r, /const status = await textQuote\(q\);/);
+  const t = fnSrc('textQuote');
+  assert.match(t, /kind: 'transactional'/);
+  const sent = t.indexOf("if (status === 'sent')");
+  assert.ok(sent > -1 && t.indexOf('sent_to_customer_at') > sent, 'marked sent only after the text went');
+});
+
+test('"Email and text it": same permission and refusals, each part reported as it went', () => {
+  assert.strictEqual(STAFF.permForRoute('POST', '/admin/quote/:code/send'), STAFF.permForRoute('POST', '/admin/quote/:code/email'));
+  const r = after("app.post('/admin/quote/:code/send', requireAdmin", 2400);
+  assert.match(r, /actorLevel\('quotes\.view'\) !== 'on'/);
+  assert.match(r, /q\.status === 'held' \|\| q\.status === 'draft' \|\| q\.cancelled_at/);
+  assert.match(r, /Number\(q\.paid_amount\) > 0/);
+  assert.ok(r.indexOf('Number(q.paid_amount) > 0') < r.indexOf('emailQuote(q)'), 'refused before anything goes');
+  assert.match(r, /await emailQuote\(q\)[\s\S]*await textQuote\(q\)/, 'the text goes even when the email did not');
+  assert.match(r, /r\.ok && status === 'sent' \? 'ok' : 'err'/, 'success only when both went');
+});
+
+test('the send buttons show only to someone allowed to press them', () => {
+  const ready = after("const mayEmail = !!q.email && STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/email');", 4000);
+  assert.match(ready, /mayEmail && textByShop && STAFF\.mayUseRoute\(actor, 'POST', '\/admin\/quote\/:code\/send'\)/);
+  assert.match(ready, /\$\{mayEmail \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/email"/, 'no Email button a helper is refused on');
+  assert.doesNotMatch(ready.slice(0, ready.indexOf('Copy message')), /\$\{q\.email \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/email"/);
+  assert.match(src, /const mayBoth = !!q\.email && mayEmail && textWay === 'shop' && may\('\/admin\/quote\/:code\/send'\);/);
 });
 
 test('the quote text is plain, branded, linked and carries the opt-out', () => {
@@ -45,7 +66,7 @@ test('the quote text is plain, branded, linked and carries the opt-out', () => {
 test('no text button for a quote the route would refuse', () => {
   assert.match(fnSrc('quoteTextWay'), /\['held', 'draft'\]\.includes\(q\.status\) \|\| q\.cancelled_at \|\| Number\(q\.paid_amount\) > 0\) return ''/);
   assert.match(fnSrc('quoteTextControl'), /onsubmit="this\.querySelector\('button'\)\.disabled=true"/);
-  assert.match(after("app.post('/admin/quote/:code/text', requireAdmin", 2600), /ref: `quote-text:\$\{code\}:r\$\{q\.revision \|\| 1\}:/);
+  assert.match(fnSrc('textQuote'), /ref: `quote-text:\$\{q\.code\}:r\$\{q\.revision \|\| 1\}:/);
 });
 
 test('a quote text that is not delivered un-sends a quote that went no other way', () => {
