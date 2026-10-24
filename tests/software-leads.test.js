@@ -83,14 +83,14 @@ test('only an agent with the board opens it, and only their own leads', () => {
 test('a finder result is added once, from the agent\'s own software run', () => {
   const add = route("app.post('/admin/software-leads', requireAdmin");
   assert.match(add, /run\.staff_id === me && run\.ask && run\.ask\.profile === 'software'/);
-  assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, token\]\)/, 'claimed for the card (the claim Leads uses)');
+  assert.match(add, /unclaim = await finderClaim\(runId, idx\);/, 'claimed for the card (the claim Leads uses)');
   assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'the result index is checked as on Leads');
   assert.match(add, /finderSaveOnce\(finder\.runId, finder\.idx, insert\)/, 'one board lead per result, as on Leads');
   /* Looked for only when the board would refuse it, so a save that lands between the two is still linked. */
   assert.match(add, /const savedBefore = seen && finder \? await finderSavedLead\(pool, finder\.runId, finder\.idx\)/);
   assert.ok(add.indexOf('await softLeadSeen(v.lead)') < add.indexOf('const savedBefore = seen && finder'));
   assert.match(add, /\} catch \(err\) \{\s+await unclaim\(\);/, 'a failed add gives its claim back');
-  assert.match(add, /let unclaim = \(\) => null;[\s\S]*unclaim = \(\) => \(finder && finder\.token \?/, 'a refusal gives the claim back, only its own');
+  assert.match(add, /let unclaim = \(\) => null;/, 'nothing to give back before a claim');
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
 });
 
