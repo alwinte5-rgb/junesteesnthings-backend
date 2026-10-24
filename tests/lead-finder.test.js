@@ -163,15 +163,18 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
     assert.ok(once.includes(step), step);
   }
   assert.ok(once.indexOf('pg_advisory_xact_lock') < once.indexOf('finderSavedLead(c, ') && once.indexOf('finderSavedLead(c, ') < once.indexOf('save(c)'), 'locked, then looked, then saved');
-  assert.match(add, /finderSaveOnce\('submissions', found\.run, found\.idx, finderId, insert\)/, 'a finder lead is saved only through it');
+  assert.match(add, /finderSaveOnce\(found\.run, found\.idx, insert\)/, 'a finder lead is saved only through it');
+  assert.match(once, /if \(row && !\(await c\.query\(FINDER_LINK_SQL, \[runId, String\(idx\), row\.id\]\)\)\.rowCount\) \{\s+throw/, 'saved and linked together, or rolled back');
+  assert.match(once, /if \(e && e\.code === '55P03'\) e\.finderBusy = true;/, 'busy only when waiting on this lock');
+  assert.match(helpers, /const finderBusy = \(e\) => !!\(e && e\.finderBusy\);/);
   assert.ok(once.indexOf("SET LOCAL lock_timeout = '5s'") < once.indexOf('pg_advisory_xact_lock') && once.indexOf('pg_advisory_xact_lock') < once.indexOf("SET LOCAL lock_timeout = DEFAULT"),
     'a short wait for this lock only, never for ever and never blamed on another add when a row lock is slow');
-  /* Found again by the website alone when it is unique in the run (it survives a rename), else by website and the
-     description written from that result, never by a name two results can share ('Social lead', a chain). */
-  assert.match(helpers, /\$3::text IS NOT NULL AND \$4::boolean AND website_key = \$3\)\s+OR \(website_key IS NOT DISTINCT FROM \$3 AND description = \$2 AND \$5::text IS NULL\)/);
-  assert.match(add, /const finderId = found \? \{ key: websiteKey, keyUnique: found\.keyUnique, text: description \|\| null \} : null;/);
+  /* Found again by the result's own lead_id, set in the same transaction as the save; never guessed from
+     a name or text two results of one search can share. */
+  assert.match(helpers, /SELECT \(results -> \$2::int ->> 'lead_id'\)::int AS id FROM lead_finder_runs WHERE id = \$1/);
+  assert.doesNotMatch(helpers, /description = \$2|detail = \$2/, 'no matching by the text written from a result');
   assert.match(add, /const savedName = name \|\| \(profileUrl \? 'Social lead' : 'Lead'\);/);
-  assert.match(add, /const savedBefore = known && found \? await finderSavedLead\(pool, 'submissions', found\.run, found\.idx, finderId\)/, 'looked for only when refusing, not on every add');
+  assert.match(add, /const savedBefore = known && found \? await finderSavedLead\(pool, found\.run, found\.idx\)/, 'looked for only when refusing, not on every add');
   assert.ok(add.indexOf('const savedBefore = known && found') < add.indexOf('if (known) {'), 'an earlier save of it is linked, not refused as known');
   assert.match(add, /if \(!rowCount\) claimToken = '';/, "another add's live claim is left alone, this one goes ahead unclaimed");
   assert.match(add, /const phone = found \? '' :/, 'a phone found online is not saved');
@@ -246,17 +249,4 @@ test('a finder result index is whole digits under the cap', () => {
   const finderIdxIn = new Function('FINDER', `return ${def[1]}`)(F);
   assert.deepStrictEqual(['0', '3', String(F.MAX_LEADS - 1)].map(finderIdxIn), [0, 3, F.MAX_LEADS - 1]);
   for (const bad of ['3abc', '-1', '', ' 3', '1.5', String(F.MAX_LEADS), '99', '100', undefined, null]) assert.strictEqual(finderIdxIn(bad), -1, String(bad));
-});
-
-test('a website names a result alone only when no other result of the run shares it', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const def = /const finderKeyUnique = (\(results, l\) => \{[\s\S]*?\n\});/.exec(src);
-  assert.ok(def, 'finderKeyUnique is defined');
-  const finderKeyUnique = new Function('FINDER', `return ${def[1]}`)(F);
-  const a = lead({ name: 'Joe Pizza North', website: 'https://joes.example/north' });
-  const b = lead({ name: 'Joe Pizza South', website: 'https://www.joes.example/south' });
-  const c = lead({ name: 'Other', website: 'https://other.example/' });
-  assert.strictEqual(finderKeyUnique([a, c], a), true);
-  assert.strictEqual(finderKeyUnique([a, b, c], a), false, 'two places on one domain: the name decides');
-  assert.strictEqual(finderKeyUnique([a, c], lead({ website: '' })), false, 'no website, no key');
 });
