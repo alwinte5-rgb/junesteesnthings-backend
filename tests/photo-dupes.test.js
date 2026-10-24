@@ -26,6 +26,10 @@ const PUBLIC = path.join(__dirname, '..', 'public');
 const read = (rel) => fs.readFileSync(path.join(PUBLIC, rel), 'utf8');
 const HASHES = JSON.parse(read('assets/data/photo-hashes.json')).photos;
 const LISTINGS = new Set(['blog/index.html', 'partners.html']);
+/* Photos the owner allows to repeat (owner, 2026-10-23: "it can stay"): the
+ * big heads row is the "Design This" card for the big head product, on the
+ * big heads and event decor pages, and in the big heads page's gallery. */
+const MAY_REPEAT = new Set(['/assets/images/work/big-head-cutouts-row.jpg']);
 
 const dist = (a, b) => { let x = BigInt('0x' + a) ^ BigInt('0x' + b), n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; };
 // Same rule as tools/photo-dupes.py: whole photos and centres both close,
@@ -55,6 +59,7 @@ test('every photo on the site has a current hash', () => {
 
 test('no photo is shown on two pages, or twice on one', () => {
   for (const [src, pages] of shown()) {
+    if (MAY_REPEAT.has(src)) continue;
     const real = pages.filter((p) => !LISTINGS.has(p));
     assert.ok(real.length <= 1, `${src} is on ${real.join(', ')}`);
   }

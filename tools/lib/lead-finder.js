@@ -352,6 +352,19 @@ function leadDescription(l) {
     l.source_url ? `Found by the AI finder on ${l.source_url}` : 'Found by the AI finder'].filter(Boolean).join('\n').slice(0, 4000);
 }
 
+/** How long a claim on a result (lead_id 0, "being added") holds before it
+ *  counts as abandoned: adding takes a second or two, so this is a request
+ *  that died part way. */
+const CLAIM_SECONDS = 120;
+
+/** True when result `l` is claimed (lead_id 0) and the claim is abandoned:
+ *  older than CLAIM_SECONDS, or from before claims carried a time. */
+function claimStale(l, nowSeconds = Math.floor(Date.now() / 1000)) {
+  if (!l || l.lead_id !== 0) return false;
+  const at = Number(l.claimed_at);
+  return !Number.isFinite(at) || at <= 0 || at < nowSeconds - CLAIM_SECONDS;
+}
+
 /** How many found leads the finder page lists at once. */
 const OPEN_LIST = 60;
 
@@ -390,6 +403,6 @@ function openFinds(runs, contacted = new Set(), limit = OPEN_LIST) {
 }
 
 module.exports = { MODEL, MAX_LEADS, MAX_SEARCHES, MAX_RESUMES, PRICE, CAPS, LIMITS, NICHES, SYSTEM, REPORT_TOOL, SHARED_HOSTS,
-  SOFTWARE_NICHES, SOFTWARE_SYSTEM, PROFILES, profileOf, OPEN_LIST,
+  SOFTWARE_NICHES, SOFTWARE_SYSTEM, PROFILES, profileOf, OPEN_LIST, CLAIM_SECONDS,
   validateRun, describe, askMessage, safeUrl, domainKey, shapeLead, shapeLeads, costOf, failureMessage, findLeads, capCheck,
-  leadDescription, openFinds };
+  leadDescription, openFinds, claimStale };

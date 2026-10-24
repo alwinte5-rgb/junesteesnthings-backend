@@ -125,7 +125,7 @@ test('every rule is re-checked when the order is placed', () => {
   const conn = readDesigner('php_connector.php');
   assert.match(conn, /jt_promo_block_reason\(\$jt_promo_code, \$order_total,/,
     'the order path must re-check with the real total and email');
-  assert.match(auth, /if \(jt_promo_block_reason\(\$code, \$sub\) !== ''\) return 0\.0;/,
+  assert.match(auth, /if \(jt_promo_block_reason\(\$code, \$sub(?:, \(string\) \$email)?\) !== ''\) return 0\.0;/,
     'and the discount itself refuses to compute when a rule fails');
 });
 
@@ -408,7 +408,9 @@ test('the order path re-checks BEFORE the discount is applied', () => {
      then reads an empty session and returns 0 regardless. */
   const conn = readDesigner('php_connector.php');
   const check = conn.indexOf('jt_promo_block_reason($jt_promo_code');
-  const apply = conn.indexOf('$order_total - jt_promo_discount($order_total)');
+  /* The real total, then nothing or the email (Business Partners, designer #117). */
+  const applyAt = /\$order_total - jt_promo_discount\(\$order_total(?:\)|,\s*isset\(\$_POST\['email'\]\))/.exec(conn);
+  const apply = applyAt ? applyAt.index : -1;
   assert.ok(check > -1 && apply > -1, 'both steps must exist');
   assert.ok(check < apply, 'the re-check must come first');
 
