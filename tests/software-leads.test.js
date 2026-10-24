@@ -83,7 +83,7 @@ test('only an agent with the board opens it, and only their own leads', () => {
 test('a finder result is added once, from the agent\'s own software run', () => {
   const add = route("app.post('/admin/software-leads', requireAdmin");
   assert.match(add, /run\.staff_id === me && run\.ask && run\.ask\.profile === 'software'/);
-  assert.match(add, /WHERE id = \$1 AND NOT \(results -> \$2::int \? 'lead_id'\)/, 'claimed before saving');
+  assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, token\]\)/, 'claimed before saving (the claim Leads uses)');
   assert.match(add, /const unclaim = /);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
 });

@@ -154,7 +154,12 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
   const add = src.slice(src.indexOf("app.post('/admin/leads/add'"), src.indexOf("app.post('/admin/quote/:code/note'"));
   assert.match(add, /FROM lead_finder_runs WHERE id = \$1 AND status = 'done'/);
   assert.match(add, /AND staff_id IS NOT DISTINCT FROM \$2`, \[runId, isStaff \? actor\.id : null\]/, "only your own runs, the owner's too");
-  assert.match(add, /WHERE id = \$1 AND NOT \(results -> \$2::int \? 'lead_id'\)/, 'claimed before saving, so it is added once');
+  assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, claimToken\]\)/, 'claimed before saving, so it is added once');
+  assert.match(add, /FROM submissions WHERE finder_run_id = \$1 AND lower\(trim\(name\)\) = lower\(trim\(\$2\)\)/, 'a lead already saved from it is linked, not saved again');
+  assert.match(add, /FINDER_MARK_SQL, \[found\.run, found\.idx, l\.id, claimToken\]/, 'marked only by the request holding the claim');
+  const claim = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
+  assert.match(claim, /WHERE id = \$1 AND \(NOT \(results -> \$2::int \? 'lead_id'\)/, 'a free result can be claimed');
+  assert.match(claim, /->> 'lead_id' = '0'\s+AND COALESCE\(\(results -> \$2::int ->> 'claimed_at'\)::bigint, 0\) < /, 'and only an abandoned claim can be taken again');
   assert.match(add, /const phone = found \? '' :/, 'a phone found online is not saved');
   assert.match(add, /if \(known\) \{/, 'a known customer is refused, not saved');
 });
@@ -195,4 +200,24 @@ test('the finder page keeps the list; searches and adds come back to it', () => 
   assert.match(add, /found \? `\/admin\/leads\/find#found-\$\{found\.run\}-\$\{found\.idx\}`/, 'adding from the finder stays on the finder');
   const open = src.slice(src.indexOf('async function finderStillOpen('), src.indexOf('function finderForm('));
   for (const w of ['first_response_at IS NULL', 'outcome IS NULL', 'dismissed_at IS NULL', 'lead_notes', 'contacted_at IS NULL']) assert.ok(open.includes(w), w);
+});
+
+test('a claim left by a request that died is given back after a while', () => {
+  const now = 1_800_000_000;
+  assert.strictEqual(F.claimStale({ lead_id: 0, claimed_at: now - 5 }, now), false, 'a fresh claim holds');
+  assert.strictEqual(F.claimStale({ lead_id: 0, claimed_at: now - F.CLAIM_SECONDS - 1 }, now), true);
+  assert.strictEqual(F.claimStale({ lead_id: 0 }, now), true, 'claims from before they carried a time are abandoned');
+  assert.strictEqual(F.claimStale({ lead_id: 41, claimed_at: 1 }, now), false, 'an added lead is never "stale"');
+  assert.strictEqual(F.claimStale({}, now), false);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.strictEqual((src.match(/await pool\.query\(\s*FINDER_CLAIM_SQL,/g) || []).length, 2, 'Leads and the software board share one claim');
+  assert.strictEqual((src.match(/pool\.query\(FINDER_UNCLAIM_SQL,/g) || []).length, 2);
+  assert.strictEqual((src.match(/pool\.query\(FINDER_MARK_SQL,/g) || []).length, 2);
+  /* Only the request holding the token may mark or give back: one that was overtaken cannot undo the other. */
+  const sql = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
+  assert.match(sql, /FINDER_UNCLAIM_SQL = [^;]*->> 'claim' = \$3`/);
+  assert.match(sql, /FINDER_MARK_SQL = [^;]*->> 'claim' = \$4`/);
+  assert.match(sql, /FINDER_LINK_SQL = [^;]*COALESCE\(results -> \$2::int ->> 'lead_id', '0'\) = '0'`/, 'never relinks an added result');
+  assert.ok(!/'lead_id'\], to_jsonb\(\$3::int\)\) WHERE id = \$1`/.test(src), 'no unconditional mark left');
+  assert.match(src, /l\.lead_id === 0 && !FINDER\.claimStale\(l\) \? '<span class="muted" style="font-size:13px">Being added…/, 'an abandoned claim shows Add again');
 });
