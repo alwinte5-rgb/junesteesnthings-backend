@@ -212,23 +212,32 @@ function loadSender(consentRows) {
     smsConsentFor: async () => (consentRows.length ? consentRows[consentRows.length - 1] : { transactional: false, marketing: false }),
     smsConfigured: () => true, attributedStaffId: () => null, recordSmsConsent: async () => {},
     twilioSend: async (to, body) => { twilio.push({ to, body }); return { sid: 'SM1' }; },
-    pool: { query: async (sql) => ({ rows: /FROM sms_consents/.test(sql) ? consentRows
+    pool: { query: async (sql) => ({ rows: /SELECT source FROM sms_consents/.test(sql) ? consentRows.slice(-1)
+                                         : /FROM sms_consents/.test(sql) ? consentRows
                                          : /INSERT INTO sms_messages/.test(sql) ? [{ id: 1 }] : [] }) },
     console: { log() {}, error() {} },
   });
-  vm.runInContext([liftFn('neverAsked'), liftFn('sendCustomerSms')].join('\n') + ';this.f = sendCustomerSms;', ctx);
+  vm.runInContext([liftFn('saidStop'), liftFn('neverAsked'), liftFn('sendCustomerSms')].join('\n') + ';this.f = sendCustomerSms;', ctx);
   return { f: ctx.f, twilio };
 }
 const update = { phone: '7738491854', kind: 'transactional', ref: 'quote:ABC123', msg: { template: 't', body: 'hi' } };
 
-test('an order update goes to a phone with no answer on file, and never to one that said no', async () => {
+test('an order update goes to the phone they gave, unless that number texted STOP', async () => {
   const none = loadSender([]);
   assert.equal(await none.f({ ...update, orderUpdate: true }), 'sent');
   assert.equal(none.twilio.length, 1);
   assert.equal(await loadSender([]).f(update), 'no-consent', 'other texts still need a yes');
-  const no = loadSender([{ transactional: false, marketing: false }]);
-  assert.equal(await no.f({ ...update, orderUpdate: true }), 'no-consent', 'STOP or an unticked box is a no');
-  assert.equal(no.twilio.length, 0);
+  const unticked = [{ transactional: false, marketing: false, source: 'quote-form' }];
+  assert.equal(await loadSender(unticked).f({ ...update, orderUpdate: true }), 'sent',
+    'an unticked box is not a no to hearing about their own order');
+  for (const source of ['sms-reply:stop', 'twilio:21610']) {
+    const no = loadSender([{ transactional: true, marketing: false, source: 'x' }, { transactional: false, marketing: false, source }]);
+    assert.equal(await no.f({ ...update, orderUpdate: true }), 'no-consent', source + ' stops order texts');
+    assert.equal(no.twilio.length, 0);
+  }
+  const restarted = [{ transactional: false, marketing: false, source: 'sms-reply:stop' },
+                     { transactional: true, marketing: false, source: 'sms-reply:start' }];
+  assert.equal(await loadSender(restarted).f({ ...update, orderUpdate: true }), 'sent', 'START after STOP texts again');
   assert.equal(await loadSender([]).f({ ...update, kind: 'marketing', orderUpdate: true }), 'no-consent',
     'marketing always needs its own yes');
 });
@@ -237,6 +246,29 @@ test('milestone texts are sent as order updates', async () => {
   const { f, sent } = loadMilestones();
   await f(base, { ...base, production_at: new Date() });
   assert.equal(sent[0].orderUpdate, true);
+});
+
+test('"Text the update" sends the step text alone and says what happened', async () => {
+  const { f, sent, emails } = loadMilestones();
+  const job = { ...base, production_at: new Date(), shipped_at: new Date() };
+  assert.equal(await f({ ...job, shipped_at: null }, job, { textOnly: true }), 'sent');
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].msg.body, /is ready! Pickup/);
+  assert.equal(emails.length, 0, 'no second email');
+  assert.equal(await f({ ...job, phone: null, shipped_at: null }, { ...job, phone: null }, { textOnly: true }), 'no-phone');
+});
+
+test('the board offers the text only for a step not texted yet, and the route refuses helpers on approval', () => {
+  const { milestoneReached } = vm.runInThisContext(`(function () { ${liftFn('milestoneReached')}; return { milestoneReached }; })`)();
+  assert.equal(milestoneReached({ production_at: 'x' }), 'milestone:production');
+  assert.equal(milestoneReached({ production_at: 'x', shipped_at: 'x' }), 'milestone:ready');
+  assert.equal(milestoneReached({}), null);
+  const at = server.indexOf("app.post('/admin/quote/:code/milestone-text', requireAdmin,");
+  assert.ok(at > 0, 'the route is behind requireAdmin');
+  const body = server.slice(at, server.indexOf('\n});', at));
+  assert.ok(body.indexOf("actorLevel('customers.message') !== 'on'") < body.indexOf('notifyQuoteMilestone'));
+  assert.match(body, /\{ textOnly: true \}/);
+  assert.match(server, /boardTexted\.get\(q\.code\)/);
 });
 
 test('sendCustomerSms checks consent for the right kind before sending', () => {
