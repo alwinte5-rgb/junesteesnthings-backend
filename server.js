@@ -34043,7 +34043,8 @@ const finderIdxIn = (v) => (/^\d{1,2}$/.test(String(v)) && Number(v) < FINDER.MA
  *  search can share. */
 async function finderSavedLead(db, runId, idx) {
   const { rows: [r] } = await db.query(
-    `SELECT (results -> $2::int ->> 'lead_id')::int AS id FROM lead_finder_runs WHERE id = $1`, [runId, idx]);
+    `SELECT CASE WHEN results -> $2::int ->> 'lead_id' ~ '^[0-9]{1,9}$' THEN (results -> $2::int ->> 'lead_id')::int END AS id
+       FROM lead_finder_runs WHERE id = $1`, [runId, idx]);
   return r && r.id > 0 ? { id: r.id } : null;
 }
 
@@ -34151,6 +34152,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   const websiteKey = FINDER.domainKey(website);
   if (!name && !email && !phone && !profileUrl) { await unclaim(); return back(res, '/admin/leads', 'err', 'A lead needs a name, contact or profile link.'); }
   if (email && !STAFF.EMAIL_RE.test(email)) { await unclaim(); return back(res, found ? `/admin/leads/find?run=${found.run}` : '/admin/leads', 'err', 'That email does not look right.'); }
+  /* Set once the lead is saved, so a later failure never reads as nothing saved. */
+  let savedId = null;
   try {
     /* A helper says where it came from; the shop's records decide whether a
        "found" lead really is theirs (tools/lib/sales-credit.js). */
@@ -34172,8 +34175,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     /* Someone the shop already has is not a new lead, so it is not saved
        again (it used to be, as a shop lead, and counted as a prospect). The
        attempt is still logged for the owner. */
-    /* Known because another add of this same result saved it (a double press,
-       or one that died before linking): link it, never refuse it. */
+    /* Known because another add of this same result saved it (a double press):
+       send them to that lead, never refuse it. */
     const savedBefore = known && found ? await finderSavedLead(pool, found.run, found.idx) : null;
     if (savedBefore) return back(res, `/admin/leads#lead-${savedBefore.id}`, 'ok', 'That one is already on Leads.');
     if (known) {
@@ -34206,8 +34209,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     /* Two helpers registering the same customer at the same moment both pass
        the check above. The first one saved wins: a later row that finds an
        earlier lead for this contact turns into a shop lead. */
-    /* The lead is saved by now, so a failure here is logged and the add still reports success. */
-    if (label.sale_type === 'rep' || label.sale_type === 'pending') try {
+    savedId = l && l.id;
+    if (label.sale_type === 'rep' || label.sale_type === 'pending') {
       const e = FRAUD.emailKey(email);
       const p = FRAUD.phoneKey(checkPhone);
       const { rows: [first] } = await pool.query(
@@ -34224,8 +34227,6 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
         await pool.query('UPDATE submissions SET sale_type = $2, sale_type_reason = $3, rep_id = NULL WHERE id = $1',
           [l.id, label.sale_type, label.reason]);
       }
-    } catch (err) {
-      console.error(`lead ${l.id} saved, but the earlier-lead check failed:`, err.message);
     }
     if (foundIt) {
       logActivity(actor, label.sale_type === 'shop' ? 'found lead was already known' : 'lead registered as theirs',
@@ -34239,7 +34240,8 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   } catch (err) {
     await unclaim();
     if (found && finderBusy(err)) return back(res, `/admin/leads/find#found-${found.run}-${found.idx}`, 'err', 'That one is being added right now. Refresh in a minute.');
-    console.error('add lead failed:', err.message);
+    console.error('add lead failed:', savedId ? `lead ${savedId} saved, then` : '', err.message);
+    if (savedId) return back(res, `/admin/leads#lead-${savedId}`, 'err', 'The lead was saved, but checking it against earlier leads failed. Tell June so she can check whose lead it is.');
     return back(res, '/admin/leads', 'err', 'Could not add the lead.');
   }
 });

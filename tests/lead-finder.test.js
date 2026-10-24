@@ -171,7 +171,9 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
     'a short wait for this lock only, never for ever and never blamed on another add when a row lock is slow');
   /* Found again by the result's own lead_id, set in the same transaction as the save; never guessed from
      a name or text two results of one search can share. */
-  assert.match(helpers, /SELECT \(results -> \$2::int ->> 'lead_id'\)::int AS id FROM lead_finder_runs WHERE id = \$1/);
+  assert.match(helpers, /'lead_id' ~ '\^\[0-9\]\{1,9\}\$' THEN \(results -> \$2::int ->> 'lead_id'\)::int END AS id/, 'only a whole-number lead_id, never a cast that throws');
+  assert.match(add, /if \(savedId\) return back\(res, `\/admin\/leads#lead-\$\{savedId\}`, 'err'/, 'a failure after the save says the lead was saved');
+  assert.doesNotMatch(add, /\) try \{/, 'the earlier-lead check fails closed, never swallowed');
   assert.doesNotMatch(helpers, /description = \$2|detail = \$2/, 'no matching by the text written from a result');
   assert.match(add, /const savedName = name \|\| \(profileUrl \? 'Social lead' : 'Lead'\);/);
   assert.match(add, /const savedBefore = known && found \? await finderSavedLead\(pool, found\.run, found\.idx\)/, 'looked for only when refusing, not on every add');
