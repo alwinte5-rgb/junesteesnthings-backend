@@ -10503,6 +10503,8 @@ async function emailQuote(q) {
     await pool.query('UPDATE quotes SET emailed_at = NOW(), sent_to_customer_at = COALESCE(sent_to_customer_at, NOW()) WHERE id = $1', [q.id]).catch(() => {});
     /* The lead was answered when the quote actually reached them (Codex #123). */
     if (q.from_submission_id && typeof markLeadResponded === 'function') markLeadResponded(q.from_submission_id, currentActor() || null).catch(() => {});
+    /* Here, as textQuote does, so every caller records it. */
+    logActivity(currentActor() || OWNER_ACTOR, 'quote emailed', { type: 'quote', id: q.code }, {});
     console.log(`quote ${q.code}: emailed to the customer`);
     return { ok: true, to };
   } catch (e) {
@@ -21122,16 +21124,9 @@ app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
     const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     if (!q) return res.redirect('/admin/quotes');
     const back = `/admin/production/${code}`;
-    if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) {
-      return res.redirect(`${back}?err=${encodeURIComponent('That quote is not with the customer, so it was not emailed.')}`);
-    }
-    /* This email asks them to accept and pay the deposit: wrong for a job that
-       already has money on it, or a dispute (Codex #140, fixed 2026-10-10). */
-    if (Number(q.paid_amount) > 0) {
-      return res.redirect(`${back}?err=${encodeURIComponent('This job already has a payment on it, so the "accept and pay" quote email was not sent. Send a message from the job instead.')}`);
-    }
+    const refused = quoteSendRefusal(q, 'email');
+    if (refused) return res.redirect(`${back}?err=${encodeURIComponent(refused)}`);
     const r = await emailQuote(q);
-    if (r.ok) logActivity(currentActor() || OWNER_ACTOR, 'quote emailed', { type: 'quote', id: code }, {});
     return res.redirect(`${back}?${r.ok ? 'ok=' + encodeURIComponent('Quote emailed to ' + r.to + '.')
       : 'err=' + encodeURIComponent('The email did not go: ' + r.error + '. Text them the link instead.')}`);
   } catch (err) {
@@ -21139,6 +21134,21 @@ app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
     res.redirect(`/admin/production/${code}?err=${encodeURIComponent('The email did not go. Please try again.')}`);
   }
 });
+
+/* Why the quote may not go to the customer by any route, or '' when it may.
+   One list for email, text and both, so a new rule reaches all three. `how`
+   is 'email', 'text' or 'both' and only words the message. */
+function quoteSendRefusal(q, how) {
+  const [done, what] = { email: ['emailed', 'quote email'], text: ['texted', 'quote text'], both: ['sent', 'quote'] }[how] || ['sent', 'quote'];
+  /* Held or draft: the customer's link does not work yet. */
+  if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) return `That quote is not with the customer, so it was not ${done}.`;
+  /* It asks them to accept and pay the deposit: wrong for a job that already
+     has money on it, or a dispute (Codex #140, fixed 2026-10-10). */
+  if (Number(q.paid_amount) > 0) {
+    return `This job already has a payment on it, so the "accept and pay" ${what} was not sent. Send a message from the job instead.`;
+  }
+  return '';
+}
 
 /* Text the quote from the shop's number: the email's twin (owner,
    2026-10-19: "I want email and text"). The same refusals as the email, then
@@ -21155,7 +21165,7 @@ function quoteTextMsg(q) {
 async function quoteTextWay(q) {
   const phone = normalizeUsPhone(q.phone);
   /* The route refuses a held, draft, cancelled or paid quote: no button for it. */
-  if (!phone || ['held', 'draft'].includes(q.status) || q.cancelled_at || Number(q.paid_amount) > 0) return '';
+  if (!phone || quoteSendRefusal(q)) return '';
   if (!smsConfigured()) return 'phone';
   const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
   return c.transactional ? 'shop' : 'phone';
@@ -21227,10 +21237,8 @@ app.post('/admin/quote/:code/send', requireAdmin, async (req, res) => {
   try {
     const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     if (!q) return res.redirect('/admin/quotes');
-    if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) return err('That quote is not with the customer, so it was not sent.');
-    if (Number(q.paid_amount) > 0) {
-      return err('This job already has a payment on it, so the "accept and pay" quote was not sent. Send a message from the job instead.');
-    }
+    const refused = quoteSendRefusal(q, 'both');
+    if (refused) return err(refused);
     /* Both halves must be able to go before either does, so a stale page
        never sends half and reports an error. */
     if (!q.email || !isValidEmail(String(q.email).trim())) return err('There is no valid email address on this quote, so nothing was sent. Text it instead.');
@@ -21238,11 +21246,12 @@ app.post('/admin/quote/:code/send', requireAdmin, async (req, res) => {
       return err('This quote cannot be texted from the shop number (no usable phone, or they have not agreed to texts), so nothing was sent. Email it instead.');
     }
     const r = await emailQuote(q);
-    if (r.ok) logActivity(currentActor() || OWNER_ACTOR, 'quote emailed', { type: 'quote', id: code }, {});
     const status = await textQuote(q);
+    /* 'duplicate' means it went a moment ago: that is not a failure. */
+    const texted = status === 'sent' || status === 'duplicate';
     const said = [r.ok ? `Emailed to ${r.to}.` : `The email did not go: ${r.error}.`,
       status === 'sent' ? `Texted to ${q.phone}.` : QUOTE_TEXT_NOT_SENT[status] || 'The text did not go, and the error has been logged.'].join(' ');
-    return res.redirect(`${back}?${r.ok && status === 'sent' ? 'ok' : 'err'}=${encodeURIComponent(said)}`);
+    return res.redirect(`${back}?${r.ok && texted ? 'ok' : 'err'}=${encodeURIComponent(said)}`);
   } catch (e) {
     console.error('quote send route failed:', e.message);
     reportError('quote-send', e, `quote ${code}`).catch(() => {});
@@ -21259,12 +21268,12 @@ app.post('/admin/quote/:code/text', requireAdmin, async (req, res) => {
   try {
     const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     if (!q) return res.redirect('/admin/quotes');
-    if (q.status === 'held' || q.status === 'draft' || q.cancelled_at) return err('That quote is not with the customer, so it was not texted.');
-    if (Number(q.paid_amount) > 0) {
-      return err('This job already has a payment on it, so the "accept and pay" quote text was not sent. Send a message from the job instead.');
-    }
+    const refused = quoteSendRefusal(q, 'text');
+    if (refused) return err(refused);
     const status = await textQuote(q);
     if (status === 'sent') return res.redirect(`${back}?ok=${encodeURIComponent('Quote texted to ' + q.phone + '.')}`);
+    /* It went a moment ago (a second tap, or right after "Email and text it"). */
+    if (status === 'duplicate') return res.redirect(`${back}?ok=${encodeURIComponent(QUOTE_TEXT_NOT_SENT.duplicate)}`);
     return err(QUOTE_TEXT_NOT_SENT[status] || 'The text did not go, and the error has been logged. Try again, or email it.');
   } catch (e) {
     console.error('quote text route failed:', e.message);

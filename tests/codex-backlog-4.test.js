@@ -16,7 +16,8 @@ test('#140 an approved held quote whose email failed says so', () => {
 });
 test('#140 the "accept and pay" quote email is not resent on a job with money on it', () => {
   const r = after("app.post('/admin/quote/:code/email'", 1600);
-  assert.ok(r.indexOf('Number(q.paid_amount) > 0') > -1 && r.indexOf('Number(q.paid_amount) > 0') < r.indexOf('await emailQuote(q)'));
+  assert.ok(r.indexOf("quoteSendRefusal(q, 'email')") > -1 && r.indexOf("quoteSendRefusal(q, 'email')") < r.indexOf('await emailQuote(q)'));
+  assert.match(after('function quoteSendRefusal(', 1200), /if \(Number\(q\.paid_amount\) > 0\)/);
 });
 test('#123 a quote credited to a disabled helper keeps that credit on a plain save', () => {
   assert.match(after('function creditField(', 2400), /\(no longer active\)<\/option>/);
