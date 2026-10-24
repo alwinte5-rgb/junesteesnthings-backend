@@ -85,10 +85,12 @@ test('a finder result is added once, from the agent\'s own software run', () => 
   assert.match(add, /run\.staff_id === me && run\.ask && run\.ask\.profile === 'software'/);
   assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, token\]\)/, 'claimed for the card (the claim Leads uses)');
   assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'the result index is checked as on Leads');
-  assert.match(add, /finderSaveOnce\('software_leads', finder\.runId, finder\.idx, l\.company, l\.website_key, insert\)/, 'one board lead per result, as on Leads');
-  const at = add.indexOf("finderSavedLead(pool, 'software_leads'");
-  assert.ok(at > -1 && at < add.indexOf('await softLeadSeen(v.lead)'), 'an earlier save of it is linked, not refused as already on the board');
-  assert.match(add, /const unclaim = /);
+  assert.match(add, /finderSaveOnce\('software_leads', finder\.runId, finder\.idx, l\.company, l\.website_key, finder\.keyUnique, insert\)/, 'one board lead per result, as on Leads');
+  /* Looked for only when the board would refuse it, so a save that lands between the two is still linked. */
+  assert.match(add, /const savedBefore = seen && finder\s+\? await finderSavedLead\(pool, 'software_leads'/);
+  assert.ok(add.indexOf('await softLeadSeen(v.lead)') < add.indexOf('const savedBefore = seen && finder'));
+  assert.match(add, /\} catch \(err\) \{\s+await unclaim\(\);/, 'a failed add gives its claim back');
+  assert.match(add, /let unclaim = \(\) => null;[\s\S]*unclaim = \(\) => \(finder && finder\.token \?/, 'a refusal gives the claim back, only its own');
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
 });
 
