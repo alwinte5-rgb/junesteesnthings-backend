@@ -84,9 +84,8 @@ test('a finder result is added once, from the agent\'s own software run', () => 
   const add = route("app.post('/admin/software-leads', requireAdmin");
   assert.match(add, /run\.staff_id === me && run\.ask && run\.ask\.profile === 'software'/);
   assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, token\]\)/, 'claimed before saving (the claim Leads uses)');
-  assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_finder_result_uq ON software_leads \(finder_run_id, finder_idx\) WHERE finder_idx IS NOT NULL/, 'one board lead per finder result');
-  assert.match(add, /finder \? finder\.runId : null, finder \? finder\.idx : null\]/, 'the result index is saved with the lead');
-  assert.strictEqual((add.match(/await finderSavedLead\('software_leads'/g) || []).length, 3, 'linked before the claim, before "already on the board", after a lost INSERT');
+  assert.ok(add.indexOf('await finderHold(res, runId, idx)') > -1, 'one add of a result at a time, as on Leads');
+  assert.strictEqual((add.match(/await finderSavedLead\('software_leads'/g) || []).length, 2, 'linked before the claim and before "already on the board"');
   assert.ok(add.indexOf("finderSavedLead('software_leads', finder.runId") < add.indexOf('await softLeadSeen(v.lead)'));
   assert.match(add, /const unclaim = /);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
