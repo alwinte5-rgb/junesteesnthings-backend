@@ -69,7 +69,9 @@ const BODY_IN = { closed: 15, tank: 14.5, open: 15, kids: 12, onesie: 7.5 };
 const CHEST = { w: 5.5, h: 5.5 };
 const SETS = {
   closed: [
-    { key: 'front',      label: 'Full front',  side: 'front', w: 14, h: 17, x: 0,    top: 4.5 },
+    /* 2" higher than first set (owner, 2026-10-24: "the edit box on the hoodie is
+       low"). tools/raise-front-box.js moved the products already in the shop. */
+    { key: 'front',      label: 'Full front',  side: 'front', w: 14, h: 17, x: 0,    top: 2.5 },
     { key: 'left_chest', label: 'Left chest',  side: 'front', ...CHEST,    x: 4.5,  cy: 6.5 },
     { key: 'back',       label: 'Back',        side: 'back',  w: 14, h: 18, x: 0,    top: 4 },
   ],
@@ -87,7 +89,7 @@ const SETS = {
     { key: 'back',        label: 'Back',        side: 'back',  w: 14, h: 17, x: 0,  top: 4 },
   ],
   kids: [
-    { key: 'front', label: 'Front', side: 'front', w: 11, h: 14, x: 0, top: 3.5 },
+    { key: 'front', label: 'Front', side: 'front', w: 11, h: 14, x: 0, top: 1.5 },  // 2" up, as closed
     { key: 'back',  label: 'Back',  side: 'back',  w: 11, h: 15, x: 0, top: 3 },
   ],
   onesie: [
