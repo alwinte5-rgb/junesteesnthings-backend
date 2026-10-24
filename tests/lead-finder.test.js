@@ -156,15 +156,19 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
   assert.match(add, /AND staff_id IS NOT DISTINCT FROM \$2`, \[runId, isStaff \? actor\.id : null\]/, "only your own runs, the owner's too");
   assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, claimToken\]\)/, 'claimed before saving, so it is added once');
   const helper = src.slice(src.indexOf('async function finderSavedLead('), src.indexOf('/* A lead that did not come through the website'));
-  assert.match(helper, /FROM submissions WHERE finder_run_id = \$1 AND lower\(trim\(name\)\) = lower\(trim\(\$2\)\)/, 'by the run and the name from the saved run');
+  assert.match(helper, /FROM submissions WHERE finder_run_id = \$1 AND lower\(trim\(name\)\) = lower\(trim\(\$2\)\) AND website_key IS NOT DISTINCT FROM \$3/, 'by the run, the name and the website, so two places of one name are not mixed up');
   /* One add of a result at a time, on a session lock that a dead process gives back by itself. */
   assert.match(helper, /pg_try_advisory_lock\(\$1::bigint\)/);
-  assert.match(helper, /res\.once\('close', \(\) => \{ c\.query\('SELECT pg_advisory_unlock\(\$1::bigint\)'/, 'released whichever way the add ends');
+  assert.match(helper, /if \(finderHolds >= FINDER_HOLDS_MAX\) return 'full';/, 'the hold never takes the pool');
+  assert.match(helper, /catch \(e\) \{ c\.release\(true\); \}/, 'a failed unlock destroys the connection, freeing the lock');
+  assert.match(helper, /const finderHeld = \(fn\) => async \(req, res, next\) => \{\s+try \{ await fn\(req, res, next\); \} finally \{/, 'released when the handler is done, not when the browser goes');
+  assert.ok(!/res\.once\('close'/.test(helper));
+  assert.match(src, /app\.post\('\/admin\/leads\/add', requireAdmin, finderHeld\(async/);
+  assert.match(src, /app\.post\('\/admin\/software-leads', requireAdmin, finderHeld\(async/);
   assert.ok(add.indexOf('await finderHold(res, runId, idx)') > -1 && add.indexOf('await finderHold(res, runId, idx)') < add.indexOf("await finderSavedLead('submissions', runId"), 'held before looking for a saved lead');
   assert.match(helper, /if \(saved\) await pool\.query\(FINDER_LINK_SQL/, 'and linked');
-  /* A lead already saved from it is linked, never saved again: before the claim and before the known refusal. */
-  assert.strictEqual((add.match(/await finderSavedLead\('submissions'/g) || []).length, 2);
-  assert.ok(add.indexOf("finderSavedLead('submissions', found.run, found.idx, name) : null") < add.indexOf('if (known) {'), 'checked before refusing as already known');
+  /* A lead already saved from it is linked under the hold, never saved again. */
+  assert.strictEqual((add.match(/await finderSavedLead\('submissions'/g) || []).length, 1);
 
   assert.match(add, /FINDER_MARK_SQL, \[found\.run, found\.idx, l\.id, claimToken\]/, 'marked only by the request holding the claim');
   const claim = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
@@ -231,7 +235,7 @@ test('a claim left by a request that died is given back after a while', () => {
   assert.ok(!/'lead_id'\], to_jsonb\(\$3::int\)\) WHERE id = \$1`/.test(src), 'no unconditional mark left');
   assert.match(src, /l\.lead_id === 0 && !FINDER\.claimStale\(l, dbNow\) \? '<span class="muted" style="font-size:13px">Being added…/, 'an abandoned claim shows Add again');
   /* Judged by the database's clock, the one the claim was stamped with, not the app's. */
-  assert.match(src, /floor\(extract\(epoch FROM NOW\(\)\)\)::bigint AS db_now FROM lead_finder_runs/);
-  assert.match(src, /const dbNow = runs\[0\] \? Number\(runs\[0\]\.db_now\) : undefined;/);
+  assert.match(src, /floor\(extract\(epoch FROM NOW\(\)\)\)::bigint AS db_now\s+FROM lead_finder_runs WHERE created_at/, 'read once, with the day counts');
+  assert.match(src, /const dbNow = Number\(today\.db_now\);/);
   assert.strictEqual((src.match(/finderResultCard\([^)]*, dbNow\)\)/g) || []).length, 2, 'both card lists pass the database clock');
 });
