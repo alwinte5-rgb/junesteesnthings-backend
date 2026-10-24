@@ -66,6 +66,8 @@ test('the job page lights the stage just tapped', () => {
 test('a move that tells the customer something asks first, by name', () => {
   assert.deepStrictEqual(milestoneAsk(job(), at('production')),
     { kind: 'milestone:production', text: 'Email Tom that their order is in production?' });
+  assert.match(milestoneAsk(job({ phone: '7735550100' }), at('production')).text, /^Email and text Tom /);
+  assert.match(milestoneAsk(job({ email: null, phone: '7735550100' }), at('production')).text, /^Text Tom /);
   assert.strictEqual(milestoneAsk(job(PRODUCTION), at('out')).kind, 'milestone:ready');
   assert.match(milestoneAsk(job(PRODUCTION), at('out')).text, /is ready for pickup\?$/, 'no method means pickup');
   assert.match(milestoneAsk(job({ ...PRODUCTION, ship_method: 'local' }), at('out')).text, /is ready\?$/);

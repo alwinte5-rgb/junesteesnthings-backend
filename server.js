@@ -4563,19 +4563,24 @@ function inTextingHours(now = new Date()) {
 }
 
 /* replyToContact: one transactional reply to someone who just called the shop
-   is allowed with no consent on file, never after any recorded answer. */
+   is allowed with no consent on file, never after any recorded answer.
+   orderUpdate: the same rule for an update on their own order (in production,
+   ready, shipped) to the phone they gave for it. Owner, 2026-10-23: "them
+   giving me their phone numbers is consent". Until then these needed a ticked
+   box, which most customers never saw, so they got the email only. A STOP or
+   an unticked box is still a no. */
 async function neverAsked(phone, kind) {
   if (kind === 'marketing') return false;
   const { rows } = await pool.query('SELECT 1 FROM sms_consents WHERE phone = $1 LIMIT 1', [phone]);
   return !rows.length;
 }
 
-async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false, media = [] }) {
+async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false, orderUpdate = false, media = [] }) {
   const to = normalizeUsPhone(phone);
   if (!to) return 'no-phone';
   try {
     const c = await smsConsentFor(to);
-    if (!(kind === 'marketing' ? c.marketing : c.transactional) && !(replyToContact && await neverAsked(to, kind))) return 'no-consent';
+    if (!(kind === 'marketing' ? c.marketing : c.transactional) && !((replyToContact || orderUpdate) && await neverAsked(to, kind))) return 'no-consent';
     if (!smsConfigured()) {
       console.log(`sendCustomerSms: skipped ${msg.template} for ${ref} — Twilio not configured`);
       return 'unconfigured';
@@ -8619,7 +8624,7 @@ async function notifyQuoteMilestone(before, after) {
   }
 
   if (after.phone) {
-    sendCustomerSms({ phone: after.phone, kind: 'transactional', ref: 'quote:' + code, msg: text, quote: code });
+    sendCustomerSms({ phone: after.phone, kind: 'transactional', ref: 'quote:' + code, msg: text, quote: code, orderUpdate: true });
   }
   if (!after.email) return 'no-email';
   const { rows } = await pool.query(
@@ -22475,7 +22480,8 @@ function milestoneAsk(q, target, sent = new Set()) {
   }
   if (sent.has(kind)) return null;
   const first = String(q.name || '').trim().split(/\s+/)[0];
-  return { kind, text: `Email ${first || 'the customer'} that their order ${what}?` };
+  const how = q.email && q.phone ? 'Email and text' : q.phone ? 'Text' : 'Email';
+  return { kind, text: `${how} ${first || 'the customer'} that their order ${what}?` };
 }
 
 /** The data-ask attributes and notify field for a form that moves a job. */
@@ -22509,8 +22515,8 @@ const STAGE_ASK_SCRIPT = `<script>(function(){
     d.style.cssText = 'border:1px solid #e3e8f2;border-radius:12px;padding:18px 20px;max-width:380px;width:calc(100% - 32px)';
     d.innerHTML = '<p style="margin:0 0 14px;font-size:15px;font-weight:600;color:#111827"></p>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
-      + '<button type="button" class="kbtn kbtn-go" data-a="yes">Move and email them</button>'
-      + '<button type="button" class="kbtn" data-a="no">Move, no email</button>'
+      + '<button type="button" class="kbtn kbtn-go" data-a="yes">Move and tell them</button>'
+      + '<button type="button" class="kbtn" data-a="no">Move, tell nobody</button>'
       + '<button type="button" class="kbtn" data-a="cancel">Cancel</button></div>';
     d.querySelector('p').textContent = text;
     document.body.appendChild(d);

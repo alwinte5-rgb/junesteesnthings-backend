@@ -202,6 +202,43 @@ test('both board routes move a job through one function that reads before it wri
   }
 });
 
+/* Owner, 2026-10-23: "them giving me their phone numbers is consent". An
+   order update goes to the phone given for the order unless that number has
+   said no; until then it needed a ticked box, so most customers heard nothing. */
+function loadSender(consentRows) {
+  const twilio = [];
+  const ctx = vm.createContext({
+    normalizeUsPhone: (p) => '+1' + String(p).replace(/\D/g, '').slice(-10),
+    smsConsentFor: async () => (consentRows.length ? consentRows[consentRows.length - 1] : { transactional: false, marketing: false }),
+    smsConfigured: () => true, attributedStaffId: () => null, recordSmsConsent: async () => {},
+    twilioSend: async (to, body) => { twilio.push({ to, body }); return { sid: 'SM1' }; },
+    pool: { query: async (sql) => ({ rows: /FROM sms_consents/.test(sql) ? consentRows
+                                         : /INSERT INTO sms_messages/.test(sql) ? [{ id: 1 }] : [] }) },
+    console: { log() {}, error() {} },
+  });
+  vm.runInContext([liftFn('neverAsked'), liftFn('sendCustomerSms')].join('\n') + ';this.f = sendCustomerSms;', ctx);
+  return { f: ctx.f, twilio };
+}
+const update = { phone: '7738491854', kind: 'transactional', ref: 'quote:ABC123', msg: { template: 't', body: 'hi' } };
+
+test('an order update goes to a phone with no answer on file, and never to one that said no', async () => {
+  const none = loadSender([]);
+  assert.equal(await none.f({ ...update, orderUpdate: true }), 'sent');
+  assert.equal(none.twilio.length, 1);
+  assert.equal(await loadSender([]).f(update), 'no-consent', 'other texts still need a yes');
+  const no = loadSender([{ transactional: false, marketing: false }]);
+  assert.equal(await no.f({ ...update, orderUpdate: true }), 'no-consent', 'STOP or an unticked box is a no');
+  assert.equal(no.twilio.length, 0);
+  assert.equal(await loadSender([]).f({ ...update, kind: 'marketing', orderUpdate: true }), 'no-consent',
+    'marketing always needs its own yes');
+});
+
+test('milestone texts are sent as order updates', async () => {
+  const { f, sent } = loadMilestones();
+  await f(base, { ...base, production_at: new Date() });
+  assert.equal(sent[0].orderUpdate, true);
+});
+
 test('sendCustomerSms checks consent for the right kind before sending', () => {
   const start = server.indexOf('async function sendCustomerSms(');
   const body = server.slice(start, server.indexOf('\n}\n', start));
