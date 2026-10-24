@@ -154,30 +154,20 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
   const add = src.slice(src.indexOf("app.post('/admin/leads/add'"), src.indexOf("app.post('/admin/quote/:code/note'"));
   assert.match(add, /FROM lead_finder_runs WHERE id = \$1 AND status = 'done'/);
   assert.match(add, /AND staff_id IS NOT DISTINCT FROM \$2`, \[runId, isStaff \? actor\.id : null\]/, "only your own runs, the owner's too");
-  assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, claimToken\]\)/, 'claimed before saving, so it is added once');
-  const helper = src.slice(src.indexOf('async function finderSavedLead('), src.indexOf('/* A lead that did not come through the website'));
-  assert.match(helper, /FROM submissions WHERE finder_run_id = \$1\s+AND CASE WHEN \$3::text IS NOT NULL THEN website_key = \$3 ELSE website_key IS NULL AND lower\(trim\(name\)\) = lower\(trim\(\$2\)\) END/,
-    'by the website when there is one (it survives a rename), else by name; two places of one name are not mixed up');
-  /* One add of a result at a time, on a session lock that a dead process gives back by itself. */
-  assert.match(helper, /pg_try_advisory_lock\(7306, \$1\)/, 'two keys, as every other advisory lock here');
-  assert.match(helper, /if \(finderHolds >= FINDER_HOLDS_MAX\) \{\s+const turn = await new Promise/, 'past the cap an add waits its turn, it is not refused');
-  assert.match(helper, /Promise\.race\(\[pending, /, 'never waits for ever on a busy pool');
-  assert.match(helper, /pending\.then\(\(late\) => late\.release\(\)/, 'a connection that comes too late is handed back');
-  assert.match(helper, /catch \(e\) \{ c\.release\(true\); \}\s+free\(\);/, 'a failed unlock destroys the connection, freeing the lock');
+  assert.match(add, /FINDER_CLAIM_SQL, \[runId, idx, claimToken\]/, 'claimed for the card when the add starts');
   assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'one index check for both routes');
-  assert.match(helper, /const finderHeld = \(fn\) => async \(req, res, next\) => \{\s+try \{ await fn\(req, res, next\); \} finally \{/, 'released when the handler is done, not when the browser goes');
-  assert.ok(!/res\.once\('close'/.test(helper));
-  assert.match(src, /app\.post\('\/admin\/leads\/add', requireAdmin, finderHeld\(async/);
-  assert.match(src, /app\.post\('\/admin\/software-leads', requireAdmin, finderHeld\(async/);
-  assert.ok(add.indexOf('await finderHold(res, runId, idx)') > -1 && add.indexOf('await finderHold(res, runId, idx)') < add.indexOf("await finderSavedLead('submissions', runId"), 'held before looking for a saved lead');
-  assert.match(helper, /if \(saved\) await pool\.query\(FINDER_LINK_SQL/, 'and linked');
-  /* A lead already saved from it is linked under the hold, never saved again. */
-  assert.strictEqual((add.match(/await finderSavedLead\('submissions'/g) || []).length, 1);
-
-  assert.match(add, /FINDER_MARK_SQL, \[found\.run, found\.idx, l\.id, claimToken\]/, 'marked only by the request holding the claim');
-  const claim = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
-  assert.match(claim, /WHERE id = \$1 AND \(NOT \(results -> \$2::int \? 'lead_id'\)/, 'a free result can be claimed');
-  assert.match(claim, /->> 'lead_id' = '0'\s+AND COALESCE\(\(results -> \$2::int ->> 'claimed_at'\)::bigint, 0\) < /, 'and only an abandoned claim can be taken again');
+  const helpers = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
+  /* One lead per result: the look and the save run in one transaction, under a lock on that result. */
+  const once = helpers.slice(helpers.indexOf('async function finderSaveOnce('));
+  for (const step of ["c.query('BEGIN')", 'pg_advisory_xact_lock(7306, hashtext($1))', 'finderSavedLead(c, ', 'save(c)', "c.query('COMMIT')", "c.query('ROLLBACK')"]) {
+    assert.ok(once.includes(step), step);
+  }
+  assert.ok(once.indexOf('pg_advisory_xact_lock') < once.indexOf('finderSavedLead(c, ') && once.indexOf('finderSavedLead(c, ') < once.indexOf('save(c)'), 'locked, then looked, then saved');
+  assert.match(add, /finderSaveOnce\('submissions', found\.run, found\.idx, savedName, websiteKey, insert\)/, 'a finder lead is saved only through it');
+  /* Found again by the website (it survives a rename), else by the name exactly as saved. */
+  assert.match(helpers, /THEN website_key = \$3 ELSE website_key IS NULL AND lower\(trim\(name\)\) = lower\(trim\(\$2\)\) END/);
+  assert.match(add, /const savedName = name \|\| \(profileUrl \? 'Social lead' : 'Lead'\);/);
+  assert.ok(add.indexOf('finderSavedLead(pool, ') > -1 && add.indexOf('finderSavedLead(pool, ') < add.indexOf('if (known) {'), 'an earlier save of it is linked, not refused as known');
   assert.match(add, /const phone = found \? '' :/, 'a phone found online is not saved');
   assert.match(add, /if \(known\) \{/, 'a known customer is refused, not saved');
 });
@@ -228,15 +218,14 @@ test('a claim left by a request that died is given back after a while', () => {
   assert.strictEqual(F.claimStale({ lead_id: 41, claimed_at: 1 }, now), false, 'an added lead is never "stale"');
   assert.strictEqual(F.claimStale({}, now), false);
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.strictEqual((src.match(/await pool\.query\(\s*FINDER_CLAIM_SQL,/g) || []).length, 2, 'Leads and the software board share one claim');
+  assert.strictEqual((src.match(/FINDER_CLAIM_SQL, \[runId, idx, /g) || []).length, 2, 'Leads and the software board share one claim');
   assert.strictEqual((src.match(/pool\.query\(FINDER_UNCLAIM_SQL,/g) || []).length, 2);
-  assert.strictEqual((src.match(/pool\.query\(FINDER_MARK_SQL,/g) || []).length, 2);
-  /* Only the request holding the token may mark or give back: one that was overtaken cannot undo the other. */
   const sql = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
-  assert.match(sql, /FINDER_UNCLAIM_SQL = [^;]*->> 'claim' = \$3`/);
-  assert.match(sql, /FINDER_MARK_SQL = [^;]*->> 'claim' = \$4`/);
+  /* A claim is for the card: it never stops the next add (finderSaveOnce keeps one lead per result). */
+  assert.match(sql, /FINDER_CLAIM_SQL = [^;]*WHERE id = \$1 AND COALESCE\(results -> \$2::int ->> 'lead_id', '0'\) = '0'`/);
+  assert.match(sql, /FINDER_UNCLAIM_SQL = [^;]*->> 'claim' = \$3`/, 'only the add holding it gives it back');
   assert.match(sql, /FINDER_LINK_SQL = [^;]*COALESCE\(results -> \$2::int ->> 'lead_id', '0'\) = '0'`/, 'never relinks an added result');
-  assert.ok(!/'lead_id'\], to_jsonb\(\$3::int\)\) WHERE id = \$1`/.test(src), 'no unconditional mark left');
+  assert.ok(!/FINDER_MARK_SQL|finderHold/.test(src), 'no second mechanism left');
   assert.match(src, /l\.lead_id === 0 && !FINDER\.claimStale\(l, dbNow\) \? '<span class="muted" style="font-size:13px">Being added…/, 'an abandoned claim shows Add again');
   /* Judged by the database's clock, the one the claim was stamped with, not the app's. */
   assert.match(src, /floor\(extract\(epoch FROM NOW\(\)\)\)::bigint AS db_now\s+FROM lead_finder_runs WHERE created_at/, 'read once, with the day counts');

@@ -108,7 +108,4 @@ function tally(leads) {
   return t;
 }
 
-/** A company name as shapeNew saves it, for finding the lead again. */
-const shapeCompany = (v) => one(v, LIMITS.company);
-
-module.exports = { PRODUCTS, STATUSES, OPEN, KINDS, LIMITS, isDate, nextStepFor, shapeNew, shapeUpdate, shapeEntry, standing, tally, shapeCompany };
+module.exports = { PRODUCTS, STATUSES, OPEN, KINDS, LIMITS, isDate, nextStepFor, shapeNew, shapeUpdate, shapeEntry, standing, tally };

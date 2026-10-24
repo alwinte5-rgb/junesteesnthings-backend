@@ -83,15 +83,11 @@ test('only an agent with the board opens it, and only their own leads', () => {
 test('a finder result is added once, from the agent\'s own software run', () => {
   const add = route("app.post('/admin/software-leads', requireAdmin");
   assert.match(add, /run\.staff_id === me && run\.ask && run\.ask\.profile === 'software'/);
-  assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, token\]\)/, 'claimed before saving (the claim Leads uses)');
-  assert.ok(add.indexOf('await finderHold(res, runId, idx)') > -1, 'one add of a result at a time, as on Leads');
-  assert.strictEqual((add.match(/await finderSavedLead\('software_leads'/g) || []).length, 1, 'linked under the hold, before the claim');
+  assert.match(add, /await pool\.query\(\s*FINDER_CLAIM_SQL, \[runId, idx, token\]\)/, 'claimed for the card (the claim Leads uses)');
   assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'the result index is checked as on Leads');
-  const at = add.indexOf("await finderSavedLead('software_leads', runId, idx, found)");
-  assert.ok(at > -1 && at < add.indexOf('await softLeadSeen(v.lead)'), 'linked before the board refuses it as already there');
-  assert.strictEqual(SL.shapeCompany('  Pixel   Pals\tAgency '), 'Pixel Pals Agency', 'found again by the name as it was saved');
-  assert.strictEqual(SL.shapeCompany('x'.repeat(300)).length, SL.LIMITS.company);
-
+  assert.match(add, /finderSaveOnce\('software_leads', finder\.runId, finder\.idx, l\.company, l\.website_key, insert\)/, 'one board lead per result, as on Leads');
+  const at = add.indexOf("finderSavedLead(pool, 'software_leads'");
+  assert.ok(at > -1 && at < add.indexOf('await softLeadSeen(v.lead)'), 'an earlier save of it is linked, not refused as already on the board');
   assert.match(add, /const unclaim = /);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
 });
