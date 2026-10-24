@@ -41,8 +41,10 @@ test('one list of refusals: held, draft, cancelled and paid quotes go nowhere', 
     const r = after(`app.post('/admin/quote/:code/${route}', requireAdmin`, 2600);
     const at = r.indexOf('quoteSendRefusal(q');
     const goes = Math.min(...['emailQuote(q)', 'textQuote(q)'].map((x) => r.indexOf(x)).filter((i) => i > -1));
+    assert.ok(Number.isFinite(goes), `${route}: the send is inside the window read`);
     assert.ok(at > -1 && at < goes, `${route}: refused before anything goes`);
   }
+  assert.match(src, /q\.email && mayEmail && !quoteSendRefusal\(q\) \? ` ·/, 'the job page header link uses the same list');
 });
 
 test('the text route refuses what the email route refuses, and records only a sent text', () => {
@@ -62,8 +64,8 @@ test('"Email and text it": same permission and refusals, each part reported as i
   assert.ok(r.indexOf('isValidEmail') > -1 && r.indexOf('isValidEmail') < r.indexOf('emailQuote(q)'), 'no email: refused before anything goes');
   assert.ok(r.indexOf("quoteTextWay(q)") > -1 && r.indexOf("quoteTextWay(q)") < r.indexOf('emailQuote(q)'), 'no shop text: refused before anything goes');
   assert.match(r, /await emailQuote\(q\)[\s\S]*await textQuote\(q\)/, 'the text goes even when the email did not');
-  assert.match(r, /r\.ok && texted \? 'ok' : 'err'/, 'success only when both went');
-  assert.match(r, /const texted = status === 'sent' \|\| status === 'duplicate';/, 'a text that went a moment ago is not a failure');
+  /* Not 'duplicate': that row may still be sending, and may yet fail. */
+  assert.match(r, /r\.ok && status === 'sent' \? 'ok' : 'err'/, 'success only when both went');
 });
 
 test('the send buttons show only to someone allowed to press them', () => {

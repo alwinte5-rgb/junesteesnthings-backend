@@ -21247,11 +21247,9 @@ app.post('/admin/quote/:code/send', requireAdmin, async (req, res) => {
     }
     const r = await emailQuote(q);
     const status = await textQuote(q);
-    /* 'duplicate' means it went a moment ago: that is not a failure. */
-    const texted = status === 'sent' || status === 'duplicate';
     const said = [r.ok ? `Emailed to ${r.to}.` : `The email did not go: ${r.error}.`,
       status === 'sent' ? `Texted to ${q.phone}.` : QUOTE_TEXT_NOT_SENT[status] || 'The text did not go, and the error has been logged.'].join(' ');
-    return res.redirect(`${back}?${r.ok && texted ? 'ok' : 'err'}=${encodeURIComponent(said)}`);
+    return res.redirect(`${back}?${r.ok && status === 'sent' ? 'ok' : 'err'}=${encodeURIComponent(said)}`);
   } catch (e) {
     console.error('quote send route failed:', e.message);
     reportError('quote-send', e, `quote ${code}`).catch(() => {});
@@ -21272,8 +21270,8 @@ app.post('/admin/quote/:code/text', requireAdmin, async (req, res) => {
     if (refused) return err(refused);
     const status = await textQuote(q);
     if (status === 'sent') return res.redirect(`${back}?ok=${encodeURIComponent('Quote texted to ' + q.phone + '.')}`);
-    /* It went a moment ago (a second tap, or right after "Email and text it"). */
-    if (status === 'duplicate') return res.redirect(`${back}?ok=${encodeURIComponent(QUOTE_TEXT_NOT_SENT.duplicate)}`);
+    /* 'duplicate' stays an error: the earlier text may still be going out,
+       and may yet fail (sendCustomerSms answers it for a 'sending' row too). */
     return err(QUOTE_TEXT_NOT_SENT[status] || 'The text did not go, and the error has been logged. Try again, or email it.');
   } catch (e) {
     console.error('quote text route failed:', e.message);
@@ -24032,7 +24030,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
         ${boards ? `<a href="/admin/production" style="color:#1848B8">back to the board</a> ·
         <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>${!q.cancelled_at && (q.accepted_at || Number(q.paid_amount || 0) > 0) ? ` · <a href="/admin/quote/new?reorder=${escEmail(q.code)}" style="color:#1848B8">reorder</a>` : ''}`
           : '<a href="/admin/team-chat" style="color:#1848B8">back to Team chat</a>'}${
-          q.email && mayEmail && !['held', 'draft'].includes(q.status) && !q.cancelled_at ? ` ·
+          q.email && mayEmail && !quoteSendRefusal(q) ? ` ·
         <form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="display:inline;margin:0">
           <button type="submit" style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline">email the quote to them</button></form>${
             q.emailed_at ? ` <span class="muted">(last emailed ${escEmail(new Date(q.emailed_at).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))})</span>` : ''}` : ''}${
