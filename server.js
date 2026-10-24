@@ -33926,14 +33926,15 @@ app.post('/admin/lead/:id/outcome', requireAdmin, async (req, res) => {
   }
 });
 
-/* A finder result is claimed before it is added (lead_id 0 = being added,
-   with when and a token naming the request), so two presses or two tabs
-   cannot both add it. A claim older than FINDER.CLAIM_SECONDS is one whose
-   request died part way (a crash, a deploy) and may be taken again; before,
-   it stayed "Being added…" for good. Only the request holding the token may
-   mark the result added or give the claim back, so a request that was
-   overtaken cannot undo the one that took over. Shared by Leads and the
-   software board. $1 run, $2 index, $3 token (FINDER_MARK_SQL: $3 lead, $4 token). */
+/* A finder result is claimed when an add starts (lead_id 0 = being added,
+   with when and a token naming the request), so the card shows "Being
+   added…". A live claim is never taken over, so neither add can clear the
+   other's; one older than FINDER.CLAIM_SECONDS is from an add that died and
+   may be. A claim does not stop another add (it goes ahead unclaimed): what
+   keeps one lead per result is finderSaveOnce(), so an add after a crash or a
+   deploy goes ahead at once. A refusal gives the claim back, only the request
+   holding the token may. Shared by Leads and the software board.
+   $1 run, $2 index, $3 token. */
 const FINDER_CLAIM_SQL = `UPDATE lead_finder_runs
     SET results = jsonb_set(jsonb_set(jsonb_set(results, ARRAY[$2::text, 'lead_id'], '0'::jsonb),
                             ARRAY[$2::text, 'claimed_at'], to_jsonb(floor(extract(epoch FROM NOW()))::bigint)),
@@ -33944,15 +33945,76 @@ const FINDER_CLAIM_SQL = `UPDATE lead_finder_runs
 const FINDER_UNCLAIM_SQL = `UPDATE lead_finder_runs
     SET results = results #- ARRAY[$2::text, 'lead_id'] #- ARRAY[$2::text, 'claimed_at'] #- ARRAY[$2::text, 'claim']
   WHERE id = $1 AND results -> $2::int ->> 'lead_id' = '0' AND results -> $2::int ->> 'claim' = $3`;
-const FINDER_MARK_SQL = `UPDATE lead_finder_runs
-    SET results = jsonb_set(results #- ARRAY[$2::text, 'claimed_at'] #- ARRAY[$2::text, 'claim'], ARRAY[$2::text, 'lead_id'], to_jsonb($3::int))
-  WHERE id = $1 AND results -> $2::int ->> 'claim' = $4`;
-/* A lead already saved from this result (a request that died after saving,
-   or whose mark failed) is linked to it, so the result is never added twice.
-   Only over an unfinished claim, never over a lead it already points to. */
+/* Points the result at its lead; never over a lead it already points to.
+   $1 run, $2 index, $3 lead. */
 const FINDER_LINK_SQL = `UPDATE lead_finder_runs
     SET results = jsonb_set(results #- ARRAY[$2::text, 'claimed_at'] #- ARRAY[$2::text, 'claim'], ARRAY[$2::text, 'lead_id'], to_jsonb($3::int))
   WHERE id = $1 AND COALESCE(results -> $2::int ->> 'lead_id', '0') = '0'`;
+/** A finder result's index from a form, or -1: whole digits, under MAX_LEADS. */
+const finderIdxIn = (v) => (/^\d{1,2}$/.test(String(v)) && Number(v) < FINDER.MAX_LEADS ? Number(v) : -1);
+
+/** The lead already saved from result `idx` of run `runId` on Leads
+ *  ('submissions') or the board ('software_leads'), linked to the result
+ *  (through `db`, a pool or a client); null when there is none. `id` is what
+ *  that result was saved with, all worked out from the saved run, never the
+ *  form: { key, keyUnique, text, source }. Found by the website domain alone
+ *  when no other result of the run shares it (it survives a rename), else by
+ *  the domain and the text written from the result (the lead's description
+ *  on Leads; the detail and where it was found on the board), which differ
+ *  between results, so two places of one name, one domain or no name at all
+ *  are never merged into one lead. */
+async function finderSavedLead(db, table, runId, idx, id) {
+  const { rows: [saved] } = await db.query(table === 'software_leads'
+    ? `SELECT id FROM software_leads WHERE finder_run_id = $1
+          AND (($3::text IS NOT NULL AND $4::boolean AND website_key = $3)
+               OR (website_key IS NOT DISTINCT FROM $3 AND detail = $2 AND source_url IS NOT DISTINCT FROM $5)) ORDER BY id LIMIT 1`
+    : `SELECT id FROM submissions WHERE finder_run_id = $1
+          AND (($3::text IS NOT NULL AND $4::boolean AND website_key = $3)
+               OR (website_key IS NOT DISTINCT FROM $3 AND description = $2 AND $5::text IS NULL)) ORDER BY id LIMIT 1`,
+    [runId, String(id.text || ''), id.key || null, !!id.keyUnique, id.source || null]);
+  if (saved) await db.query(FINDER_LINK_SQL, [runId, String(idx), saved.id]);
+  return saved || null;
+}
+
+/** Saves the lead for finder result `idx` of run `runId` once: in one
+ *  transaction, under a lock on that result, it looks for a lead already
+ *  saved from it (finderSavedLead) and links that, or runs `save(client)`,
+ *  which inserts and returns the new row, and links the result to it. Two adds
+ *  of one result take turns here, however long either took to get here, and
+ *  the second finds the first's lead; a process that dies mid-way rolls back
+ *  and frees the lock. The lock lasts milliseconds, on the connection doing
+ *  the work. Returns { saved } or { row } (row null when save refused). */
+async function finderSaveOnce(table, runId, idx, id, save) {
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    /* Never waits long on an add that is stuck: lock_timeout throws 55P03 (finderBusy). The
+       limit covers this lock only and is lifted after it, so a slow row lock later is not
+       mistaken for another add of this result. */
+    await c.query("SET LOCAL lock_timeout = '5s'");
+    /* Class 7306 is the finder's alone; the two-key form is its own space, apart from the one-key hashtext locks. */
+    await c.query('SELECT pg_advisory_xact_lock(7306, hashtext($1))', [`${runId}:${idx}`]);
+    await c.query('SET LOCAL lock_timeout = DEFAULT');
+    const saved = await finderSavedLead(c, table, runId, idx, id);
+    if (saved) { await c.query('COMMIT'); return { saved }; }
+    const row = await save(c);
+    if (row) await c.query(FINDER_LINK_SQL, [runId, String(idx), row.id]);
+    await c.query('COMMIT');
+    return { row: row || null };
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+/** True when finderSaveOnce gave up waiting for another add of the same result. */
+const finderBusy = (e) => !!(e && e.code === '55P03');
+/** Whether result `l`'s website domain is unique among `results`, so the domain alone names it. */
+const finderKeyUnique = (results, l) => {
+  const key = FINDER.domainKey(FINDER.safeUrl(l && l.website));
+  return !!key && (results || []).filter((x) => x && FINDER.domainKey(FINDER.safeUrl(x.website)) === key).length === 1;
+};
 
 /* A lead that did not come through the website: a social DM, a phone call, a
    walk-in. Same table as every other lead, so it is counted, chased and
@@ -33968,7 +34030,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
   let claimToken = '';
   const runId = intIn(b.finder_run);
   if (runId) {
-    const idx = Number.parseInt(b.finder_idx, 10);
+    const idx = finderIdxIn(b.finder_idx);
     try {
       /* Only from a run of your own: the owner adding from a helper's run
          would take the find from them. */
@@ -33976,20 +34038,17 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
                                                    AND staff_id IS NOT DISTINCT FROM $2`, [runId, isStaff ? actor.id : null]);
       /* A software search's results belong on the software board, never on Leads. */
       if (run && run.results && (await pool.query(`SELECT 1 FROM lead_finder_runs WHERE id = $1 AND ask->>'profile' = 'software'`, [runId])).rows.length) run.results = [];
-      found = run && Number.isInteger(idx) && idx >= 0 && idx < FINDER.MAX_LEADS && Array.isArray(run.results) ? run.results[idx] : null;
+      found = run && idx >= 0 && Array.isArray(run.results) ? run.results[idx] : null;
       if (!found) return back(res, '/admin/leads/find', 'err', 'That result is not in one of your searches.');
       if (found.lead_id) return back(res, `/admin/leads#lead-${Number(found.lead_id)}`, 'ok', 'That one is already on Leads.');
-      const { rows: [saved] } = await pool.query(
-        `SELECT id FROM submissions WHERE finder_run_id = $1 AND lower(trim(name)) = lower(trim($2)) ORDER BY id LIMIT 1`, [runId, text(found.name, 200)]);
-      if (saved) {
-        await pool.query(FINDER_LINK_SQL, [runId, idx, saved.id]);
-        return back(res, `/admin/leads#lead-${saved.id}`, 'ok', 'That one is already on Leads.');
-      }
-      /* Claimed before anything is saved (FINDER_CLAIM_SQL); a refusal below gives it back. */
+      const keyUnique = finderKeyUnique(run.results, found);
+      /* Claimed for the card (FINDER_CLAIM_SQL); a refusal below gives it back. Another add's
+         live claim is left alone and this one goes ahead unclaimed. */
       claimToken = crypto.randomBytes(9).toString('hex');
       const { rowCount } = await pool.query(
         FINDER_CLAIM_SQL, [runId, idx, claimToken]);
-      if (!rowCount) return back(res, `/admin/leads/find#found-${runId}-${idx}`, 'err', 'That one is being added right now. Refresh in a minute.');
+      if (!rowCount) claimToken = '';
+      found = { ...found, keyUnique };
     } catch (err) {
       console.error('finder add lookup failed:', err.message);
       return back(res, '/admin/leads/find', 'err', 'Could not add the lead.');
@@ -33997,7 +34056,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     found = { ...found, run: runId, idx };
   }
   /* Gives a finder result back when it was not added after all. */
-  const unclaim = () => (found ? pool.query(FINDER_UNCLAIM_SQL, [found.run, found.idx, claimToken]).catch(() => {}) : null);
+  const unclaim = () => (found && claimToken ? pool.query(FINDER_UNCLAIM_SQL, [found.run, found.idx, claimToken]).catch(() => {}) : null);
   const name = text(found ? found.name : b.name, 200);
   const email = (text(b.email, 254) || (found ? text(found.email, 254) : '')).toLowerCase();
   /* A number found online is never called or texted (sales course lg3), so a
@@ -34037,9 +34096,15 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     const known = foundIt ? (CREDIT.knownReason(await seenCustomer({ email, phone: checkPhone }), fmtDate)
       || CREDIT.knownReason({ lead: await seenProfile(profileId) }, fmtDate)
       || CREDIT.knownReason({ lead: await seenWebsite(websiteKey) }, fmtDate)) : '';
+    const savedName = name || (profileUrl ? 'Social lead' : 'Lead');
     /* Someone the shop already has is not a new lead, so it is not saved
        again (it used to be, as a shop lead, and counted as a prospect). The
        attempt is still logged for the owner. */
+    /* Known because another add of this same result saved it (a double press,
+       or one that died before linking): link it, never refuse it. */
+    const finderId = found ? { key: websiteKey, keyUnique: found.keyUnique, text: description || null } : null;
+    const savedBefore = known && found ? await finderSavedLead(pool, 'submissions', found.run, found.idx, finderId) : null;
+    if (savedBefore) return back(res, `/admin/leads#lead-${savedBefore.id}`, 'ok', 'That one is already on Leads.');
     if (known) {
       await unclaim();
       logActivity(actor, 'found lead refused: already known', { type: 'lead', id: null }, { reason: known, name });
@@ -34052,14 +34117,20 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     }
     const source = ['Facebook', 'Instagram', 'TikTok', 'Google'].includes(platform) ? 'social'
       : platform === 'Phone' ? 'phone' : 'manual';
-    const { rows: [l] } = await pool.query(
+    const insert = async (db) => (await db.query(
       `INSERT INTO submissions (name, phone, email, description, source, platform, profile_url, assigned_to,
                                 sale_type, sale_type_reason, rep_id, website, website_key, finder_run_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
-      [name || (profileUrl ? 'Social lead' : 'Lead'), phone, email, description || null, source, platform, profileUrl,
-       isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id, website, websiteKey, found ? found.run : null]);
+      [savedName, phone, email, description || null, source, platform, profileUrl,
+       isStaff ? actor.id : null, label.sale_type, label.reason, label.rep_id, website, websiteKey, found ? found.run : null])).rows[0];
+    let l;
     if (found) {
-      await pool.query(FINDER_MARK_SQL, [found.run, found.idx, l.id, claimToken]);
+      /* One lead per finder result (finderSaveOnce): an add that lost the race links to the one that won. */
+      const once = await finderSaveOnce('submissions', found.run, found.idx, finderId, insert);
+      if (once.saved) return back(res, `/admin/leads#lead-${once.saved.id}`, 'ok', 'That one is already on Leads.');
+      l = once.row;
+    } else {
+      l = await insert(pool);
     }
     /* Two helpers registering the same customer at the same moment both pass
        the check above. The first one saved wins: a later row that finds an
@@ -34093,6 +34164,7 @@ app.post('/admin/leads/add', requireAdmin, async (req, res) => {
     return res.redirect(`/admin/leads#lead-${l.id}`);
   } catch (err) {
     await unclaim();
+    if (found && finderBusy(err)) return back(res, `/admin/leads/find#found-${found.run}-${found.idx}`, 'err', 'That one is being added right now. Refresh in a minute.');
     console.error('add lead failed:', err.message);
     return back(res, '/admin/leads', 'err', 'Could not add the lead.');
   }
@@ -34340,7 +34412,8 @@ const FINDER_PAGES = {
 /** Runs made today on the shop's clock: by `staffId` and by everyone. */
 async function finderRunsToday(staffId) {
   const { rows: [n] } = await pool.query(
-    `SELECT COUNT(*) FILTER (WHERE staff_id IS NOT DISTINCT FROM $1)::int AS mine, COUNT(*)::int AS shop
+    `SELECT COUNT(*) FILTER (WHERE staff_id IS NOT DISTINCT FROM $1)::int AS mine, COUNT(*)::int AS shop,
+            floor(extract(epoch FROM NOW()))::bigint AS db_now
        FROM lead_finder_runs WHERE created_at >= (date_trunc('day', NOW() AT TIME ZONE $2) AT TIME ZONE $2)`, [staffId, SHOP_TZ]);
   return n;
 }
@@ -34388,11 +34461,11 @@ function finderForm(ask, cap, profile = 'shop') {
   </form>`;
 }
 
-function finderResultCard(run, l, i, known, mine = true) {
+function finderResultCard(run, l, i, known, mine = true, dbNow = undefined) {
   const link = (u, label) => (u ? `<a href="${escEmail(u)}" target="_blank" rel="noopener noreferrer nofollow">${escEmail(label)}</a>` : '');
   const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } };
   const soft = !!(run.ask && run.ask.profile === 'software');
-  const action = l.lead_id === 0 && !FINDER.claimStale(l) ? '<span class="muted" style="font-size:13px">Being added…</span>'
+  const action = l.lead_id === 0 && !FINDER.claimStale(l, dbNow) ? '<span class="muted" style="font-size:13px">Being added…</span>'
     : l.lead_id && soft ? `<a class="btn btn-ghost" href="/admin/software-leads#slead-${Number(l.lead_id)}">On your board →</a>`
     : l.lead_id ? `<a class="btn btn-ghost" href="/admin/leads#lead-${Number(l.lead_id)}">On Leads →</a>`
     : known && soft ? `<span class="muted" style="font-size:13px">Already on the board.</span>`
@@ -34437,6 +34510,8 @@ async function finderPage(req, res, profile) {
       pool.query(`SELECT id, staff_id, ask, status, results FROM lead_finder_runs
                    WHERE staff_id IS NOT DISTINCT FROM $1 AND COALESCE(ask->>'profile', 'shop') = $2 AND status = 'done'
                    ORDER BY id DESC LIMIT 300`, [staffId, profile])]);
+    /* The database's clock, the one claims are stamped and judged by (FINDER_CLAIM_SQL). */
+    const dbNow = Number(today.db_now);
     const cap = FINDER.capCheck({ mine: today.mine, shop: today.shop, owner });
     const wanted = intIn(req.query.run);
     /* No run asked for: every lead found and not yet contacted, newest first,
@@ -34471,7 +34546,7 @@ async function finderPage(req, res, profile) {
       shown = `<h3 style="margin:18px 0 6px" id="found">Your found leads <span class="muted" style="font-weight:400;font-size:13px">&middot; ${list.length}${
         waiting ? `, ${waiting} added and waiting for a first contact` : ''}${left ? ` &middot; ${left} ${profile === 'software' ? 'already on the board' : 'the shop already has'} left out` : ''}</span></h3>
         <p class="muted" style="font-size:13px;margin:0 0 8px">Each search adds to this list. A lead stays here until you contact them and log it on the lead.</p>
-        ${list.length ? `<div class="grid-cards">${list.map((x) => finderResultCard(x.run, x.l, x.i, '', true)).join('')}</div>`
+        ${list.length ? `<div class="grid-cards">${list.map((x) => finderResultCard(x.run, x.l, x.i, '', true, dbNow)).join('')}</div>`
           : `<div class="card">${emptyState(own.length ? 'Every lead you found has been contacted. Run a new search for more.' : 'No leads yet. Pick a kind of customer and an area above.')}</div>`}
         ${more ? `<p class="muted" style="font-size:13px">${more} older ${more === 1 ? 'lead' : 'leads'} not shown yet: contact the ones above and ${more === 1 ? 'it moves' : 'they move'} up.</p>` : ''}`;
     }
@@ -34481,7 +34556,7 @@ async function finderPage(req, res, profile) {
         : await Promise.all(results.map((l) => (l.lead_id ? '' : finderKnown(l).catch(() => ''))));
       shown = `<h3 style="margin:18px 0 6px">${escEmail(run.query)} <span class="muted" style="font-weight:400;font-size:13px">&middot; ${
         escEmail(whenShort(run.created_at))} &middot; ${results.length} found${known.filter(Boolean).length ? `, ${known.filter(Boolean).length} already known` : ''}</span> <a href="${P.path}#found" style="font-size:13px;font-weight:400">Back to your list</a></h3>
-        ${results.length ? `<div class="grid-cards">${results.map((l, i) => finderResultCard(run, l, i, known[i], run.staff_id === staffId)).join('')}</div>`
+        ${results.length ? `<div class="grid-cards">${results.map((l, i) => finderResultCard(run, l, i, known[i], run.staff_id === staffId, dbNow)).join('')}</div>`
           : `<div class="card">${emptyState('Nothing usable came back. Try a wider area or different words.')}</div>`}`;
     } else if (run && run.status === 'failed') {
       shown = `<div class="card"><div class="warn">${escEmail(run.error || 'That search did not finish.')}</div></div>`;
@@ -34721,59 +34796,64 @@ app.post('/admin/software-leads', requireAdmin, async (req, res) => {
   const me = actor.kind === 'staff' ? actor.id : null;
   let input = b;
   let finder = null;
+  let unclaim = () => null;
   try {
     /* A finder result: taken from the run, which must be this person's. */
     const runId = intIn(b.finder_run);
     if (runId) {
-      const idx = /^\d{1,2}$/.test(String(b.finder_idx)) ? Number(b.finder_idx) : -1;
+      const idx = finderIdxIn(b.finder_idx);
       const { rows: [run] } = await pool.query(`SELECT id, staff_id, ask, results FROM lead_finder_runs WHERE id = $1 AND status = 'done'`, [runId]);
       const found = run && run.staff_id === me && run.ask && run.ask.profile === 'software' && Array.isArray(run.results) && idx >= 0 ? run.results[idx] : null;
       if (!found) return back(res, `${SOFT_PATH}/find`, 'err', 'That search result is not yours to add.');
       if (found.lead_id) return back(res, `${SOFT_PATH}#slead-${Number(found.lead_id)}`, 'ok', 'Already on your board.');
-      const { rows: [saved] } = await pool.query(
-        `SELECT id FROM software_leads WHERE finder_run_id = $1 AND lower(trim(company)) = lower(trim($2)) ORDER BY id LIMIT 1`, [runId, String(found.name || '')]);
-      if (saved) {
-        await pool.query(FINDER_LINK_SQL, [runId, idx, saved.id]);
-        return back(res, `${SOFT_PATH}#slead-${saved.id}`, 'ok', 'Already on your board.');
-      }
-      /* Claimed before anything is saved (FINDER_CLAIM_SQL), as on Leads; a refusal below gives it back. */
+      /* Claimed for the card (FINDER_CLAIM_SQL), as on Leads; a refusal below gives it back. */
       const token = crypto.randomBytes(9).toString('hex');
       const { rowCount: claimed } = await pool.query(
         FINDER_CLAIM_SQL, [runId, idx, token]);
-      if (!claimed) return back(res, `${SOFT_PATH}/find#found-${runId}-${idx}`, 'err', 'That one is being added right now. Refresh in a minute.');
-      finder = { runId, idx, token };
+      finder = { runId, idx, token: claimed ? token : '', keyUnique: finderKeyUnique(run.results, found) };
       input = { product: b.product || 'cos', company: found.name, email: found.email || b.email, website: found.website,
         source_url: found.source_url || found.website || found.social, detail: [found.why_fit, found.kind, found.city].filter(Boolean).join(' · '),
         plan: 'Agency', next_step: 'Send the first message', next_on: shopToday() };
     }
-    const unclaim = () => (finder ? pool.query(FINDER_UNCLAIM_SQL, [finder.runId, String(finder.idx), finder.token]).catch(() => {}) : null);
+    unclaim = () => (finder && finder.token ? pool.query(FINDER_UNCLAIM_SQL, [finder.runId, String(finder.idx), finder.token]).catch(() => {}) : null);
     const v = SOFTLEADS.shapeNew(input);
     if (v.error) await unclaim();
     if (v.error) return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err', v.error);
     const seen = await softLeadSeen(v.lead);
+    /* Already on the board because another add of this same result saved it: link it, never refuse it. */
+    const finderId = finder ? { key: v.lead.website_key, keyUnique: finder.keyUnique, text: v.lead.detail, source: v.lead.source_url } : null;
+    const savedBefore = seen && finder ? await finderSavedLead(pool, 'software_leads', finder.runId, finder.idx, finderId) : null;
+    if (savedBefore) return back(res, `${SOFT_PATH}#slead-${savedBefore.id}`, 'ok', 'Already on your board.');
     if (seen) await unclaim();
     if (seen) {
       return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err',
         `${seen.company} is already on the board${seen.rep_id === me ? ' (yours)' : seen.rep_id ? `, with ${nameOf(await staffRoster(), seen.rep_id)}` : ''}.`);
     }
     const l = v.lead;
-    const { rows: [row] } = await pool.query(
+    const insert = async (db) => (await db.query(
       `INSERT INTO software_leads (product, company, contact, email, website, website_key, source_url, detail, plan, status, next_step, next_on, rep_id, finder_run_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'new', $10, $11::date, $12, $13)
        ON CONFLICT DO NOTHING RETURNING id`,
-      [l.product, l.company, l.contact, l.email, l.website, l.website_key, l.source_url, l.detail, l.plan, l.next_step, l.next_on, me, finder ? finder.runId : null]);
+      [l.product, l.company, l.contact, l.email, l.website, l.website_key, l.source_url, l.detail, l.plan, l.next_step, l.next_on, me, finder ? finder.runId : null])).rows[0];
+    let row;
+    if (finder) {
+      /* One lead per finder result (finderSaveOnce), as on Leads. */
+      const once = await finderSaveOnce('software_leads', finder.runId, finder.idx, finderId, insert);
+      if (once.saved) return back(res, `${SOFT_PATH}#slead-${once.saved.id}`, 'ok', 'Already on your board.');
+      row = once.row;
+    } else {
+      row = await insert(pool);
+    }
     if (!row) {
       await unclaim();
       return back(res, finder ? `${SOFT_PATH}/find?run=${finder.runId}` : `${SOFT_PATH}#add`, 'err', `${l.company} is already on the board.`);
-    }
-    if (finder) {
-      await pool.query(FINDER_MARK_SQL, [finder.runId, String(finder.idx), row.id, finder.token])
-        .catch((e) => console.error('finder mark failed:', e.message));
     }
     logActivity(actor, 'software lead added', { type: 'software_lead', id: row.id }, { company: l.company });
     return back(res, finder ? `${SOFT_PATH}/find#found-${finder.runId}-${finder.idx}` : `${SOFT_PATH}#slead-${row.id}`, 'ok',
       `${l.company} is on your board. It counts once you log your first contact.`);
   } catch (err) {
+    await unclaim();
+    if (finder && finderBusy(err)) return back(res, `${SOFT_PATH}/find#found-${finder.runId}-${finder.idx}`, 'err', 'That one is being added right now. Refresh in a minute.');
     console.error('software lead add failed:', err.message);
     return back(res, `${SOFT_PATH}#add`, 'err', 'Could not add the lead.');
   }
