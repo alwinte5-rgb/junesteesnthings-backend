@@ -45,7 +45,7 @@ const REVIEWS = path.join(PUBLIC, 'assets', 'data', 'reviews.json');
 // Hash-stamped (tools/lib/css-tag.js), like site-nav.css.
 const BLOCKS_CSS = require('./lib/css-tag').cssTag('/assets/css/page-blocks.css');
 const { assetStamp } = require('./lib/css-tag');
-const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261019a" defer></script>';
+const FEED_TAG = '<script src="/assets/js/shop-feed.js?v=20261025a" defer></script>';
 // Any older shop-feed tag is swapped for FEED_TAG, so a script change reaches every page.
 const FEED_ANY = /<script src="\/assets\/js\/shop-feed\.js(?:\?v=[\w.-]+)?" defer><\/script>/;
 const PHONE = { tel: '+17739004592', display: '(773) 900-4592' };
@@ -117,9 +117,12 @@ const PRODUCT_LINK = /\/product\.php\?product_id=\d+$/;
 const DOTS_ROW = '<div class="pb-dots" aria-hidden="true"></div>';
 
 /* item.own: the card keeps its own photo and line instead of the feed's
-   (Big Head Cutouts: the feed has only a drawing and no single price). */
+   (Big Head Cutouts: the feed's photo is only a drawing, and one "From"
+   price undersells a pack). item.allIn: an all-in item (mugs, pillows) keeps
+   its own photo, the feed's being the bare designer drawing, and takes the
+   feed's price only when the feed sends a real all-in one. */
 function card(item, from, kind = 'service') {
-  return `<a class="pb-card" href="${esc(item.link)}" data-from="${from}" data-card="${kind}"${item.own ? ' data-own="1"' : ''}>
+  return `<a class="pb-card" href="${esc(item.link)}" data-from="${from}" data-card="${kind}"${item.own ? ' data-own="1"' : ''}${item.allIn ? ' data-all-in="1"' : ''}>
       <div class="pb-im"><img src="${esc(item.image)}" alt="Custom ${esc(item.name)} by June's Tees" loading="lazy" width="300" height="300" /></div>
       <div class="pb-bd"><div class="pb-nm">${esc(item.name)}</div><div class="pb-pr">${esc(item.price)}</div>${PRODUCT_LINK.test(item.link) && !item.own ? DOTS_ROW : ''}<span class="pb-go">Design This &rarr;</span></div>
     </a>`;

@@ -94,6 +94,8 @@ function cleanShopFeed(d) {
     link: designerLink(p && p.link),
     image: imageUrl(p && p.image),
     from_price: price(p && p.from_price),
+    /* The price carries the printing (mugs, pillows): "From $X each". */
+    ...(p && p.all_in === true ? { all_in: true } : {}),
     ...colors(p && p.colors),
   })).filter((p) => /^https:\/\/design\.jtees\.net\/product\.php\?product_id=\d+$/.test(p.link));
 
