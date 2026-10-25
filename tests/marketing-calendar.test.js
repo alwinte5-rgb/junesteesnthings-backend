@@ -75,3 +75,17 @@ test('the calendar page is owner-only and sits behind the admin login', () => {
   const line = src.slice(src.lastIndexOf('\n', at), src.indexOf('\n', at));
   assert.match(line, /requireAdmin/, 'behind the admin login');
 });
+
+test('a last order day never falls on a day the shop is closed (owner: Christmas 2026 = Tue Nov 24)', () => {
+  const { lastOpenDay, CLOSED } = require('../tools/lib/shop-closed');
+  const at = (s) => new Date(s + 'T00:00:00Z');
+  assert.strictEqual(iso(lastOpenDay(at('2026-11-27'))), '2026-11-24', 'inside the Thanksgiving closure');
+  assert.strictEqual(iso(lastOpenDay(at('2026-11-25'))), '2026-11-24', 'its first day');
+  assert.strictEqual(iso(lastOpenDay(at('2026-11-28'))), '2026-11-28', 'after it');
+  assert.strictEqual(iso(lastOpenDay(at('2026-11-24'))), '2026-11-24', 'before it');
+  for (const [a, b] of CLOSED) assert.ok(/^\d{4}-\d\d-\d\d$/.test(a) && /^\d{4}-\d\d-\d\d$/.test(b) && a <= b, `${a}..${b}`);
+  const xmas = CAL.datesFor(CAL.OCCASIONS.find((o) => o.id === 'christmas'), 2026);
+  assert.strictEqual(iso(xmas.orderBy), '2026-11-24', 'the calendar');
+  const ev = require('../tools/lib/events').upcoming(new Date('2026-10-25T00:00:00Z')).find((e) => e.key === 'christmas');
+  assert.strictEqual(ev.orderByDate.toISOString().slice(0, 10), '2026-11-24', 'the Christmas email');
+});

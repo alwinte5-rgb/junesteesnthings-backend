@@ -23,6 +23,7 @@
  * Dates are plain calendar days (UTC midnight), so no timezone can move one.
  */
 
+const { lastOpenDay } = require('./shop-closed');
 const DAY = 86400000;
 const MIN_ADS_WEEKS = 6;
 
@@ -82,7 +83,8 @@ function datesFor(o, y) {
   const lead = { ...DEFAULT_LEAD, ...(LEAD[o.id] || {}) };
   if (lead.adsWeeks < MIN_ADS_WEEKS) throw new Error(`${o.id}: ads must start at least ${MIN_ADS_WEEKS} weeks before the season`);
   const event = o.event(y), season = o.season(y), end = o.end ? o.end(y) : event;
-  const orderBy = addDays(end, -lead.orderByDays);
+  /* Never a day the shop is closed (tools/lib/shop-closed.js). */
+  const orderBy = lastOpenDay(addDays(end, -lead.orderByDays));
   if ((orderBy - season) / DAY < 14) throw new Error(`${o.id} ${y}: the season must open at least 2 weeks before the last order day`);
   return {
     id: o.id, name: o.name, note: o.note || '', year: y, page: o.page, push: o.push, live: !!o.page,
