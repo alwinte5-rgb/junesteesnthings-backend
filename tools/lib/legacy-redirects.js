@@ -42,7 +42,8 @@ const PRODUCT_RULES = [
   /* In-house sublimation groups (owner, 2026-10-23 and 2026-10-25), ahead of
      the catch-all below so a mug or pillow link lands where they are sold. */
   [/\bmugs?\b|tumbler/, cat(97)],
-  [/tote|\bbag\b|pillow|socks|\bmask\b|frame|koozie|ornament|blanket/, cat(58)],
+  [/pillow/, cat(98)],
+  [/tote|\bbag\b|socks|\bmask\b|frame|koozie|ornament|blanket/, cat(58)],
   [/t-?shirt|\btees?\b|shirt|gildan|bella|3001|5000|2000|64000|jersey/, cat(52)],
 ];
 

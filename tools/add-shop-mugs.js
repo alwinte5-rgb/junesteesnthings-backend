@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-/* White sublimation mugs, tumblers, pillow covers and socks from Michaels,
- * printed in house.
+/* White sublimation mugs, tumblers and pillows (Michaels) and socks (Silky
+ * Socks), printed in house.
  *
  *   railway run -s MySQL node tools/add-shop-mugs.js            # dry run
  *   railway run -s MySQL node tools/add-shop-mugs.js --apply    # write
@@ -16,11 +16,18 @@
  * is stored at $0 — the big head cutout pattern. The designer shows "From $X
  * each" for it (jt-print-compat.php, designer #156) and the quote form adds
  * nothing on top of a $0 product. The Sublimation method's bands are read at
- * run time, so re-running this after a sublimation reprice carries it through.
+ * run time, so re-running this after a sublimation reprice carries it through
+ * to the designer and the quote form. The "From $X each" lines on the
+ * sublimation page (public/assets/data/page-blocks.json, p523/p530) are
+ * written by hand, since the shop feed has no price for an all-in item: change
+ * them in the same commit.
  *
  * Tagged `supplier = 'shop'`: the designer's catalogue feed (jt-catalog.php)
  * publishes those rows to the quote form even while inactive, and the daily
- * S&S sync lists them as the shop's own products, never looked up.
+ * S&S sync lists them as the shop's own products, never looked up. A `held`
+ * item is written as supplier 'shop-held', active=0, with its method switched
+ * off: off the quote form and out of the S&S sync (which reads only active or
+ * staged rows). Un-hold it here and re-run; never switch the row on by hand.
  */
 const { mysqlUrlFrom, mysql, sq, enjson, dejson, encodePrintings } = require('./lib/db');
 const { sellPrice } = require('./lib/markup');
@@ -47,12 +54,15 @@ const MUGS = [
   /* Owner, 2026-10-25: the white pillow is the Michaels 16x16 cover ($6.99),
      sold FILLED with polyfill (about $4 a pillow), so `regular` is the cover
      plus the filling. The owner set it at $28 for one, printing included
-     (she sold them at $25): `onePiece` fixes the first band there and the
-     larger bands keep the Sublimation steps below it. It replaces the 18x18
-     cover row (`was`), and it is the one pillow live in the designer. */
-  { name: 'White Sublimation Throw Pillow — 16x16, filled', short: 'Pillow 16x16 (filled)', regular: 10.99, onePiece: 28,
-    was: { name: 'White Sublimation Throw Pillow Cover — 18x18', short: 'Pillow Cover 18x18' }, designer: 'pillow',
+     (she sold them at $25). `sell` is the blank's price the owner's $28 gives
+     at today's $14 Sublimation band for one, set by hand rather than by the
+     markup rule; every band is then that blank plus the band, as for the mugs.
+     The one pillow live in the designer; the 18x18 cover is held, as its own
+     row, so quotes already made with it keep their item. */
+  { name: 'White Sublimation Throw Pillow — 16x16, filled', short: 'Pillow 16x16 (filled)', regular: 10.99, sell: 14.00, designer: 'pillow',
     desc: 'All-white polyester throw pillow, 16" x 16", zipper cover made for sublimation (Make Market, from Michaels), filled in our shop. Printed in full color on the front.' },
+  { name: 'White Sublimation Throw Pillow Cover — 18x18', short: 'Pillow Cover 18x18', regular: 6.99, held: true,
+    desc: 'All-white polyester throw pillow cover with zipper, 18" x 18", made for sublimation (Make Market, from Michaels). Printed in our shop in full color on the front. Cover only, no insert.' },
   /* Held 2026-10-25 (owner): sequin pillows and socks come off the quote form
      until the owner has checked vendors and the stock on hand. `held` writes
      supplier 'shop-held', which jt-catalog.php does not publish, so the row and
@@ -110,12 +120,10 @@ if (!authorRow) { console.error('no active product to take the author from — r
 console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — all-in = blank + ' + SUBLIMATION + ' (#' + method[0].id + ')\n');
 console.log('  ' + 'item'.padEnd(24) + ceilings.map((c, i) => ((i ? ceilings[i - 1] + 1 : 1) + '-' + c).padStart(9)).join(''));
 for (const m of MUGS) {
-  /* An owner-set price for one piece moves the blank so the first band lands
-     on it; refuse one that would sell the blank under what it costs. */
-  m.price = m.onePiece ? m.onePiece - Number(subBands[ceilings[0]].price) : sellPrice(m.regular);
-  if (!(m.price >= m.regular)) { console.error('  ' + m.name + ': $' + m.onePiece + ' for one leaves $' + m.price.toFixed(2) + ' for a $' + m.regular.toFixed(2) + ' blank — refusing'); process.exit(1); }
-  let have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
-  if (!have.length && m.was) have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.was.name) + ';', { rows: true });
+  /* An owner-set blank price must never sell the blank under what it costs. */
+  m.price = m.sell != null ? m.sell : sellPrice(m.regular);
+  if (!(m.price >= m.regular)) { console.error('  ' + m.name + ': blank $' + m.price.toFixed(2) + ' is under its $' + m.regular.toFixed(2) + ' cost — refusing'); process.exit(1); }
+  const have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
   if (have.length > 1) { console.error('  ' + have.length + ' products are named "' + m.name + '" — refusing'); process.exit(1); }
   m.id = have.length ? have[0].id : null;
   m.active = m.designer ? 1 : 0;
@@ -130,22 +138,19 @@ for (const m of MUGS) {
   const title = methodTitle(m);
   const calc = enjson({ multi: false, type: 'fixed', show_detail: '1', values: { front: m.bands } });
   const desc = m.desc + ' Price includes the printing.';
-  let have = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(title) + ';', { rows: true });
-  if (!have.length && m.was) {
-    /* A renamed item keeps its method row: retitle it rather than leave the old one active. */
-    have = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(methodTitle(m.was)) + ';', { rows: true });
-    if (have.length === 1) mysql(url, 'UPDATE lumise_printings SET title=' + sq(title) + ' WHERE id=' + Number(have[0].id) + ';');
-  }
+  const have = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(title) + ';', { rows: true });
   if (have.length > 1) { console.error('  ' + have.length + ' methods are titled "' + title + '" — refusing'); process.exit(1); }
-  if (have.length) mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(calc) + ', active=1, description=' + sq(desc) + ', updated=NOW() WHERE id=' + Number(have[0].id) + ';');
+  /* A held item's method is switched off with it. */
+  const on = m.held ? 0 : 1;
+  if (have.length) mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(calc) + ', active=' + on + ', description=' + sq(desc) + ', updated=NOW() WHERE id=' + Number(have[0].id) + ';');
   else mysql(url, 'INSERT INTO lumise_printings (title,active,calculate,thumbnail,upload,description,author,created,updated) VALUES (' +
-    sq(title) + ',1,' + sq(calc) + ",'',''," + sq(desc) + ',' + sq(authorRow.author) + ',NOW(),NOW());');
+    sq(title) + ',' + on + ',' + sq(calc) + ",'',''," + sq(desc) + ',' + sq(authorRow.author) + ',NOW(),NOW());');
   m.methodId = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(title) + ';', { rows: true })[0].id;
   m.printings = encodePrintings([m.methodId]);
 }
 for (const m of MUGS) {
   if (m.id) {
-    mysql(url, 'UPDATE lumise_products SET name=' + sq(m.name) + ", price='0.00', supplier_cost=" + sq(m.regular.toFixed(2)) +
+    mysql(url, "UPDATE lumise_products SET price='0.00', supplier_cost=" + sq(m.regular.toFixed(2)) +
       ", supplier=" + sq(m.supplier) + ', active=' + m.active + ', description=' + sq(m.desc) + ', printings=' + sq(m.printings) +
       ', updated=NOW() WHERE id=' + Number(m.id) + ';');
   } else {

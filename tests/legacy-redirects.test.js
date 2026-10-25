@@ -34,7 +34,7 @@ test('old products land on the category that sells the same thing now', () => {
     '/products/holloway-polyester-t-shirt': cat(52),
     '/product/bella-canvas-3001-t-shirt/': cat(52),
     '/products/skeleton-hands-t-shirt': cat(52),
-    '/products/16x16-throw-pillow': cat(58),
+    '/products/16x16-throw-pillow': cat(98),
     '/products/20-oz-tumbler-grinch': cat(97),
     '/product/mug/': cat(97),
     '/product/athletic-socks/': cat(58),
