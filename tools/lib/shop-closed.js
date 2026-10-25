@@ -11,7 +11,8 @@ const CLOSED = [
 ];
 
 const DAY = 86400000;
-const ymd = (t) => t.toISOString().slice(0, 10);
+/* marketing-calendar.js requires this file, so its ymd is read on use. */
+const ymd = (t) => require('./marketing-calendar').ymd(t);
 
 /** The day `t` (a UTC-midnight Date), or the last open day before it. */
 function lastOpenDay(t) {

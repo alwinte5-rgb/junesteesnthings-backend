@@ -241,7 +241,8 @@ const PRINT_STYLE = `<style>
    can be best displayed"), whole above the hero, never cropped: its words are
    part of the picture. It leads to the page's own products. */
 function bannerHtml(b, from) {
-  return `<a class="occ-banner" href="#pb-products-h" data-from="${from}_banner" style="display:block;max-width:1400px;margin:0 auto"><img src="${esc(b.src)}" srcset="${esc(b.srcset)}" sizes="(max-width: 1400px) 100vw, 1400px" width="${Number(b.width)}" height="${Number(b.height)}" alt="${esc(b.alt)}" fetchpriority="high" style="display:block;width:100%;height:auto" /></a>`;
+  return require('./lib/seasonal').bannerImg(b, { href: '#pb-products-h', cls: 'occ-banner', from: `${from}_banner`,
+    style: 'display:block;max-width:1400px;margin:0 auto', imgStyle: 'display:block;width:100%;height:auto' });
 }
 
 function render(page, style, business, now) {

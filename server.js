@@ -353,7 +353,9 @@ try {
    (/contact, /partners, the 404) use sendPage() too. */
 app.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-  const rel = req.path === '/' ? 'index.html' : req.path.replace(/^\/+/, '');
+  let rel = req.path === '/' ? 'index.html' : req.path.replace(/^\/+/, '');
+  /* A folder address (/blog/) is its index page, as express.static serves it. */
+  if (rel.endsWith('/')) rel += 'index.html';
   if (!SEASONAL.isPage(rel)) return next();
   return sendPage(req, res, rel, 200, next);
 });

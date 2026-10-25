@@ -90,13 +90,9 @@ function logoFile(name, now = new Date()) {
 const HOME_EVENTS = {
   christmas: {
     from: '2026-10-25', until: 'event', // owner: up now with the Christmas logo, until December 25
-    banner: {
-      href: '/occasions/christmas-shirts-chicago.html',
-      src: '/assets/images/seasonal/christmas-2026-banner-1916.webp',
-      srcset: '/assets/images/seasonal/christmas-2026-banner-960.webp 960w, /assets/images/seasonal/christmas-2026-banner-1916.webp 1916w',
-      width: 1916, height: 821,
-      alt: 'Custom Christmas apparel from June\'s Tees & Things: matching family sets, hoodies, sweatshirts and more. Shop Christmas.',
-    },
+    /* The banner is the occasion page's own (occasion-pages.json), so one
+       record holds its picture and words. */
+    banner: 'occasions/christmas-shirts-chicago.html',
     /* Owner, 2026-10-25: "the large 4 cards gifts first then the clothing". */
     rows: [
       { title: 'Christmas gifts', products: ['p523', 'p530', 'p27', 'p154'], large: true },
@@ -120,6 +116,22 @@ const HOME_EVENTS = {
 };
 const MAX_EVENTS = 2;
 
+/** An event's banner: { href, src, srcset, width, height, alt } from the
+ *  occasion page it names (occasion-pages.json), or null. */
+function bannerFor(cfg) {
+  if (!cfg.banner) return null;
+  const page = require('../occasion-pages').load().pages.find((p) => p.path === cfg.banner);
+  if (!page || !page.banner) throw new Error(`seasonal: ${cfg.banner} has no banner in occasion-pages.json`);
+  return { href: '/' + page.path, ...page.banner };
+}
+
+/** The banner markup, shared by the homepage and the occasion pages: shown
+ *  whole, never cropped, because its words are part of the picture. */
+function bannerImg(b, { href, cls, from, style = '', imgStyle = '' }) {
+  const { escHtml: esc } = require('./html-escape');
+  return `<a class="${cls}" href="${esc(href)}" data-from="${esc(from)}"${style ? ` style="${style}"` : ''}><img src="${esc(b.src)}" srcset="${esc(b.srcset)}" sizes="(max-width: 1400px) 100vw, 1400px" width="${Number(b.width)}" height="${Number(b.height)}" alt="${esc(b.alt)}" fetchpriority="high"${imgStyle ? ` style="${imgStyle}"` : ''} /></a>`;
+}
+
 /* With no event on: hoodies lead in the cold months, tees and tanks in the
    warm ones. Month numbers 1-12. */
 function everyday(month) {
@@ -140,7 +152,10 @@ function startOf(e, cal) {
 function homeEvents(now = new Date()) {
   const cal = require('./marketing-calendar');
   const day = chicagoDay(now);
-  return cal.upcoming(now)
+  /* The calendar picks each occasion's year from a UTC day; hand it noon UTC
+     of the Chicago day, so the evening of an event (already tomorrow in UTC)
+     still counts as that day. */
+  return cal.upcoming(new Date(day + 'T12:00:00Z'))
     .filter((e) => HOME_EVENTS[e.id])
     .map((e) => ({ ...e, cfg: HOME_EVENTS[e.id] }))
     .filter((e) => startOf(e, cal) <= day && day <= cal.ymd(e.cfg.until === 'event' ? e.end : e.orderBy))
@@ -182,8 +197,9 @@ function homeBlock(events, now) {
   const day = chicagoDay(now);
   const parts = events.map((e) => {
     const c = e.cfg, from = `home_${e.id.replace(/[^a-z0-9]+/g, '_')}`;
-    const page = c.banner ? c.banner.href : (e.page || '');
-    const banner = c.banner ? `<a class="ss-banner" href="${esc(c.banner.href)}" data-from="${from}"><img src="${esc(c.banner.src)}" srcset="${esc(c.banner.srcset)}" sizes="(max-width: 1400px) 100vw, 1400px" width="${c.banner.width}" height="${c.banner.height}" alt="${esc(c.banner.alt)}" fetchpriority="high" /></a>` : '';
+    const b = bannerFor(c);
+    const page = b ? b.href : (e.page || '');
+    const banner = b ? bannerImg(b, { href: b.href, cls: 'ss-banner', from }) : '';
     const tag = day <= cal.ymd(e.orderBy) ? `${esc(e.name)} &middot; order by ${esc(cal.longDate(e.orderBy))}` : esc(e.name);
     /* The first row carries the event's name, its order-by note and the link
        to its page; the ones after it just their own heading. */
@@ -237,10 +253,14 @@ function isPage(rel) {
   return /^[\w/-][\w./-]*\.html$/.test(rel) && !rel.split('/').some((seg) => seg.startsWith('.'));
 }
 
-/* Dressed pages, per Chicago day: rel -> { mtimeMs, html (null = unchanged), etag }.
-   A file is read again only when it changes or the day turns. */
+/* Dressed pages, per Chicago day: rel -> { ver, html (null = unchanged), etag }.
+   `ver` is the page file's mtime plus those of the data the dressing reads,
+   so a file is read again only when one of them changes or the day turns. A
+   page that fails to dress is remembered the same way (sent as it is), so a
+   mistake costs one log line, not a re-read on every request. */
 const dressed = new Map();
 let dressedDay = '';
+const DATA_FILES = ['page-blocks.json', 'occasion-pages.json', 'reviews.json'];
 
 /** A page as it should be sent today, or null when today leaves it as it is
  *  (or it is not a page): { html, etag }. */
@@ -254,12 +274,18 @@ function dressFile(publicDir, rel, now = new Date()) {
   if (!st.isFile()) return null;
   const day = chicagoDay(now);
   if (day !== dressedDay) { dressed.clear(); dressedDay = day; }
+  const mt = (f) => { try { return fs.statSync(path.join(publicDir, 'assets', 'data', f)).mtimeMs; } catch { return 0; } };
+  const ver = [st.mtimeMs, ...DATA_FILES.map(mt)].join('|');
   let hit = dressed.get(rel);
-  if (!hit || hit.mtimeMs !== st.mtimeMs) {
+  if (!hit || hit.ver !== ver) {
     const html = fs.readFileSync(file, 'utf8');
-    const out = dressPage(html, rel, now);
-    hit = out === html ? { mtimeMs: st.mtimeMs, html: null }
-      : { mtimeMs: st.mtimeMs, html: out, etag: `W/"s-${crypto.createHash('sha1').update(out).digest('base64url').slice(0, 20)}"` };
+    let out = html;
+    try { out = dressPage(html, rel, now); } catch (err) {
+      /* A seasonal mistake must never take a page down: send it as it is. */
+      console.error('seasonal page', rel, err.message);
+    }
+    hit = out === html ? { ver, html: null }
+      : { ver, html: out, etag: `W/"s-${crypto.createHash('sha1').update(out).digest('base64url').slice(0, 20)}"` };
     dressed.set(rel, hit);
   }
   return hit.html === null ? null : { html: hit.html, etag: hit.etag };
@@ -267,5 +293,5 @@ function dressFile(publicDir, rel, now = new Date()) {
 
 module.exports = {
   BRAND, LOGO_FILES, LOGO_SEASONS, chicagoDay, logoSeason, logoFile,
-  HOME_EVENTS, homeEvents, seasonPlan, everyday, reorderShop, dressPage, dressFile, isPage, SEASON_START, SEASON_END,
+  HOME_EVENTS, homeEvents, bannerFor, bannerImg, seasonPlan, everyday, reorderShop, dressPage, dressFile, isPage, SEASON_START, SEASON_END,
 };

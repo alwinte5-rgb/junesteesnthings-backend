@@ -85,7 +85,8 @@ test('every event is a real occasion, with real products, shelves and photos', (
     assert.ok(occ.has(id), `${id} is in the marketing calendar`);
     for (const r of c.rows || [{ products: c.products }]) for (const p of r.products) assert.ok(data.catalog[p], `${id}: ${p} is a page-blocks product`);
     for (const sh of c.shelves) assert.ok(data.rows[sh], `${id}: ${sh} has a shelf`);
-    if (c.banner) for (const src of [c.banner.src, ...c.banner.srcset.split(',').map((x) => x.trim().split(' ')[0])]) {
+    const b = S.bannerFor(c);
+    if (b) for (const src of [b.src, ...b.srcset.split(',').map((x) => x.trim().split(' ')[0])]) {
       assert.ok(fs.existsSync(path.join(ROOT, 'public', src)), `${id}: ${src}`);
     }
   }
@@ -140,4 +141,51 @@ test('a dressed page carries its own ETag, and an untouched one goes on to the s
   assert.match(a.html, /ss-christmas-h/);
   assert.strictEqual(S.dressFile(PUB, '.well-known/x.html', xmas), null);
   assert.strictEqual(S.dressFile(PUB, 'no-such-page.html', xmas), null);
+});
+
+test('the evening of Dec 25 in Chicago (already Dec 26 in UTC) is still Christmas', () => {
+  const late = new Date('2026-12-26T01:30:00Z'); // 7:30pm Dec 25 in Chicago
+  assert.strictEqual(S.chicagoDay(late), '2026-12-25');
+  assert.ok(S.homeEvents(late).some((e) => e.id === 'christmas'), 'banner and rows stay up all of Dec 25');
+  assert.ok(!S.homeEvents(new Date('2026-12-26T18:00:00Z')).some((e) => e.id === 'christmas'), 'and come down on Dec 26');
+});
+
+test('the homepage banner and the occasion page banner are one record', () => {
+  const b = S.bannerFor(S.HOME_EVENTS.christmas);
+  const occ = require('../tools/occasion-pages').load().pages.find((p) => p.path === 'occasions/christmas-shirts-chicago.html');
+  assert.strictEqual(b.src, occ.banner.src);
+  assert.strictEqual(b.alt, occ.banner.alt);
+  assert.strictEqual(b.href, '/occasions/christmas-shirts-chicago.html');
+});
+
+test('a dressed page is rebuilt when its data changes, and a failure is remembered, not retried per request', () => {
+  const os = require('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'season-'));
+  const PUB = path.join(ROOT, 'public');
+  fs.mkdirSync(path.join(tmp, 'assets', 'data'), { recursive: true });
+  for (const f of ['page-blocks.json', 'occasion-pages.json', 'reviews.json']) fs.copyFileSync(path.join(PUB, 'assets', 'data', f), path.join(tmp, 'assets', 'data', f));
+  fs.copyFileSync(path.join(PUB, 'index.html'), path.join(tmp, 'index.html'));
+  const xmas = at('2026-10-25');
+  const a = S.dressFile(tmp, 'index.html', xmas);
+  const pbFile = path.join(tmp, 'assets', 'data', 'page-blocks.json');
+  const later = new Date(Date.now() + 5000);
+  fs.utimesSync(pbFile, later, later);
+  const b = S.dressFile(tmp, 'index.html', xmas);
+  assert.ok(a && b && a.html === b.html, 'same data, same page');
+  /* A page that cannot be dressed is sent as it is. */
+  fs.writeFileSync(path.join(tmp, 'broken.html'), '<html><div class="jtn-dd-m"></div></html>');
+  assert.strictEqual(S.dressFile(tmp, 'broken.html', xmas), null);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('the menu snippet design.jtees.net fetches is dressed too, so its Shop menu follows the season', () => {
+  const out = S.dressFile(path.join(ROOT, 'public'), 'assets/data/site-nav.html', at('2026-10-25'));
+  assert.ok(out, 'dressed');
+  const ids = out.html.slice(out.html.indexOf('>Shop</button>')).match(/category_id=(\d+)/g).slice(0, 3).map((x) => +x.split('=')[1]);
+  assert.deepStrictEqual(ids, [53, 52, 55]);
+});
+
+test('a folder address (/blog/) is dressed as its index page', () => {
+  const src = read('server.js');
+  assert.match(src, /rel\.endsWith\('\/'\)/, 'trailing slash maps to index.html');
 });
