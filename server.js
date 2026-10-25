@@ -26572,6 +26572,7 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
         + 'Garments: price the one they picked or named. For a t-shirt, lead with the shop\'s pick, marked in the list: '
         + '"our regular tee" for a regular order, "our tee for uniform orders" when it is for staff or uniforms; '
         + 'offer it beside the one they named (same kind of garment, takes the same print, comes in their color), so they can choose; at most three options per item. '
+        + '50/50 blends are the shop\'s pick for work uniforms and company orders. For everything else, lead with cotton and offer a blend only if they ask. '
         + 'When they ask for a women\'s or ladies\' fit, offer the women\'s-cut garments in the list first (the shop\'s pick is unisex: offer it only as an extra). '
         + 'When they ask for cotton, offer garments the list marks cotton first, and never one marked performance or polyester. '
         + 'Colors: say a garment comes in a color only when that color is in its colors list; if the color they want is not listed, '
