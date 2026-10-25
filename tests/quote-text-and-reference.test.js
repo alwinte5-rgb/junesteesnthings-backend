@@ -21,11 +21,35 @@ test('a helper who may email the quote may text it, and nobody else', () => {
   assert.strictEqual(STAFF.permForRoute('POST', '/admin/quote/:code/text'), STAFF.permForRoute('POST', '/admin/quote/:code/email'));
 });
 
+/* Run, not read: one list of refusals for email, text and both. */
+const quoteSendRefusal = vm.runInThisContext(`(${fnSrc('quoteSendRefusal')})`);
+
+test('one list of refusals: held, draft, cancelled and paid quotes go nowhere', () => {
+  const ok = { status: 'sent', paid_amount: '0' };
+  for (const how of ['email', 'text', 'both', undefined]) {
+    assert.strictEqual(quoteSendRefusal(ok, how), '', String(how));
+    for (const bad of [{ status: 'held' }, { status: 'draft' }, { status: 'sent', cancelled_at: new Date() }, { status: 'sent', paid_amount: '50.00' }]) {
+      assert.ok(quoteSendRefusal(bad, how), `${how} ${JSON.stringify(bad)}`);
+    }
+  }
+  /* The wording each route showed before it was shared. */
+  assert.strictEqual(quoteSendRefusal({ status: 'held' }, 'email'), 'That quote is not with the customer, so it was not emailed.');
+  assert.strictEqual(quoteSendRefusal({ status: 'draft' }, 'text'), 'That quote is not with the customer, so it was not texted.');
+  assert.match(quoteSendRefusal({ paid_amount: 1 }, 'email'), /"accept and pay" quote email was not sent/);
+  assert.match(quoteSendRefusal({ paid_amount: 1 }, 'both'), /"accept and pay" quote was not sent/);
+  for (const route of ['email', 'text', 'send']) {
+    const r = after(`app.post('/admin/quote/:code/${route}', requireAdmin`, 2600);
+    const at = r.indexOf('quoteSendRefusal(q');
+    const goes = Math.min(...['emailQuote(q)', 'textQuote(q)'].map((x) => r.indexOf(x)).filter((i) => i > -1));
+    assert.ok(Number.isFinite(goes), `${route}: the send is inside the window read`);
+    assert.ok(at > -1 && at < goes, `${route}: refused before anything goes`);
+  }
+  assert.match(src, /q\.email && mayEmail && !quoteSendRefusal\(q\) \? ` ·/, 'the job page header link uses the same list');
+});
+
 test('the text route refuses what the email route refuses, and records only a sent text', () => {
   const r = after("app.post('/admin/quote/:code/text', requireAdmin", 2600);
   assert.match(r, /actorLevel\('quotes\.view'\) !== 'on'/);
-  assert.match(r, /q\.status === 'held' \|\| q\.status === 'draft' \|\| q\.cancelled_at/);
-  assert.match(r, /Number\(q\.paid_amount\) > 0/);
   assert.match(r, /const status = await textQuote\(q\);/);
   const t = fnSrc('textQuote');
   assert.match(t, /kind: 'transactional'/);
@@ -37,12 +61,10 @@ test('"Email and text it": same permission and refusals, each part reported as i
   assert.strictEqual(STAFF.permForRoute('POST', '/admin/quote/:code/send'), STAFF.permForRoute('POST', '/admin/quote/:code/email'));
   const r = after("app.post('/admin/quote/:code/send', requireAdmin", 2400);
   assert.match(r, /actorLevel\('quotes\.view'\) !== 'on'/);
-  assert.match(r, /q\.status === 'held' \|\| q\.status === 'draft' \|\| q\.cancelled_at/);
-  assert.match(r, /Number\(q\.paid_amount\) > 0/);
-  assert.ok(r.indexOf('Number(q.paid_amount) > 0') < r.indexOf('emailQuote(q)'), 'refused before anything goes');
   assert.ok(r.indexOf('isValidEmail') > -1 && r.indexOf('isValidEmail') < r.indexOf('emailQuote(q)'), 'no email: refused before anything goes');
   assert.ok(r.indexOf("quoteTextWay(q)") > -1 && r.indexOf("quoteTextWay(q)") < r.indexOf('emailQuote(q)'), 'no shop text: refused before anything goes');
   assert.match(r, /await emailQuote\(q\)[\s\S]*await textQuote\(q\)/, 'the text goes even when the email did not');
+  /* Not 'duplicate': that row may still be sending, and may yet fail. */
   assert.match(r, /r\.ok && status === 'sent' \? 'ok' : 'err'/, 'success only when both went');
 });
 
@@ -70,7 +92,7 @@ test('the quote text is plain, branded, linked and carries the opt-out', () => {
 });
 
 test('no text button for a quote the route would refuse', () => {
-  assert.match(fnSrc('quoteTextWay'), /\['held', 'draft'\]\.includes\(q\.status\) \|\| q\.cancelled_at \|\| Number\(q\.paid_amount\) > 0\) return ''/);
+  assert.match(fnSrc('quoteTextWay'), /if \(!phone \|\| quoteSendRefusal\(q\)\) return '';/);
   assert.match(fnSrc('quoteTextControl'), /onsubmit="this\.querySelector\('button'\)\.disabled=true"/);
   assert.match(fnSrc('textQuote'), /ref: `quote-text:\$\{q\.code\}:r\$\{q\.revision \|\| 1\}:/);
 });
