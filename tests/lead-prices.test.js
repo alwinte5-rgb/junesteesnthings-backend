@@ -258,14 +258,22 @@ test('a work or company order leads with the 50/50; anything else with cotton', 
   const g = (id, name, price) => ({ id, name, price, sizes: [], printing_ids: [1] });
   const cat = [g(13, 'Gildan 5000 Unisex Heavy Cotton T-Shirt', 6.40), g(14, 'Gildan 8000 Adult DryBlend 50/50 Tee', 6.90)];
   const first = (asked) => P.pickProducts(cat, asked)[0].id;
-  for (const asked of ['shirts for our company', '40 tees for my business', 'corporate event tees for the office',
+  for (const asked of ['shirts for our company', '40 tees for my business', 'corporate tees for the office team',
     'shirts for my landscaping crew', 'tees for work', 'something to wear at work', 'staff uniforms']) {
     assert.strictEqual(first(asked), 14, asked);
     assert.strictEqual(P.shopPick(cat[1], asked), 'our tee for uniform orders', asked);
   }
-  for (const asked of ['shirts for our family reunion', '20 tees for a birthday', 'crew neck sweatshirts and tees', 'a crewneck for my mom']) {
+  for (const asked of ['shirts for our family reunion', '20 tees for a birthday', 'crew neck sweatshirts and tees', 'a crewneck for my mom',
+    /* Owner, 2026-10-24: "company events get the regular cotton". */
+    'shirts for our company picnic', 'tees for the office holiday party', 'corporate fundraiser 5k shirts', 'our business is having a team building event', 'corporate event tees for the office']) {
     assert.strictEqual(first(asked), 13, asked);
+    assert.strictEqual(P.shopPick(cat[1], asked), '', asked);
   }
+  /* An event that plainly asks for work shirts still gets the 50/50. */
+  assert.strictEqual(first('staff uniforms our crew will wear on the job at events'), 14);
+  assert.strictEqual(first('work shirts for the company, also some for the summer party'), 14);
   const route = src.slice(src.indexOf("app.post('/admin/api/lead/:id/suggest-followup'"), src.indexOf("app.post('/admin/api/quote/:code/review-message'"));
-  assert.match(route, /50\/50 blends are the shop\\'s pick for work uniforms and company orders\. For everything else, lead with cotton and offer a blend only if they ask\./);
+  assert.match(route, /50\/50 blends are the shop\\'s pick for shirts worn on the job/);
+  assert.match(route, /they shrink less and stay comfortable/);
+  assert.match(route, /A company event \(a party, picnic, outing, '\s*\+ 'fundraiser\) gets the regular cotton tee/);
 });

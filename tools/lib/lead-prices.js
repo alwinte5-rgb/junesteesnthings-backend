@@ -25,9 +25,15 @@ const STAPLES = [/\bbella\s*\+?\s*canvas 3001 unisex jersey tee\b/i, /\bgildan 5
    Gildan 8000 50/50 for a uniform order. */
 const REGULAR_TEE = /\bgildan 5000 /i;
 const UNIFORM_TEE = /\bgildan 8000\b/i;
-/* A work order: 50/50 blends are the shop's pick for work uniforms and company orders
-   (owner, 2026-10-24); "crew" is a work crew, never a crew neck. */
-const UNIFORM = /\b(uniforms?|staff|employees?|workwear|work\s*shirts?|compan(y|ies)|business(es)?|corporate|office|crew(?![\s-]*necks?)|for\s+work|at\s+work)\b/i;
+/* A work order: the 50/50 is the shop's pick for what is worn on the job, because it
+   shrinks less and stays comfortable over time; 100% cotton shrinks fast (owner,
+   2026-10-24). "crew" is a work crew, never a crew neck. A company EVENT is not that:
+   it gets the regular cotton, unless they plainly ask for uniforms or work shirts. */
+const UNIFORM = /\b(uniforms?|staff|employees?|workwear|work\s*shirts?|compan(y|ies)|business(es)?|corporate|office|crew(?![\s-]*necks?)|for\s+work|at\s+work|on\s+the\s+job)\b/i;
+const EVENT = /\b(events?|part(y|ies)|picnics?|outings?|fundraisers?|reunions?|celebrations?|holiday|retreats?|conferences?|galas?|banquets?|anniversary|team[\s-]*building|5k|festivals?|giveaways?|promo(tional)?|trade\s*shows?|expos?)\b/i;
+const ON_THE_JOB = /\b(uniforms?|workwear|work\s*shirts?|on\s+the\s+job)\b/i;
+/** True for an order worn at work (the 50/50 leads); a company event is not one. */
+const isWorkOrder = (text) => UNIFORM.test(text) && (!EVENT.test(text) || ON_THE_JOB.test(text));
 /* Light tees are never offered: the shop does not sell them (lib/ssa-costs). */
 const { isLightTee: LIGHT_TEE } = require('./ssa-costs');
 /* A garment for a child: only the youth kind offers one. */
@@ -168,7 +174,7 @@ function pickProducts(products, asked) {
   }
   /* The shop's pick for tees, ahead of the cheaper ones. */
   if (!kinds.length || kinds.includes(KINDS[0])) {
-    const pick = UNIFORM.test(text) ? [UNIFORM_TEE, REGULAR_TEE] : [REGULAR_TEE];
+    const pick = isWorkOrder(text) ? [UNIFORM_TEE, REGULAR_TEE] : [REGULAR_TEE];
     for (const re of pick) { const p = adult(re); if (p) add(p); }
   }
   const perKind = Math.max(2, Math.floor(MAX_PRODUCTS / Math.max(1, kinds.length)) - 1);
@@ -186,7 +192,7 @@ function pickProducts(products, asked) {
 function shopPick(p, asked) {
   if (CHILD.test(p.name)) return '';
   if (REGULAR_TEE.test(p.name)) return 'our regular tee';
-  if (UNIFORM_TEE.test(p.name) && UNIFORM.test(String(asked || ''))) return 'our tee for uniform orders';
+  if (UNIFORM_TEE.test(p.name) && isWorkOrder(String(asked || ''))) return 'our tee for uniform orders';
   return '';
 }
 
