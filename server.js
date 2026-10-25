@@ -26524,7 +26524,7 @@ app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, claudeRoute('sugg
    every note and email on the lead as what the shop did. Facts it does not
    have go in the reply as [June to fill in: ...], which cleanEmail refuses
    to send. Suggests only: the page puts it in the box and a person sends it. */
-/* "Tell Claude what to change" on a lead reply, as on the job page (its box takes 500). */
+/* "Tell Claude what to change" on a lead reply, as the job page's Rewrite box (maxLength 500). */
 const LEAD_CHANGE_MAX = 500;
 app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -26592,9 +26592,13 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
        to the prompt several times and it just rewrote the same thing"). It used to be
        dropped here: only the draft reached Claude, so every rewrite was the first one. */
     const change = String((req.body || {}).change || '').replace(/\s+/g, ' ').trim().slice(0, LEAD_CHANGE_MAX);
-    const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft: (req.body || {}).draft,
-      note: change ? `${note} The shop has read the draft and wants this changed: "${change}". Rewrite the draft to do exactly that; `
-        + 'it overrides anything above it conflicts with. Keep everything else in the draft that is still right.' : note });
+    const draft = String((req.body || {}).draft || '').trim();
+    /* First, so it is never the part a long note loses, and it outranks the rules after it. */
+    const asked = !change ? ''
+      : draft ? `The shop has read the draft and wants this changed: "${change}". Rewrite the draft to do exactly that, `
+        + 'and keep everything else in it that is still right. This overrides any rule below that conflicts with it. '
+      : `The shop wants this in the reply: "${change}". Do exactly that. This overrides any rule below that conflicts with it. `;
+    const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft, note: asked + note });
     /* Answers the owner has checked, picked by what they asked. */
     const topic = String(l.description || '').slice(0, 300);
     const playbook = topic ? await pool.query(

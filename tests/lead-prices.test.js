@@ -195,8 +195,8 @@ test('the lead reply instructions reach Claude whole, with room for a change of 
   };
   for (const note of [build('x', null, 0), build('x', {}, 12), build('', null, 0)]) {
     const change = 'x'.repeat(500);
-    const full = `${note} The shop has read the draft and wants this changed: "${change}". Rewrite the draft to do exactly that; `
-      + 'it overrides anything above it conflicts with. Keep everything else in the draft that is still right.';
+    const full = `The shop has read the draft and wants this changed: "${change}". Rewrite the draft to do exactly that, `
+      + 'and keep everything else in it that is still right. This overrides any rule below that conflicts with it. ' + note;
     const { ask } = C.validateAsk({ note: full });
     assert.strictEqual(ask.note, full.slice(0, C.LIMITS.note));
     assert.ok(full.length <= C.LIMITS.note, `the note fits: ${full.length} of ${C.LIMITS.note}`);
@@ -208,9 +208,39 @@ test('"Tell Claude what to change" on a lead reaches Claude, last and in its own
   const route = src.slice(src.indexOf("app.post('/admin/api/lead/:id/suggest-followup'"), src.indexOf("app.post('/admin/api/quote/:code/review-message'"));
   assert.match(route, /const change = String\(\(req\.body \|\| \{\}\)\.change \|\| ''\)\.replace\(\/\\s\+\/g, ' '\)\.trim\(\)\.slice\(0, LEAD_CHANGE_MAX\);/);
   assert.match(route, /wants this changed: "\$\{change\}"\. Rewrite the draft to do exactly that/);
+  /* First in the note, so a long note never loses it; worded for no draft yet too. */
+  assert.match(route, /validateAsk\(\{ channel: 'email', draft, note: asked \+ note \}\)/);
+  assert.match(route, /: `The shop wants this in the reply: "\$\{change\}"\. Do exactly that\./);
   /* The page has the box and sends it with the draft. */
   const box = src.slice(src.indexOf('function leadEmailBox('), src.indexOf("const shopMonth = (d) =>"));
   assert.match(box, /<input data-lchange maxlength="\$\{LEAD_CHANGE_MAX\}"/);
   assert.match(box, /data-lredo/);
   assert.match(box, /JSON\.stringify\(\{draft:f\.body\.value===f\.body\.defaultValue\?'':f\.body\.value,change:change\|\|''\}\)/);
+});
+
+test('fabric and fit words are read the way a customer means them', () => {
+  /* A blend is a blend, not performance, even when its name says Poly. */
+  assert.strictEqual(P.fabric('Jerzees 29M Dri-Power 50/50 Cotton/Poly T-Shirt'), '50/50 cotton-polyester blend');
+  assert.strictEqual(P.fabric('Bella+Canvas 3001 CVC Heather Tee'), 'cotton-polyester blend', 'the CVC is not the cotton 3001');
+  assert.strictEqual(P.fabric('Bella+Canvas 3001 Unisex Jersey Tee'), '100% cotton (heather colors are blends)');
+  assert.strictEqual(P.fabric('Sport-Tek ST350 PosiCharge Competitor Tee'), 'performance (polyester), not cotton');
+  const g = (id, name, price) => ({ id, name, price, sizes: [], printing_ids: [1] });
+  const cat = [g(1, 'Jerzees 29M 50/50 Cotton/Poly T-Shirt', 5), g(2, "CORE365 Women's Performance T-Shirt", 5.5),
+    g(3, 'Gildan 5000 Unisex Heavy Cotton T-Shirt', 6.4), g(4, "Bella+Canvas 6004 Women's Favorite T-Shirt", 8.66),
+    g(5, "Women's Fashion Polo", 12), g(6, 'Girls Youth Tee', 6), g(7, "Women's 50/50 Blend Tee", 6.9)];
+  const ids = (asked) => P.pickProducts(cat, asked).map((p) => p.id);
+  /* "No cotton" and "cotton candy" are not asking for cotton: performance stays. */
+  assert.ok(ids('need moisture wicking shirts, no cotton please').includes(2));
+  assert.ok(ids('tees in cotton candy pink').includes(2));
+  assert.ok(!ids('cotton tees please').includes(2), 'cotton asked: no performance');
+  /* Girls are children: no adult women's cuts pushed first. */
+  const kids = ids("15 shirts for my daughter's girls soccer team");
+  assert.ok(kids[0] !== 4 && kids[0] !== 2, 'no women\'s cut leads a girls order: ' + kids);
+  /* Women's polo shirts: polos, not four women's tees. */
+  const polo = ids("women's polo shirts for the front desk");
+  assert.strictEqual(polo[0], 5);
+  assert.ok(!polo.slice(0, 2).includes(4), 'no women\'s tee ahead of the polo: ' + polo);
+  /* Women's cotton: a cotton women's cut ahead of a women's blend. */
+  const wc = ids("women's cotton tees");
+  assert.ok(wc.indexOf(4) < wc.indexOf(7), 'cotton before blend: ' + wc);
 });
