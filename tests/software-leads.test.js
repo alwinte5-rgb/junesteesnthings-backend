@@ -83,14 +83,21 @@ test('only an agent with the board opens it, and only their own leads', () => {
 test('a finder result is added once, from the agent\'s own software run', () => {
   const add = route("app.post('/admin/software-leads', requireAdmin");
   assert.match(add, /run\.staff_id === me && run\.ask && run\.ask\.profile === 'software'/);
-  assert.match(add, /unclaim = await finderClaim\(runId, idx\);/, 'claimed for the card (the claim Leads uses)');
+  assert.match(add, /await hold\(runId, idx\);/, 'claimed for the card (the claim Leads uses)');
   assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'the result index is checked as on Leads');
   assert.match(add, /finderSaveOnce\(finder\.runId, finder\.idx, insert\)/, 'one board lead per result, as on Leads');
   /* Looked for only when the board would refuse it, so a save that lands between the two is still linked. */
   assert.match(add, /const savedBefore = seen && finder \? await finderSavedLead\(pool, finder\.runId, finder\.idx\)/);
   assert.ok(add.indexOf('await softLeadSeen(v.lead)') < add.indexOf('const savedBefore = seen && finder'));
-  assert.match(add, /\} catch \(err\) \{\s+await unclaim\(\);/, 'a failed add gives its claim back');
-  assert.match(add, /let unclaim = \(\) => null;/, 'nothing to give back before a claim');
+  /* Every reply, refusals and failures too, goes through finderAdd, which gives the claim back first. */
+  const at = src.indexOf("app.post('/admin/software-leads', requireAdmin");
+  const end = src.indexOf('\n}));', at);
+  assert.ok(at > -1 && end > at, 'the route ends where finderAdd closes it');
+  const whole = src.slice(at, end);
+  /* Ends before the next route, so the checks below read this one alone. */
+  assert.ok(!whole.slice(1).includes('\napp.'), 'only this route is read');
+  assert.match(whole, /^app\.post\('\/admin\/software-leads', requireAdmin, \(req, res\) => finderAdd\(res, `\$\{SOFT_PATH\}#add`, async \(hold\) => \{/);
+  assert.doesNotMatch(whole, /return back\(|return res\.redirect\(|unclaim/, 'no reply that skips finderAdd');
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
 });
 

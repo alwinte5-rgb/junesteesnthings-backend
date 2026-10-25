@@ -157,7 +157,7 @@ test('a helper must say where a hand-added lead came from, and the records decid
   assert.match(r, /A lead you found needs their email, phone or profile link/, 'nothing to check means nothing to claim');
   assert.match(r, /if \(foundIt && !email && !FRAUD\.phoneKey\(phone\) && !profileId && !\(found && websiteKey\)\)/,
     'a website alone is enough only for a finder lead');
-  assert.match(r, /if \(known\) \{\s+await unclaim\(\);\s+logActivity\(actor, 'found lead refused: already known'/, 'a known customer is refused, not saved');
+  assert.match(r, /if \(known\) \{\s+logActivity\(actor, 'found lead refused: already known'.*\n\s+return \(\) => back\(res/, 'a known customer is refused, not saved');
 });
 
 test('labels show wherever a lead or sale is listed', () => {
