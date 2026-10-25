@@ -113,7 +113,18 @@ test('an all-in product keeps its flag, and its card says the printing is includ
   assert.strictEqual(c[1].pr.textContent, 'From $9.00 + printing');
 });
 
-function runPageScript(feed) {
+test('an all-in card keeps its photo, and its price unless the feed sends an all-in one', () => {
+  const allIn = { 0: { 'data-all-in': '1' }, 1: { 'data-all-in': '1' } };
+  const c = runPageScript({ categories: [], best: [], products_complete: true, products: [
+    { link: D + 'product.php?product_id=21', image: 'https://design.jtees.net/core/raws/products/square_pillow.png', from_price: 21, all_in: true },
+    { link: D + 'product.php?product_id=22', image: 'https://design.jtees.net/core/raws/products/cup_back.png', from_price: null },
+  ] }, allIn);
+  assert.strictEqual(c[0].img.src, 'built-in.jpg', 'the drawing never replaces the card photo');
+  assert.strictEqual(c[0].pr.textContent, 'From $21.00 each, printing included');
+  assert.strictEqual(c[1].pr.textContent, 'From $2.00 + printing', 'no all-in price in the feed: the built-in line stays');
+});
+
+function runPageScript(feed, attrs = {}) {
   const vm = require('node:vm');
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
   /* Enough of an element for the dots: attributes, classes, closest(), and the
@@ -145,6 +156,7 @@ function runPageScript(feed) {
     card(D + 'product.php?product_id=22', 'From $2.00 + printing'),
     card(D + 'product.php?product_id=99', 'From $3.00 + printing'),
     card(D + 'products.php?category_id=52', 'From $4.00 + printing')];
+  for (const [i, a] of Object.entries(attrs)) Object.assign(cards[i], a);
   const store = { jt_shop_feed6: JSON.stringify({ at: Date.now(), d: feed }) };
   const on = {};
   vm.runInNewContext(src, {

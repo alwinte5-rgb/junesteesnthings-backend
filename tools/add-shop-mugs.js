@@ -18,8 +18,10 @@
  * nothing on top of a $0 product. The Sublimation method's bands are read at
  * run time, so re-running this after a sublimation reprice carries it through
  * to the designer, the quote form and the jtees.net cards (the shop feed sends
- * an all-in item's cheapest band, flagged `all_in`; the card text in
- * page-blocks.json is only what shows before the feed answers).
+ * an all-in item's cheapest band, flagged `all_in`). The "From $X each" text
+ * in public/assets/data/page-blocks.json is what search engines, visitors
+ * without scripts and a feed outage see: after a reprice, change it in the
+ * same commit and run node tools/page-blocks.js --write.
  *
  * Tagged `supplier = 'shop'`: the designer's catalogue feed (jt-catalog.php)
  * publishes those rows to the quote form even while inactive, and the daily

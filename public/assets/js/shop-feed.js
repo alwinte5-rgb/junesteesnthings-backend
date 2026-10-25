@@ -36,14 +36,20 @@
         if (d.products_complete === true && /\/product\.php\?product_id=\d+$/.test(a.href)) a.hidden = true;
         return;
       }
-      /* A card with its own photo and line (data-own) keeps them: the feed
-         has only a drawing and no single price for Big Head Cutouts. */
+      /* A card with its own photo and line (data-own) keeps them: the feed's
+         photo for Big Head Cutouts is only a drawing, and one "From" price
+         undersells a pack. */
       if (a.getAttribute('data-own') === '1') return;
+      /* An all-in card (mugs, pillows) keeps its photo, the feed's being the
+         bare designer drawing, and its price unless the feed sends a real
+         all-in one: an older or failing feed never turns a right price into
+         "Priced as you design". */
+      var allIn = a.getAttribute('data-all-in') === '1';
       var img = a.querySelector('.pb-im img');
-      if (img && it.image) img.src = it.image;
+      if (img && it.image && !allIn) img.src = it.image;
       var pr = a.querySelector('.pb-pr');
-      /* An all-in product's price includes its printing (mugs, pillows). */
-      if (pr) pr.textContent = typeof it.from_price !== 'number' ? 'Priced as you design'
+      if (pr && allIn) { if (it.all_in && typeof it.from_price === 'number') pr.textContent = 'From $' + it.from_price.toFixed(2) + ' each, printing included'; }
+      else if (pr) pr.textContent = typeof it.from_price !== 'number' ? 'Priced as you design'
         : 'From $' + it.from_price.toFixed(2) + (it.all_in ? ' each, printing included' : ' + printing');
       if (pr) dots(pr, it.colors, it.color_count);
     });
