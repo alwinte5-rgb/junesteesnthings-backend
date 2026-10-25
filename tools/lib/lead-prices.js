@@ -30,6 +30,35 @@ const UNIFORM = /\b(uniforms?|staff|employees?|workwear|work\s*shirts?)\b/i;
 const { isLightTee: LIGHT_TEE } = require('./ssa-costs');
 /* A garment for a child: only the youth kind offers one. */
 const CHILD = /\b(youth|infant|toddler|kids?)\b/i;
+/* A women's cut, asked for and in a catalogue name (which writes Women's or Women’s).
+   2026-10-24: "women's fit tees" got the cheapest tees of any cut, so the reply
+   offered a women's performance tee and led with the unisex pick. */
+const WOMEN_ASK = /\b(wom[ae]n[’']?s?|ladies|ladys?|female|girls?)\b/i;
+const WOMEN = /\bwomen[’']?s\b|\bladies\b/i;
+/* What it is made of, so a reply can tell cotton from performance. A name that
+   says it is the best source; KNOWN_FABRIC covers everyday styles whose name does not. */
+const COTTON_ASK = /\bcotton\b/i;
+const PERFORMANCE = /\b(performance|polyester|poly|moisture[- ]?wicking|wicking|dri[- ]?fit|cool[- ]?dry)\b/i;
+const KNOWN_FABRIC = [
+  [/\bgildan 5000\b/i, '100% cotton (heather colors are blends)'],
+  [/\bgildan 64000\b/i, '100% ring-spun cotton (heather colors are blends)'],
+  [/\bgildan 8000\b/i, '50/50 cotton-polyester blend'],
+  [/\bgildan 18500\b/i, '50/50 cotton-polyester blend'],
+  [/\b(bella\s*\+?\s*canvas|bc) ?3001\b/i, '100% cotton (heather colors are blends)'],
+  [/\b(bella\s*\+?\s*canvas|bc) ?6004\b/i, '100% cotton (heather colors are blends)'],
+  [/\b(next level|nl) ?3600\b/i, '100% cotton'],
+  [/\b(next level|nl) ?3900\b/i, '100% cotton'],
+  [/\bec3000\b/i, '100% organic cotton'],
+];
+/** What a garment is made of, from its name: '' when the name does not say. */
+function fabric(name) {
+  const n = String(name || '');
+  if (PERFORMANCE.test(n)) return 'performance (polyester), not cotton';
+  const known = KNOWN_FABRIC.find(([re]) => re.test(n));
+  if (known) return known[1];
+  const m = n.match(/\b(100% )?(organic |ring[- ]spun |combed )*cotton\b/i);
+  return m ? m[0].toLowerCase() : '';
+}
 /* Words a customer uses for a garment, and the words in a catalogue name that mean it. */
 const KINDS = [
   { ask: /\b(t-?shirts?|tees?|shirts?)\b/i, name: /\b(tee|t-shirt)\b/i },
@@ -94,8 +123,12 @@ function pickProducts(products, asked) {
   const text = String(asked || '').toLowerCase();
   const words = new Set(text.match(/[a-z0-9]+/g) || []);
   const kinds = KINDS.filter((k) => k.ask.test(text));
-  /* Staff-only services (design fees, folding) are not garments to offer. */
-  const usable = (products || []).filter((p) => p && p.name && Number(p.price) > 0 && !p.service && !LIGHT_TEE(p.name))
+  const women = WOMEN_ASK.test(text);
+  const cotton = COTTON_ASK.test(text);
+  /* Staff-only services (design fees, folding) are not garments to offer; nor, when
+     they asked for cotton, a performance one. */
+  const usable = (products || []).filter((p) => p && p.name && Number(p.price) > 0 && !p.service && !LIGHT_TEE(p.name)
+    && !(cotton && PERFORMANCE.test(p.name)))
     .slice().sort((a, b) => a.price - b.price);
   const out = [];
   const add = (p) => { if (out.length < MAX_PRODUCTS && !out.includes(p)) out.push(p); };
@@ -104,6 +137,16 @@ function pickProducts(products, asked) {
   for (const p of usable) {
     const codes = (p.name.toLowerCase().match(/[a-z0-9]+/g) || []).filter((t) => /\d/.test(t) && t.length >= 3);
     if (codes.some((c) => words.has(c))) add(p);
+  }
+  /* A women's fit: the women's cuts of each kind they named come next, ahead of the
+     shop's unisex pick, the ones whose fabric is known first when they asked for cotton. */
+  if (women) {
+    const wanted = kinds.length ? kinds.filter((k) => !k.child) : [KINDS[0]];
+    for (const k of wanted) {
+      const pool = usable.filter((p) => WOMEN.test(p.name) && k.name.test(p.name) && !CHILD.test(p.name));
+      const ranked = cotton ? [...pool.filter((p) => fabric(p.name)), ...pool.filter((p) => !fabric(p.name))] : pool;
+      for (const p of ranked.slice(0, 4)) add(p);
+    }
   }
   /* The shop's pick for tees, ahead of the cheaper ones. */
   if (!kinds.length || kinds.includes(KINDS[0])) {
@@ -158,7 +201,8 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
         .map((m) => String(m.title).split(' — ')[0]).filter((t, i, a) => a.indexOf(t) === i);
       const colours = colourList(p, asked);
       const pick = shopPick(p, asked);
-      lines.push(`- ${p.name}${pick ? ` (${pick})` : ''}: ${money(p.price)}${up.length ? ` (${up.join(', ')})` : ''}${can.length ? `; can take: ${can.join(', ')}` : ''}`
+      const made = fabric(p.name);
+      lines.push(`- ${p.name}${pick ? ` (${pick})` : ''}${WOMEN.test(p.name) ? ' [women\'s cut]' : ''}${made ? ` [${made}]` : ''}: ${money(p.price)}${up.length ? ` (${up.join(', ')})` : ''}${can.length ? `; can take: ${can.join(', ')}` : ''}`
         + `; link: ${productLink(p.id)}; colors: ${colours || 'not listed'}`);
     }
   }
@@ -179,4 +223,4 @@ function priceSheet(catalog, asked, { blankTiers = [], screenFee = 0, addons = [
   return lines.join('\n');
 }
 
-module.exports = { priceSheet, pickProducts, shopPick, colourList, productLink, ladder, methodLines, MAX_PRODUCTS, MAX_COLOURS };
+module.exports = { priceSheet, pickProducts, shopPick, colourList, productLink, ladder, methodLines, fabric, MAX_PRODUCTS, MAX_COLOURS };

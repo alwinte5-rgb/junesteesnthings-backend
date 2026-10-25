@@ -15,7 +15,10 @@
 const Anthropic = require('@anthropic-ai/sdk');
 
 const MODEL = 'claude-opus-5-5';
-const LIMITS = { note: 2000, pasted: 6000, draft: 5000, subject: 150 };
+/* note is 4000: the lead reply's own instructions are over 2000 on their own,
+   and at 2000 the end ("No discounts, rush fees or dates of your own") was cut
+   off before Claude saw it (2026-10-24: a lead reply offered rush fees). */
+const LIMITS = { note: 4000, pasted: 6000, draft: 5000, subject: 150 };
 const TEXT_MAX = 260; // the job page's text box allows 300, less the brand and opt-out
 
 const SYSTEM = `You coach the team at June's Tees & Things, a Black-owned,
