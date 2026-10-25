@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-/* White sublimation mugs and tumblers from Michaels, printed in house.
+/* White sublimation mugs, tumblers, pillow covers and socks from Michaels,
+ * printed in house.
  *
  *   railway run -s MySQL node tools/add-shop-mugs.js            # dry run
  *   railway run -s MySQL node tools/add-shop-mugs.js --apply    # write
@@ -38,6 +39,17 @@ const MUGS = [
     desc: 'All-white stainless skinny tumbler with lid and straw, 18.5 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color, all the way around.' },
   { name: 'Glow-in-the-Dark Sublimation Tumbler — 20 oz', short: 'Glow Tumbler 20 oz', regular: 15.49,
     desc: 'Sublimation tumbler that glows in the dark, 20 oz, with lid and straw (Make Market, from Michaels). Printed in our shop in full color, all the way around.' },
+  /* Owner, 2026-10-24: pillows and socks on the quote form first; each goes
+     live in the designer once its template and drawing are ready. Same rule as
+     the mugs. The sequin cover is a Craft Express 4-pack ($24.99) at Michaels,
+     so `regular` is the price of one. Socks carry ONE printing charge per
+     pair: two would put one pair at ~$35, above what photo socks sell for. */
+  { name: 'White Sublimation Throw Pillow Cover — 18x18', short: 'Pillow Cover 18x18', regular: 6.99,
+    desc: 'All-white polyester throw pillow cover with zipper, 18" x 18", made for sublimation (Make Market, from Michaels). Printed in our shop in full color on the front. Cover only, no insert.' },
+  { name: 'Flip Sequin Sublimation Pillow Cover — 16x16', short: 'Sequin Pillow 16x16', regular: 6.25,
+    desc: 'Two-tone flip sequin pillow cover, 16" x 16" (Craft Express, from Michaels). Your photo or design is printed on the white sequin side and shows when the sequins are brushed one way. Cover only, no insert.' },
+  { name: 'Sublimation Crew Socks — Adult, pair', short: 'Crew Socks (pair)', regular: 3.49,
+    desc: 'White adult crew socks, one pair, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: faces, names, logos.' },
 ];
 
 /* The mugs are also sold in the online designer (owner, 2026-10-23): live,
