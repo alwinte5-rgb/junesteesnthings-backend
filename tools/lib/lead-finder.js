@@ -26,8 +26,10 @@ const MAX_SEARCHES = 8;
 /* The server-side search loop can pause a long turn; it is resumed this many times. */
 const MAX_RESUMES = 2;
 const PRICE = { input: 4 / 1e6, output: 20 / 1e6, search: 10 / 1000 };
-/* Runs a day: each helper, and the whole shop together. */
-const CAPS = { perHelper: 10, shop: 40 };
+/* Runs a day: each helper, and the whole shop together (Leads and the software
+   board both count, failed runs too). Owner, 2026-10-24: 2 a day for the shop,
+   to hold the finder's spend (~30-60c a run) down. */
+const CAPS = { perHelper: 2, shop: 2 };
 const LIMITS = { niche: 120, area: 80, note: 300 };
 
 const NICHES = {
