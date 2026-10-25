@@ -252,3 +252,20 @@ test('blends named only by style, and plain polyester, keep their fabric', () =>
   assert.strictEqual(P.fabric('Poly Jersey Tee'), 'performance (polyester), not cotton');
   assert.strictEqual(P.fabric('Jerzees 29M 50/50 Cotton/Poly T-Shirt'), '50/50 cotton-polyester blend', 'a blend, checked first');
 });
+
+/* Owner, 2026-10-24: "blends 50/50 are for work uniforms and companies". */
+test('a work or company order leads with the 50/50; anything else with cotton', () => {
+  const g = (id, name, price) => ({ id, name, price, sizes: [], printing_ids: [1] });
+  const cat = [g(13, 'Gildan 5000 Unisex Heavy Cotton T-Shirt', 6.40), g(14, 'Gildan 8000 Adult DryBlend 50/50 Tee', 6.90)];
+  const first = (asked) => P.pickProducts(cat, asked)[0].id;
+  for (const asked of ['shirts for our company', '40 tees for my business', 'corporate event tees for the office',
+    'shirts for my landscaping crew', 'tees for work', 'something to wear at work', 'staff uniforms']) {
+    assert.strictEqual(first(asked), 14, asked);
+    assert.strictEqual(P.shopPick(cat[1], asked), 'our tee for uniform orders', asked);
+  }
+  for (const asked of ['shirts for our family reunion', '20 tees for a birthday', 'crew neck sweatshirts and tees', 'a crewneck for my mom']) {
+    assert.strictEqual(first(asked), 13, asked);
+  }
+  const route = src.slice(src.indexOf("app.post('/admin/api/lead/:id/suggest-followup'"), src.indexOf("app.post('/admin/api/quote/:code/review-message'"));
+  assert.match(route, /50\/50 blends are the shop\\'s pick for work uniforms and company orders\. For everything else, lead with cotton and offer a blend only if they ask\./);
+});

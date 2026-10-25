@@ -25,7 +25,9 @@ const STAPLES = [/\bbella\s*\+?\s*canvas 3001 unisex jersey tee\b/i, /\bgildan 5
    Gildan 8000 50/50 for a uniform order. */
 const REGULAR_TEE = /\bgildan 5000 /i;
 const UNIFORM_TEE = /\bgildan 8000\b/i;
-const UNIFORM = /\b(uniforms?|staff|employees?|workwear|work\s*shirts?)\b/i;
+/* A work order: 50/50 blends are the shop's pick for work uniforms and company orders
+   (owner, 2026-10-24); "crew" is a work crew, never a crew neck. */
+const UNIFORM = /\b(uniforms?|staff|employees?|workwear|work\s*shirts?|compan(y|ies)|business(es)?|corporate|office|crew(?![\s-]*necks?)|for\s+work|at\s+work)\b/i;
 /* Light tees are never offered: the shop does not sell them (lib/ssa-costs). */
 const { isLightTee: LIGHT_TEE } = require('./ssa-costs');
 /* A garment for a child: only the youth kind offers one. */
