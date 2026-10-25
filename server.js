@@ -34189,7 +34189,9 @@ async function finderAdd(res, fallback, add) {
   } finally {
     await unclaim();
   }
-  if (!failed && typeof reply === 'function') return reply();
+  if (!failed && typeof reply === 'function') {
+    try { return reply(); } catch (e) { failed = e; }
+  }
   failed = failed || new Error('the add gave no reply to send');
   console.error('finder add failed:', failed.message);
   reportError('finder-add', failed, fallback).catch(() => {});

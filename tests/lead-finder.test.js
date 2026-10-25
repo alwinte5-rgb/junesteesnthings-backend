@@ -291,6 +291,9 @@ test('finderAdd gives the claim back once the add is done, before the reply, whi
   await finderAdd(res(), '/admin/software-leads#add', async () => undefined);
   assert.deepStrictEqual(log.splice(0), ['reported the add gave no reply to send', 'back /admin/software-leads#add err Could not add the lead.']);
   /* One that already replied (a bare back()) is reported, and not answered twice. */
+  /* The reply itself throws: reported and answered. */
+  await finderAdd(res(), '/admin/leads', async () => () => { throw new Error('render broke'); });
+  assert.deepStrictEqual(log.splice(0), ['reported render broke', 'back /admin/leads err Could not add the lead.']);
   const sent = res();
   await finderAdd(sent, '/admin/leads', async () => { back(sent, '/x', 'ok', 'sent'); return sent; });
   assert.deepStrictEqual(log.splice(0), ['back /x ok sent', 'reported the add gave no reply to send']);
