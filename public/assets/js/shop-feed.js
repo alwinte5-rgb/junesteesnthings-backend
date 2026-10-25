@@ -42,7 +42,9 @@
       var img = a.querySelector('.pb-im img');
       if (img && it.image) img.src = it.image;
       var pr = a.querySelector('.pb-pr');
-      if (pr) pr.textContent = typeof it.from_price === 'number' ? 'From $' + it.from_price.toFixed(2) + ' + printing' : 'Priced as you design';
+      /* An all-in product's price includes its printing (mugs, pillows). */
+      if (pr) pr.textContent = typeof it.from_price !== 'number' ? 'Priced as you design'
+        : 'From $' + it.from_price.toFixed(2) + (it.all_in ? ' each, printing included' : ' + printing');
       if (pr) dots(pr, it.colors, it.color_count);
     });
   }
@@ -123,7 +125,7 @@
   /* The landing pages share /api/shop-feed's per-visitor limit with the quote
      form's token and photo uploads, so one answer is kept per tab for 10
      minutes: browsing twenty service pages asks once, not twenty times. */
-  var KEY = 'jt_shop_feed5', TTL = 10 * 60 * 1000;
+  var KEY = 'jt_shop_feed6', TTL = 10 * 60 * 1000;
   function cached() {
     try {
       var c = JSON.parse(sessionStorage.getItem(KEY) || 'null');

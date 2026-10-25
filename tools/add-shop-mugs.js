@@ -17,10 +17,9 @@
  * each" for it (jt-print-compat.php, designer #156) and the quote form adds
  * nothing on top of a $0 product. The Sublimation method's bands are read at
  * run time, so re-running this after a sublimation reprice carries it through
- * to the designer and the quote form. The "From $X each" lines on the
- * sublimation page (public/assets/data/page-blocks.json, p523/p530) are
- * written by hand, since the shop feed has no price for an all-in item: change
- * them in the same commit.
+ * to the designer, the quote form and the jtees.net cards (the shop feed sends
+ * an all-in item's cheapest band, flagged `all_in`; the card text in
+ * page-blocks.json is only what shows before the feed answers).
  *
  * Tagged `supplier = 'shop'`: the designer's catalogue feed (jt-catalog.php)
  * publishes those rows to the quote form even while inactive, and the daily
