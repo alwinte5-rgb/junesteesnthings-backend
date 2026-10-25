@@ -122,13 +122,23 @@ test('no list after the nudge, a refusal and API errors are worded for the page'
 });
 
 test('daily caps: per helper and for the shop; the owner has only the shop cap', () => {
-  assert.deepStrictEqual(F.capCheck({ mine: 0, shop: 0 }), { ok: true, left: F.CAPS.perHelper });
-  assert.strictEqual(F.capCheck({ mine: F.CAPS.perHelper, shop: 12 }).ok, false);
-  assert.match(F.capCheck({ mine: F.CAPS.perHelper, shop: 12 }).why, /your/);
-  assert.strictEqual(F.capCheck({ mine: 2, shop: F.CAPS.shop }).ok, false);
-  assert.match(F.capCheck({ mine: 2, shop: F.CAPS.shop }).why, /shop/);
-  assert.strictEqual(F.capCheck({ mine: 30, shop: 35, owner: true }).left, 5);
-  assert.strictEqual(F.capCheck({ mine: 3, shop: F.CAPS.shop - 2 }).left, 2);
+  /* Owner, 2026-10-24: 2 searches a day for the whole shop. */
+  assert.deepStrictEqual(F.CAPS, { perHelper: 2, shop: 2 });
+  /* The rules, on caps big enough to tell them apart. */
+  const caps = { perHelper: 10, shop: 40 };
+  assert.deepStrictEqual(F.capCheck({ mine: 0, shop: 0 }, caps), { ok: true, left: 10 });
+  assert.strictEqual(F.capCheck({ mine: 10, shop: 12 }, caps).ok, false);
+  assert.match(F.capCheck({ mine: 10, shop: 12 }, caps).why, /your/);
+  assert.strictEqual(F.capCheck({ mine: 2, shop: 40 }, caps).ok, false);
+  assert.match(F.capCheck({ mine: 2, shop: 40 }, caps).why, /shop/);
+  assert.strictEqual(F.capCheck({ mine: 30, shop: 35, owner: true }, caps).left, 5);
+  assert.strictEqual(F.capCheck({ mine: 3, shop: 38 }, caps).left, 2);
+  /* With the live caps: two runs, by anyone, and the day is done. */
+  assert.deepStrictEqual(F.capCheck({ mine: 0, shop: 0 }), { ok: true, left: 2 });
+  assert.deepStrictEqual(F.capCheck({ mine: 1, shop: 1 }), { ok: true, left: 1 });
+  assert.strictEqual(F.capCheck({ mine: 0, shop: 2 }).ok, false, 'a helper is stopped once the shop has used two');
+  assert.strictEqual(F.capCheck({ mine: 2, shop: 2, owner: true }).ok, false, 'the owner too');
+  assert.match(F.capCheck({ mine: 0, shop: 2 }).why, /all 2 searches/);
 });
 
 test('the lead note says where it was found, and never carries a phone number', () => {
