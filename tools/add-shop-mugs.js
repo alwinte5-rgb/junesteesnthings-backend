@@ -31,9 +31,9 @@ if (!url) { console.error('usage: railway run -s MySQL node tools/add-shop-mugs.
 
 const SUBLIMATION = 'Sublimation — Polyester Only';
 const MUGS = [
-  { name: 'White Ceramic Sublimation Mug — 11.8 oz', short: 'Mug 11.8 oz', regular: 3.49, designer: true,
+  { name: 'White Ceramic Sublimation Mug — 11.8 oz', short: 'Mug 11.8 oz', regular: 3.49, designer: 'mug',
     desc: 'All-white ceramic mug, 11.8 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: names, photos, logos.' },
-  { name: 'White Ceramic Sublimation Mug — 15 oz', short: 'Mug 15 oz', regular: 4.99, designer: true,
+  { name: 'White Ceramic Sublimation Mug — 15 oz', short: 'Mug 15 oz', regular: 4.99, designer: 'mug',
     desc: 'All-white ceramic mug, 15 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: names, photos, logos.' },
   { name: 'White Skinny Sublimation Tumbler with Straw — 18.5 oz', short: 'Skinny Tumbler 18.5 oz', regular: 9.99,
     desc: 'All-white stainless skinny tumbler with lid and straw, 18.5 oz, made for sublimation (Make Market, from Michaels). Printed in our shop in full color, all the way around.' },
@@ -44,8 +44,15 @@ const MUGS = [
      the mugs. The sequin cover is a Craft Express 4-pack ($24.99) at Michaels,
      so `regular` is the price of one. Socks carry ONE printing charge per
      pair: two would put one pair at ~$35, above what photo socks sell for. */
-  { name: 'White Sublimation Throw Pillow Cover — 18x18', short: 'Pillow Cover 18x18', regular: 6.99,
-    desc: 'All-white polyester throw pillow cover with zipper, 18" x 18", made for sublimation (Make Market, from Michaels). Printed in our shop in full color on the front. Cover only, no insert.' },
+  /* Owner, 2026-10-25: the white pillow is the Michaels 16x16 cover ($6.99),
+     sold FILLED with polyfill (about $4 a pillow), so `regular` is the cover
+     plus the filling. The owner set it at $28 for one, printing included
+     (she sold them at $25): `onePiece` fixes the first band there and the
+     larger bands keep the Sublimation steps below it. It replaces the 18x18
+     cover row (`was`), and it is the one pillow live in the designer. */
+  { name: 'White Sublimation Throw Pillow — 16x16, filled', short: 'Pillow 16x16 (filled)', regular: 10.99, onePiece: 28,
+    was: { name: 'White Sublimation Throw Pillow Cover — 18x18', short: 'Pillow Cover 18x18' }, designer: 'pillow',
+    desc: 'All-white polyester throw pillow, 16" x 16", zipper cover made for sublimation (Make Market, from Michaels), filled in our shop. Printed in full color on the front.' },
   /* Held 2026-10-25 (owner): sequin pillows and socks come off the quote form
      until the owner has checked vendors and the stock on hand. `held` writes
      supplier 'shop-held', which jt-catalog.php does not publish, so the row and
@@ -73,8 +80,21 @@ const ONE_SIZE = { QTYS: { id: 'QTYS', name: 'Quantity per Size', type: 'quantit
     multiple_options: [{ title: 'One Size', value: 'One Size', price: '', min_qty: '', max_qty: '' }] }) },
   BCOL: { id: 'BCOL', name: 'Color', type: 'product_color', required: false, use_variation: false,
     values: { options: [{ value: '#ffffff', title: 'White', price: '', default: '1' }] } } };
-const MUG_THUMB = 'https://design.jtees.net/core/raws/products/cup_back.png';
-const CATEGORY = { slug: 'custom-mugs-drinkware', name: 'Mugs & Drinkware', order: 8 };
+/* The pillow drawing (core/raws/products/square_pillow.png, designer repo) is
+   an opaque 600x600 photo, so it sits UNDER the design (no overlay). The print
+   box is 440px of the 535px pillow, about 13" on the 16" face, centred; the
+   stage is drawn at 400px, so every figure is scaled by 2/3. Filed under
+   Pillows & Home Decor, the shop group the owner named 2026-10-25. */
+const PILLOW_STAGES = { front: { label: 'Front', source: 'raws', overlay: false, url: 'products/square_pillow.png',
+  edit_zone: { height: 293, width: 293, left: 0, top: 0, radius: '0' },
+  product_width: 400, product_height: 400, template: {} } };
+const DESIGNER = {
+  mug: { stages: MUG_STAGES, thumb: 'https://design.jtees.net/core/raws/products/cup_back.png',
+    category: { slug: 'custom-mugs-drinkware', name: 'Mugs & Drinkware', order: 8 } },
+  pillow: { stages: PILLOW_STAGES, thumb: 'https://design.jtees.net/core/raws/products/square_pillow.png',
+    category: { slug: 'custom-pillows-home-decor', name: 'Pillows & Home Decor', order: 9 } },
+};
+for (const m of MUGS) if (m.designer && !DESIGNER[m.designer]) { console.error('no designer drawing "' + m.designer + '" for ' + m.name + ' — refusing'); process.exit(1); }
 
 const method = mysql(url, 'SELECT id, active, calculate FROM lumise_printings WHERE title=' + sq(SUBLIMATION) + ';', { rows: true });
 if (method.length !== 1) { console.error('expected one "' + SUBLIMATION + '" method, found ' + method.length + ' — refusing'); process.exit(1); }
@@ -90,8 +110,12 @@ if (!authorRow) { console.error('no active product to take the author from — r
 console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — all-in = blank + ' + SUBLIMATION + ' (#' + method[0].id + ')\n');
 console.log('  ' + 'item'.padEnd(24) + ceilings.map((c, i) => ((i ? ceilings[i - 1] + 1 : 1) + '-' + c).padStart(9)).join(''));
 for (const m of MUGS) {
-  m.price = sellPrice(m.regular);
-  const have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
+  /* An owner-set price for one piece moves the blank so the first band lands
+     on it; refuse one that would sell the blank under what it costs. */
+  m.price = m.onePiece ? m.onePiece - Number(subBands[ceilings[0]].price) : sellPrice(m.regular);
+  if (!(m.price >= m.regular)) { console.error('  ' + m.name + ': $' + m.onePiece + ' for one leaves $' + m.price.toFixed(2) + ' for a $' + m.regular.toFixed(2) + ' blank — refusing'); process.exit(1); }
+  let have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
+  if (!have.length && m.was) have = mysql(url, 'SELECT id, price, active, supplier FROM lumise_products WHERE name=' + sq(m.was.name) + ';', { rows: true });
   if (have.length > 1) { console.error('  ' + have.length + ' products are named "' + m.name + '" — refusing'); process.exit(1); }
   m.id = have.length ? have[0].id : null;
   m.active = m.designer ? 1 : 0;
@@ -106,7 +130,12 @@ for (const m of MUGS) {
   const title = methodTitle(m);
   const calc = enjson({ multi: false, type: 'fixed', show_detail: '1', values: { front: m.bands } });
   const desc = m.desc + ' Price includes the printing.';
-  const have = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(title) + ';', { rows: true });
+  let have = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(title) + ';', { rows: true });
+  if (!have.length && m.was) {
+    /* A renamed item keeps its method row: retitle it rather than leave the old one active. */
+    have = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(methodTitle(m.was)) + ';', { rows: true });
+    if (have.length === 1) mysql(url, 'UPDATE lumise_printings SET title=' + sq(title) + ' WHERE id=' + Number(have[0].id) + ';');
+  }
   if (have.length > 1) { console.error('  ' + have.length + ' methods are titled "' + title + '" — refusing'); process.exit(1); }
   if (have.length) mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(calc) + ', active=1, description=' + sq(desc) + ', updated=NOW() WHERE id=' + Number(have[0].id) + ';');
   else mysql(url, 'INSERT INTO lumise_printings (title,active,calculate,thumbnail,upload,description,author,created,updated) VALUES (' +
@@ -116,7 +145,7 @@ for (const m of MUGS) {
 }
 for (const m of MUGS) {
   if (m.id) {
-    mysql(url, "UPDATE lumise_products SET price='0.00', supplier_cost=" + sq(m.regular.toFixed(2)) +
+    mysql(url, 'UPDATE lumise_products SET name=' + sq(m.name) + ", price='0.00', supplier_cost=" + sq(m.regular.toFixed(2)) +
       ", supplier=" + sq(m.supplier) + ', active=' + m.active + ', description=' + sq(m.desc) + ', printings=' + sq(m.printings) +
       ', updated=NOW() WHERE id=' + Number(m.id) + ';');
   } else {
@@ -128,21 +157,20 @@ for (const m of MUGS) {
   }
 }
 
-let catId = null;
-if (MUGS.some((m) => m.designer)) {
-  const c = mysql(url, 'SELECT id FROM lumise_categories WHERE slug=' + sq(CATEGORY.slug) + " AND type='products';", { rows: true });
-  if (c.length) catId = c[0].id;
-  else {
-    mysql(url, 'INSERT INTO lumise_categories (name, slug, upload, thumbnail_url, parent, type, active, `order`, author, created, updated) VALUES (' +
-      sq(CATEGORY.name) + ', ' + sq(CATEGORY.slug) + ", '', '', 0, 'products', 1, " + CATEGORY.order + ", '', NOW(), NOW());");
-    catId = mysql(url, 'SELECT id FROM lumise_categories WHERE slug=' + sq(CATEGORY.slug) + " AND type='products';", { rows: true })[0].id;
-  }
-  console.log('  category #' + catId + ' ' + CATEGORY.name);
+const catIds = {};
+for (const key of new Set(MUGS.filter((m) => m.designer).map((m) => m.designer))) {
+  const cat = DESIGNER[key].category;
+  const c = mysql(url, 'SELECT id FROM lumise_categories WHERE slug=' + sq(cat.slug) + " AND type='products';", { rows: true });
+  if (!c.length) mysql(url, 'INSERT INTO lumise_categories (name, slug, upload, thumbnail_url, parent, type, active, `order`, author, created, updated) VALUES (' +
+    sq(cat.name) + ', ' + sq(cat.slug) + ", '', '', 0, 'products', 1, " + cat.order + ", '', NOW(), NOW());");
+  catIds[key] = c.length ? c[0].id : mysql(url, 'SELECT id FROM lumise_categories WHERE slug=' + sq(cat.slug) + " AND type='products';", { rows: true })[0].id;
+  console.log('  category #' + catIds[key] + ' ' + cat.name);
 }
 for (const m of MUGS.filter((x) => x.designer)) {
+  const d = DESIGNER[m.designer], catId = catIds[m.designer];
   const id = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true })[0].id;
-  mysql(url, 'UPDATE lumise_products SET stages=' + sq(enjson(MUG_STAGES)) + ', attributes=' + sq(enjson(ONE_SIZE)) +
-    ', variations=' + sq(enjson({ default: '', attrs: [], variations: [] })) + ', thumbnail_url=' + sq(MUG_THUMB) +
+  mysql(url, 'UPDATE lumise_products SET stages=' + sq(enjson(d.stages)) + ', attributes=' + sq(enjson(ONE_SIZE)) +
+    ', variations=' + sq(enjson({ default: '', attrs: [], variations: [] })) + ', thumbnail_url=' + sq(d.thumb) +
     ', updated=NOW() WHERE id=' + Number(id) + ';');
   const ref = mysql(url, 'SELECT id FROM lumise_categories_reference WHERE category_id=' + Number(catId) + ' AND item_id=' + Number(id) + " AND type='products';", { rows: true });
   if (!ref.length) mysql(url, 'INSERT INTO lumise_categories_reference (category_id, item_id, author, type) VALUES (' + Number(catId) + ', ' + Number(id) + ", '', 'products');");

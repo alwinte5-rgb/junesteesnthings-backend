@@ -18,6 +18,8 @@
     "p129": { "name": "SubliVie 1910 Men's Polyester Sublimation Tee", "link": "https://design.jtees.net/product.php?product_id=129", "image": "/assets/images/shop/listing-p129.jpg", "price": "From $12.30 + printing" },
     "p130": { "name": "SubliVie 1210 Youth Polyester Sublimation Tee", "link": "https://design.jtees.net/product.php?product_id=130", "image": "/assets/images/shop/listing-p130.jpg", "price": "From $9.72 + printing" },
     "p131": { "name": "SubliVie 1310 Toddler Polyester Sublimation Tee", "link": "https://design.jtees.net/product.php?product_id=131", "image": "/assets/images/shop/listing-p131.jpg", "price": "From $9.72 + printing" },
+    "p523": { "name": "White Ceramic Sublimation Mug, 11.8 oz", "link": "https://design.jtees.net/product.php?product_id=523", "image": "/assets/images/shop/listing-p523.jpg", "price": "From $13.98 each, printing included", "own": true },
+    "p527": { "name": "White Throw Pillow, 16x16, filled", "link": "https://design.jtees.net/product.php?product_id=527", "image": "/assets/images/shop/listing-p527.jpg", "price": "From $21.00 each, printing included", "own": true },
     "p188": { "name": "Big Head Cutouts", "link": "https://design.jtees.net/product.php?product_id=188", "image": "/assets/images/work/big-head-cutouts-row.jpg", "price": "12″ to 36″, by the pack or one at a time", "own": true },
     "p12": { "name": "Gildan 5000 Unisex Heavy Cotton Tee", "link": "https://design.jtees.net/product.php?product_id=12", "image": "/assets/images/shop/ssa-33476_f_fm.jpg", "price": "From $5.12 + printing" },
     "p13": { "name": "Gildan 64000 Unisex Softstyle Tee", "link": "https://design.jtees.net/product.php?product_id=13", "image": "/assets/images/shop/ssa-33310_f_fm.jpg", "price": "From $6.28 + printing" },
@@ -50,7 +52,7 @@
   },
   "_featured": "The products a service page is about, shown first and larger. One product with an info key sits beside how it works; several make a row of large cards. Only products that really match the service (owner, 2026-10-20).",
   "featured": {
-    "services/sublimation.html": { "heading": "Made for sublimation", "products": ["p129", "p130", "p131"] },
+    "services/sublimation.html": { "heading": "Made for sublimation", "products": ["p129", "p130", "p131", "p523", "p527"] },
     "services/big-head-cutouts.html": { "heading": "Design your big heads online", "products": ["p188"], "info": "bighead", "covers": ["c72"] },
     "services/event-decor.html": { "heading": "Big head cutouts, designed online", "products": ["p188"], "info": "bighead", "covers": ["c72"] }
   },
