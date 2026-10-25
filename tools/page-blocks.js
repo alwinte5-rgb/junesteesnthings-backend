@@ -574,7 +574,7 @@ function run(mode) {
   return drifted;
 }
 
-module.exports = { apply, applyHome, load, validate, run, mark, BLOCKS, fromTag, shelvesFor };
+module.exports = { apply, applyHome, load, validate, run, mark, BLOCKS, fromTag, shelvesFor, card, shelves };
 
 if (require.main === module) {
   const mode = process.argv.includes('--write') ? 'write' : 'check';

@@ -30,8 +30,9 @@
 
   var PCT = 10;
   var KEY_SEEN = 'jt_tx_pop_seen', KEY_JOINED = 'jt_tx_joined';
-  // An 80px-tall copy of brand/logo-2026 (small, not the master), loaded while it waits.
-  var LOGO = '/assets/images/brand/logo-popup.png';
+  // An 80px-tall copy of the logo (small, not the master), loaded while it
+  // waits; logo-current follows the season (tools/lib/seasonal.js).
+  var LOGO = '/assets/images/brand/logo-current-popup.png';
   var AGAIN_MS = 14 * 86400000, ARM_MS = 6000, PHONE_MS = 30000, PHONE_DEPTH = 0.35;
 
   var store = {

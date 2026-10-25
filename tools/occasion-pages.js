@@ -237,6 +237,13 @@ const PRINT_STYLE = `<style>
     @media(max-width:768px){.container{padding:0 16px;}}
   </style>`;
 
+/* The owner's own banner for an occasion (Christmas 2026: "use it where it
+   can be best displayed"), whole above the hero, never cropped: its words are
+   part of the picture. It leads to the page's own products. */
+function bannerHtml(b, from) {
+  return `<a class="occ-banner" href="#pb-products-h" data-from="${from}_banner" style="display:block;max-width:1400px;margin:0 auto"><img src="${esc(b.src)}" srcset="${esc(b.srcset)}" sizes="(max-width: 1400px) 100vw, 1400px" width="${Number(b.width)}" height="${Number(b.height)}" alt="${esc(b.alt)}" fetchpriority="high" style="display:block;width:100%;height:auto" /></a>`;
+}
+
 function render(page, style, business, now) {
   const url = `${SITE}/${page.path}`;
   const print = page.kind === 'print';
@@ -294,7 +301,7 @@ function render(page, style, business, now) {
   <script src="/assets/js/analytics.js"></script>
 </head>
 <body${print ? ` data-jt-pick="${esc(page.print.pick)}"` : ''}>
-<section class="hero">
+${page.banner ? bannerHtml(page.banner, require('./page-blocks').fromTag(page.path)) + '\n' : ''}<section class="hero">
   <div class="container">
     <div class="hero-eyebrow">${page.eyebrow}</div>
     <h1>${page.h1}</h1>
