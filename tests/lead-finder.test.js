@@ -152,9 +152,12 @@ test('the finder routes need leads.view; the page escapes what came from the web
 test('a finder add reads the lead from the saved run, only the helper\'s own', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const add = src.slice(src.indexOf("app.post('/admin/leads/add'"), src.indexOf("app.post('/admin/quote/:code/note'"));
-  assert.match(add, /FROM lead_finder_runs WHERE id = \$1 AND status = 'done'/);
-  assert.match(add, /AND staff_id IS NOT DISTINCT FROM \$2`, \[runId, isStaff \? actor\.id : null\]/, "only your own runs, the owner's too");
-  assert.match(add, /unclaim = await finderClaim\(runId, idx\);/, 'claimed for the card when the add starts');
+  assert.match(add, /WHERE id = \$1 AND status = 'done' AND staff_id IS NOT DISTINCT FROM \$2`, \[runId, isStaff \? actor\.id : null\]/, "only your own runs, the owner's too");
+  /* The run is read once: its profile comes with it. */
+  assert.match(add, /ask->>'profile' AS profile FROM lead_finder_runs/);
+  assert.match(add, /if \(run && run\.profile === 'software'\) run\.results = \[\];/, 'a software search is never added to Leads');
+  assert.strictEqual((add.match(/FROM lead_finder_runs/g) || []).length, 1, 'one read of the run');
+  assert.match(add, /await hold\(runId, idx\);/, 'claimed for the card when the add starts');
   assert.match(add, /const idx = finderIdxIn\(b\.finder_idx\);/, 'one index check for both routes');
   const helpers = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
   /* One lead per result: the look and the save run in one transaction, under a lock on that result. */
@@ -172,7 +175,7 @@ test('a finder add reads the lead from the saved run, only the helper\'s own', (
   /* Found again by the result's own lead_id, set in the same transaction as the save; never guessed from
      a name or text two results of one search can share. */
   assert.match(helpers, /'lead_id' ~ '\^\[0-9\]\{1,9\}\$' THEN \(results -> \$2::int ->> 'lead_id'\)::int END AS id/, 'only a whole-number lead_id, never a cast that throws');
-  assert.match(add, /if \(savedId\) return back\(res, `\/admin\/leads#lead-\$\{savedId\}`, 'err'/, 'a failure after the save says the lead was saved');
+  assert.match(add, /if \(savedId\) return \(\) => back\(res, `\/admin\/leads#lead-\$\{savedId\}`, 'err'/, 'a failure after the save says the lead was saved');
   assert.doesNotMatch(add, /\) try \{/, 'the earlier-lead check fails closed, never swallowed');
   assert.doesNotMatch(helpers, /description = \$2|detail = \$2/, 'no matching by the text written from a result');
   assert.match(add, /const savedName = name \|\| \(profileUrl \? 'Social lead' : 'Lead'\);/);
@@ -231,7 +234,8 @@ test('a claim left by a request that died is given back after a while', () => {
   assert.strictEqual(F.claimStale({}, now), false);
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.strictEqual((src.match(/FINDER_CLAIM_SQL, \[runId, idx, /g) || []).length, 1, 'one claim query, in finderClaim');
-  assert.strictEqual((src.match(/unclaim = await finderClaim\(runId, idx\);/g) || []).length, 2, 'Leads and the software board share it');
+  assert.strictEqual((src.match(/unclaim = await finderClaim\(runId, idx\);/g) || []).length, 1, 'claimed only through finderAdd');
+  assert.strictEqual((src.match(/await hold\(runId, idx\);/g) || []).length, 2, 'Leads and the software board share it');
   assert.strictEqual((src.match(/pool\.query\(FINDER_UNCLAIM_SQL,/g) || []).length, 1, 'one give-back, in finderClaim');
   const sql = src.slice(src.indexOf('const FINDER_CLAIM_SQL'), src.indexOf('/* A lead that did not come through the website'));
   /* A live claim is never taken over; only one older than CLAIM_SECONDS (an add that died). */
@@ -253,4 +257,36 @@ test('a finder result index is whole digits under the cap', () => {
   const finderIdxIn = new Function('FINDER', `return ${def[1]}`)(F);
   assert.deepStrictEqual(['0', '3', String(F.MAX_LEADS - 1)].map(finderIdxIn), [0, 3, F.MAX_LEADS - 1]);
   for (const bad of ['3abc', '-1', '', ' 3', '1.5', String(F.MAX_LEADS), '99', '100', undefined, null]) assert.strictEqual(finderIdxIn(bad), -1, String(bad));
+});
+
+test('finderAdd gives the claim back once the add is done, before the reply, whichever way it went', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const at = src.indexOf('async function finderAdd(');
+  assert.ok(at > -1, 'finderAdd is defined');
+  const def = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  const log = [];
+  /* A stand-in claim that records when it is given back. */
+  const finderClaim = async (runId, idx) => { log.push(`claim ${runId}:${idx}`); return async () => { log.push('give back'); }; };
+  const finderAdd = new Function('finderClaim', `return ${def}`)(finderClaim);
+  const reply = (what) => () => log.push(`reply ${what}`);
+
+  /* Refused after the claim: given back, then the reply. */
+  await finderAdd(async (hold) => { await hold(7, 2); return reply('refused'); });
+  assert.deepStrictEqual(log.splice(0), ['claim 7:2', 'give back', 'reply refused']);
+  /* Added: still called (a no-op in SQL once the result is linked), and still before the reply. */
+  await finderAdd(async (hold) => { await hold(7, 3); return reply('added'); });
+  assert.deepStrictEqual(log.splice(0), ['claim 7:3', 'give back', 'reply added']);
+  /* Nothing claimed (a hand-added lead): nothing to give back. */
+  await finderAdd(async () => reply('by hand'));
+  assert.deepStrictEqual(log.splice(0), ['reply by hand']);
+  /* The add throws: the claim is given back and the error is not swallowed. */
+  await assert.rejects(finderAdd(async (hold) => { await hold(7, 4); throw new Error('boom'); }), /boom/);
+  assert.deepStrictEqual(log.splice(0), ['claim 7:4', 'give back']);
+
+  /* Leads replies only through it too. */
+  const leads = src.slice(src.indexOf("app.post('/admin/leads/add'"), src.indexOf("app.post('/admin/quote/:code/note'"));
+  assert.match(leads, /^app\.post\('\/admin\/leads\/add', requireAdmin, \(req, res\) => finderAdd\(async \(hold\) => \{/);
+  assert.doesNotMatch(leads, /return back\(|return res\.redirect\(|await unclaim/, 'no reply that skips finderAdd');
+  /* A give-back that fails is logged; the claim clears itself later. */
+  assert.match(src.slice(src.indexOf('async function finderClaim(')), /\.catch\(\(e\) => console\.error\(`finder result \$\{runId\}:\$\{idx\}: giving the claim back failed:`/);
 });
