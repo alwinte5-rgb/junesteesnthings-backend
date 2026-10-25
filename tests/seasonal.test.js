@@ -44,8 +44,9 @@ test('every season has every logo file', () => {
 
 test('the route answers before the 30-day static cache, and the pages use it', () => {
   const src = read('server.js');
-  const route = src.indexOf("res.set('Cache-Control', 'public, max-age=3600');\n    res.sendFile(path.join(__dirname, 'public', file)");
-  assert.ok(route !== -1, 'logo-current is served with a 1-hour cache');
+  const route = src.indexOf('logoFile(path.basename(req.path))');
+  assert.ok(route !== -1, 'logo-current is answered from seasonal.js');
+  assert.match(src.slice(route, route + 300), /max-age=3600/, 'with a 1-hour cache');
   assert.ok(route < src.indexOf("app.use(express.static(path.join(__dirname, 'public')"), 'and ahead of the static files');
   assert.match(read('tools/site-nav.js'), /logo-current\.webp/, 'menu and footer');
   assert.match(read('public/assets/data/site-nav.html'), /logo-current\.webp/);
@@ -82,7 +83,7 @@ test('every event is a real occasion, with real products, shelves and photos', (
   const occ = new Set(cal.OCCASIONS.map((o) => o.id));
   for (const [id, c] of Object.entries(S.HOME_EVENTS)) {
     assert.ok(occ.has(id), `${id} is in the marketing calendar`);
-    for (const p of c.products) assert.ok(data.catalog[p], `${id}: ${p} is a page-blocks product`);
+    for (const r of c.rows || [{ products: c.products }]) for (const p of r.products) assert.ok(data.catalog[p], `${id}: ${p} is a page-blocks product`);
     for (const sh of c.shelves) assert.ok(data.rows[sh], `${id}: ${sh} has a shelf`);
     if (c.banner) for (const src of [c.banner.src, ...c.banner.srcset.split(',').map((x) => x.trim().split(' ')[0])]) {
       assert.ok(fs.existsSync(path.join(ROOT, 'public', src)), `${id}: ${src}`);
@@ -95,7 +96,10 @@ test('the homepage in Christmas season: banner, row, hoodies first', () => {
   const out = S.dressPage(html, 'index.html', at('2026-10-25'));
   assert.match(out, /class="ss-banner" href="\/occasions\/christmas-shirts-chicago\.html"/);
   assert.match(out, /Christmas &middot; order by Friday, November 27/);
-  assert.match(out, /<h2 id="ss-christmas-h">Christmas shirts &amp; gifts<\/h2>/);
+  assert.match(out, /<h2 id="ss-christmas-h">Christmas gifts<\/h2>/, 'gifts first (owner)');
+  assert.match(out, /<h2 id="ss-christmas-1-h">Matching Christmas clothing<\/h2>/, 'then the clothing');
+  assert.ok(out.indexOf('ss-christmas-h') < out.indexOf('ss-christmas-1-h'));
+  assert.match(out, /pb-row pb-row-lg ss-row-4">\s*<a class="pb-card" href="https:\/\/design\.jtees\.net\/product\.php\?product_id=523"/, 'four large gift cards, the mug first');
   const shop = (o, head) => o.slice(o.indexOf(head)).match(/category_id=(\d+)/g).slice(0, 3).map((x) => +x.split('=')[1]);
   assert.deepStrictEqual(shop(out, '>Shop</button>'), [53, 52, 55], 'desktop menu');
   assert.deepStrictEqual(shop(out, '<summary>Shop</summary>'), [53, 52, 55], 'phone drawer');
@@ -112,11 +116,28 @@ test('the menu keeps every link when it reorders, and the file holds the everyda
   assert.strictEqual(read('public/index.html').match(/season-home:start[^>]*-->\n<!-- season-home:end/) !== null, true, 'the slot is empty in the file');
 });
 
-test('server.js dresses pages after the gated routes and before the static files', () => {
+test('every page goes through sendPage: after the gated routes, before the static files', () => {
   const src = read('server.js');
-  const dress = src.indexOf('out = seasonal.dressCached(html, rel, st.mtimeMs);');
+  const dress = src.indexOf('SEASONAL.isPage(rel)');
   assert.ok(dress !== -1);
   assert.ok(dress > src.indexOf("app.get(['/partners', '/partners.html']"), 'after /partners, which gates its page');
   assert.ok(dress < src.indexOf("app.use(express.static(path.join(__dirname, 'public')"), 'before the static files');
-  assert.match(src, /rel\.includes\('\.\.'\)/, 'no path leaves public/');
+  assert.doesNotMatch(src, /sendFile\(path\.join\(__dirname, 'public', '[^']+\.html'\)\)/, 'no route sends a page around sendPage');
+  for (const r of ["'contact.html'", "'sms-consent.html'", "'sms-terms.html'", "'404.html', 404"]) assert.ok(src.includes(`sendPage(req, res, ${r}`), r);
+});
+
+test('only real pages are dressed: no dot folders, no way out of public/', () => {
+  for (const ok of ['index.html', 'occasions/christmas-shirts-chicago.html', 'assets/data/site-nav.html']) assert.ok(S.isPage(ok), ok);
+  for (const no of ['.well-known/x.html', 'a/.b.html', '../server.js', 'a/../../x.html', 'contact', 'x.htm']) assert.ok(!S.isPage(no), no);
+});
+
+test('a dressed page carries its own ETag, and an untouched one goes on to the static files', () => {
+  const PUB = path.join(ROOT, 'public');
+  const xmas = at('2026-10-25');
+  const a = S.dressFile(PUB, 'index.html', xmas), b = S.dressFile(PUB, 'index.html', xmas);
+  assert.ok(a && /^W\/"s-/.test(a.etag), 'dressed, with an ETag');
+  assert.strictEqual(a.etag, b.etag, 'the same page twice in a day keeps its ETag');
+  assert.match(a.html, /ss-christmas-h/);
+  assert.strictEqual(S.dressFile(PUB, '.well-known/x.html', xmas), null);
+  assert.strictEqual(S.dressFile(PUB, 'no-such-page.html', xmas), null);
 });

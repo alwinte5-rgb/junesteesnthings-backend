@@ -26,6 +26,9 @@ const LOGO_FILES = {
   'logo-current.png': 'logo-2026.png',
   'logo-current-900.png': 'logo-2026-900.png',
   'logo-current-popup.png': 'logo-popup.png',
+  /* design.jtees.net's editor keeps its own (blue) logo out of season;
+     jt_season_logo() there always shows this address. */
+  'logo-studio-current.png': 'logo-studio.png',
 };
 
 /* A season's logo files sit in BRAND/seasonal/<id>/ under the everyday file
@@ -36,9 +39,9 @@ const LOGO_SEASONS = [
 
 /** 'YYYY-MM-DD' for the Chicago day `now` falls on (composed from parts,
  *  never from a locale format). */
+const CHICAGO = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
 function chicagoDay(now = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' })
-    .formatToParts(now);
+  const parts = CHICAGO.formatToParts(now);
   const get = (t) => parts.find((p) => p.type === t).value;
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
@@ -79,7 +82,9 @@ function logoFile(name, now = new Date()) {
  * edge), so a season starts and ends on its own day with nothing to run. The
  * committed files hold the everyday version.
  *
- * Product ids are page-blocks.json catalog ids; categories are designer
+ * An event's products are `title` + `products` (one row), or `rows` for
+ * several; a `large` row shows four big cards. Product ids are
+ * page-blocks.json catalog ids; categories are designer
  * category ids (cNN for shelves, NN for the menu).
  */
 const HOME_EVENTS = {
@@ -92,8 +97,11 @@ const HOME_EVENTS = {
       width: 1916, height: 821,
       alt: 'Custom Christmas apparel from June\'s Tees & Things: matching family sets, hoodies, sweatshirts and more. Shop Christmas.',
     },
-    title: 'Christmas shirts & gifts',
-    products: ['p21', 'p29', 'p24', 'p12', 'p28', 'p154', 'p523', 'p530'],
+    /* Owner, 2026-10-25: "the large 4 cards gifts first then the clothing". */
+    rows: [
+      { title: 'Christmas gifts', products: ['p523', 'p530', 'p27', 'p154'], large: true },
+      { title: 'Matching Christmas clothing', products: ['p21', 'p29', 'p24', 'p12', 'p28', 'p92', 'p17', 'p13'] },
+    ],
     shelves: ['c53', 'c52', 'c55'],
     shop: [53, 52, 55, 97, 98],
   },
@@ -176,27 +184,30 @@ function homeBlock(events, now) {
     const c = e.cfg, from = `home_${e.id.replace(/[^a-z0-9]+/g, '_')}`;
     const page = c.banner ? c.banner.href : (e.page || '');
     const banner = c.banner ? `<a class="ss-banner" href="${esc(c.banner.href)}" data-from="${from}"><img src="${esc(c.banner.src)}" srcset="${esc(c.banner.srcset)}" sizes="(max-width: 1400px) 100vw, 1400px" width="${c.banner.width}" height="${c.banner.height}" alt="${esc(c.banner.alt)}" fetchpriority="high" /></a>` : '';
-    const ids = (c.products || []).filter((id) => data.catalog[id]);
     const tag = day <= cal.ymd(e.orderBy) ? `${esc(e.name)} &middot; order by ${esc(cal.longDate(e.orderBy))}` : esc(e.name);
-    const row = ids.length ? `<section class="pb-products ss-row" aria-labelledby="ss-${esc(e.id)}-h">
+    /* The first row carries the event's name, its order-by note and the link
+       to its page; the ones after it just their own heading. */
+    const rows = (c.rows || [{ title: c.title, products: c.products }]).map((r, i) => {
+      const ids = (r.products || []).filter((id) => data.catalog[id]);
+      if (!ids.length) return '';
+      const hid = `ss-${esc(e.id)}${i ? '-' + i : ''}-h`;
+      return `<section class="pb-products ss-row" aria-labelledby="${hid}">
   <div class="pb-wrap">
     <div class="pb-head">
-      <div><div class="pb-tag">${tag}</div><h2 id="ss-${esc(e.id)}-h">${esc(c.title)}</h2></div>
-      ${page ? `<a class="pb-all" href="${esc(page)}" data-from="${from}">Shop ${esc(e.name)} &rarr;</a>` : ''}
+      <div>${i ? '' : `<div class="pb-tag">${tag}</div>`}<h2 id="${hid}">${esc(r.title)}</h2></div>
+      ${!i && page ? `<a class="pb-all" href="${esc(page)}" data-from="${from}">Shop ${esc(e.name)} &rarr;</a>` : ''}
     </div>
-    <div class="pb-row">
+    <div class="pb-row${r.large ? ' pb-row-lg ss-row-4' : ''}">
       ${ids.map((id) => pb.card(data.catalog[id], from, 'product')).join('\n      ')}
     </div>
   </div>
-</section>` : '';
-    return banner + row;
+</section>`;
+    });
+    return banner + rows.join('\n');
   });
-  return `<style>.ss-banner{display:block;max-width:1400px;margin:0 auto}.ss-banner img{display:block;width:100%;height:auto}</style>
+  return `<style>.ss-banner{display:block;max-width:1400px;margin:0 auto}.ss-banner img{display:block;width:100%;height:auto}.pb-row-lg.ss-row-4{grid-template-columns:repeat(4,1fr)}@media (max-width:900px){.pb-row-lg.ss-row-4{grid-template-columns:repeat(2,1fr)}}</style>
 ${parts.join('\n')}`;
 }
-
-/* Pages are dressed once per Chicago day (and file version). */
-const dressed = new Map();
 
 /** A page as it should be sent today: the season's homepage block and shelves,
  *  and the Shop menu in season order. Returns the input untouched when today
@@ -220,17 +231,41 @@ function dressPage(html, rel, now = new Date()) {
   return out;
 }
 
-/** dressPage with a per-day cache, keyed by the file's own version. */
-function dressCached(html, rel, version, now = new Date()) {
-  const key = `${rel}|${version}|${chicagoDay(now)}`;
-  if (!dressed.has(key)) {
-    if (dressed.size > 300) dressed.clear();
-    dressed.set(key, dressPage(html, rel, now));
+/** A page path under public/ this may dress: an .html file, no dot folders
+ *  or files (express.static ignores those) and no way out of public/. */
+function isPage(rel) {
+  return /^[\w/-][\w./-]*\.html$/.test(rel) && !rel.split('/').some((seg) => seg.startsWith('.'));
+}
+
+/* Dressed pages, per Chicago day: rel -> { mtimeMs, html (null = unchanged), etag }.
+   A file is read again only when it changes or the day turns. */
+const dressed = new Map();
+let dressedDay = '';
+
+/** A page as it should be sent today, or null when today leaves it as it is
+ *  (or it is not a page): { html, etag }. */
+function dressFile(publicDir, rel, now = new Date()) {
+  if (!isPage(rel)) return null;
+  const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+  const file = path.join(publicDir, rel);
+  if (!file.startsWith(path.join(publicDir, path.sep))) return null;
+  let st;
+  try { st = fs.statSync(file); } catch { return null; }
+  if (!st.isFile()) return null;
+  const day = chicagoDay(now);
+  if (day !== dressedDay) { dressed.clear(); dressedDay = day; }
+  let hit = dressed.get(rel);
+  if (!hit || hit.mtimeMs !== st.mtimeMs) {
+    const html = fs.readFileSync(file, 'utf8');
+    const out = dressPage(html, rel, now);
+    hit = out === html ? { mtimeMs: st.mtimeMs, html: null }
+      : { mtimeMs: st.mtimeMs, html: out, etag: `W/"s-${crypto.createHash('sha1').update(out).digest('base64url').slice(0, 20)}"` };
+    dressed.set(rel, hit);
   }
-  return dressed.get(key);
+  return hit.html === null ? null : { html: hit.html, etag: hit.etag };
 }
 
 module.exports = {
   BRAND, LOGO_FILES, LOGO_SEASONS, chicagoDay, logoSeason, logoFile,
-  HOME_EVENTS, homeEvents, seasonPlan, everyday, reorderShop, dressPage, dressCached, SEASON_START, SEASON_END,
+  HOME_EVENTS, homeEvents, seasonPlan, everyday, reorderShop, dressPage, dressFile, isPage, SEASON_START, SEASON_END,
 };

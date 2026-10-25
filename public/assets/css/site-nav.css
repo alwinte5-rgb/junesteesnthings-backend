@@ -26,7 +26,9 @@ a.jt-studio{color:#0E78B8;font-weight:700;text-decoration:underline;text-underli
 .jtn-in{max-width:1280px;margin:0 auto;padding:.6rem 1.25rem;display:flex;align-items:center;gap:1rem;}
 .jtn a{text-decoration:none;}
 .jtn-logo{display:flex;align-items:center;flex-shrink:0;}
-.jtn-logo img{width:auto;height:58px;display:block;}
+/* A fixed box for the logo (the everyday wide one fills it; a season's square
+   emblem sits at its left), so the menu never jumps when the picture loads. */
+.jtn-logo img{width:148px;height:58px;object-fit:contain;object-position:left center;display:block;}
 .jtn-logo span{font-weight:800;font-size:1.02rem;line-height:1.15;display:flex;flex-direction:column;}
 .jtn-logo small{font-weight:500;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:#6B7280;}
 .jtn-menu{display:flex;align-items:center;gap:.15rem;margin-left:auto;}
@@ -98,7 +100,7 @@ html{overflow-x:clip;}
   .jtn-in{padding:.5rem .75rem;gap:.5rem;}
   .jtn-act{gap:.4rem;}
   .jtn-logo{min-width:0;flex-shrink:1;}
-  .jtn-logo img{height:42px;max-width:100%;object-fit:contain;}
+  .jtn-logo img{width:107px;height:42px;max-width:100%;object-fit:contain;object-position:left center;}
   .jtn-burger{width:36px;height:36px;padding:7px;}
 }
 /* Product search (header icon + field under the menu; top of the phone drawer). */
@@ -128,7 +130,7 @@ html{overflow-x:clip;}
 .jtf a:hover{color:#fff;text-decoration:underline;}
 .jtf p{margin:0 0 .8rem;color:rgba(255,255,255,.72);font-size:.9rem;max-width:34rem;}
 .jtf-logo{display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem;color:#fff!important;font:800 1.05rem Inter,system-ui,sans-serif;text-decoration:none!important;}
-.jtf-logo img{width:auto;height:84px;display:block;}
+.jtf-logo img{width:214px;height:84px;object-fit:contain;object-position:left center;display:block;}
 .jtf-logo small{display:block;font:600 .68rem Inter,system-ui,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.6);}
 .jtf-texts{color:#F4A623!important;font-weight:700;}
 .jtf-social{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.4rem;}
