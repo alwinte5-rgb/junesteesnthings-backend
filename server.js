@@ -34175,16 +34175,25 @@ async function finderClaim(runId, idx) {
  *  once the add is done, whichever way it went: once the result is linked to its lead
  *  that changes nothing (FINDER_UNCLAIM_SQL wants it still being added, under this
  *  request's token), so no refusal has to remember to. The reply waits for it, so the
- *  page it lands on never shows a card still "Being added…". */
-async function finderAdd(add) {
+ *  page it lands on never shows a card still "Being added…". An add that throws, or
+ *  returns no reply, is reported and answered "Could not add the lead." at `fallback`,
+ *  never left hanging. */
+async function finderAdd(res, fallback, add) {
   let unclaim = () => null;
   let reply;
+  let failed = null;
   try {
     reply = await add(async (runId, idx) => { unclaim = await finderClaim(runId, idx); });
+  } catch (e) {
+    failed = e;
   } finally {
     await unclaim();
   }
-  return reply();
+  if (!failed && typeof reply === 'function') return reply();
+  failed = failed || new Error('the add gave no reply to send');
+  console.error('finder add failed:', failed.message);
+  reportError('finder-add', failed, fallback).catch(() => {});
+  if (!res.headersSent) back(res, fallback, 'err', 'Could not add the lead.');
 }
 /** True when finderSaveOnce gave up waiting for another add of the same result. */
 const finderBusy = (e) => !!(e && e.finderBusy);
@@ -34194,7 +34203,7 @@ const finderBusy = (e) => !!(e && e.finderBusy);
    scored the same way. */
 /* Each reply is returned as a function (finderAdd sends it once a finder
    result's claim is given back). */
-app.post('/admin/leads/add', requireAdmin, (req, res) => finderAdd(async (hold) => {
+app.post('/admin/leads/add', requireAdmin, (req, res) => finderAdd(res, '/admin/leads', async (hold) => {
   const b = req.body || {};
   const actor = currentActor();
   const isStaff = !!(actor && actor.kind === 'staff');
@@ -34958,7 +34967,7 @@ app.get('/admin/software-leads', requireAdmin, async (req, res) => {
 });
 
 /* As on Leads, each reply is returned as a function (finderAdd). */
-app.post('/admin/software-leads', requireAdmin, (req, res) => finderAdd(async (hold) => {
+app.post('/admin/software-leads', requireAdmin, (req, res) => finderAdd(res, `${SOFT_PATH}#add`, async (hold) => {
   const b = req.body || {};
   const actor = currentActor() || OWNER_ACTOR;
   const me = actor.kind === 'staff' ? actor.id : null;

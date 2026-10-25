@@ -267,25 +267,37 @@ test('finderAdd gives the claim back once the add is done, before the reply, whi
   const log = [];
   /* A stand-in claim that records when it is given back. */
   const finderClaim = async (runId, idx) => { log.push(`claim ${runId}:${idx}`); return async () => { log.push('give back'); }; };
-  const finderAdd = new Function('finderClaim', `return ${def}`)(finderClaim);
+  /* Stand-ins that record what was reported and sent. */
+  const reportError = async (kind, e) => { log.push(`reported ${e.message}`); };
+  const back = (res, to, kind, msg) => { res.headersSent = true; log.push(`back ${to} ${kind} ${msg}`); };
+  const console = { error: () => {} };
+  const finderAdd = new Function('finderClaim', 'reportError', 'back', 'console', `return ${def}`)(finderClaim, reportError, back, console);
   const reply = (what) => () => log.push(`reply ${what}`);
+  const res = () => ({ headersSent: false });
 
   /* Refused after the claim: given back, then the reply. */
-  await finderAdd(async (hold) => { await hold(7, 2); return reply('refused'); });
+  await finderAdd(res(), '/admin/leads', async (hold) => { await hold(7, 2); return reply('refused'); });
   assert.deepStrictEqual(log.splice(0), ['claim 7:2', 'give back', 'reply refused']);
   /* Added: still called (a no-op in SQL once the result is linked), and still before the reply. */
-  await finderAdd(async (hold) => { await hold(7, 3); return reply('added'); });
+  await finderAdd(res(), '/admin/leads', async (hold) => { await hold(7, 3); return reply('added'); });
   assert.deepStrictEqual(log.splice(0), ['claim 7:3', 'give back', 'reply added']);
   /* Nothing claimed (a hand-added lead): nothing to give back. */
-  await finderAdd(async () => reply('by hand'));
+  await finderAdd(res(), '/admin/leads', async () => reply('by hand'));
   assert.deepStrictEqual(log.splice(0), ['reply by hand']);
-  /* The add throws: the claim is given back and the error is not swallowed. */
-  await assert.rejects(finderAdd(async (hold) => { await hold(7, 4); throw new Error('boom'); }), /boom/);
-  assert.deepStrictEqual(log.splice(0), ['claim 7:4', 'give back']);
+  /* The add throws: the claim is given back, the error reported, and the page still answered. */
+  await finderAdd(res(), '/admin/leads', async (hold) => { await hold(7, 4); throw new Error('boom'); });
+  assert.deepStrictEqual(log.splice(0), ['claim 7:4', 'give back', 'reported boom', 'back /admin/leads err Could not add the lead.']);
+  /* A path that gives no reply is reported and answered too, never left hanging. */
+  await finderAdd(res(), '/admin/software-leads#add', async () => undefined);
+  assert.deepStrictEqual(log.splice(0), ['reported the add gave no reply to send', 'back /admin/software-leads#add err Could not add the lead.']);
+  /* One that already replied (a bare back()) is reported, and not answered twice. */
+  const sent = res();
+  await finderAdd(sent, '/admin/leads', async () => { back(sent, '/x', 'ok', 'sent'); return sent; });
+  assert.deepStrictEqual(log.splice(0), ['back /x ok sent', 'reported the add gave no reply to send']);
 
   /* Leads replies only through it too. */
   const leads = src.slice(src.indexOf("app.post('/admin/leads/add'"), src.indexOf("app.post('/admin/quote/:code/note'"));
-  assert.match(leads, /^app\.post\('\/admin\/leads\/add', requireAdmin, \(req, res\) => finderAdd\(async \(hold\) => \{/);
+  assert.match(leads, /^app\.post\('\/admin\/leads\/add', requireAdmin, \(req, res\) => finderAdd\(res, '\/admin\/leads', async \(hold\) => \{/);
   assert.doesNotMatch(leads, /return back\(|return res\.redirect\(|await unclaim/, 'no reply that skips finderAdd');
   /* A give-back that fails is logged; the claim clears itself later. */
   assert.match(src.slice(src.indexOf('async function finderClaim(')), /\.catch\(\(e\) => console\.error\(`finder result \$\{runId\}:\$\{idx\}: giving the claim back failed:`/);

@@ -92,9 +92,11 @@ test('a finder result is added once, from the agent\'s own software run', () => 
   /* Every reply, refusals and failures too, goes through finderAdd, which gives the claim back first. */
   const at = src.indexOf("app.post('/admin/software-leads', requireAdmin");
   const end = src.indexOf('\n}));', at);
-  assert.ok(end > at && end - at < 6000, 'the route ends where finderAdd closes it');
+  assert.ok(at > -1 && end > at, 'the route ends where finderAdd closes it');
   const whole = src.slice(at, end);
-  assert.match(whole, /^app\.post\('\/admin\/software-leads', requireAdmin, \(req, res\) => finderAdd\(async \(hold\) => \{/);
+  /* Ends before the next route, so the checks below read this one alone. */
+  assert.ok(!whole.slice(1).includes('\napp.'), 'only this route is read');
+  assert.match(whole, /^app\.post\('\/admin\/software-leads', requireAdmin, \(req, res\) => finderAdd\(res, `\$\{SOFT_PATH\}#add`, async \(hold\) => \{/);
   assert.doesNotMatch(whole, /return back\(|return res\.redirect\(|unclaim/, 'no reply that skips finderAdd');
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS software_leads_site_idx ON software_leads \(product, website_key\) WHERE website_key IS NOT NULL/);
 });
