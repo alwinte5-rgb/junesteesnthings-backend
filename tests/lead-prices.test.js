@@ -273,7 +273,10 @@ test('a work or company order leads with the 50/50; anything else with cotton', 
   assert.strictEqual(first('staff uniforms our crew will wear on the job at events'), 14);
   assert.strictEqual(first('work shirts for the company, also some for the summer party'), 14);
   const route = src.slice(src.indexOf("app.post('/admin/api/lead/:id/suggest-followup'"), src.indexOf("app.post('/admin/api/quote/:code/review-message'"));
-  assert.match(route, /50\/50 blends are the shop\\'s pick for shirts worn on the job/);
+  assert.match(route, /50\/50 blends are the shop\\'s pick for shirts worn on the job day after day/);
+  /* The code and the prompt agree: staff working an event get the cotton too. */
+  assert.strictEqual(first('staff shirts for our booth at the trade show'), 13);
+  assert.match(route, /even shirts the staff wear to work it, gets the regular cotton tee/);
   assert.match(route, /they shrink less and stay comfortable/);
-  assert.match(route, /A company event \(a party, picnic, outing, '\s*\+ 'fundraiser\) gets the regular cotton tee/);
+
 });
