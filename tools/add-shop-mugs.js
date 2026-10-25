@@ -46,10 +46,15 @@ const MUGS = [
      pair: two would put one pair at ~$35, above what photo socks sell for. */
   { name: 'White Sublimation Throw Pillow Cover — 18x18', short: 'Pillow Cover 18x18', regular: 6.99,
     desc: 'All-white polyester throw pillow cover with zipper, 18" x 18", made for sublimation (Make Market, from Michaels). Printed in our shop in full color on the front. Cover only, no insert.' },
-  { name: 'Flip Sequin Sublimation Pillow Cover — 16x16', short: 'Sequin Pillow 16x16', regular: 6.25,
+  /* Held 2026-10-25 (owner): sequin pillows and socks come off the quote form
+     until the owner has checked vendors and the stock on hand. `held` writes
+     supplier 'shop-held', which jt-catalog.php does not publish, so the row and
+     its pricing stay ready to switch back on. */
+  { name: 'Flip Sequin Sublimation Pillow Cover — 16x16', short: 'Sequin Pillow 16x16', regular: 6.25, held: true,
     desc: 'Two-tone flip sequin pillow cover, 16" x 16" (Craft Express, from Michaels). Your photo or design is printed on the white sequin side and shows when the sequins are brushed one way. Cover only, no insert.' },
-  { name: 'Sublimation Crew Socks — Adult, pair', short: 'Crew Socks (pair)', regular: 3.49,
-    desc: 'White adult crew socks, one pair, made for sublimation (Make Market, from Michaels). Printed in our shop in full color: faces, names, logos.' },
+  /* Silky Socks Athletic Socks, the colored-foot style the owner uses: $4.50 a pair. */
+  { name: 'Sublimation Crew Socks — Adult, pair', short: 'Crew Socks (pair)', regular: 4.50, held: true,
+    desc: 'Athletic crew socks, one pair (Silky Socks): white leg for the print, cushioned cotton foot in your choice of color. Adult S-XL. Printed in our shop in full color: faces, names, logos.' },
 ];
 
 /* The mugs are also sold in the online designer (owner, 2026-10-23): live,
@@ -90,9 +95,10 @@ for (const m of MUGS) {
   if (have.length > 1) { console.error('  ' + have.length + ' products are named "' + m.name + '" — refusing'); process.exit(1); }
   m.id = have.length ? have[0].id : null;
   m.active = m.designer ? 1 : 0;
+  m.supplier = m.held ? 'shop-held' : 'shop';
   m.bands = allIn(m.price);
   console.log('  ' + m.short.padEnd(24) + ceilings.map((c) => ('$' + m.bands[c].price).padStart(9)).join('') +
-    '   (blank $' + m.price.toFixed(2) + ' from $' + m.regular.toFixed(2) + ' regular; ' + (m.designer ? 'LIVE in the designer' : 'quote only') + ')');
+    '   (blank $' + m.price.toFixed(2) + ' from $' + m.regular.toFixed(2) + ' regular; ' + (m.held ? 'HELD, off the quote form' : m.designer ? 'LIVE in the designer' : 'quote only') + ')');
 }
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
@@ -111,13 +117,13 @@ for (const m of MUGS) {
 for (const m of MUGS) {
   if (m.id) {
     mysql(url, "UPDATE lumise_products SET price='0.00', supplier_cost=" + sq(m.regular.toFixed(2)) +
-      ", supplier='shop', active=" + m.active + ', description=' + sq(m.desc) + ', printings=' + sq(m.printings) +
+      ", supplier=" + sq(m.supplier) + ', active=' + m.active + ', description=' + sq(m.desc) + ', printings=' + sq(m.printings) +
       ', updated=NOW() WHERE id=' + Number(m.id) + ';');
   } else {
     /* The same columns tools/add-table-cover.js writes for a quote-only row. */
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +
       'printings,thumbnail_url,active,`order`,author,created,updated) VALUES (' +
-      sq(m.name) + ',' + sq(m.desc) + ",'0.00'," + sq(m.regular.toFixed(2)) + ",'shop'," +
+      sq(m.name) + ',' + sq(m.desc) + ",'0.00'," + sq(m.regular.toFixed(2)) + ',' + sq(m.supplier) + ',' +
       sq(enjson({})) + ',' + sq(enjson({})) + ',' + sq(m.printings) + ",''," + m.active + ',999,' + sq(authorRow.author) + ',NOW(),NOW());');
   }
 }
@@ -144,7 +150,7 @@ for (const m of MUGS.filter((x) => x.designer)) {
 let bad = 0;
 for (const m of MUGS) {
   const v = mysql(url, 'SELECT id, price, active, supplier, printings FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true });
-  const ok = v.length === 1 && Number(v[0].price) === 0 && Number(v[0].active) === m.active && v[0].supplier === 'shop' && v[0].printings === m.printings;
+  const ok = v.length === 1 && Number(v[0].price) === 0 && Number(v[0].active) === m.active && v[0].supplier === m.supplier && v[0].printings === m.printings;
   if (!ok) bad++;
   const vm = mysql(url, 'SELECT calculate FROM lumise_printings WHERE id=' + Number(m.methodId) + ';', { rows: true })[0];
   const okM = vm && JSON.stringify(((dejson(vm.calculate) || {}).values || {}).front) === JSON.stringify(m.bands);
