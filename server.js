@@ -26524,6 +26524,8 @@ app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, claudeRoute('sugg
    every note and email on the lead as what the shop did. Facts it does not
    have go in the reply as [June to fill in: ...], which cleanEmail refuses
    to send. Suggests only: the page puts it in the box and a person sends it. */
+/* "Tell Claude what to change" on a lead reply, as the job page's Rewrite box (maxLength 500). */
+const LEAD_CHANGE_MAX = 500;
 app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const id = intIn(req.params.id);
@@ -26570,6 +26572,8 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
         + 'Garments: price the one they picked or named. For a t-shirt, lead with the shop\'s pick, marked in the list: '
         + '"our regular tee" for a regular order, "our tee for uniform orders" when it is for staff or uniforms; '
         + 'offer it beside the one they named (same kind of garment, takes the same print, comes in their color), so they can choose; at most three options per item. '
+        + 'When they ask for a women\'s or ladies\' fit, offer the women\'s-cut garments in the list first (the shop\'s pick is unisex: offer it only as an extra). '
+        + 'When they ask for cotton, offer garments the list marks cotton first, and never one marked performance or polyester. '
         + 'Colors: say a garment comes in a color only when that color is in its colors list; if the color they want is not listed, '
         + 'say so and name the closest listed ones. Give each garment you name its link from the list, on its own line, so they can see it. '
       : '')
@@ -26584,7 +26588,17 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
         + 'Answer each question they asked, in the order they asked it, and speak to the specifics they gave (items, colors, quantities, '
         + 'design, place, date). Then ask only for the details a quote still needs that they have not given. '
         + 'Do not send a generic checklist of everything a quote could need. ' + fillIn;
-    const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft: (req.body || {}).draft, note });
+    /* What the person writing the reply asked to change (owner, 2026-10-24: "I added
+       to the prompt several times and it just rewrote the same thing"). It used to be
+       dropped here: only the draft reached Claude, so every rewrite was the first one. */
+    const change = String((req.body || {}).change || '').replace(/\s+/g, ' ').trim().slice(0, LEAD_CHANGE_MAX);
+    const draft = String((req.body || {}).draft || '').trim();
+    /* First, so it is never the part a long note loses, and it outranks the rules after it. */
+    const asked = !change ? ''
+      : draft ? `The shop has read the draft and wants this changed: "${change}". Rewrite the draft to do exactly that, `
+        + 'and keep everything else in it that is still right. This overrides any rule below that conflicts with it. '
+      : `The shop wants this in the reply: "${change}". Do exactly that. This overrides any rule below that conflicts with it. `;
+    const { ask } = REPLYCOACH.validateAsk({ channel: 'email', draft, note: asked + note });
     /* Answers the owner has checked, picked by what they asked. */
     const topic = String(l.description || '').slice(0, 300);
     const playbook = topic ? await pool.query(
@@ -26839,6 +26853,9 @@ function leadEmailBox(l, backField) {
         <div style="margin:0 0 8px">
           <button type="button" class="btn" data-lsug="${l.id}" style="padding:6px 14px;font-size:12.5px;background:#5b3fb0">${contacted ? 'Suggest a follow-up with Claude' : 'Write a reply with Claude'}</button>
           <span class="muted" data-lsugst style="font-size:12px;margin-left:6px">${contacted ? 'Reads their enquiry and what was sent.' : 'Answers what they asked.'} Replaces the message; you edit and send.</span></div>
+        <div data-lchrow style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;align-items:center">
+          <input data-lchange maxlength="${LEAD_CHANGE_MAX}" placeholder="Tell Claude what to change, e.g. women's cotton tees only, shorter, no rush fees" style="flex:1 1 260px;padding:7px;font-size:13px">
+          <button type="button" class="btn" data-lredo style="padding:6px 14px;font-size:12.5px;background:#5b3fb0">Rewrite</button></div>
         <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">${held ? 'Send to June to check' : 'Send email'}</button>
       </form>
       <script>/* A send that fails comes back with the stock message; the draft typed
@@ -26847,18 +26864,23 @@ function leadEmailBox(l, backField) {
       try{var p=new URLSearchParams(location.search),d=JSON.parse(sessionStorage.getItem(k)||'null');
         if(d&&p.get('err')){f.subject.value=d.s;f.body.value=d.b;box.style.display='block';}else if(p.get('ok'))sessionStorage.removeItem(k);}catch(e){}
       f.addEventListener('submit',function(){try{sessionStorage.setItem(k,JSON.stringify({s:f.subject.value,b:f.body.value}));}catch(e){}});
-      var sg=f.querySelector('[data-lsug]'),st=f.querySelector('[data-lsugst]');
+      var sg=f.querySelector('[data-lsug]'),st=f.querySelector('[data-lsugst]'),ch=f.querySelector('[data-lchange]'),rd=f.querySelector('[data-lredo]');
       /* The stock message is not sent as a draft: Claude would keep its generic checklist.
-         Anything it cannot know comes back as [June to fill in: ...], which the server will not send. */
-      var ask=function(){sg.disabled=true;asked=true;st.textContent='Claude is writing a reply to what they asked...';
+         Anything it cannot know comes back as [June to fill in: ...], which the server will not send.
+         Rewrite sends the message as it is now with what to change (2026-10-24: before, a
+         second press sent no instruction at all, so Claude wrote the same reply again). */
+      var ask=function(change){if(sg.disabled)return;sg.disabled=true;rd.disabled=true;asked=true;
+        st.textContent=change?'Claude is rewriting it...':'Claude is writing a reply to what they asked...';
         fetch('/admin/api/lead/${l.id}/suggest-followup',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({draft:f.body.value===f.body.defaultValue?'':f.body.value})}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
-        .then(function(x){sg.disabled=false;if(!x.ok||!x.d.reply){st.textContent=(x.d&&x.d.error)||'No suggestion this time.';return;}
-          if(x.d.subject)f.subject.value=x.d.subject;f.body.value=x.d.reply;
+          body:JSON.stringify({draft:f.body.value===f.body.defaultValue?'':f.body.value,change:change||''})}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+        .then(function(x){sg.disabled=false;rd.disabled=false;if(!x.ok||!x.d.reply){st.textContent=(x.d&&x.d.error)||'No suggestion this time.';return;}
+          if(x.d.subject)f.subject.value=x.d.subject;f.body.value=x.d.reply;if(change)ch.value='';
           var need=(x.d.ask_shop||[]).filter(Boolean);
           st.textContent=need.length?'Suggested. Before sending, fill in: '+need.join('; '):'Suggested. Read it, change anything, then send.';})
-        .catch(function(){sg.disabled=false;st.textContent='Could not reach the server. Try again.';});};
-      var asked=false;sg.addEventListener('click',ask);
+        .catch(function(){sg.disabled=false;rd.disabled=false;st.textContent='Could not reach the server. Try again.';});};
+      var asked=false;sg.addEventListener('click',function(){ask('');});
+      rd.addEventListener('click',function(){var c=ch.value.trim();if(!c){st.textContent='Type what to change first, e.g. "women\\'s cotton tees only".';ch.focus();return;}ask(c);});
+      ch.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();rd.click();}});
       /* The first time the box opens on the stock message, Claude writes the reply (not after a failed send put a draft back). */
       box.addEventListener('jt-open',function(){if(!asked&&!sg.disabled&&f.body.value===f.body.defaultValue)ask();});})();</script>
       <form method="POST" action="/admin/lead/${l.id}/note" style="margin-top:10px">
