@@ -339,8 +339,10 @@ try {
   const seasonal = SEASONAL;
   app.get(Object.keys(seasonal.LOGO_FILES).map((n) => `/${seasonal.BRAND}/${n}`), (req, res) => {
     const file = seasonal.logoFile(path.basename(req.path));
-    if (!file) return res.status(404).end();
+    /* Out of season the studio's address is a 404, cached like the logo, and
+       the studio falls back to its own (tools/lib/seasonal.js SEASON_ONLY). */
     res.set('Cache-Control', 'public, max-age=3600');
+    if (!file) return res.status(404).end();
     res.sendFile(path.join(__dirname, 'public', file), { maxAge: 3600 * 1000 });
   });
 }

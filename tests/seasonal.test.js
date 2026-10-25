@@ -24,14 +24,19 @@ test('the last day is included, in Chicago time', () => {
 test('every logo-current address sends the season file in season and the plain one outside', () => {
   const xmas = new Date('2026-12-01T18:00:00Z'), after = new Date('2027-02-01T18:00:00Z');
   for (const [name, plain] of Object.entries(S.LOGO_FILES)) {
-    assert.strictEqual(S.logoFile(name, after), `${S.BRAND}/${plain}`);
+    assert.strictEqual(S.logoFile(name, after), S.SEASON_ONLY.has(name) ? null : `${S.BRAND}/${plain}`);
     assert.strictEqual(S.logoFile(name, xmas), `${S.BRAND}/seasonal/christmas-2026/${plain}`);
   }
+  assert.strictEqual(S.logoFile('logo-studio-current.png', after), null, 'the studio uses its own logo out of season');
   assert.strictEqual(S.logoFile('../server.js'), null, 'only the listed names');
 });
 
 test('each logo-current file on disk is the everyday logo (the route answers first; the copy keeps file checks and a fallback true)', () => {
   for (const [name, plain] of Object.entries(S.LOGO_FILES)) {
+    if (S.SEASON_ONLY.has(name)) {
+      assert.ok(!fs.existsSync(path.join(ROOT, 'public', S.BRAND, name)), `${name} has no file outside the seasons, so static never serves it`);
+      continue;
+    }
     assert.ok(fs.readFileSync(path.join(ROOT, 'public', S.BRAND, name)).equals(fs.readFileSync(path.join(ROOT, 'public', S.BRAND, plain))), `${name} = ${plain}`);
   }
 });

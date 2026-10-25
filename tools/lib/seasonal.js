@@ -26,10 +26,15 @@ const LOGO_FILES = {
   'logo-current.png': 'logo-2026.png',
   'logo-current-900.png': 'logo-2026-900.png',
   'logo-current-popup.png': 'logo-popup.png',
-  /* design.jtees.net's editor keeps its own (blue) logo out of season;
-     jt_season_logo() there always shows this address. */
+  /* design.jtees.net's studio: jt_season_logo() there shows this address
+     and falls back to its own stored logo when it fails. It exists only in
+     season (SEASON_ONLY), so out of season the studio shows whatever logo
+     its admin holds, and an outage or a deploy of the studio before this
+     backend costs nothing but the emblem. */
   'logo-studio-current.png': 'logo-studio.png',
 };
+/* Addresses with no everyday file: 404 out of season. */
+const SEASON_ONLY = new Set(['logo-studio-current.png']);
 
 /* A season's logo files sit in BRAND/seasonal/<id>/ under the everyday file
    names, one of each. */
@@ -58,7 +63,8 @@ function logoFile(name, now = new Date()) {
   const plain = LOGO_FILES[name];
   if (!plain) return null;
   const s = logoSeason(now);
-  return s ? `${BRAND}/seasonal/${s.id}/${plain}` : `${BRAND}/${plain}`;
+  if (!s) return SEASON_ONLY.has(name) ? null : `${BRAND}/${plain}`;
+  return `${BRAND}/seasonal/${s.id}/${plain}`;
 }
 
 /* THE HOMEPAGE AND THE SHOP MENU BY SEASON (owner, 2026-10-25: a Christmas
@@ -292,6 +298,6 @@ function dressFile(publicDir, rel, now = new Date()) {
 }
 
 module.exports = {
-  BRAND, LOGO_FILES, LOGO_SEASONS, chicagoDay, logoSeason, logoFile,
+  BRAND, LOGO_FILES, LOGO_SEASONS, SEASON_ONLY, chicagoDay, logoSeason, logoFile,
   HOME_EVENTS, homeEvents, bannerFor, bannerImg, seasonPlan, everyday, reorderShop, dressPage, dressFile, isPage, SEASON_START, SEASON_END,
 };
