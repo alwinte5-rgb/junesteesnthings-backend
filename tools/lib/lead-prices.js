@@ -42,8 +42,10 @@ const WOMEN = /\bwomen[’']?s\b|\bladies\b/i;
 const COTTON_ASK = /(?<!\b(?:no|not|non)[\s-])\bcotton\b(?![\s-]candy)/i;
 /* A blend says so (50/50, CVC, cotton/poly); checked before performance, so "Cotton/Poly" is a blend. */
 const BLEND = /\b\d{2}\s*\/\s*\d{2}\b|\bcvc\b|\btri[- ]?blend\b|\bcotton\s*\/\s*poly(ester)?\b|\bpoly\s*\/\s*cotton\b/i;
-const PERFORMANCE = /\b(performance|100% polyester|moisture[- ]?wicking|wicking|dri[- ]?fit|cool[- ]?dry|posicharge)\b/i;
+const PERFORMANCE = /\b(performance|polyester|poly|moisture[- ]?wicking|wicking|dri[- ]?fit|cool[- ]?dry|posicharge)\b/i;
 const KNOWN_FABRIC = [
+  [/\bgildan 8000\b/i, '50/50 cotton-polyester blend'],
+  [/\bgildan 18500\b/i, '50/50 cotton-polyester blend'],
   [/\bgildan 5000\b/i, '100% cotton (heather colors are blends)'],
   [/\bgildan 64000\b/i, '100% ring-spun cotton (heather colors are blends)'],
   [/\b(bella\s*\+?\s*canvas|bc) ?3001\b/i, '100% cotton (heather colors are blends)'],
@@ -53,7 +55,8 @@ const KNOWN_FABRIC = [
   [/\bec3000\b/i, '100% organic cotton'],
 ];
 /** What a garment is made of, from its name: '' when the name does not say. A blend
- *  first (a 3001 CVC is not the cotton 3001), then performance, then the known styles. */
+ *  first (a 3001 CVC is not the cotton 3001, "Cotton/Poly" is not performance), then
+ *  performance, then the known styles. */
 function fabric(name) {
   const n = String(name || '');
   if (BLEND.test(n)) {

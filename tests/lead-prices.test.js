@@ -244,3 +244,11 @@ test('fabric and fit words are read the way a customer means them', () => {
   const wc = ids("women's cotton tees");
   assert.ok(wc.indexOf(4) < wc.indexOf(7), 'cotton before blend: ' + wc);
 });
+
+test('blends named only by style, and plain polyester, keep their fabric', () => {
+  assert.strictEqual(P.fabric('Gildan 18500 Heavy Blend Hooded Sweatshirt'), '50/50 cotton-polyester blend');
+  assert.strictEqual(P.fabric('Gildan 8000 Adult DryBlend Tee'), '50/50 cotton-polyester blend');
+  assert.strictEqual(P.fabric('Polyester Tee'), 'performance (polyester), not cotton');
+  assert.strictEqual(P.fabric('Poly Jersey Tee'), 'performance (polyester), not cotton');
+  assert.strictEqual(P.fabric('Jerzees 29M 50/50 Cotton/Poly T-Shirt'), '50/50 cotton-polyester blend', 'a blend, checked first');
+});
