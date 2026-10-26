@@ -124,7 +124,7 @@ test('an all-in card keeps its photo, and its price unless the feed sends an all
   assert.strictEqual(c[1].pr.textContent, 'From $2.00 + printing', 'no all-in price in the feed: the built-in line stays');
 });
 
-function runPageScript(feed, attrs = {}) {
+function runPageScript(feed, attrs = {}, extra = {}) {
   const vm = require('node:vm');
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'assets', 'js', 'shop-feed.js'), 'utf8');
   /* Enough of an element for the dots: attributes, classes, closest(), and the
@@ -162,6 +162,7 @@ function runPageScript(feed, attrs = {}) {
   vm.runInNewContext(src, {
     window: { fetch: () => { throw new Error('should use the cached feed'); } },
     document: { querySelectorAll: () => cards,
+      getElementById: (id) => (extra.byId || {})[id] || null,
       addEventListener: (type, fn) => { on[type] = fn; },
       createElement: () => el({ className: '', style: {}, kids: [], textContent: '', title: '',
         appendChild(c) { this.kids.push(c); c.parentNode = this; },
@@ -176,6 +177,18 @@ function runPageScript(feed, attrs = {}) {
   cards.on = on;
   return cards;
 }
+
+test('the "Ready-made designs" link shows only while the designer lists one', () => {
+  const link = { hidden: true };
+  runPageScript({ categories: [{ name: 'Ready-Made Designs', image: 'https://x/y.jpg', link: D + 'ready-made.php' }], best: [], products: [] }, {}, { byId: { 'jt-rm-link': link } });
+  assert.strictEqual(link.hidden, false);
+  runPageScript({ categories: [{ name: 'T-Shirts', image: 'https://x/y.jpg', link: D + 'products.php?category_id=52' }], best: [], products: [] }, {}, { byId: { 'jt-rm-link': link } });
+  assert.strictEqual(link.hidden, true, 'gone again once none is live');
+  const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.match(html, /id="jt-rm-link" href="https:\/\/design\.jtees\.net\/ready-made\.php"[^>]* hidden>/, 'starts hidden in the page');
+  assert.strictEqual(cleanShopFeed({ ok: true, best: [], categories: [{ name: 'Ready-Made Designs', image: 'https://x/y.jpg', link: D + 'ready-made.php', from_price: 20 }] })
+    .categories[0].link, D + 'ready-made.php', 'the server keeps the card');
+});
 
 test('the page script reprices every listed card and hides a switched-off product only with a complete list', () => {
   const products = [
