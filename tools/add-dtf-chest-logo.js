@@ -8,18 +8,22 @@
  * second stage is method #1's additional-location ladder copied as it is, so a
  * chest logo beside a full back costs exactly what it does today.
  *
- * QUOTE FORM ONLY: the method is linked to no product, so the online designer
- * does not offer it. The quote form lists every active method.
+ * The quote form lists every active method. The online designer offers it on
+ * every product that already offers method #1 and that lib/garments.js
+ * decorationsFor() gives the 'dtf:chest' role — adult garments: the oversized
+ * print's list plus vests (owner, 2026-10-26) — with the value #1 has there.
  *
  * Re-running is safe: it re-prices the method in place WITHOUT touching its
- * on/off switch. Re-run it after any change to method #1's additional-location
- * prices, since that stage is copied.
+ * on/off switch, and only adds the product link where it is missing. Re-run it
+ * after any change to method #1's additional-location prices, since that stage
+ * is copied.
  */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { mysqlUrlFrom, mysql, enjson, dejson, sq } = require('./lib/db');
 const { CHEST_LOGO_LADDER } = require('./lib/dtf-chest-logo');
+const { decorationsFor } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
 const url = mysqlUrlFrom(process.env);
@@ -74,8 +78,16 @@ const newCalc = {
 };
 
 const existing = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(TITLE) + ';', { rows: true });
+const products = mysql(url, 'SELECT id, name, printings FROM lumise_products;', { rows: true });
+const parse = (p) => { try { const o = JSON.parse(decodeURIComponent(p || '')); return o && typeof o === 'object' ? o : null; } catch { return null; } };
+const hasDtf = products.filter((p) => { const o = parse(p.printings); return o && Object.prototype.hasOwnProperty.call(o, '_1'); });
+const fits = (p) => (decorationsFor(p.name) || []).includes('dtf:chest');
+const withDtf = hasDtf.filter(fits);
+const skipped = hasDtf.filter((p) => !fits(p));
+
 console.log('\n  ' + (existing.length ? 'update #' + existing[0].id + ' (active=' + existing[0].active + ', left as it is)' : 'create') + '  ' + TITLE);
-console.log('  linked to no product: quote form only');
+console.log('  offer it on ' + withDtf.length + ' product(s) that already offer standard DTF');
+console.log('  skip ' + skipped.length + ' that are not adult garments (bags, kids, caps, non-garments): ' + skipped.map((p) => '#' + p.id).join(' '));
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
 const dir = path.join(os.homedir(), 'jtees-backups');
@@ -84,6 +96,7 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const backup = path.join(dir, 'dtf-chest-logo-' + stamp + '.json');
 fs.writeFileSync(backup, JSON.stringify({
   printings: mysql(url, 'SELECT id, title, active, calculate FROM lumise_printings ORDER BY id;', { rows: true }),
+  products: products.map((p) => ({ id: p.id, printings: p.printings })),
 }, null, 1));
 console.log('\n  backup ' + backup);
 
@@ -99,8 +112,20 @@ if (existing.length) {
   id = mysql(url, 'SELECT id FROM lumise_printings WHERE title=' + sq(TITLE) + ';', { rows: true })[0].id;
 }
 
+/* Every product link in ONE transaction, as in add-dtf-oversized.js. */
+const linkStmts = [];
+for (const p of withDtf) {
+  const o = parse(p.printings);
+  if (Object.prototype.hasOwnProperty.call(o, '_' + id)) continue;
+  o['_' + id] = o._1;
+  linkStmts.push('UPDATE lumise_products SET printings=' + sq(encodeURIComponent(JSON.stringify(o))) +
+    ', updated=NOW() WHERE id=' + Number(p.id) + ';');
+}
+if (linkStmts.length) mysql(url, 'START TRANSACTION;\n' + linkStmts.join('\n') + '\nCOMMIT;');
+
 const v = mysql(url, 'SELECT id, title, active, calculate FROM lumise_printings WHERE id=' + Number(id) + ';', { rows: true })[0];
 const back = dejson(v.calculate);
 const ok = back && JSON.stringify(back.values) === JSON.stringify(newCalc.values);
 console.log('  verified #' + v.id + '  active=' + v.active + '  prices ' + (ok ? 'match' : 'DO NOT MATCH'));
+console.log('  linked to ' + linkStmts.length + ' more product(s)');
 if (!ok) process.exit(1);
