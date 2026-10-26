@@ -14,6 +14,7 @@
 const MAX_CATEGORIES = 16;
 const MAX_BEST = 8;
 const MAX_PRODUCTS = 2000;
+const MAX_READYMADE = 12;
 
 function text(v, max) {
   if (typeof v !== 'string') return '';
@@ -103,7 +104,17 @@ function cleanShopFeed(d) {
      page hides a product card missing from the list only then. */
   const products_complete = d.products_complete === true && raw.length > 0 && raw.length <= MAX_PRODUCTS;
 
-  return { categories, best, products, products_complete };
+  /* Ready-made designs, sold as products (designer ready-made.php): a card
+     each for the homepage's Ready-Made shelf, linking to that design's page.
+     Optional: an older designer sends none, and the shelf stays away. */
+  const readymades = (Array.isArray(d.readymades) ? d.readymades : []).slice(0, MAX_READYMADE * 2).map((r) => ({
+    name: text(r && r.name, 80),
+    image: imageUrl(r && r.image),
+    link: designerLink(r && r.link),
+    from_price: price(r && r.from_price),
+  })).filter((r) => r.name && r.image && /^https:\/\/design\.jtees\.net\/ready-made\.php\?id=\d+$/.test(r.link)).slice(0, MAX_READYMADE);
+
+  return { categories, best, products, products_complete, readymades };
 }
 
 module.exports = { PHOTO, cleanShopFeed, HEX };

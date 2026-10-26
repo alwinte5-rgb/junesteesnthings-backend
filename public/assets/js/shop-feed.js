@@ -19,11 +19,44 @@
      (switched off in the Design Studio), but only when the feed says the list
      is the whole catalogue, so an outage or partial answer never empties a
      shelf. */
+  /* The homepage's Ready-Made shelf: the designs themselves, as product cards,
+     first among the shelves. Built from the feed (DOM calls and textContent,
+     never innerHTML) and only when at least one design is live; it is removed
+     again when none is. */
+  function readyShelf(list) {
+    var host = document.querySelector ? document.querySelector('#shop .pb-shelves') : null;
+    if (!host) return;
+    var old = document.getElementById('pb-shelf-ready');
+    if (old) old.parentNode.removeChild(old);
+    if (!list.length) return;
+    var el = function (tag, cls, txt) { var n = document.createElement(tag); if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; };
+    var shelf = el('div', 'pb-shelf'); shelf.id = 'pb-shelf-ready';
+    var head = el('div', 'pb-shelf-h');
+    head.appendChild(el('h3', null, 'Ready-Made Designs'));
+    var all = el('a', null, 'See all \u2192'); all.href = 'https://design.jtees.net/ready-made.php'; all.setAttribute('data-from', 'home_shop_readymade');
+    head.appendChild(all);
+    shelf.appendChild(head);
+    var row = el('div', 'pb-row');
+    list.slice(0, 8).forEach(function (r) {
+      var a = el('a', 'pb-card'); a.href = r.link; a.setAttribute('data-from', 'home_shop_readymade'); a.setAttribute('data-card', 'readymade');
+      var im = el('div', 'pb-im'), img = el('img'); img.src = r.image; img.alt = r.name; img.loading = 'lazy'; img.width = 300; img.height = 300;
+      im.appendChild(img); a.appendChild(im);
+      var bd = el('div', 'pb-bd');
+      bd.appendChild(el('div', 'pb-nm', r.name));
+      if (typeof r.from_price === 'number') bd.appendChild(el('div', 'pb-pr', 'From $' + r.from_price.toFixed(2) + ' each, printing included'));
+      bd.appendChild(el('span', 'pb-go', 'Shop This \u2192'));
+      a.appendChild(bd); row.appendChild(a);
+    });
+    shelf.appendChild(row);
+    host.insertBefore(shelf, host.firstChild);
+  }
+
   function refresh(d) {
     /* The homepage's "Ready-made designs" link (index.html) shows only while
        the designer lists a live one, so it never opens an empty page. */
     var rmLink = document.getElementById ? document.getElementById('jt-rm-link') : null;
     if (rmLink) rmLink.hidden = !(d.categories || []).some(function (c) { return /\/ready-made\.php$/.test(c.link || ''); });
+    readyShelf(d.readymades || []);
     var byLink = {};
     var products = d.products || [];
     (d.categories || []).concat(d.best || [], products).forEach(function (it) {
