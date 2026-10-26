@@ -36,13 +36,14 @@ const LINKS = {
   quote: `${SITE}/contact`,
 };
 const PHONE = '(773) 900-4592';
-const LOGO = `${SITE}/assets/images/brand/logo-2026-900.png`;
+const LOGO = `${SITE}/assets/images/brand/logo-current-900.png`;
 /* Each event's picture: the shop's own work photos on jtees.net (`photo`),
    chosen per event. Swap in a better one by changing `photo`. */
 const PHOTOS = `${SITE}/assets/images/`;
 /* Orders close 4 weeks before every event (owner, 2026-10-17: "bring those in
    line at 4 weeks no 3 days"): standard turnaround is 7 to 14 business days
    after proof approval, so a shorter deadline is a rush promise. */
+const { lastOpenDay } = require('./shop-closed');
 const MIN_ORDER_BY = 28;
 /* At least four weeks of selling before the order-by date (owner, 2026-10-06:
    "at least a month in advance"), so 8 weeks before the event; longer where an
@@ -380,8 +381,10 @@ function occurrence(e, t0) {
   let date = e.when(new Date(t0).getUTCFullYear());
   if (date.getTime() < t0) date = e.when(new Date(t0).getUTCFullYear() + 1);
   const lead = Math.max(e.lead || 0, MIN_LEAD);
-  const start = new Date(date.getTime() - lead * DAY);
-  const orderByDate = new Date(date.getTime() - Math.max(e.orderBy || 0, MIN_ORDER_BY) * DAY);
+  const orderByDate = lastOpenDay(new Date(date.getTime() - Math.max(e.orderBy || 0, MIN_ORDER_BY) * DAY));
+  /* Selling opens early enough to keep 4 full weeks before the order-by
+     date, even when a closure pulls that date earlier. */
+  const start = new Date(Math.min(date.getTime() - lead * DAY, orderByDate.getTime() - (MIN_LEAD - MIN_ORDER_BY) * DAY));
   const daysTo = Math.round((date.getTime() - t0) / DAY);
   const phase = t0 < start.getTime() ? 'later' : t0 <= orderByDate.getTime() ? 'selling' : 'last-call';
   return { ...e, date, start, orderByDate, daysTo, phase, image: PHOTOS + e.photo };

@@ -87,7 +87,7 @@ test('nothing promises curbside pickup, rush, or same-week turnaround', () => {
 
 test('/contact is served, listed in the sitemap, and carries the form first', () => {
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-  assert.match(server, /app\.get\('\/contact', \(_req, res\) => \{\s*res\.sendFile\(path\.join\(__dirname, 'public', 'contact\.html'\)\);/);
+  assert.match(server, /app\.get\('\/contact', \(req, res\) => \{\s*sendPage\(req, res, 'contact\.html'\);/, 'served through sendPage (seasonal menu)');
   assert.match(read('sitemap.xml'), /<loc>https:\/\/www\.jtees\.net\/contact<\/loc>/);
   const page = read('contact.html');
   assert.ok(page.indexOf('data-jt-quote-form') < page.indexOf('class="ct-info"'), 'the form comes before the details');

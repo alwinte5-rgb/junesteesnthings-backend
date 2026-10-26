@@ -288,16 +288,32 @@ app.get(LEGACY_PATHS, (req, res, next) => {
   return to ? res.redirect(301, to) : next();
 });
 
+/* A page file, dressed for the season when today changes it (tools/lib/seasonal.js),
+   else sent as it is (or handed to `fallback`, the static files). Dressed
+   pages keep revalidating: an ETag of their own, and 304 when it matches. */
+const SEASONAL = require('./tools/lib/seasonal');
+function sendPage(req, res, rel, status = 200, fallback = null) {
+  let dressed = null;
+  try { dressed = SEASONAL.dressFile(path.join(__dirname, 'public'), rel); } catch (err) {
+    /* A seasonal mistake must never take a page down: send it as it is. */
+    console.error('seasonal page', rel, err.message);
+  }
+  if (!dressed) return fallback ? fallback() : res.status(status).sendFile(path.join(__dirname, 'public', rel));
+  res.status(status).set('Cache-Control', 'public, max-age=0').set('ETag', dressed.etag).type('html');
+  if (status === 200 && req.fresh) return res.status(304).end();
+  return res.send(dressed.html);
+}
+
 /* Business Partners Program page. Until JT_PARTNERS=on it does not exist —
    express.static below would otherwise serve the .html. /mail15 was the first
    mailer's address (printed on it, and in its QR): it now forwards here, so
    the discount code is never the name of a page. */
 app.get(['/partners', '/partners.html'], (req, res) => {
-  if (!PARTNERS.on()) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
-  res.sendFile(path.join(__dirname, 'public', 'partners.html'));
+  if (!PARTNERS.on()) return sendPage(req, res, '404.html', 404);
+  sendPage(req, res, 'partners.html');
 });
 app.get(['/mail15', '/mail15.html'], (req, res) => {
-  if (!PARTNERS.on()) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+  if (!PARTNERS.on()) return sendPage(req, res, '404.html', 404);
   res.redirect(301, '/partners?src=mailer');
 });
 
@@ -314,6 +330,37 @@ try {
 } catch (err) {
   console.error('sitemap.xml could not be read:', err.message);
 }
+
+/* The logo by season (tools/lib/seasonal.js): every page, email and the
+   designer shows /assets/images/brand/logo-current*, answered here with a
+   1-hour cache so a season starts and ends within the hour. The plain logo
+   files keep their 30-day cache below. */
+{
+  const seasonal = SEASONAL;
+  app.get(Object.keys(seasonal.LOGO_FILES).map((n) => `/${seasonal.BRAND}/${n}`), (req, res) => {
+    const file = seasonal.logoFile(path.basename(req.path));
+    /* Out of season the studio's address is a 404, cached like the logo, and
+       the studio falls back to its own (tools/lib/seasonal.js SEASON_ONLY). */
+    res.set('Cache-Control', 'public, max-age=3600');
+    if (!file) return res.status(404).end();
+    res.sendFile(path.join(__dirname, 'public', file), { maxAge: 3600 * 1000 });
+  });
+}
+
+/* Pages by season (tools/lib/seasonal.js): the homepage's seasonal banner,
+   rows and shelves, and the Shop menu's order, put in as each page is sent.
+   Pages are not cached at the edge (HTML revalidates every load), so a season
+   starts and ends on its own day. A page today leaves untouched goes on to
+   the static files as before. The routes that send a page themselves
+   (/contact, /partners, the 404) use sendPage() too. */
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  let rel = req.path === '/' ? 'index.html' : req.path.replace(/^\/+/, '');
+  /* A folder address (/blog/) is its index page, as express.static serves it. */
+  if (rel.endsWith('/')) rel += 'index.html';
+  if (!SEASONAL.isPage(rel)) return next();
+  return sendPage(req, res, rel, 200, next);
+});
 
 // Serve frontend
 /* Browser caching for static files. Images and fonts rarely change: 30 days.
@@ -6403,7 +6450,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
     ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
       alt="Custom ${label}" loading="lazy">${label}</a>`).join('');
-  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo-2026-900.png" alt="June's Tees &amp; Things"></a></div>`;
+  const top = `<div class="tx-top"><a href="/"><img src="/assets/images/brand/logo-current-900.png" alt="June's Tees &amp; Things"></a></div>`;
   const foot = `<div class="tx-foot">June's Tees &amp; Things &middot; 3047 N Lincoln Ave, Chicago &middot; (773) 900-4592<br>
     <a href="/">jtees.net</a> &middot; <a href="${LAB}">Design Lab</a> &middot; <a href="/sms-terms">SMS terms</a> &middot;
     <a href="${D}/privacy.php">Privacy</a></div>`;
@@ -6805,7 +6852,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
       .k{font-size:30px;font-weight:800;margin:18px 0}.k b{background:#12203c;color:#fff;padding:2px 12px;border-radius:8px}
       img.qr{width:300px;height:300px}.f{font-size:13px;color:#4b5563;line-height:1.5;margin-top:22px}
       @media print{.np{display:none}}</style></head><body><div class="s">
-    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo-2026-900.png" alt="June's Tees" style="width:220px">
+    <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo-current-900.png" alt="June's Tees" style="width:220px">
     <h1>Get ${REINTRO.PCT}% off</h1>
     <p style="font-size:22px;margin:0">your next order when you join our texts</p>
     <img class="qr" src="${escEmail(qr)}" alt="QR code to sign up">
@@ -6875,19 +6922,19 @@ app.post('/admin/campaign/partners/email', requireAdmin, async (req, res) => {
   res.redirect('/admin/campaign?msg=' + encodeURIComponent('Started. The first batch is going out now, then up to the daily limit each day.') + '#partners');
 });
 
-app.get('/sms-terms', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'sms-terms.html'));
+app.get('/sms-terms', (req, res) => {
+  sendPage(req, res, 'sms-terms.html');
 });
 /* The quote form on a page of its own. Every "Get a Quote" and "Contact" link
    on both sites points here: /#contact landed on the heading above the
    homepage form, or in the middle of the long homepage (owner, 2026-10-17). */
-app.get('/contact', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'contact.html'));
+app.get('/contact', (req, res) => {
+  sendPage(req, res, 'contact.html');
 });
 // The opt-in as a customer sees it, with a screenshot: what A2P 10DLC campaign
 // vetting asks for, and what a carrier reviewer reads against the description.
-app.get('/sms-consent', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'sms-consent.html'));
+app.get('/sms-consent', (req, res) => {
+  sendPage(req, res, 'sms-consent.html');
 });
 
 // Passwordless login code for customer accounts on the designer site
@@ -43917,8 +43964,8 @@ app.post('/admin/delivery/settings/partner', requireAdmin, async (req, res) => {
 });
 
 // ─── 404 catch-all (HTML pages) ──────────────────────────────────────────────
-app.use((_req, res) => {
-  res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+app.use((req, res) => {
+  sendPage(req, res, '404.html', 404);
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
