@@ -47,7 +47,7 @@ test('every menu link goes somewhere real', () => {
   const links = flat(nav.menu).map((i) => i.href);
   for (const href of links) {
     if (href.startsWith('https://design.jtees.net/')) {
-      assert.match(href, /^https:\/\/design\.jtees\.net\/(products\.php(\?category_id=\d+)?|collection\.php\?c=[a-z-]+|editor\.php\?product_base=\d+)$/, href);
+      assert.match(href, /^https:\/\/design\.jtees\.net\/(products\.php(\?category_id=\d+)?|collection\.php\?c=[a-z-]+|editor\.php\?product_base=\d+|ready-made\.php)$/, href);
     } else if (href.startsWith('/#')) {
       assert.match(read('index.html'), new RegExp(`id="${href.slice(2)}"`), 'homepage has ' + href);
     } else {

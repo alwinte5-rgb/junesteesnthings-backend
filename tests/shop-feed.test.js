@@ -163,6 +163,7 @@ function runPageScript(feed, attrs = {}, extra = {}) {
     window: { fetch: () => { throw new Error('should use the cached feed'); } },
     document: { querySelectorAll: () => cards,
       getElementById: (id) => (extra.byId || {})[id] || null,
+      querySelector: (q) => (extra.query || {})[q] || null,
       addEventListener: (type, fn) => { on[type] = fn; },
       createElement: () => el({ className: '', style: {}, kids: [], textContent: '', title: '',
         appendChild(c) { this.kids.push(c); c.parentNode = this; },
@@ -188,6 +189,38 @@ test('the "Ready-made designs" link shows only while the designer lists one', ()
   assert.match(html, /id="jt-rm-link" href="https:\/\/design\.jtees\.net\/ready-made\.php"[^>]* hidden>/, 'starts hidden in the page');
   assert.strictEqual(cleanShopFeed({ ok: true, best: [], categories: [{ name: 'Ready-Made Designs', image: 'https://x/y.jpg', link: D + 'ready-made.php', from_price: 20 }] })
     .categories[0].link, D + 'ready-made.php', 'the server keeps the card');
+});
+
+test('ready-made designs: the server keeps only design pages on the designer, capped at 12', () => {
+  const r = (id, extra = {}) => ({ name: 'Nana Elf ' + id, image: 'https://design.jtees.net/data/templates/2026/10/x.png?v=1', link: D + 'ready-made.php?id=' + id, from_price: 20, ...extra });
+  const d = cleanShopFeed({ ...good, readymades: [
+    r(1), r(2, { link: 'https://evil.example/ready-made.php?id=2' }), r(3, { link: D + 'products.php' }),
+    r(4, { image: 'javascript:alert(1)' }), r(5, { name: '' }), ...Array.from({ length: 20 }, (_, i) => r(10 + i)),
+  ] });
+  assert.strictEqual(d.readymades[0].link, D + 'ready-made.php?id=1');
+  assert.ok(d.readymades.every((x) => /^https:\/\/design\.jtees\.net\/ready-made\.php\?id=\d+$/.test(x.link)), 'only design pages');
+  assert.ok(!d.readymades.some((x) => /^Nana Elf [2-5]$/.test(x.name)), 'bad links, photos and names are dropped');
+  assert.strictEqual(d.readymades.length, 12, 'capped');
+  assert.deepStrictEqual(cleanShopFeed(good).readymades, [], 'an older designer sends none');
+});
+
+test('ready-made designs: the homepage shows them first as product cards, and removes the shelf when none is live', () => {
+  const kids = [];
+  const host = { firstChild: null, insertBefore(n) { kids.unshift(n); n.parentNode = host; }, removeChild(n) { kids.splice(kids.indexOf(n), 1); } };
+  const byId = {};
+  const query = { '#shop .pb-shelves': host };
+  const feed = (list) => ({ categories: [], best: [], products: [], readymades: list });
+  const one = { name: 'Nana <b>Elf</b>', image: 'https://x/y.png', link: D + 'ready-made.php?id=7', from_price: 20 };
+  runPageScript(feed([one]), {}, { byId, query });
+  assert.strictEqual(kids.length, 1, 'one shelf, put first');
+  const shelf = kids[0];
+  byId['pb-shelf-ready'] = shelf;
+  const card = shelf.kids[1].kids[0];
+  assert.strictEqual(card.href, D + 'ready-made.php?id=7');
+  assert.strictEqual(card.kids[1].kids[0].textContent, 'Nana <b>Elf</b>', 'the name is text, never HTML');
+  assert.strictEqual(card.kids[1].kids[1].textContent, 'From $20.00 each, printing included');
+  runPageScript(feed([]), {}, { byId, query });
+  assert.strictEqual(kids.length, 0, 'gone when none is live');
 });
 
 test('the page script reprices every listed card and hides a switched-off product only with a complete list', () => {
