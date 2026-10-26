@@ -20,6 +20,10 @@
      is the whole catalogue, so an outage or partial answer never empties a
      shelf. */
   function refresh(d) {
+    /* The homepage's "Ready-made designs" link (index.html) shows only while
+       the designer lists a live one, so it never opens an empty page. */
+    var rmLink = document.getElementById ? document.getElementById('jt-rm-link') : null;
+    if (rmLink) rmLink.hidden = !(d.categories || []).some(function (c) { return /\/ready-made\.php$/.test(c.link || ''); });
     var byLink = {};
     var products = d.products || [];
     (d.categories || []).concat(d.best || [], products).forEach(function (it) {
