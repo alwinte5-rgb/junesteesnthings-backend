@@ -150,8 +150,11 @@ tools/add-dtf-chest-logo.js. A 4" x 4" chest logo on its own. Owner's rule:
 Anchorfish's 16 sq in cost at the same markup the full front carries in each
 band, rounded to 5c; 50-99 set by hand to $7.25 because Anchorfish's 16 sq in
 cost rises from 25-49 to 50-99. Typed in tools/lib/dtf-chest-logo.js, not
-derived. Quote form only (linked to no product). Beside a full front, back or
-oversized print it is the additional location, wherever it sits. On the quote
+derived. Beside a full front, back or oversized print it is the additional
+location, wherever it sits. Since 2026-10-26 it is also on adult garments and
+vests in the online designer (lib/garments.js 'dtf:chest'), where the designer
+picks Chest logo / standard / Oversized from the art itself (lumise app.js
+printing.dtf_auto; chest-only art, or over 132 sq in = Oversized). On the quote
 form and the customer's page a DTF front reads "Full front" or "Chest logo".
 
   stage                   1-4       5-11      12-24      25-35      36-49      50-99    100-249    250-499    500-999  1000-2499  2500-7000
