@@ -44,3 +44,15 @@ test('own-print products match by their first word; only scene A is listed (sign
   assert.deepStrictEqual(r.map((x) => [x.id, x.scene]), [[196, null], [197, 'A'], [197, 'B']]);
   fs.rmSync(d, { recursive: true });
 });
+
+test('letter-only style codes count as the style (Shaka Wear, Atlantis, LEGACY; 2026-10-27)', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-'));
+  for (const f of ['359-Shaka-Wear-SHGDH-Unisex-Los-Angeles-Garment-Dyed-Hoodie.webp', '166-Atlantis-FRASER-Sustainable-Dad-Hat.webp',
+    '197-Yard-sign-front-lawn-A.webp']) fs.writeFileSync(path.join(d, f), 'x');
+  const got = Object.fromEntries(readDir(d).map((g) => [g.id, g]));
+  assert.deepStrictEqual([got[359].styles, got[359].brand], [['SHGDH'], ['Shaka', 'Wear']]);
+  assert.deepStrictEqual([got[166].styles, got[166].brand], [['FRASER'], ['Atlantis']]);
+  assert.deepStrictEqual(got[197].styles, [], 'a sign file still reads as own-print');
+  assert.strictEqual(mismatch('Shaka Wear SHGDH Unisex Los Angeles Garment-Dyed Hoodie Sweatshirt', ['SHGDH'], ['Shaka', 'Wear']), null);
+  assert.match(mismatch('Shaka Wear SHGDN Unisex Garment-Dyed Designer Tee', ['SHGDH'], ['Shaka', 'Wear']), /style SHGDH is not in/);
+});
