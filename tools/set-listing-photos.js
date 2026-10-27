@@ -41,13 +41,18 @@ const dir = argv.find((a) => !a.startsWith('--'));
 
 /** {id, file, styles, brand} for each image in `dir`: styles are the name
  *  tokens holding a digit (the style number), brand the words before the
- *  first of them — the product's name must carry both. */
+ *  first of them — the product's name must carry both.
+ *  Some brands' style codes are letters only (Shaka Wear SHGDH, Atlantis
+ *  FRASER, LEGACY EZA). With no digit token, upper-case tokens of 3+ letters
+ *  are the style instead; a sign's file ("197-Yard-sign-front-lawn-A") has
+ *  none, so it still reads as own-print. */
 function readDir(d) {
   return fs.readdirSync(d).filter((f) => /^\d{1,5}-.+\.(webp|png|jpe?g)$/i.test(f)).sort().map((f) => {
     const [idTok, ...rest] = f.replace(/\.[a-z]+$/i, '').split('-');
-    const first = rest.findIndex((t) => /\d/.test(t));
+    const isStyle = rest.some((t) => /\d/.test(t)) ? (t) => /\d/.test(t) : (t) => /^[A-Z][A-Z0-9]{2,}$/.test(t);
+    const first = rest.findIndex(isStyle);
     const scene = rest.length > 1 && /^[A-Z]$/.test(rest[rest.length - 1]) ? rest[rest.length - 1] : null;
-    return { id: Number(idTok), file: path.join(d, f), styles: rest.filter((t) => /\d/.test(t)),
+    return { id: Number(idTok), file: path.join(d, f), styles: rest.filter(isStyle),
       brand: first > 0 ? rest.slice(0, first) : [], words: rest, scene };
   });
 }
