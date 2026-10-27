@@ -27653,7 +27653,10 @@ app.get('/admin/orders', requireAdmin, async (req, res) => {
    June so a problem can be fixed instead of published. Everything collected is
    held for approval before it appears anywhere. */
 
-const GOOGLE_REVIEW_URL = process.env.JT_GOOGLE_REVIEW_URL || '';
+/* Reviews go straight to Google (owner, 2026-10-27: "Thats where I get my
+   customers from. It's no proof if I am just uploading them to my website").
+   The link is public, not a secret, so the shop's own link is the default. */
+const GOOGLE_REVIEW_URL = process.env.JT_GOOGLE_REVIEW_URL || 'https://g.page/r/CWKc1jS7iFKHEBM/review';
 
 function reviewToken() { return crypto.randomBytes(9).toString('base64url'); }
 
@@ -27686,6 +27689,9 @@ app.get('/review/:token', async (req, res) => {
         text ${SHOP_PHONE}.</p></div>`));
     }
     const r = rows[0];
+    /* Links in emails sent before reviews went straight to Google land here:
+       send them on to Google too. */
+    if (!r.submitted_at) return res.redirect(302, GOOGLE_REVIEW_URL);
     if (r.submitted_at) {
       return res.send(quotePage('Thank you', `
         <div class="card"><h1>Thanks — we have your review</h1>
@@ -28053,9 +28059,8 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
       [token, name || '', email, phone || '', product || '', order_ref || null, quote_code || null]);
   }
 
-  const link = `${PUBLIC_BASE_URL}/review/${token}`;
-  const stars = [1,2,3,4,5].map(n =>
-    `<a href="${link}?r=${n}" style="text-decoration:none;font-size:30px;color:#F4A623">★</a>`).join(' ');
+  /* Straight to Google: a review only counts where new customers read it. */
+  const link = GOOGLE_REVIEW_URL;
 
   const first = name ? escEmail(String(name).split(' ')[0]) : '';
 
@@ -28077,25 +28082,25 @@ async function requestReview({ token, name, email, phone, product, order_ref, qu
 
   await sendClientEmail({
     quote: quote_code || null, kind: followup ? 'review-followup' : 'review-ask',
-    preview: followup ? 'The one reminder to leave a review.' : 'Asked how it turned out: a star to tap, or a few words.',
+    preview: followup ? 'The one reminder to leave a review.' : 'Asked how it turned out, with a link to review us on Google.',
     to: email,
     subject,
     html: `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:8px">
       <!-- Preview text: what the inbox shows beside the subject. Hidden in the
            body so it never renders twice. -->
-      <div style="display:none;max-height:0;overflow:hidden;opacity:0">One tap, no form, no account.</div>
+      <div style="display:none;max-height:0;overflow:hidden;opacity:0">A quick Google review, about 30 seconds.</div>
 
       <p style="color:#374151;line-height:1.7;margin:0 0 14px">${first ? 'Hi ' + first + ',' : 'Hi,'}</p>
 
       <p style="color:#374151;line-height:1.7;margin:0 0 14px">Your order went out a little while ago —
         I hope it has had some use by now.</p>
 
-      <p style="color:#374151;line-height:1.7;margin:0 0 6px">If it turned out well, would you tap a star?
-        One click, no form, no account.</p>
+      <p style="color:#374151;line-height:1.7;margin:0 0 6px">If it turned out well, would you leave us
+        a quick review on Google?</p>
 
-      <p style="text-align:center;margin:20px 0 6px;line-height:1">${stars}</p>
-      <p style="text-align:center;margin:0 0 22px"><a href="${link}"
-         style="color:#6b7280;font-size:13px;text-decoration:underline">or write a few words &rarr;</a></p>
+      <p style="text-align:center;margin:20px 0 22px"><a href="${escEmail(link)}"
+         style="display:inline-block;background:#1a3fa8;color:#fff;font-weight:600;padding:12px 22px;border-radius:8px;text-decoration:none">
+         <span style="color:#F4A623">★★★★★</span>&nbsp; Review us on Google &rarr;</a></p>
 
       <p style="color:#374151;line-height:1.7;margin:0 0 18px">Reviews are genuinely how a small Chicago shop
         gets found instead of a big online printer. It takes about ten seconds and it helps more than you would think.</p>

@@ -296,7 +296,7 @@ function asker() {
   const mails = [];
   const sandbox = {
     isValidEmail: (e) => /^[^@\s]+@[^@\s]+$/.test(e), reviewToken: () => 'tok',
-    PUBLIC_BASE_URL: 'https://www.jtees.net', SHOP_SIGNER: 'June', SHOP_PHONE: '(773) 555-0100', SHOP_NAME: "June's Tees",
+    PUBLIC_BASE_URL: 'https://www.jtees.net', GOOGLE_REVIEW_URL: 'https://g.page/r/test/review', SHOP_SIGNER: 'June', SHOP_PHONE: '(773) 555-0100', SHOP_NAME: "June's Tees",
     sendClientEmail: async (m) => { mails.push(m); },
     pool: { query: async () => ({ rows: [] }) },
   };
@@ -313,6 +313,7 @@ test('a review ask and its reminder are recorded on the job, each by name', asyn
   assert.deepStrictEqual(a.mails.map((m) => [m.quote, m.kind]),
     [['AB12CD34EF', 'review-ask'], ['AB12CD34EF', 'review-followup'], [null, 'review-ask']]);
   assert.ok(a.mails.every((m) => m.preview && m.to && m.subject && m.html));
+  assert.ok(a.mails.every((m) => m.html.includes('https://g.page/r/test/review')), 'every ask carries the Google link');
   const kinds = grab('const MESSAGE_KINDS = {', '};');
   assert.match(kinds, /'review-ask': 'Review ask'/, 'the job page would show the raw key');
   assert.match(kinds, /'review-followup': 'Review reminder'/);
