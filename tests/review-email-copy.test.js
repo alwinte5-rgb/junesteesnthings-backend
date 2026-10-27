@@ -77,9 +77,18 @@ test('it is signed by a person', () => {
   assert.match(REQUEST, /\$\{SHOP_SIGNER\}/);
 });
 
-test('the star links still carry the rating', () => {
-  assert.match(REQUEST, /\$\{link\}\?r=\$\{n\}|r=\$\{n\}/,
-    'one-tap rating is the entire mechanism');
+test('the ask links straight to Google, not to a form on our own site', () => {
+  assert.match(REQUEST, /const link = GOOGLE_REVIEW_URL;/,
+    'owner, 2026-10-27: reviews must land on Google, where new customers read them');
+  assert.doesNotMatch(REQUEST, /\/review\/\$\{token\}/,
+    'a review kept on our own site is no proof to a new customer');
+  assert.match(src, /const GOOGLE_REVIEW_URL = process\.env\.JT_GOOGLE_REVIEW_URL \|\| 'https:\/\/g\.page\/r\/CWKc1jS7iFKHEBM\/review';/,
+    'with the setting unset the ask must still carry the shop\'s Google link');
+});
+
+test('old emailed links forward to Google', () => {
+  const page = extractFn("app.get('/review/:token'");
+  assert.match(page, /if \(!r\.submitted_at\) return res\.redirect\(302, GOOGLE_REVIEW_URL\);/);
 });
 
 test('the subject does not name the product', () => {
