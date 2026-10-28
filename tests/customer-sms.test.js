@@ -211,6 +211,7 @@ function loadSender(consentRows) {
     normalizeUsPhone: (p) => '+1' + String(p).replace(/\D/g, '').slice(-10),
     smsConsentFor: async () => (consentRows.length ? consentRows[consentRows.length - 1] : { transactional: false, marketing: false }),
     smsConfigured: () => true, attributedStaffId: () => null, recordSmsConsent: async () => {},
+    STOP_SOURCES: require('../tools/lib/sms-consent').STOP_SOURCES,
     twilioSend: async (to, body) => { twilio.push({ to, body }); return { sid: 'SM1' }; },
     pool: { query: async (sql) => ({ rows: /SELECT source FROM sms_consents/.test(sql) ? consentRows.slice(-1)
                                          : /FROM sms_consents/.test(sql) ? consentRows
@@ -240,6 +241,10 @@ test('an order update goes to the phone they gave, unless that number texted STO
   assert.equal(await loadSender(restarted).f({ ...update, orderUpdate: true }), 'sent', 'START after STOP texts again');
   assert.equal(await loadSender([]).f({ ...update, kind: 'marketing', orderUpdate: true }), 'no-consent',
     'marketing always needs its own yes');
+  /* The one-time "reply JOIN" ask: any number on file, never after a STOP. */
+  assert.equal(await loadSender([]).f({ ...update, consentAsk: true }), 'sent');
+  assert.equal(await loadSender([{ transactional: false, marketing: false, source: 'sms-reply:stop' }]).f({ ...update, consentAsk: true }), 'no-consent');
+  assert.equal(await loadSender([]).f({ ...update, kind: 'marketing', consentAsk: true }), 'no-consent', 'the ask is never a marketing send');
 });
 
 test('milestone texts are sent as order updates', async () => {
