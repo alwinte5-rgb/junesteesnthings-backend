@@ -55,8 +55,8 @@ test('every FAQ question from both homepages is answered, and the structured dat
 });
 
 test("the owner's turnaround and file-type wording, and none of the old", () => {
-  assert.match(text, /7–14 business days, depending on the project/);
-  assert.match(text, /Rush fees may apply/);
+  assert.match(text, /Small orders take 5–7 business days and larger orders 7–14, depending on the project/);
+  assert.match(text, /Need it in under 5 days\? Rush turnaround is available for a fee\./);
   assert.match(text, /Designing online: upload PNG, JPG, or WEBP/);
   assert.match(text, /Getting a quote: we take vector files \(AI, EPS, SVG\)/);
   for (const old of [/about 7 days/i, /7-Day Delivery/i, /5–10/]) assert.doesNotMatch(text, old);
