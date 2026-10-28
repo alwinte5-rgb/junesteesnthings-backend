@@ -2,7 +2,8 @@
 
 /* Calls to the shop's Twilio number.
 
-   The caller hears a short menu. An order option (or no key) rings the
+   In shop hours a call rings the owner straight away; outside them the
+   caller hears a short menu. An order option (or no key) rings the
    owner's cell (TWILIO_TO_NUMBER) from the shop number, and a text names the
    caller as it rings. Unanswered, or outside shop hours, the caller gets the
    shop voicemail; the owner is texted about every missed call.
@@ -98,8 +99,21 @@ function menuInner({ base, again = false }) {
     `<Redirect method="POST">${xml(base + PATHS.menu)}</Redirect>`);
 }
 
-function incomingTwiml({ base }) {
-  return twiml(menuInner({ base }));
+/* Whether a new call rings the owner straight away: in shop hours, with an
+   owner number, and not the owner calling in. Callers who meet a menu hang
+   up, so in hours there is none; out of hours the menu still gives hours,
+   address and voicemail. */
+function ringsDirect({ from, owner, open }) {
+  return Boolean(open && owner && from !== owner);
+}
+
+function incomingTwiml({ base, from, owner, shop, open = false }) {
+  if (!ringsDirect({ from, owner, open })) return twiml(menuInner({ base }));
+  const callerId = shop ? ` callerId="${xml(shop)}"` : '';
+  return twiml(
+    say(`Thanks for calling ${SHOP}. One moment while we connect you.`) +
+    `<Dial timeout="${RING_SECONDS}" answerOnBridge="true"${callerId} action="${xml(base + PATHS.done)}" method="POST">` +
+    `<Number>${xml(owner)}</Number></Dial>`);
 }
 
 /* Ring the owner. The cell shows the SHOP number (`shop`), so a call saved
@@ -224,6 +238,6 @@ function transcriptText({ from, text, status }) {
 const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
 
 module.exports = {
-  PATHS, MENU, incomingTwiml, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
+  PATHS, MENU, incomingTwiml, ringsDirect, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
   voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody, parseCallCommand, callbackTwiml, connectTwiml, transcriptText,
 };

@@ -12,7 +12,36 @@ const owner = '+17738491854';
 const shop = '+17739004592';
 const from = '+13125550199';
 
-test('a call opens on the menu, and silence falls through to the menu handler', () => {
+test('in shop hours a call rings the owner straight away, with no menu', () => {
+  const t = V.incomingTwiml({ base, from, owner, shop, open: true });
+  assert.match(t, /Thanks for calling June&apos;s Tees\. One moment/);
+  assert.match(t, /<Dial [^>]*callerId="\+17739004592"/);
+  assert.match(t, /<Dial [^>]*timeout="18"/);
+  assert.match(t, /action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/done"/);
+  assert.match(t, /<Number>\+17738491854<\/Number>/);
+  assert.doesNotMatch(t, /<Gather|press 1/);
+  assert.equal(V.ringsDirect({ from, owner, open: true }), true);
+});
+
+test('the menu still answers out of hours, with no owner number, and for the owner calling in', () => {
+  for (const c of [{ from, owner, open: false }, { from, owner: '', open: true }, { from: owner, owner, open: true }]) {
+    const t = V.incomingTwiml({ base, shop, ...c });
+    assert.match(t, /<Gather numDigits="1"/);
+    assert.doesNotMatch(t, /<Dial/);
+    assert.equal(V.ringsDirect(c), false);
+  }
+});
+
+test('the incoming route passes the call details and texts the owner only when it rings direct', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
+  assert.match(route, /twilioVoiceOk\(req, res\)/);
+  assert.match(route, /open: VOICE\.isOpen\(\)/);
+  assert.match(route, /VOICE\.incomingTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
+  assert.match(route, /if \(VOICE\.ringsDirect\(call\)\) await sendOwnerSms\(VOICE\.ringText\(/);
+});
+
+test('a call opens on the menu out of hours, and silence falls through to the menu handler', () => {
   const t = V.incomingTwiml({ base });
   assert.match(t, /Thanks for calling June&apos;s Tees and Things/);
   assert.match(t, /<Gather numDigits="1"[^>]*action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/menu"/);
