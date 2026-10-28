@@ -185,7 +185,9 @@ test('no page hides overflow on html or body, so the menu stays sticky', () => {
    the blue bar's "Design your own apparel online" opens the designer. */
 test('every Design Studio mention links to the designer', () => {
   const nav = JSON.parse(read('assets/data/site-nav.json'));
-  assert.match(nav.announcement[0].href, /^https:\/\/design\.jtees\.net\//, 'the blue bar opens the designer');
+  const design = nav.announcement.find((a) => /Design your own/.test(a.text));
+  assert.ok(design, 'the blue bar keeps "Design your own apparel online"');
+  assert.match(design.href, /^https:\/\/design\.jtees\.net\//, 'the blue bar opens the designer');
   const bad = [];
   const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const p = path.join(dir, e.name);

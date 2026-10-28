@@ -107,11 +107,15 @@ test('the ad pages make no promise the owner has taken back', () => {
     assert.doesNotMatch(body, /\b12\+/, rel);
     assert.doesNotMatch(body, /Grab it curbside/, rel);
     assert.doesNotMatch(body, /24.48 hour/, rel);
-    assert.doesNotMatch(body, /fast (local )?turnaround|rush options|same[- ]day|1–2 days|week of graduation/i, rel);
+    /* Owner 2026-10-28: fast turnaround and paid rush are back (small orders
+       5–7 business days, larger 7–14, rush for a fee); still never same-day,
+       1–2 days, a free rush or a rush price on the page. */
+    assert.doesNotMatch(body, /rush options|same[- ]day|1–2 days|week of graduation|free rush|rush[^.<]{0,40}\d+ ?%/i, rel);
   }
-  // the announcement bar is on every page: no rush promise there
+  // the announcement bar is on every page: paid rush may be named, never
+  // same-day, free or priced
   const nav = JSON.parse(read('assets/data/site-nav.json'));
-  for (const a of nav.announcement) assert.doesNotMatch(a.text, /rush/i);
+  for (const a of nav.announcement) assert.doesNotMatch(a.text, /same[- ]day|free rush|24.48 hour|\d+ ?%/i);
 });
 
 test('page cards are refreshed from the feed by link, built with DOM calls only', () => {
@@ -268,4 +272,21 @@ test('each review shows its own Google rating, and the reviews are the customers
   assert.strictEqual(photo('Corvina Hollingsworth'), '/assets/images/reviews/review-2.jpg');
   assert.strictEqual(photo('Monaya Ali'), '/assets/images/reviews/review-5.jpg');
   assert.strictEqual(photo('Rob Simpson'), undefined);
+});
+
+/* Owner 2026-10-28: the speed line customers chose the shop for is back. */
+test('the bar, homepage and service pages say small orders 5–7 days, larger 7–14, rush for a fee', () => {
+  const nav = JSON.parse(read('assets/data/site-nav.json'));
+  assert.match(nav.announcement[0].text, /Fast turnaround · Small orders 5–7 business days · Rush available/);
+  const home = read('index.html');
+  assert.match(home, /Small orders take 5–7 business days and larger orders 7–14/);
+  assert.match(home, /Need it in under 5 days\? Rush turnaround is available for a fee\./);
+  for (const rel of ['services/custom-tshirts-chicago.html', 'services/dtf-transfers.html', 'services/embroidery.html']) {
+    const body = read(rel);
+    assert.doesNotMatch(body, /Most orders take 7–14/, rel);
+    assert.match(body, /Small orders take 5–7 business days/, rel);
+  }
+  for (const rel of ['services/dtf-transfers.html', 'services/embroidery.html', 'services/banners-signs.html']) {
+    assert.match(read(rel), /<span class="hero-badge">⚡ Fast Turnaround<\/span>/, rel);
+  }
 });

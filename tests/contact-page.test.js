@@ -73,12 +73,13 @@ test('"Email us" and "Email Now" start an email', () => {
   }
 });
 
-test('nothing promises curbside pickup, rush, or same-week turnaround', () => {
+test('nothing promises curbside pickup, a free rush, or same-week turnaround', () => {
   for (const rel of pages()) {
     if (rel === 'sms-terms.html' || rel === 'sms-consent.html') continue;
     const text = read(rel);
     assert.doesNotMatch(text, /curbside/i, rel);
-    assert.doesNotMatch(text, /Rush (?:Available|options are available|turnaround available)|rush job/i, rel);
+    // paid rush is offered again (owner 2026-10-28), never free or same-day
+    assert.doesNotMatch(text, /free rush|same[- ]day rush/i, rel);
     assert.doesNotMatch(text, /same[- ]week/i, rel);
   }
   assert.doesNotMatch(read('services/screen-printing.html'), /href="tel:[^"]*"[^>]*>[^<]*Get a Custom Quote/,
