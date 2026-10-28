@@ -6450,14 +6450,9 @@ async function campaignAskPhones() {
     /* Quotes from the last two years only: an older number may belong to
        someone else by now. */
     pool.query(`SELECT DISTINCT phone FROM quotes WHERE COALESCE(phone, '') <> '' AND created_at > NOW() - INTERVAL '2 years'`)]);
-  /* And every number on the Brevo list (owner, 2026-10-28). If Brevo cannot
-     be read, the rest still go and the failure is reported. */
-  let brevoNums = [];
-  try { brevoNums = REINTRO.brevoPhones(await brevoAllContacts()); }
-  catch (e) { console.error('ask: Brevo list unavailable:', e.message); reportError('reintro:ask-brevo', e).catch(() => {}); }
   /* Never the shop's own phones (the owner's alerts number, the Twilio line). */
   const own = new Set([process.env.TWILIO_TO_NUMBER, process.env.TWILIO_PHONE_NUMBER].map((p) => normalizeUsPhone(p || '')).filter(Boolean));
-  return REINTRO.askAudience(rows, [...q.map((r) => normalizeUsPhone(r.phone)).filter(Boolean), ...brevoNums], foldSmsConsent)
+  return REINTRO.askAudience(rows, q.map((r) => normalizeUsPhone(r.phone)).filter(Boolean), foldSmsConsent)
     .filter((p) => !own.has(p));
 }
 
@@ -6935,7 +6930,7 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
       </div>
       <div class="card" style="margin-top:14px">
         <h2 class="card-title">1b. Ask everyone else first</h2>
-        <p class="muted">One plain text, once, to the <b>${askPhones.length}</b> other numbers on file (the Brevo list, orders, quotes, order-update sign-ups),
+        <p class="muted">One plain text, once, to the <b>${askPhones.length}</b> other numbers on file (orders, quotes, order-update sign-ups),
           never to anyone who texted STOP. It sells nothing: it asks them to reply JOIN. Everyone who does gets their ${REINTRO.PCT}% code
           and joins the hello text above, so press <b>Send the hello text</b> again a day or two later.</p>
         <div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px;white-space:pre-wrap">${escEmail(ask.body)}</div>

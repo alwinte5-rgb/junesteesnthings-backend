@@ -258,14 +258,3 @@ test('YES to the ask joins; the ask goes 11am-6pm Chicago only; failed numbers a
   assert.match(src, /if \(tried\.has\(phone\)\) continue;/);
   assert.match(src, /STOP_SOURCES\.includes\(r\.source\)/, 'saidStop reads the shared list');
 });
-
-test('the ask also reaches the Brevo list: SMS, else PHONE, never a contact Brevo blocked for SMS', () => {
-  assert.deepStrictEqual(R.brevoPhones([
-    { attributes: { SMS: '17735550101' } },
-    { attributes: { PHONE: '(773) 555-0102' } },
-    { smsBlacklisted: true, attributes: { SMS: '17735550103' } },
-    { attributes: { SMS: 'not a phone' } },
-    { attributes: {} },
-  ]), ['+17735550101', '+17735550102']);
-  assert.match(src, /REINTRO\.brevoPhones\(await brevoAllContacts\(\)\)/);
-});
