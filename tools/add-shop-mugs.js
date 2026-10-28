@@ -103,9 +103,9 @@ const PILLOW_STAGES = { front: { label: 'Front', source: 'raws', overlay: false,
    (owner's branded mockups, 2026-10-28), the same files as the jtees.net cards.
    The drawing the design sits on stays in `stages`. */
 const DESIGNER = {
-  mug: { stages: MUG_STAGES, thumb: 'https://jtees.net/assets/images/shop/listing-p523.jpg',
+  mug: { stages: MUG_STAGES, thumb: 'https://www.jtees.net/assets/images/shop/listing-p523.jpg',
     category: { slug: 'custom-mugs-drinkware', name: 'Mugs & Drinkware', order: 8 } },
-  pillow: { stages: PILLOW_STAGES, thumb: 'https://jtees.net/assets/images/shop/listing-p530.jpg',
+  pillow: { stages: PILLOW_STAGES, thumb: 'https://www.jtees.net/assets/images/shop/listing-p530.jpg',
     category: { slug: 'custom-pillows-home-decor', name: 'Pillows & Home Decor', order: 9 } },
 };
 for (const m of MUGS) if (m.designer && !DESIGNER[m.designer]) { console.error('no designer drawing "' + m.designer + '" for ' + m.name + ' — refusing'); process.exit(1); }
