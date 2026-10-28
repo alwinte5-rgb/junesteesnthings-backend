@@ -1,53 +1,76 @@
-/* What this account PAYS (customerPrice), not S&S's list price, and the MEDIAN
-   colour per size: the same figures tools/ssa-sync.js keeps the catalogue on.
-   Built from the list price and the cheapest colour, a new style's extended-size
-   prices were wrong for good, because the hourly sync corrects the base price
-   but never rebuilt the size options (Codex #223).
+/* What an S&S garment is PRICED from: its regular (list) price, with the
+   typical colour's size premiums. Outside a sale that is also what this account
+   pays (no standing discount; 25 live styles checked 2026-10-18). Built from
+   the cheapest colour, a new style's extended-size prices were wrong for good,
+   because the hourly sync corrects the base price but never rebuilt the size
+   options (Codex #223).
 
    Shared by ssa-add-products.js (which writes the size options), ssa-sync.js
    (which keeps them current) and catalog-inventory.js (which checks them), so
    the three cannot disagree. */
 const { CORE_SIZES } = require('./garments');
 const { sizeUpcharge } = require('./markup');
+const { median } = require('./team-metrics');
 
-/* SALES (owner, 2026-10-18: "if S&S has a sale the customer gets the new
-   price"). During a sale customerPrice IS the sale price; outside one it is the
-   list price (checked across 25 live styles: this account has no standing
-   discount). The sync runs once a day and a blank is bought a day or more after
-   the order, so a sale ending soon would sell at the sale price and be bought
-   at list. Inside SALE_BUFFER_DAYS of its end a row is costed at list. */
-const SALE_BUFFER_DAYS = 4;
+/* REGULAR PRICE ONLY (owner, 2026-10-28: "regular price for everything …
+   passing on the sale without labeling them on sale is a problem"; and
+   2026-10-23: "dont give them the sale price"). This replaces the 2026-10-18
+   rule that passed S&S sales on. A sale is the shop's margin: the shop pays
+   customerPrice, but the customer is priced from S&S's list price.
 
-/* A sale end written without a zone is read as UTC, so the buffer starts at
-   the same moment on Railway (UTC) and on the Mac (Central) (code review,
-   2026-10-18). */
-const saleEnd = (t) => {
-  if (!t) return NaN;
-  const s = String(t);
-  return Date.parse(/T\d\d:\d\d(:\d\d(\.\d+)?)?$/.test(s) ? s + 'Z' : s);
-};
+   Passing sales on also broke the size ladder. S&S often discounts only SOME
+   colours, and the median across colours landed on the sale price for some
+   sizes and the list price for others: the econscious EC3000 charged +$3.78
+   for M and L and nothing for XL. */
 
-/** What one S&S product row costs the shop, sale included unless it is about
- *  to end — or, with `list`, its list price whatever the sale. `now` is
- *  injectable for tests. */
-function pieceCost(r, now = Date.now(), { list = false } = {}) {
-  const ends = saleEnd(r.saleExpiration);
-  if (list || (Number.isFinite(ends) && ends - now < SALE_BUFFER_DAYS * 86400000)) {
-    return Number(r.piecePrice || r.customerPrice || r.casePrice || 0);
-  }
-  return Number(r.customerPrice || r.piecePrice || r.casePrice || 0);
+/** What one S&S product row is priced from: its list price. */
+function pieceCost(r) {
+  return Number(r.piecePrice || r.customerPrice || r.casePrice || 0);
 }
 
-/** { size: median cost across colours } from S&S product rows. `list` costs
- *  every row at list price, sale or not. */
-function costBySize(rows, now = Date.now(), opts = {}) {
-  const per = {};
-  for (const r of rows) { const c = pieceCost(r, now, opts); if (r.sizeName && c) (per[r.sizeName] = per[r.sizeName] || []).push(c); }
-  const out = {};
-  for (const [size, xs] of Object.entries(per)) {
-    const a = xs.slice().sort((x, y) => x - y); const m = a.length >> 1;
-    out[size] = a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+/** { size: cost } from S&S product rows: the typical colour's base cost plus
+ *  the typical size premium. The premium is measured INSIDE each colour (its
+ *  size against its own cheapest core size) and then the median taken, so a
+ *  colour priced differently from the rest — a heather, a sale, a closeout —
+ *  cannot make a medium dearer than an XL.
+ *
+ *  - Only colours that carry a core size set the base and premiums (a
+ *    tall-only or extended-only colour would otherwise count its 2XL as a
+ *    "base"); with no core size anywhere, every colour counts.
+ *  - A size cheaper than the base (XS, some youth) keeps a negative premium.
+ *  - The cheapest core size of the result IS the typical base: if colours
+ *    disagree on which core size is cheapest, every premium is shifted so the
+ *    lowest core premium is zero, rather than pricing above every colour. */
+function costBySize(rows) {
+  const byColour = new Map();
+  for (const r of rows || []) {
+    const c = pieceCost(r);
+    if (!r.sizeName || !(c > 0)) continue;
+    /* colorCode when a row has no name, so unnamed rows of different colours
+       are not pooled into one; rows with neither share one bucket. */
+    const k = String(r.colorName || r.colorCode || '');
+    if (!byColour.has(k)) byColour.set(k, {});
+    const sizes = byColour.get(k);
+    (sizes[r.sizeName] = sizes[r.sizeName] || []).push(c);
   }
+  const colours = [];
+  for (const sizes of byColour.values()) {
+    const cost = {};
+    for (const [z, xs] of Object.entries(sizes)) cost[z] = median(xs);
+    const base = baseCostOf(cost);
+    if (Number.isFinite(base)) colours.push({ cost, base, core: CORE_SIZES.some((z) => cost[z] > 0) });
+  }
+  const use = colours.some((c) => c.core) ? colours.filter((c) => c.core) : colours;
+  if (!use.length) return {};
+  const base = median(use.map((c) => c.base));
+  const prem = {};
+  for (const c of use) for (const [z, v] of Object.entries(c.cost)) (prem[z] = prem[z] || []).push(v - c.base);
+  const typical = {};
+  for (const [z, ps] of Object.entries(prem)) typical[z] = median(ps);
+  const corePrem = CORE_SIZES.map((z) => typical[z]).filter((v) => v !== undefined && v !== null);
+  const shift = corePrem.length ? Math.min(...corePrem) : 0;
+  const out = {};
+  for (const [z, v] of Object.entries(typical)) out[z] = Math.round((base + v - shift) * 100) / 100;
   return out;
 }
 
@@ -61,15 +84,13 @@ function baseCostOf(bySize) {
 }
 
 /** Whether a cost move is held for a person instead of written: a jump larger
- *  than `guard` (a fraction) off the stored cost — unless it is a sale ENDING,
- *  a move UP to the list price. Outside a sale the cost IS the list price, so
- *  excusing any move "to list" switched the guard off whenever no sale was
- *  running, and a feed glitch to $1.50 would have repriced a $15 hoodie
- *  below cost (code review, 2026-10-18). */
-function jumpHeld(was, cost, listCost, guard) {
+ *  than `guard` (a fraction) off the stored cost, up or down. Costs are list
+ *  prices now, so a sale ending is no longer a legitimate jump to excuse — and
+ *  excusing rises "to list" let any upward feed glitch through. One-off moves
+ *  a person has looked at are written with ssa-sync.js --accept-jumps. */
+function jumpHeld(was, cost, guard) {
   if (!(was > 0)) return false;
-  const saleEnding = cost > was && Math.abs(cost - listCost) < 0.01;
-  return Math.abs(cost - was) / was > guard && !saleEnding;
+  return Math.abs(cost - was) / was > guard;
 }
 
 /** The product's size field: { key, values, asString }, or null when it has
@@ -172,4 +193,4 @@ function closedColours(options, stock, min = CLOSEOUT_MIN) {
   }).map((o) => o.title);
 }
 
-module.exports = { SALE_BUFFER_DAYS, CLOSEOUT_MIN, atSanMar, isLightTee, pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours };
+module.exports = { CLOSEOUT_MIN, atSanMar, isLightTee, pieceCost, costBySize, baseCostOf, jumpHeld, readSizes, sizeOptions, colourStock, closedColours };

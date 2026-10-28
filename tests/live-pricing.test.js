@@ -1,6 +1,7 @@
-/* Live S&S pricing (owner, 2026-10-18): a sale reaches the customer, except in
- * its last 4 days; and the size list and its extra charges follow today's cost
- * on every sync instead of staying what they were the day a product was added.
+/* Live S&S pricing. Owner, 2026-10-28: "regular price for everything" — an
+ * S&S sale is the shop's margin and never reaches the customer (this replaced
+ * the 2026-10-18 rule that passed sales on). The size list and its extra
+ * charges follow today's cost on every sync.
  *
  * Run: node --test tests/live-pricing.test.js
  */
@@ -8,29 +9,75 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { pieceCost, costBySize, sizeOptions, jumpHeld, readSizes, SALE_BUFFER_DAYS } = require('../tools/lib/ssa-costs');
+const { pieceCost, costBySize, sizeOptions, jumpHeld, readSizes } = require('../tools/lib/ssa-costs');
 
-const NOW = Date.parse('2026-10-18T12:00:00Z');
 const row = (over) => ({ sizeName: 'M', piecePrice: 3.55, customerPrice: 3.18, salePrice: 3.18, ...over });
 
-test('a sale is passed on while it has more than 4 days to run', () => {
-  assert.strictEqual(SALE_BUFFER_DAYS, 4);
-  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-10-31T00:00:00' }), NOW), 3.18);
+test('a running sale is never passed on: every row is priced at list', () => {
+  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-12-31T00:00:00' })), 3.55);
+  assert.strictEqual(pieceCost({ piecePrice: 5.4, customerPrice: 5.4 }), 5.4, 'no sale: the same number');
+  assert.strictEqual(pieceCost({ customerPrice: 5.4 }), 5.4, 'a row with no list price falls back');
 });
 
-test('inside the last 4 days the list price is used', () => {
-  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-10-21T00:00:00' }), NOW), 3.55);
-  /* An expired sale the feed still reports is list too. */
-  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-10-10T00:00:00' }), NOW), 3.55);
+/* The econscious EC3000 (style 13546), 2026-10-28: some colours on sale at
+   $5.30, others at $7.19 list; the median-per-size of the SALE prices put S and
+   XL at $5.30 and M and L at $7.19, so M cost +$3.78 and XL nothing. */
+test('sizes never cost less than smaller sizes because only some colours are on sale', () => {
+  const rows = [];
+  const colour = (name, list, sale, xxl) => {
+    for (const z of ['S', 'M', 'L', 'XL']) rows.push({ colorName: name, sizeName: z, piecePrice: list, customerPrice: sale });
+    rows.push({ colorName: name, sizeName: '2XL', piecePrice: xxl, customerPrice: xxl });
+  };
+  colour('Black', 7.19, 5.3, 8.47); colour('Navy', 7.19, 7.19, 8.47);
+  colour('Iris', 5.95, 5.25, 7.58); colour('Sky', 7.19, 5.3, 8.47);
+  const c = costBySize(rows);
+  assert.strictEqual(c.S, c.M); assert.strictEqual(c.M, c.L); assert.strictEqual(c.L, c.XL);
+  assert.ok(c['2XL'] > c.XL);
+  assert.strictEqual(c.S, 7.19, 'the typical colour at list');
 });
 
-test('no sale: customerPrice (equal to list for this account)', () => {
-  assert.strictEqual(pieceCost({ piecePrice: 5.4, customerPrice: 5.4 }, NOW), 5.4);
+test('a colour priced apart from the rest cannot reorder the sizes', () => {
+  /* Heather dearer than the solids; it has no XL row at all. */
+  const rows = [
+    { colorName: 'Black', sizeName: 'S', piecePrice: 6 }, { colorName: 'Black', sizeName: 'XL', piecePrice: 6 },
+    { colorName: 'White', sizeName: 'S', piecePrice: 6 }, { colorName: 'White', sizeName: 'XL', piecePrice: 6 },
+    { colorName: 'Heather', sizeName: 'S', piecePrice: 9 },
+  ];
+  const c = costBySize(rows);
+  assert.strictEqual(c.XL, c.S, 'one dear colour with no XL does not make XL cheaper than S');
 });
 
-test('costBySize applies the buffer per row', () => {
-  const rows = [row({ sizeName: 'S', saleExpiration: '2026-10-31' }), row({ sizeName: '2XL', piecePrice: 5, customerPrice: 4.5, saleExpiration: '2026-10-20' })];
-  assert.deepStrictEqual(costBySize(rows, NOW), { S: 3.18, '2XL': 5 });
+test('an extended-only colour does not set the base or dilute the 2XL extra', () => {
+  const rows = [];
+  for (const c of ['A', 'B']) {
+    for (const z of ['S', 'M', 'L', 'XL']) rows.push({ colorName: c, sizeName: z, piecePrice: 7.19 });
+    rows.push({ colorName: c, sizeName: '2XL', piecePrice: 8.47 });
+  }
+  for (const z of ['2XL', '3XL']) rows.push({ colorName: 'Tall', sizeName: z, piecePrice: 8.47 });
+  const c = costBySize(rows);
+  assert.strictEqual(c.S, 7.19);
+  assert.strictEqual(c['2XL'], 8.47);
+});
+
+test('a size cheaper than the base stays cheaper; colours disagreeing on the cheapest core size do not inflate it', () => {
+  const xs = costBySize([{ colorName: 'A', sizeName: 'XS', piecePrice: 6.8 }, { colorName: 'A', sizeName: 'S', piecePrice: 7.2 }]);
+  assert.ok(xs.XS < xs.S, 'XS keeps its lower cost');
+  const rows = [
+    { colorName: 'A', sizeName: 'S', piecePrice: 5 }, { colorName: 'A', sizeName: 'M', piecePrice: 6 },
+    { colorName: 'B', sizeName: 'S', piecePrice: 6 }, { colorName: 'B', sizeName: 'M', piecePrice: 5 },
+  ];
+  const c = costBySize(rows);
+  assert.strictEqual(Math.min(c.S, c.M), 5, 'the cheapest core size is the typical colour base');
+});
+
+test('rows with no colour name are told apart by colour code', () => {
+  const rows = [
+    { colorCode: '01', sizeName: 'S', piecePrice: 5 }, { colorCode: '01', sizeName: 'XL', piecePrice: 5 },
+    { colorCode: '02', sizeName: 'S', piecePrice: 9 }, { colorCode: '02', sizeName: 'XL', piecePrice: 9 },
+    { colorCode: '03', sizeName: 'S', piecePrice: 5 }, { colorCode: '03', sizeName: 'XL', piecePrice: 5 },
+  ];
+  const c = costBySize(rows);
+  assert.strictEqual(c.S, 5); assert.strictEqual(c.XL, 5);
 });
 
 test('sizeOptions makes a size list with values and today\'s extra charges', () => {
@@ -54,7 +101,7 @@ test('one size stays a single quantity box', () => {
 test('the daily sync rebuilds size fields, and add-products writes the full format', () => {
   const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
   assert.match(sync, /sizeOptions\(vals, bySize\.bySize, cost\)/);
-  assert.ok(!/const pieceCost = \(r\) =>/.test(sync), 'the sync uses the shared, sale-aware pieceCost');
+  assert.ok(!/const pieceCost = \(r\) =>/.test(sync), 'the sync uses the shared pieceCost');
   const add = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
   assert.match(add, /values: JSON\.stringify\(sizeOptions\(\{ multiple_options \}, sizeCost, baseCost\)\)/);
 });
@@ -69,30 +116,24 @@ test('one base-cost rule everywhere: cheapest core size, else cheapest size', ()
   assert.match(sync, /const bySize = costBySize\(rows\);/, 'the sync uses the shared median-per-size helper');
 });
 
-test('the jump guard: a sale ending passes, a glitch with no sale running is held', () => {
-  /* Sale ends: $9 sale back up to $15 list. */
-  assert.strictEqual(jumpHeld(9, 15, 15, 0.4), false);
-  /* No sale, so cost == list: a feed glitch to $1.50 must still be held. */
-  assert.strictEqual(jumpHeld(15, 1.5, 1.5, 0.4), true);
-  /* An upward jump that is not to list is held too. */
-  assert.strictEqual(jumpHeld(10, 20, 15, 0.4), true);
-  assert.strictEqual(jumpHeld(10, 11, 11, 0.4), false, 'small moves pass');
-  assert.strictEqual(jumpHeld(0, 11, 11, 0.4), false, 'no stored cost: nothing to compare');
+test('the jump guard holds a big move either way; --accept-jumps is the reviewed override', () => {
+  assert.strictEqual(jumpHeld(15, 1.5, 0.4), true, 'a glitch down');
+  assert.strictEqual(jumpHeld(10, 20, 0.4), true, 'a glitch up — no longer excused as "back to list"');
+  assert.strictEqual(jumpHeld(10, 11, 0.4), false, 'small moves pass');
+  assert.strictEqual(jumpHeld(0, 11, 0.4), false, 'no stored cost: nothing to compare');
   const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
-  assert.match(sync, /if \(jumpHeld\(was, cost, listCost, PRICE_JUMP_GUARD\)\)/);
+  assert.match(sync, /if \(!ACCEPT_JUMPS\.has\(Number\(p\.id\)\) && jumpHeld\(was, cost, PRICE_JUMP_GUARD\)\)/);
+  assert.ok(/ACCEPT_JUMPS\.has\(Number\(p\.id\)\)/.test(sync), 'the override is per product id, not a blanket switch');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.ok(!server.includes('accept-jumps'), 'the scheduled run never accepts jumps');
 });
 
-test('list costing ignores a running sale', () => {
-  const r = row({ saleExpiration: '2026-10-31T00:00:00' });
-  assert.strictEqual(pieceCost(r, NOW), 3.18);
-  assert.strictEqual(pieceCost(r, NOW, { list: true }), 3.55);
-  assert.deepStrictEqual(costBySize([r], NOW, { list: true }), { M: 3.55 });
-});
-
-test('a sale end with no zone is read as UTC', () => {
-  /* 4 days + 1 hour after NOW in UTC: still on sale wherever the sync runs. */
-  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-10-22T13:00:00' }), NOW), 3.18);
-  assert.strictEqual(pieceCost(row({ saleExpiration: '2026-10-22T11:00:00' }), NOW), 3.55);
+test('a held product still gets its size extras rebuilt', () => {
+  const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  const sizes = sync.indexOf('sizeOptions(vals, bySize.bySize, cost)');
+  const held = sync.indexOf('jumpHeld(was, cost, PRICE_JUMP_GUARD)');
+  assert.ok(sizes > 0 && held > sizes, 'sizes are rebuilt before the hold decides');
+  assert.match(sync.slice(held, held + 400), /if \(attrsChanged\) sets\.push\(attrsSet\(\)\)/);
 });
 
 test('readSizes: key, string form, and an unreadable field', () => {

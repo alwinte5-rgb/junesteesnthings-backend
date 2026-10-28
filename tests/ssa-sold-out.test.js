@@ -9,7 +9,7 @@ const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
 test('stock is counted at every warehouse, dropship and Canada included', () => {
   assert.match(src, /allQty \+= Number\(w\.qty\) \|\| 0;/);
-  assert.match(src, /return \{ bySize, listBySize, homeQty, farQty, allQty,/);
+  assert.match(src, /return \{ bySize, homeQty, farQty, allQty,/);
 });
 
 test('a live S&S product with no stock is switched off the same run; staged rows and Bella+Canvas are not', () => {

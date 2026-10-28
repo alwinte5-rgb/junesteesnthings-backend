@@ -29,11 +29,13 @@ test('#223 new S&S styles: tank art, the price the account pays, filed into cate
   assert.match(t, /\['3483',\s+'tank',/);
   assert.match(t, /tank:\s+\{ raws: 'tank_tops'/);
   /* The cost helpers live in tools/lib/ssa-costs.js (shared with the catalogue
-     audit); what matters is that they read what the account PAYS. */
+     audit), so no tool reads S&S prices its own way. Since 2026-10-28 they read
+     the regular price (owner: "regular price for everything"); the 14.92 here
+     was a sale price against an 18.67 list. */
   assert.match(t, /require\('\.\/lib\/ssa-costs'\)/);
   const { pieceCost } = require('../tools/lib/ssa-costs');
-  assert.strictEqual(pieceCost({ customerPrice: 14.92, piecePrice: 18.67 }), 14.92);
-  assert.ok(!/Number\(r\.piecePrice \|\| r\.casePrice \|\| 0\)/.test(t), 'no reader left on the list price');
+  assert.strictEqual(pieceCost({ customerPrice: 14.92, piecePrice: 18.67 }), 18.67);
+  assert.ok(!/Number\(r\.piecePrice \|\| r\.casePrice \|\| 0\)/.test(t), 'no private reader of the price in this tool');
   assert.match(t, /categorise-products\.js'\), '--apply'\]/);
 });
 
