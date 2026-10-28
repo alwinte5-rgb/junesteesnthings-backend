@@ -4161,7 +4161,9 @@ app.post('/submit', countFormFailures('quote'), makeRateLimit(4, 60 * 60 * 1000)
      /admin/leads and Brevo all show it with no new column (quote-picks.js). */
   const picks = QPICKS.parsePicks(req.body);
   const typed = description == null ? '' : String(description).trim();
-  const fullDescription = [QPICKS.picksLine(picks), typed].filter(Boolean).join('\n\n');
+  /* A ticked "Need it sooner?" goes first, so a rush is the first thing read. */
+  const rush = QPICKS.rushLine(QPICKS.parseRush(req.body));
+  const fullDescription = [rush, QPICKS.picksLine(picks), typed].filter(Boolean).join('\n\n');
   const s = { name: name.trim(), phone: phone.trim(), email: email.trim().toLowerCase(), description: fullDescription, photo_url,
               first_touch: parseFirstTouch(req.headers.cookie) };
   /* "How did you hear about us?" (optional). Naming a salesperson makes the

@@ -45,7 +45,7 @@ test('/submit puts the picks first in the description, inside the length the for
   const at = SRC.indexOf("app.post('/submit',");
   const route = SRC.slice(at, at + 4000);
   assert.match(route, /const picks = QPICKS\.parsePicks\(req\.body\);/);
-  assert.match(route, /const fullDescription = \[QPICKS\.picksLine\(picks\), typed\]\.filter\(Boolean\)\.join\('\\n\\n'\);/);
+  assert.match(route, /const fullDescription = \[rush, QPICKS\.picksLine\(picks\), typed\]\.filter\(Boolean\)\.join\('\\n\\n'\);/);
   assert.match(route, /description: fullDescription/);
   /* The typed text is still capped at 2,000 before the picks are added; the
      picks line is at most the eleven labels and quantities. */
@@ -67,4 +67,29 @@ test('the form draws the boxes before the description, and ticking one makes the
 test('a picker that cannot be drawn never stops the form working', () => {
   assert.match(JS, /try \{ picks = picker\(form\); \} catch \(e\) \{ picks = null; \}/);
   assert.match(JS, /if \(!anchor \|\| !anchor\.parentNode \|\|/);
+});
+
+/* "Need it sooner?" (owner, 2026-10-28). */
+test('a ticked rush box leads the enquiry with a RUSH line, with the date when it is real', () => {
+  const now = new Date('2026-10-28T15:00:00Z');
+  assert.strictEqual(QP.parseRush({}, now), null);
+  assert.strictEqual(QP.rushLine(QP.parseRush({ rush_by: '2026-11-03' }, now)), '', 'a date without the box is not a rush');
+  assert.deepStrictEqual(QP.parseRush({ rush_needed: '1', rush_by: '2026-11-03' }, now), { by: '2026-11-03' });
+  assert.strictEqual(QP.rushLine(QP.parseRush({ rush_needed: '1', rush_by: '2026-11-03' }, now)),
+    '⚡ RUSH: needs it in under 5 business days, by Tue, Nov 3, 2026 (rush fee applies)');
+  assert.strictEqual(QP.rushLine(QP.parseRush({ rush_needed: 'on' }, now)),
+    '⚡ RUSH: needs it in under 5 business days (rush fee applies)');
+  for (const bad of ['2026-02-30', '2026-13-01', 'tomorrow', '2025-01-01', '2028-01-01', '<b>2026-11-03</b>', '2026-11-03T00:00']) {
+    assert.deepStrictEqual(QP.parseRush({ rush_needed: '1', rush_by: bad }, now), { by: '' }, bad);
+  }
+  assert.doesNotMatch(QP.rushLine({ by: '' }), /\d+ ?%|\$/, 'no fee figure: the owner quotes it');
+});
+
+test('/submit puts the rush line before the picks and the typed message', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /const rush = QPICKS\.rushLine\(QPICKS\.parseRush\(req\.body\)\);\s*const fullDescription = \[rush, QPICKS\.picksLine\(picks\), typed\]/);
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'assets', 'js', 'quote-form.js'), 'utf8');
+  assert.match(js, /name="rush_needed" value="1"/);
+  assert.match(js, /type="date" id="' \+ id \+ 'rushby" name="rush_by"/);
+  assert.match(js, /Need it sooner\?<\/b> Under 5 business days\. Rush fee applies\./);
 });
