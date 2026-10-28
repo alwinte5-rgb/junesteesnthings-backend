@@ -482,14 +482,20 @@ test('the sweep books what no webhook delivered, and leaves checkout payments al
   const early = charge({ created: 1790000000 - 400 * 86400 });
   const d = desk({ stripe: { charges: [outside, viaCheckout, early],
                              sessions: [{ id: 'cs_2', payment_intent: viaCheckout.payment_intent }] } });
+  /* The sweep reads the clock itself, so its 30-day edge is bounded by the
+     clock either side of it, not by NOW (read when this file loaded): a
+     second ticking over in between made this fail on a busy run. */
+  const before = Math.floor(Date.now() / 1000);
   const out = await d.sweep();
+  const after = Math.floor(Date.now() / 1000);
   assert.match(out, /charge\(s\) checked, 1 taken outside checkout booked/);
   assert.strictEqual(d.unlinked.length, 1);
   assert.strictEqual(d.unlinked[0].source, 'stripe_sweep');
   assert.match(d.alerts[0].html, /Found by the hourly check against Stripe/);
   const list = d.calls.find((c) => c.path === '/v1/charges');
   const since = Number(list.params['created[gte]']);
-  assert.strictEqual(since, Math.max(d.from, NOW - 30 * 86400), 'never before booking began, never past 30 days');
+  assert.ok(since >= Math.max(d.from, before - 30 * 86400) && since <= Math.max(d.from, after - 30 * 86400),
+    `never before booking began, never past 30 days (got ${since})`);
   assert.strictEqual(await d.sweep(), '', 'quiet on the next hour');
 });
 
