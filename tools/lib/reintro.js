@@ -253,8 +253,22 @@ function inviteBlock(email) {
   </td></tr></table>`;
 }
 
+/** The phones on the Brevo list, for the ask (owner, 2026-10-28: "use the
+ *  numbers in Brevo"): the SMS attribute, else PHONE, as a US number. A
+ *  contact Brevo has blocked for SMS is left out. */
+function brevoPhones(contacts) {
+  const out = [];
+  for (const c of contacts || []) {
+    if (!c || c.smsBlacklisted) continue;
+    const a = c.attributes || {};
+    const phone = normalizeUsPhone(a.SMS || a.PHONE || '');
+    if (phone) out.push(phone);
+  }
+  return out;
+}
+
 /** The ask goes out 11am to 6pm Chicago: 9am Pacific to 7pm Eastern, inside
  *  every mainland US time zone's 8am-9pm quiet-hours window. */
 function inAskHours(chicagoHour) { return chicagoHour >= 11 && chicagoHour < 18; }
 
-module.exports = { inAskHours, inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, askText, askAudience, newCode, marketingPhones, emailAudience, helloEmail };
+module.exports = { brevoPhones, inAskHours, inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, askText, askAudience, newCode, marketingPhones, emailAudience, helloEmail };
