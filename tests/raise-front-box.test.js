@@ -56,3 +56,17 @@ test('a product with no colourways (NULL or {}) moves its own box and writes no 
     assert.ok(plan && !plan.error && plan.variations === null && plan.copies === 0, v);
   }
 });
+
+/* #14 keeps its admin-made stage ids (shared designs are keyed by them), so
+   the front is found by role and written back under the same id. */
+test('a front stored under a random id is raised and kept under that id', () => {
+  const st = { ZWEnsr7gXm: front(8, { label: 'Front' }), mr83j4pl: { label: 'Back' } };
+  const plan = planProduct({ id: 14, name: 'Bella+Canvas 3001 Unisex Jersey Tee', stages: enjson(st),
+    variations: enjson({ variations: { 1: { stages: JSON.parse(JSON.stringify(st)) } } }) });
+  assert.ok(plan, 'not skipped');
+  assert.deepStrictEqual(Object.keys(plan.stages), ['ZWEnsr7gXm', 'mr83j4pl']);
+  assert.ok(plan.stages.ZWEnsr7gXm[MARK]);
+  assert.strictEqual(plan.stages.ZWEnsr7gXm.edit_zone.top, plan.after);
+  assert.deepStrictEqual(Object.keys(plan.variations.variations[1].stages), ['ZWEnsr7gXm', 'mr83j4pl']);
+  assert.strictEqual(plan.copies, 1);
+});

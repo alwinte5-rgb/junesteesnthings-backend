@@ -77,9 +77,9 @@ test('--staged writes the product switched off and tagged ssa-staged; plain runs
   const row = { name: "Shaka Wear SHMHO Unisex Max Heavyweight Oversized Tee", price: 13.36, thumb: 'https://x/a.jpg',
     stages: 'st', attributes: 'at', printings: 'pr', styleID: 9161, cost: 6.68 };
   const staged = productInsertSql({ ...row, staged: true });
-  assert.match(staged, /, 500, 0, '', NOW\(\), NOW\(\), 'ssa-staged', 9161, 6\.68, NOW\(\)/);
+  assert.match(staged, /, 900, 0, '', NOW\(\), NOW\(\), 'ssa-staged', 9161, 6\.68, NOW\(\)/);
   const live = productInsertSql({ ...row, staged: false });
-  assert.match(live, /, 500, 1, '', NOW\(\), NOW\(\), 'ssa', 9161, 6\.68, NOW\(\)/);
+  assert.match(live, /, 900, 1, '', NOW\(\), NOW\(\), 'ssa', 9161, 6\.68, NOW\(\)/);
   assert.match(staged, /WHERE supplier_style_id=9161\) AS t\);$/, 'a re-run adds nothing twice');
   assert.throws(() => productInsertSql({ ...row, styleID: 'x' }), /bad style id/);
 });

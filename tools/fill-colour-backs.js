@@ -23,26 +23,36 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { urlFromStdinJson, mysql, enjson, dejson, sq } = require('./lib/db');
-const { standins } = require('./lib/placements');
+const { standins, aliasStages } = require('./lib/placements');
 
 /** { variations, backs } with backs added, or null when nothing changes.
  *  `drawnBack(name, likeStage)` returns a measured drawing stage or null. */
 function fillBacks(p, { drawnBack } = {}) {
-  const st = dejson(p.stages) || {};
+  /* Sides by role, not key: a product made in the admin keeps random stage ids
+     (#14), and its saved designs need them kept (placements.js aliasStages). */
+  const pa = aliasStages(dejson(p.stages) || {});
+  const st = pa.stages;
   const vars = p.variations ? dejson(p.variations) : null;
   if (!vars || !vars.variations) return null;
+  const restores = new Map();
+  for (const v of Object.values(vars.variations)) {
+    if (!v || !v.stages) continue;
+    const a = aliasStages(v.stages, pa.keys);
+    v.stages = a.stages; restores.set(v, a.restore);
+  }
   const needs = Object.values(vars.variations).filter((v) => v && v.stages && v.stages.front && !v.stages.back);
   if (!needs.length) return null;
   let back = standins(st, vars).back;
   if (!back && drawnBack) back = drawnBack(p.name, st.front);
   if (!back) return null;
-  const out = JSON.parse(JSON.stringify(vars));
   let backs = 0;
-  for (const v of Object.values(out.variations)) {
+  for (const v of Object.values(vars.variations)) {
     if (!v || !v.stages || !v.stages.front || v.stages.back) continue;
     v.stages.back = { ...JSON.parse(JSON.stringify(back)), label: 'Back' };
     backs++;
   }
+  for (const [v, restore] of restores) v.stages = restore(v.stages);
+  const out = JSON.parse(JSON.stringify(vars));
   return { variations: out, backs };
 }
 

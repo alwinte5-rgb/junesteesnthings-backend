@@ -36,7 +36,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('./../lib/db');
-const { placementSet, boxesFor, stagesFor, keepUncovered, standins, aliasStages } = require('./../lib/placements');
+const { placementSet, boxesFor, stagesFor, keepUncovered, standins, aliasStages, SETS } = require('./../lib/placements');
 
 const SHEET = (process.argv.find((a) => a.startsWith('--sheet=')) || '').slice(8);
 const OVERRIDES = (() => {
@@ -102,6 +102,17 @@ process.stdin.on('end', () => {
       { encoding: 'utf8', maxBuffer: 1 << 26 });
     if (r.status === 0) { try { meas = JSON.parse(r.stdout); } catch { meas = {}; } }
     else console.log('  could not measure the photos — keeping the single copied box');
+  }
+  /* An aliased front holds designs laid out for the whole front. A set whose
+     `front` box is a left chest would shrink that id to a 4" chest zone, so
+     such a product is refused rather than wired. No product needs it today. */
+  if (alias.aliased && alias.keys.front && set) {
+    const fb = (SETS[set] || []).find((b) => b.key === 'front');
+    if (fb && /chest/i.test(fb.label)) {
+      console.error('  ' + p.name + ': its front is stored as ' + alias.keys.front + ', which saved designs use as the full ' +
+        'front, and this garment\'s front placement is a ' + fb.label + ' — not wired. Rename the stage in the admin first.');
+      process.exit(1);
+    }
   }
   let productStages = null, sheetItem = null;
   const oldVars = dejson(p.variations);

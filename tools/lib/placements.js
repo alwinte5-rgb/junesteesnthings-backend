@@ -185,23 +185,35 @@ function stagesFor(base, boxes, images, sizes) {
 
 /** Which stored stage key is the front, and which the back. Normally the keys
  *  ARE `front` and `back`; a product built in the Lumise admin can carry random
- *  ids instead (#14, the Bella+Canvas 3001, has `ZWEnsr7gXm` labelled "Front").
- *  Saved and shared designs are keyed by those ids, so they are kept and found
- *  by label rather than renamed. A label shared by two stages matches neither. */
+ *  ids instead (#14, the Bella+Canvas 3001, has `ZWEnsr7gXm`). Saved and shared
+ *  designs are keyed by those ids, so they are kept, never renamed, and found:
+ *    1. by the `jt_key` marker aliasStages() writes on every stage it stores
+ *       under such an id, so a second run finds what the first one wrote
+ *       (the placement label it writes, "Full front", is not "Front");
+ *    2. failing that, by label: "Front", "Full front", "Front side" and the like.
+ *  A side two stages both claim matches neither. */
+const SIDE_WORDS = /\b(full|side|print|view|panel)\b/g;
+const labelSide = (l) => String(l || '').toLowerCase().replace(/[^a-z ]/g, ' ').replace(SIDE_WORDS, ' ').trim();
+
 function sideKeys(stages) {
   const st = stages || {};
   const out = {};
   for (const side of ['front', 'back']) {
     if (st[side]) { out[side] = side; continue; }
-    const hits = Object.keys(st).filter((k) => st[k] && String(st[k].label || '').trim().toLowerCase() === side);
+    let hits = Object.keys(st).filter((k) => st[k] && st[k].jt_key === side);
+    if (!hits.length) hits = Object.keys(st).filter((k) => st[k] && labelSide(st[k].label) === side);
     if (hits.length === 1) out[side] = hits[0];
   }
   return out;
 }
 
 /** `stages` with its front/back stored under `front`/`back`, and a function
- *  that puts any stages object built from it back under the stored keys. */
-function aliasStages(stages) {
+ *  that puts any stages object built from it back under the stored keys,
+ *  marking each such stage with `jt_key` so the next run can find it again.
+ *  `aliased` says whether any side lives under another key. `fallback` (the
+ *  product's own `keys`) names the id for a side this colourway does not have
+ *  yet, so a back added to one colour lands under the product's back id. */
+function aliasStages(stages, fallback) {
   const keys = sideKeys(stages);
   const norm = {};
   const back = {};
@@ -213,10 +225,14 @@ function aliasStages(stages) {
   const restore = (st) => {
     if (!st) return st;
     const out = {};
-    for (const [k, v] of Object.entries(st)) out[back[k] || k] = v;
+    for (const [k, v] of Object.entries(st)) {
+      const id = back[k] || (fallback && (k === 'front' || k === 'back') && !(stages || {})[fallback[k]] ? fallback[k] : null);
+      if (id) out[id] = Object.assign({}, v, { jt_key: k });
+      else out[k] = v;
+    }
     return out;
   };
-  return { stages: norm, restore };
+  return { stages: norm, restore, aliased: Object.keys(back).length > 0, keys: back };
 }
 
 const isPhoto = (s) => /^https:\/\//.test(String((s && s.image) || ''));

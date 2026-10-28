@@ -30,10 +30,12 @@ function selectWanted(core, batch, { staged = false, only = [] } = {}) {
 }
 
 /* Where a new style sorts in the shop and the designer's product picker (both
-   order by `order` ascending). The owner's hand-ranked basics are 1-45 and the
-   rest of the catalogue starts at 100; a new style written as 1 jumped ahead of
-   all of them, which is how a $39 hoodie came to be the shop's second product. */
-const NEW_PRODUCT_ORDER = 500;
+   order by `order` ascending). The owner's hand-ranked basics are 1-45,
+   tools/shop-order.js numbers the rest from 100 by section, and the one-off
+   adders (signs, services, cutouts) sit at 997-999. A new style written as 1
+   jumped ahead of every basic, which is how a $39 hoodie came to be the shop's
+   second product; 900 puts it after the catalogue until shop-order.js files it. */
+const NEW_PRODUCT_ORDER = 900;
 
 const money = (n) => Math.round(Number(n) * 100) / 100;
 

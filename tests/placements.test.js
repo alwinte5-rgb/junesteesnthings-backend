@@ -180,3 +180,25 @@ test('plain front/back keys are left alone, and a doubled label matches nothing'
   const a = aliasStages({ front: { label: 'Full front' }, left_chest: {}, back: {} });
   assert.deepStrictEqual(Object.keys(a.restore({ front: 1, left_chest: 2, back: 3 })), ['front', 'left_chest', 'back']);
 });
+
+/* Code review on #477: wire writes the front back under the random id with the
+   placement label "Full front", so a SECOND run that looked only for "Front"
+   lost the id — and with it the shared designs. The marker it writes now is
+   what a re-run finds, and the wider label match is the fallback. */
+test('a second run finds the random-id front the first run wrote', () => {
+  const { sideKeys, aliasStages } = require('../tools/lib/placements');
+  const first = aliasStages({ ZWEnsr7gXm: { label: 'Front' }, mr83j4pl: { label: 'Back' } });
+  const written = first.restore({ front: { label: 'Full front' }, left_chest: { label: 'Left chest' }, back: { label: 'Back' } });
+  assert.strictEqual(written.ZWEnsr7gXm.jt_key, 'front');
+  assert.deepStrictEqual(sideKeys(written), { front: 'ZWEnsr7gXm', back: 'mr83j4pl' });
+  const again = aliasStages(written).restore({ front: { label: 'Full front' }, left_chest: {}, back: {} });
+  assert.deepStrictEqual(Object.keys(again), ['ZWEnsr7gXm', 'left_chest', 'mr83j4pl']);
+});
+
+test('labels like "Full front" and "Back Side" are found; plain keys get no marker', () => {
+  const { sideKeys, aliasStages } = require('../tools/lib/placements');
+  assert.deepStrictEqual(sideKeys({ a: { label: 'Full front' }, b: { label: 'Back Side' } }), { front: 'a', back: 'b' });
+  assert.deepStrictEqual(sideKeys({ a: { label: 'Left chest' } }), {});
+  const out = aliasStages({ front: {}, back: {} }).restore({ front: { x: 1 }, back: { x: 2 } });
+  assert.strictEqual(out.front.jt_key, undefined);
+});
