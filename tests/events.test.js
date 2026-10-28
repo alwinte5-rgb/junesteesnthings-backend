@@ -79,3 +79,21 @@ test('no event promises less than 2 weeks to order (owner, 2026-10-28)', () => {
     assert.ok((e.orderByDate - e.start) / 86400000 >= 28, `${e.key}: at least 4 weeks of selling`);
   }
 });
+
+test('an event sends nothing after its last call, so no "0 days left" email on the order-by date', () => {
+  const sch = E.schedule(new Date('2026-10-06T12:00:00Z'), 365);
+  const done = new Set();
+  for (const x of sch) {
+    const id = x.event.key + E.iso(x.event.date);
+    assert.ok(!done.has(id), `${id} emailed on ${E.iso(x.day)} after its last call`);
+    if (x.beat === 'lastcall') done.add(id);
+  }
+});
+
+test('Christmas orders close the Tuesday before Thanksgiving every year (owner)', () => {
+  for (const [y, want] of [[2026, '2026-11-24'], [2027, '2027-11-23'], [2028, '2028-11-21']]) {
+    const x = E.upcoming(new Date(Date.UTC(y, 0, 2))).find((e) => e.key === 'christmas');
+    assert.strictEqual(E.iso(x.orderByDate), want);
+    assert.strictEqual(x.orderByDate.getUTCDay(), 2);
+  }
+});

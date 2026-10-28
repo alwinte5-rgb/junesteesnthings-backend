@@ -23,7 +23,7 @@
  * Dates are plain calendar days (UTC midnight), so no timezone can move one.
  */
 
-const { lastOpenDay } = require('./shop-closed');
+const { lastOpenDay, christmasLastDay } = require('./shop-closed');
 const DAY = 86400000;
 const MIN_ADS_WEEKS = 6;
 
@@ -60,7 +60,7 @@ const OCCASIONS = [
   { id: 'senior-night-fall', name: 'Senior night (fall sports)', event: (y) => d(y, 10, 1), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
   { id: 'chicago-marathon', name: 'Chicago Marathon', event: (y) => nthWeekday(y, 10, 0, 2), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, runner support shirts, race signs' },
   { id: 'halloween', note: 'Halloween is October 31.', name: 'Halloween', event: (y) => d(y, 10, 31), season: (y) => d(y, 9, 1), page: '/occasions/halloween-shirts-chicago.html', push: 'Witch squad and group costume shirts, kids shirts' },
-  { id: 'christmas', note: 'Christmas is December 25.', orderNote: 'Christmas orders close the Tuesday before Thanksgiving: we close for Thanksgiving and December fills up fast.', name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
+  { id: 'christmas', note: 'Christmas is December 25.', orderNote: 'Christmas orders close the Tuesday before Thanksgiving: we close for Thanksgiving and December fills up fast.', closes: (y) => christmasLastDay(y), name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
 ];
 
 /* `end` marks an occasion that is a whole season, not one day: weddings run
@@ -77,15 +77,15 @@ const OCCASIONS = [
 /* Lead times in weeks before the season start. adsWeeks may be raised per
    occasion; it may never go under MIN_ADS_WEEKS. */
 const DEFAULT_LEAD = { prepWeeks: 10, adsWeeks: 6, orderByDays: 14 };
-/* Christmas closes Tue Nov 24 (owner): shut Nov 25-27, busiest month. */
-const LEAD = { christmas: { orderByDays: 31 } };
+/* Christmas sets its own last day (`closes`, tools/lib/shop-closed.js). */
+const LEAD = {};
 
 function datesFor(o, y) {
   const lead = { ...DEFAULT_LEAD, ...(LEAD[o.id] || {}) };
   if (lead.adsWeeks < MIN_ADS_WEEKS) throw new Error(`${o.id}: ads must start at least ${MIN_ADS_WEEKS} weeks before the season`);
   const event = o.event(y), season = o.season(y), end = o.end ? o.end(y) : event;
   /* Never a day the shop is closed (tools/lib/shop-closed.js). */
-  const orderBy = lastOpenDay(addDays(end, -lead.orderByDays));
+  const orderBy = lastOpenDay(o.closes ? o.closes(y) : addDays(end, -lead.orderByDays));
   if ((orderBy - season) / DAY < 14) throw new Error(`${o.id} ${y}: the season must open at least 2 weeks before the last order day`);
   return {
     id: o.id, name: o.name, note: o.note || '', year: y, page: o.page, push: o.push, live: !!o.page,

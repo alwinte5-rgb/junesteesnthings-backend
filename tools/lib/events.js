@@ -43,7 +43,9 @@ const PHOTOS = `${SITE}/assets/images/`;
 /* Orders close 2 weeks before every event (owner, 2026-10-28, replacing the
    4 weeks of 2026-10-17): small orders take 5–7 business days and larger
    ones 7–14, and anything later is a paid rush. */
-const { lastOpenDay } = require('./shop-closed');
+const { lastOpenDay, christmasLastDay } = require('./shop-closed');
+/* An occasion page's path, from the one list in marketing-calendar.js. */
+const CAL_PAGE = (id) => require('./marketing-calendar').OCCASIONS.find((o) => o.id === id).page;
 const MIN_ORDER_BY = 14;
 /* At least four weeks of selling before the order-by date (owner, 2026-10-06:
    "at least a month in advance"), so 6 weeks before the event; longer where an
@@ -80,7 +82,9 @@ const saturdayBefore = (dt) => new Date(dt.getTime() - ((dt.getUTCDay() + 1) % 7
 /* `when(y)` gives the date in year y. `lead` (optional): days ahead the
    selling starts, only where it is more than MIN_LEAD. `orderBy` (optional):
    days before the date an order must be in, only where it is more than
-   MIN_ORDER_BY - shorter is a rush promise and is refused. `email` is what goes
+   MIN_ORDER_BY - shorter is a rush promise and is refused. `closes(y)`
+   (optional): the last order day itself, where it follows a rule of its own.
+   `email` is what goes
    to the list; `ads` is the search ad text and keywords. */
 const EVENTS = [
   {
@@ -126,16 +130,15 @@ const EVENTS = [
            keywords: ['thanksgiving family shirts', 'matching family shirts chicago', 'friendsgiving shirts'] },
   },
   {
-    /* Orders close Tue Nov 24 (owner): the shop is shut Nov 25-27 and
-       December is the busiest month, so 31 days, not the 2-week minimum. */
-    key: 'christmas', weight: 2, orderBy: 31, photo: 'email/xmas-gifts-real.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25),
+    /* Orders close the Tuesday before Thanksgiving (owner; Nov 24 in 2026). */
+    key: 'christmas', weight: 2, closes: christmasLastDay, photo: 'email/xmas-gifts-real.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25),
     products: ['Matching family Christmas shirts and hoodies', 'Photo gifts: mugs, pillows, totes and baby bodysuits', 'Holiday party shirts for the office or your team', 'Christmas sweatshirts with a name, a year or an inside joke'],
-    link: `${SITE}/occasions/christmas-shirts-chicago.html`, cta: 'Make a Christmas gift',
+    link: SITE + CAL_PAGE('christmas'), cta: 'Make a Christmas gift',
     email: {
       subject: 'Gifts with their face on it (order by {orderBy})',
       preview: 'Family Christmas shirts, photo mugs and pillows, office party tees.',
       headline: 'The gift nobody else can buy them',
-      intro: 'Christmas is {date}. Put a photo, a name or an inside joke on a hoodie, a mug, a pillow or a tote and it is a gift made only for them. Small orders are ready in 5–7 business days.',
+      intro: 'Christmas is {date}. Put a photo, a name or an inside joke on a hoodie, a mug, a pillow or a tote and it is a gift made only for them.',
       ps: 'Ordering for the office party or a whole family? Ask us about group pricing.',
     },
     ads: { headlines: ['Custom Photo Gifts Chicago', 'Matching Christmas Shirts', 'Personalized Hoodies & Mugs'],
@@ -383,7 +386,8 @@ function occurrence(e, t0) {
   let date = e.when(new Date(t0).getUTCFullYear());
   if (date.getTime() < t0) date = e.when(new Date(t0).getUTCFullYear() + 1);
   const lead = Math.max(e.lead || 0, MIN_LEAD);
-  const orderByDate = lastOpenDay(new Date(date.getTime() - Math.max(e.orderBy || 0, MIN_ORDER_BY) * DAY));
+  const latest = date.getTime() - Math.max(e.orderBy || 0, MIN_ORDER_BY) * DAY;
+  const orderByDate = lastOpenDay(new Date(e.closes ? Math.min(e.closes(date.getUTCFullYear()).getTime(), latest) : latest));
   /* Selling opens early enough to keep 4 full weeks before the order-by
      date, even when a closure pulls that date earlier. */
   const start = new Date(Math.min(date.getTime() - lead * DAY, orderByDate.getTime() - (MIN_LEAD - MIN_ORDER_BY) * DAY));
