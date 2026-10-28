@@ -1,8 +1,10 @@
 'use strict';
 
-/* The 6 ft table cover (owner, 2026-10-21): DTF printed in house on one or two
- * sides of a YCC Linens blank, at the owner's all-in prices, shipping included:
- *   1 side  $75 for 1-2, $65 each from 3;  2 sides $110 for 1, $95 each for 2, $80 each from 3.
+/* The 6 ft table cover (owner, 2026-10-21; repriced 2026-10-28): printed in
+ * house on one or two sides (ivory and white sublimated, other colors DTF),
+ * at the owner's all-in prices, shipping included:
+ *   1 side  $75 (1-4), $70 (5-9), $60 (10-49), $52 (50-99), $45 (100+);
+ *   2 sides $105, $95, $85, $75, $65.
  * tools/add-table-cover.js writes them as one decoration method whose main
  * stage is the 1-side price and whose second stage is what the back adds. */
 
@@ -38,7 +40,7 @@ const line = (qty, prints) => priceLine({ product: { price: 0, sizes: [] }, addo
 const r2 = (n) => Math.round(n * 100) / 100;
 
 test('the owner\'s prices, each, at every quantity, from the real engine', () => {
-  for (const [q, one, two] of [[1, 75, 110], [2, 75, 95], [3, 65, 80], [10, 65, 80], [500, 65, 80]]) {
+  for (const [q, one, two] of [[1, 75, 105], [4, 75, 105], [5, 70, 95], [10, 60, 85], [50, 52, 75], [100, 45, 65], [500, 45, 65]]) {
     assert.strictEqual(r2(line(q, [{ loc: 'front', method: COVER }]).unit), one, `1 side at ${q}`);
     assert.strictEqual(r2(line(q, [{ loc: 'front', method: COVER }, { loc: 'back', method: COVER }]).unit), two, `2 sides at ${q}`);
     assert.strictEqual(r2(line(q, [{ loc: 'back', method: COVER }]).unit), one, `a back-only print is one side at ${q}`);
@@ -70,9 +72,9 @@ test('the tool refuses a missing or rising price and is dry-run by default', () 
 
 test('job costs: the cover blank and its delivery are costs, and the front is a 252 sq in print', () => {
   const JC = require('../tools/lib/job-costs');
-  const catalog = { products: [{ id: 700, name: 'Fitted Table Cover — 6 ft', price: 0, cost: 12.99 }],
+  const catalog = { products: [{ id: 700, name: 'Table Cover — 6 ft', price: 0, cost: 15.39 }],
     methods: [{ id: 900, title: 'DTF Printing — Table Cover' }] };
   const est = JC.estimateJob([{ product_id: 700, method_id: 900, stage: '', qty: 1, unit_price: 75 }], catalog);
   const c = est.lines[0].unit_cost;
-  assert.ok(c >= 12.99 + 11.99 + JC.DTF[1][2] - 0.01, `cost ${c}`);
+  assert.ok(c >= 15.39 + 11.99 + JC.DTF[1][2] - 0.01, `cost ${c}`);
 });

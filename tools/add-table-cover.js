@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-/* Fitted 6 ft table cover, DTF printed in house on one or two sides.
+/* 6 ft table cover, printed in house on one or two sides: ivory and white
+ * covers sublimated, every other color DTF (owner, 2026-10-28).
  *
  *   node tools/add-table-cover.js --vars=<(jtees-env)            # dry run
  *   node tools/add-table-cover.js --vars=<(jtees-env) --apply    # write
@@ -13,7 +14,8 @@
  *      so 1 side + back = the 2-side price at every quantity. The engine reads
  *      the main table for the first side printed and the second-stage table
  *      for the other (server.js priceLine keyOf). Keys are band CEILINGS.
- *   2. The product, "Fitted Table Cover — 6 ft", quote-only (active=0,
+ *   2. The product, "Table Cover — 6 ft" (was "Fitted Table Cover — 6 ft"
+ *      until 2026-10-28; the old name is found and renamed), quote-only (active=0,
  *      supplier 'ycc', published to the quote form by the designer's
  *      jt-catalog.php), price 0 so nothing is added on top: the blank and its
  *      delivery from YCC Linens are inside the owner's price. supplier_cost
@@ -33,13 +35,15 @@ const url = mysqlUrlFrom(env);
 if (!url) { console.error('usage: add-table-cover.js --vars=<(jtees-env) [--apply]'); process.exit(2); }
 
 const METHOD = 'DTF Printing — Table Cover';
-const METHOD_DESC = 'Full-color DTF printed on a fitted 6 ft table cover: one side is a large print ' +
-  'on the front panel; two sides adds the back panel. The price includes the cover and its delivery.';
-const PRODUCT = 'Fitted Table Cover — 6 ft';
+const METHOD_DESC = 'Full-color print on a 6 ft table cover, sublimated on ivory and white covers and DTF on every other color: ' +
+  'one side is a large print on the front panel; two sides adds the back panel. The price includes the cover and its delivery.';
+const PRODUCT = 'Table Cover — 6 ft';
+const OLD_PRODUCT = 'Fitted Table Cover — 6 ft';   // its name until 2026-10-28 (owner: no "fitted")
 /* supplier 'ycc': the designer's catalogue feed (jt-catalog.php) publishes
    inactive rows only for the suppliers it lists ('ycc' since designer #147). */
-const PRODUCT_DESC = 'Fitted polyester table cover for a 6 ft table (72" x 30"), closed on all four sides. ' +
-  'Tell us the color on the quote (30 to choose from; we confirm stock). Printed in our shop with DTF on one side (front) or two sides (front and back).';
+const PRODUCT_DESC = 'Polyester table cover for a 6 ft table (72" x 30"), closed on all four sides, relaxed fit. ' +
+  'Tell us the color on the quote (30 to choose from; we confirm stock). Printed in our shop on one side (front) or two sides (front and back): ' +
+  'ivory and white are sublimated (no feel), every other color is DTF.';
 
 /* Band ceilings -> price each, from tools/lib/table-cover.js (the page
    prints the same table). ONE_SIDE is the main stage; BACK is what the
@@ -76,7 +80,8 @@ const newCalc = {
 };
 
 const existingM = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(METHOD) + ';', { rows: true });
-const existingP = mysql(url, 'SELECT id, price, active, printings FROM lumise_products WHERE name=' + sq(PRODUCT) + ';', { rows: true });
+let existingP = mysql(url, 'SELECT id, name, price, active, printings FROM lumise_products WHERE name=' + sq(PRODUCT) + ';', { rows: true });
+if (!existingP.length) existingP = mysql(url, 'SELECT id, name, price, active, printings FROM lumise_products WHERE name=' + sq(OLD_PRODUCT) + ';', { rows: true });
 console.log('\n  method:  ' + (existingM.length ? 'update #' + existingM[0].id + ' (active=' + existingM[0].active + ', left as it is)' : 'create') + '  ' + METHOD);
 console.log('  product: ' + (existingP.length ? 'update #' + existingP[0].id + ' ($' + existingP[0].price + ' -> $' + blank.toFixed(2) + ')' : 'create (inactive, quote-only)') + '  ' + PRODUCT);
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
@@ -100,7 +105,7 @@ if (existingM.length) {
 }
 const printings = encodePrintings([mid]);
 if (existingP.length) {
-  mysql(url, 'UPDATE lumise_products SET price=' + sq(blank.toFixed(2)) + ', supplier_cost=' + sq(BLANK_COST.toFixed(2)) +
+  mysql(url, 'UPDATE lumise_products SET name=' + sq(PRODUCT) + ', price=' + sq(blank.toFixed(2)) + ', supplier_cost=' + sq(BLANK_COST.toFixed(2)) +
     ', description=' + sq(PRODUCT_DESC) + ', printings=' + sq(printings) + ', updated=NOW() WHERE id=' + Number(existingP[0].id) + ';');
 } else {
   /* The same columns tools/add-services.js writes for a quote-only row. */

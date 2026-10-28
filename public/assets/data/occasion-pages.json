@@ -3,7 +3,13 @@
  "pages": [
   {
    "path": "occasions/christmas-shirts-chicago.html",
-      "banner": { "src": "/assets/images/seasonal/christmas-2026-banner-1916.webp", "srcset": "/assets/images/seasonal/christmas-2026-banner-960.webp 960w, /assets/images/seasonal/christmas-2026-banner-1916.webp 1916w", "width": 1916, "height": 821, "alt": "Custom Christmas apparel from June's Tees & Things: matching family sets, hoodies, sweatshirts and more. Shop Christmas." },
+   "banner": {
+    "src": "/assets/images/seasonal/christmas-2026-banner-1916.webp",
+    "srcset": "/assets/images/seasonal/christmas-2026-banner-960.webp 960w, /assets/images/seasonal/christmas-2026-banner-1916.webp 1916w",
+    "width": 1916,
+    "height": 821,
+    "alt": "Custom Christmas apparel from June's Tees & Things: matching family sets, hoodies, sweatshirts and more. Shop Christmas."
+   },
    "calendar": "christmas",
    "kind": "holiday",
    "keyword": "custom christmas shirts",
@@ -1685,9 +1691,9 @@
    "keyword": "custom table covers",
    "eyebrow": "Table Covers · Chicago, IL",
    "title": "Custom Table Covers Chicago | June's Tees & Things",
-   "meta": "Custom fitted 6 ft table covers in Chicago: your logo printed in full color on the front, or front and back, in about 30 cover colors. From one cover.",
+   "meta": "Custom 6 ft table covers in Chicago with your logo on the front, or front and back. Ivory and white are sublimated with no feel. From one cover.",
    "h1": "Custom <em>Table Covers</em> in Chicago",
-   "pitch": "A fitted cover for a 6 foot table with your logo printed in full color on the front, or on the front and back, in the cover color you choose. From one cover, priced below.",
+   "pitch": "A cover for a 6 foot table with your logo printed in full color on the front, or on the front and back, in the cover color you choose. From one cover; estimated prices below.",
    "badges": [
     "🎪 Fits a 6 ft Table",
     "🎨 About 30 Cover Colors",
@@ -1698,7 +1704,7 @@
     "families": [
      "table_cover_inhouse"
     ],
-    "product": "Custom Fitted Table Cover",
+    "product": "Custom Table Cover",
     "prices_h2": "Table cover prices",
     "colors": "table_cover",
     "photos": [
@@ -1708,13 +1714,6 @@
       "w": 1200,
       "h": 900,
       "own": true
-     },
-     {
-      "file": "table-cover-car-show",
-      "alt": "A black table cover with a large white logo printed on the front, under a tent at a car show",
-      "w": 801,
-      "h": 1200,
-      "source": "https://unsplash.com/photos/HUL7QpS05MU"
      },
      {
       "file": "table-cover-logo-front",
@@ -1739,13 +1738,13 @@
     {
      "h2": "Custom table covers that make a booth look finished",
      "p": [
-      "Custom table covers turn a plain folding table into a branded booth in a minute. At a vendor market, a trade show, a church fair or a school night, your logo on the front of the table tells people who you are from across the room, and the cover hides boxes and stock underneath. We print your logo in full color on a fitted cover for a standard 6 foot table, from a single cover."
+      "Custom table covers turn a plain folding table into a branded booth in a minute. At a vendor market, a trade show, a church fair or a school night, your logo on the front of the table tells people who you are from across the room, and the cover hides boxes and stock underneath. We print your logo in full color on a cover for a standard 6 foot table, from a single cover."
      ]
     },
     {
-     "h2": "A fitted cover, printed in our shop",
+     "h2": "A cover made for a 6 foot table, printed in our shop",
      "p": [
-      "The cover is fitted polyester made for a 6 foot table (72 by 30 inches), closed on all four sides, so it sits neat and tight with no draping or pinning. We print your design on it in our own Lakeview shop with DTF, a full-color heat transfer that handles fine detail, gradients and bright colors on any cover color."
+      "The cover is polyester made for a 6 foot table (72 by 30 inches), closed on all four sides, with a relaxed fit: neat on the table without being tight. We print your design in our own Lakeview shop. Ivory and white covers are sublimated: the ink is dyed into the fabric itself, so there is nothing to feel and the print cannot crack or peel. Every other cover color is printed with DTF, a full-color heat transfer that handles fine detail, gradients and bright colors on dark and bright covers."
      ]
     },
     {
@@ -1769,7 +1768,7 @@
     {
      "h2": "Choosing a cover color",
      "p": [
-      "Most booths choose a cover in their brand color or a dark neutral. Black and navy covers hide spills and scuffs and make a light or bright logo pop. White and ivory look clean and suit weddings, showers and church events, and a bold color such as red, royal blue or purple matches a team or school. Tell us your logo colors on the quote form and we suggest a cover color that keeps the logo easy to read from across the room."
+      "Most booths choose a cover in their brand color or a dark neutral. Black and navy covers hide spills and scuffs and make a light or bright logo pop. White and ivory look clean, suit weddings, showers and church events, and are sublimated, so the logo has no feel at all. A bold color such as red, royal blue or purple matches a team or school. Tell us your logo colors on the quote form and we suggest a cover color that keeps the logo easy to read from across the room."
      ]
     },
     {
@@ -1788,7 +1787,7 @@
    "faq": [
     {
      "q": "What size table does it fit?",
-     "a": "A standard 6 foot rectangular folding table, 72 by 30 inches. The cover is fitted and closed on all four sides."
+     "a": "A standard 6 foot rectangular folding table, 72 by 30 inches. The cover is closed on all four sides and sits neat without being tight."
     },
     {
      "q": "What is printed?",
@@ -1796,11 +1795,11 @@
     },
     {
      "q": "What colors can the cover be?",
-     "a": "The covers come in about 30 colors. Tell us the color on the quote form and we confirm it is in stock."
+     "a": "The covers come in about 30 colors. Ivory and white are sublimated, with no feel; the other colors are printed with DTF. Tell us the color on the quote form and we confirm it is in stock."
     },
     {
      "q": "Can I order just one?",
-     "a": "Yes, from one cover. The price each comes down from 3 covers, as the table above shows."
+     "a": "Yes, from one cover. The price each comes down at 5, 10, 50 and 100 covers, as the table above shows. The prices are estimates; your quote has the final price."
     },
     {
      "q": "Can you design it for me?",
@@ -1812,7 +1811,7 @@
     },
     {
      "q": "Can I wash it?",
-     "a": "Yes. Wash it cold, inside out, on a gentle cycle, and hang it to dry. Do not iron over the print."
+     "a": "Yes. Wash it cold, inside out, on a gentle cycle, and hang it to dry. Do not iron over a DTF print. A sublimated print on an ivory or white cover is dyed into the fabric and lasts as long as the cover does."
     },
     {
      "q": "Do the prices include tax and shipping?",

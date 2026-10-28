@@ -74,15 +74,17 @@ const count = (n) => n.toLocaleString('en-US');
 
 /* The 6 ft table cover is printed in our shop, not bought from SinaLite
    (owner, 2026-10-21), so its table comes from tools/lib/table-cover.js, the
-   same numbers tools/add-table-cover.js gives the quote engine. Bands: 1, 2,
-   then one price from 3. Ready on the in-house window (server.js JT_PROD_MIN/MAX). */
+   same numbers tools/add-table-cover.js gives the quote engine. One row per
+   band, labelled as a range (1–4, 5–9 ...), so no total is shown: a range has
+   none. The owner calls them estimates (2026-10-28). Ready on the in-house
+   window (server.js JT_PROD_MIN/MAX). */
 const IN_HOUSE_LEAD = [7, 10];
 function tableCoverFamily() {
-  const rows = [1, 2, 3].map((q) => ({ q, cells: [TC.priceEach(q, 1), TC.priceEach(q, 2)] }));
-  return { key: 'table_cover', lead: IN_HOUSE_LEAD, rows,
+  const rows = TC.BANDS.map(([q, label]) => ({ q, label, cells: [TC.priceEach(q, 1), TC.priceEach(q, 2)] }));
+  return { key: 'table_cover', lead: IN_HOUSE_LEAD, rows, estimate: true,
     cols: [{ label: 'Printed one side (front)' }, { label: 'Printed two sides (front and back)' }],
-    f: { label: 'Fitted Table Cover — 6 ft', any_qty: false,
-      pp_note: 'Each price includes the cover and its delivery to our shop. From 3 covers, every cover is the 3-cover price.' } };
+    f: { label: 'Table Cover — 6 ft', any_qty: false,
+      pp_note: 'These prices are estimates: your final price is on your quote. Each price includes the cover and its delivery to our shop.' } };
 }
 
 function printFamilies(page) {
@@ -183,7 +185,7 @@ function colorsBox(page) {
   return `<div class="pp-colors">
       <h3>Cover colors</h3>
       ${list.length
-        ? `<p>${list.length} cover colors. Tell us the one you want on the quote form and we confirm it is in stock:</p>
+        ? `<p>${list.length} cover colors. ${esc(TC.SUBLIMATED.join(' and '))} covers are sublimated: the ink is dyed into the fabric, so there is nothing to feel. Every other color is printed with DTF. Tell us the color you want on the quote form and we confirm it is in stock:</p>
       <ul>${list.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`
         : '<p>The covers come in about 30 colors, from black, white and navy to bright and pastel shades. Tell us the color you want on the quote form and we confirm it is in stock.</p>'}
     </div>`;
@@ -195,7 +197,7 @@ function pricesSection(page, fams, sum) {
       <div class="pp-scroll"><table class="pp-table">
         <thead><tr><th scope="col">Quantity</th>${fm.cols.map((c) => `<th scope="col">${esc(c.label)}</th>`).join('')}</tr></thead>
         <tbody>
-        ${fm.rows.map((r) => `<tr><th scope="row">${count(r.q)}</th>${r.cells.map((e) => (e > 0 ? `<td><b>${money(e)}</b> each<span>${money(Math.round(e * r.q * 100) / 100)} total</span></td>` : '<td>&mdash;<span>not sold at this quantity</span></td>')).join('')}</tr>`).join('\n        ')}
+        ${fm.rows.map((r) => `<tr><th scope="row">${r.label ? esc(r.label) : count(r.q)}</th>${r.cells.map((e) => (e > 0 ? `<td><b>${money(e)}</b> each${r.label ? '' : `<span>${money(Math.round(e * r.q * 100) / 100)} total</span>`}</td>` : '<td>&mdash;<span>not sold at this quantity</span></td>')).join('')}</tr>`).join('\n        ')}
         </tbody>
       </table></div>
       <p class="pp-note">${fm.f.pp_note ? esc(fm.f.pp_note) : fm.f.any_qty
@@ -207,7 +209,7 @@ function pricesSection(page, fams, sum) {
     ${photoStrip(page)}
     <div class="section-tag">Prices</div>
     <h2>${esc(page.print.prices_h2)}</h2>
-    <p class="lead">From <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop for pickup; we can also ship your order straight to you or your event, quoted with your order. Sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
+    <p class="lead">${fams.some((x) => x.estimate) ? 'Estimated prices: from' : 'From'} <b>${money(sum.low.each)} each</b> at ${count(sum.low.q)}${fams.some((x) => x.estimate) ? ' or more' : ''}. The smallest order is ${count(sum.start.q)} for ${money(sum.start.total)}. Every price includes shipping to our Lakeview shop for pickup; we can also ship your order straight to you or your event, quoted with your order. Sales tax is added to the quote. Ready about ${sum.lead[0]} to ${sum.lead[1]} business days after you approve the proof.</p>
     ${tables}
     ${colorsBox(page)}
     ${designBox(page)}
