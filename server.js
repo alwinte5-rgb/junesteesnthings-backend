@@ -32,6 +32,7 @@ const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects')
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
+const DESIGN_FU = require('./tools/lib/design-followups');
 const SIGNAGE = require('./tools/lib/signage');
 const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
@@ -2029,6 +2030,9 @@ async function initStaffTables() {
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS rep_id INTEGER',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS heard_from TEXT',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS heard_rep_text TEXT',
+    // Designer-lead follow-up emails sent, and when the last went (tools/lib/design-followups.js).
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS design_fu_sent INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS design_fu_at TIMESTAMPTZ',
     "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type TEXT NOT NULL DEFAULT 'shop'",
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type_reason TEXT',
     // A helper's rate on the shop's own leads they close; commission_pct is for their own.
@@ -6108,6 +6112,45 @@ function designerUrlOk(u) {
   const v = String(u || '');
   return v.length <= 500 && v.startsWith(DESIGNER_BASE + '/') && !/[\s"'<>]/.test(v);
 }
+/** Follow-up emails to people who saved a design (tools/lib/design-followups.js):
+ *  1, 3 and 7 days after, until a quote, a reply or an outcome. Each send is
+ *  claimed first (design_fu_sent moves on only from the count read), so two
+ *  sweeps can never send the same one. Marketing mail: unsubscribes honored. */
+async function sendDesignFollowups(now = new Date()) {
+  if (!inTextingHours(now)) return '';
+  const { rows } = await pool.query(
+    `SELECT s.id, s.name, s.email, s.description, s.photo_url, s.design_url, s.created_at, s.dismissed_at,
+            s.outcome, s.first_response_at, s.design_fu_sent, s.design_fu_at,
+            EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id
+                    OR (s.email <> '' AND LOWER(q.email) = LOWER(s.email) AND q.created_at > s.created_at)) AS has_quote
+       FROM submissions s
+      WHERE s.source = 'designer' AND s.design_fu_sent < $1 AND s.created_at >= $2
+      ORDER BY s.created_at LIMIT 200`, [DESIGN_FU.STEPS.length, new Date(DESIGN_FU.START)]);
+  let n = 0;
+  for (const lead of rows) {
+    const step = DESIGN_FU.dueStep(lead, now);
+    if (!step || !designerUrlOk(lead.design_url)) continue;
+    const { rowCount } = await pool.query(
+      `UPDATE submissions SET design_fu_sent = $2, design_fu_at = NOW() WHERE id = $1 AND design_fu_sent = $3`,
+      [lead.id, step, step - 1]);
+    if (!rowCount) continue;
+    /* The product name is the second part of the lead's description, when it was given. */
+    const part = String(lead.description || '').split(' · ')[1] || '';
+    const product = /[:$]/.test(part) ? '' : part.slice(0, 80);
+    const m = DESIGN_FU.followupEmail(step, { name: lead.name, product, link: lead.design_url,
+      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(),
+      pct: parseInt(process.env.JT_PROMO_PCT, 10) || 10 });
+    try {
+      await sendEmail({ to: lead.email, subject: m.subject, html: customerEmailHtml(m.heading, m.inner), marketing: true, promo: false });
+      n++;
+    } catch (e) {
+      console.error(`design follow-up ${step} for lead ${lead.id} failed:`, e.message);
+      reportError('design-followup', e, `lead ${lead.id}`).catch(() => {});
+    }
+  }
+  return n ? `${n} sent` : '';
+}
+
 const DESIGN_LEAD_FIELDS = new Set(['name', 'email', 'phone', 'note', 'product', 'summary', 'total', 'preview_url',
   'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua']);
 app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 6), async (req, res) => {
@@ -31494,6 +31537,8 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
      15 minutes before its email goes. */
   setInterval(() => step('chat alerts', sendChatAlerts),
     Math.max(5000, Number(process.env.JT_CHAT_ALERT_EVERY_MS) || 5 * 60 * 1000));
+  /* Designer-lead follow-ups: every 30 minutes, daytime only. */
+  setInterval(() => step('design follow-ups', sendDesignFollowups), 30 * 60 * 1000);
   /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
   setTimeout(() => step('notifications', notifySweep), 20 * 1000);
   setInterval(() => step('notifications', notifySweep), 2 * 60 * 1000);
