@@ -111,7 +111,7 @@ function helloEmail({ first, email }) {
     style="display:block;width:100%;max-width:262px;height:auto;border-radius:10px;border:0"></a></td>`;
   const garment = (img, label, cat) => `<td width="33%" align="center" style="padding:4px;vertical-align:top">
     <a href="${DESIGN}/products.php?category_id=${cat}" style="text-decoration:none;color:#0B1F4B">
-    <img src="${IMG('email/' + img + '.jpg')}" alt="Custom ${label.replace('&amp;', '&')} with your design" width="164"
+    <img src="${IMG('email/' + img + '.jpg')}" alt="Custom ${label.replace('&amp;', '&')}, your design here" width="164"
       style="display:block;width:100%;max-width:164px;height:auto;border-radius:10px;border:0;margin:0 auto">
     <div style="font-weight:700;font-size:13.5px;margin-top:4px">${label}</div></a></td>`;
   const feature = (icon, title, text) => `<tr><td style="padding:7px 10px 7px 0;vertical-align:top;font-size:20px">${icon}</td>
@@ -138,9 +138,10 @@ function helloEmail({ first, email }) {
     <h2 style="font-size:18px;color:#0B1F4B;margin:0 0 4px 4px">New: choose your garment</h2>
     <p style="line-height:1.6;margin:0 4px 8px">Start with the piece you want: 45+ real garments in your choice of color and size.</p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      ${/* Blanks with a "your design here" print box (owner 2026-10-28),
-            drawn onto the shop photos ssa-33929, 33306, 18365, 113683, 36262, 97052. */ ''}<tr>${garment('garment-tee', 'T-shirts', 52)}${garment('garment-hoodie', 'Hoodies', 53)}${garment('garment-tank', 'Tank tops', 54)}</tr>
-      <tr>${garment('garment-youth', 'Kids &amp; youth', 55)}${garment('garment-baby', 'Baby', 56)}${garment('garment-hat', 'Hats', 57)}</tr>
+      ${/* The Design Studio's own listing photos, June's Tees "your design
+            here" mark on each (owner 2026-10-28), from the shop feed: products
+            12, 81, 19, 28, 100 and 25, saved as JPG for mail apps without WebP. */ ''}<tr>${garment('listing-tee', 'T-shirts', 52)}${garment('listing-hoodie', 'Hoodies', 53)}${garment('listing-tank', 'Tank tops', 54)}</tr>
+      <tr>${garment('listing-youth', 'Kids &amp; youth', 55)}${garment('listing-baby', 'Baby', 56)}${garment('listing-hat', 'Hats', 57)}</tr>
     </table>
   </td></tr>
   <tr><td style="padding:14px 28px 4px">
