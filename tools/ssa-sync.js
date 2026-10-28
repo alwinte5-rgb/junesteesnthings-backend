@@ -37,7 +37,17 @@ const { sellPrice } = require('./lib/markup');
 const { CORE_SIZES } = require('./lib/garments');
 
 const APPLY = process.argv.includes('--apply');
-const ACCEPT_JUMPS = process.argv.includes('--accept-jumps');
+/* --accept-jumps=<id,id,…>: write these products' cost moves even over the
+   jump guard — moves a person has reviewed in a dry run. Ids only, never a
+   blanket switch: a feed glitch on any other product between the dry run and
+   this run is still held. */
+const ACCEPT_JUMPS = (() => {
+  const a = process.argv.find((x) => x.startsWith('--accept-jumps'));
+  if (!a) return new Set();
+  const ids = a.split('=')[1] || '';
+  if (!/^\d+(,\d+)*$/.test(ids)) { console.error('--accept-jumps takes product ids: --accept-jumps=251,289'); process.exit(2); }
+  return new Set(ids.split(',').map(Number));
+})();
 /* --json=<file>: the run's decisions as data, for the owner's review page. */
 const JSON_OUT = (process.argv.find((a) => a.startsWith('--json=')) || '').slice(7);
 
@@ -151,7 +161,7 @@ async function resolveStyle(ssa, p) {
   return null;
 }
 
-/** Cheapest piece cost per size, plus local stock, or null if S&S has nothing. */
+/** Regular-price cost per size (lib/ssa-costs costBySize), plus stock, or null if S&S has nothing. */
 async function sizeCosts(ssa, styleId) {
   /* No `fields=` filter. Asking for `warehouses` through it returns the array
      with warehouseAbbr and qty STRIPPED OUT, which reads as "nothing in stock
@@ -160,22 +170,17 @@ async function sizeCosts(ssa, styleId) {
      carries the stock levels. */
   const rows = await ssa('products/?styleid=' + styleId);
   if (!Array.isArray(rows) || !rows.length) return null;
-  /* WHICH PRICE, AND WHOSE.
-   *
-   * piecePrice is S&S's LIST price. customerPrice is what this account
-   * actually pays, and on a Gildan 18600 that is $18.67 against $14.92 — the
-   * shop was marking up from a number it never pays, so every S&S garment in
-   * the catalogue sold at about 2.5x cost while the rule says 2x. A full-zip
-   * hoodie listed at $37.34 that should be $31.62.
-   *
-   * SALES are not passed on (owner, 2026-10-28: "regular price for
-   * everything"). customerPrice IS the sale price while a sale runs, so
-   * lib/ssa-costs pieceCost() prices every row from piecePrice, the list
-   * price; outside a sale the two are equal for this account.
+  /* WHICH PRICE. Every S&S garment is priced from piecePrice, S&S's regular
+   * (list) price (owner, 2026-10-28: "regular price for everything"; a sale
+   * is the shop's margin, never passed on unlabelled). customerPrice is what
+   * this account pays: the sale price while a sale runs, the list price
+   * otherwise (no standing discount; 25 live styles checked 2026-10-18).
+   * lib/ssa-costs pieceCost() reads piecePrice, so supplier_cost holds the
+   * cost the PRICE is built from. During a sale the shop pays less than it.
    */
 
   /* COLOURS ARE NOT ALL THE SAME PRICE, and the cheapest is not the typical
-   * one. On that same hoodie, White is $14.92 and the other FIFTEEN colours
+   * one. On a Gildan 18600 hoodie, White is $14.92 and the other FIFTEEN colours
    * are $15.81 — so pricing the style off its cheapest colour prices 15 of 16
    * garments off one the customer is not buying. The MEDIAN colour per size is
    * the typical garment: lib/ssa-costs costBySize(), shared with
@@ -319,15 +324,9 @@ process.stdin.on('end', async () => {
     const sets = [p.supplier === 'ssa-staged' ? `supplier='ssa-staged'` : `supplier='ssa'`,
       `supplier_style_id=${style.id}`, 'ssa_seen_at=NOW()'];
 
-    /* --accept-jumps writes moves over the guard too: for a one-off change a
-       person has already reviewed in a dry run (the switch to regular prices,
-       2026-10-28). The daily run never passes it. */
-    if (!ACCEPT_JUMPS && jumpHeld(was, cost, PRICE_JUMP_GUARD)) {
-      suspicious.push({ p, cost, price, move });
-      stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
-      continue;                                    // tag it, but never reprice it
-    }
-
+    /* The size extras are differences inside one style, so they are rebuilt
+       even when the base move below is held: a held product would otherwise
+       keep a broken size ladder along with its old price. */
     const attrs = dejson(p.attributes);
     let attrsChanged = false, retire = false;
     const sz = readSizes(attrs);
@@ -340,6 +339,17 @@ process.stdin.on('end', async () => {
         attrsChanged = true;
         resized.push({ p, before: vals, after: next });
       }
+    }
+    /* Written only if the field is still what this run read (see below). */
+    const attrsSet = () => 'attributes=IF(attributes=' + sq(p.attributes) + ', ' + sq(enjson(attrs)) + ', attributes)';
+
+    /* A move over the guard is held for a person — unless its id was passed in
+       --accept-jumps after a reviewed dry run. The daily run passes none. */
+    if (!ACCEPT_JUMPS.has(Number(p.id)) && jumpHeld(was, cost, PRICE_JUMP_GUARD)) {
+      suspicious.push({ p, cost, price, move });
+      if (attrsChanged) sets.push(attrsSet());
+      stmts.push(`UPDATE lumise_products SET ${sets.join(', ')} WHERE id=${p.id};`);
+      continue;                                    // tag it and fix its sizes, but never reprice it
     }
 
     /* Discontinued colours come off the product. The dropped options are kept
@@ -374,7 +384,7 @@ process.stdin.on('end', async () => {
       /* Written only if the field is still what this run read: the run
          takes minutes of S&S calls, and an edit made in admin meanwhile
          must not be overwritten with this run's older copy. */
-      sets.push('attributes=IF(attributes=' + sq(p.attributes) + ', ' + sq(enjson(attrs)) + ', attributes)');
+      sets.push(attrsSet());
     }
     if (retire) retired.push(p);
 

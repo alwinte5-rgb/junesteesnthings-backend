@@ -47,6 +47,39 @@ test('a colour priced apart from the rest cannot reorder the sizes', () => {
   assert.strictEqual(c.XL, c.S, 'one dear colour with no XL does not make XL cheaper than S');
 });
 
+test('an extended-only colour does not set the base or dilute the 2XL extra', () => {
+  const rows = [];
+  for (const c of ['A', 'B']) {
+    for (const z of ['S', 'M', 'L', 'XL']) rows.push({ colorName: c, sizeName: z, piecePrice: 7.19 });
+    rows.push({ colorName: c, sizeName: '2XL', piecePrice: 8.47 });
+  }
+  for (const z of ['2XL', '3XL']) rows.push({ colorName: 'Tall', sizeName: z, piecePrice: 8.47 });
+  const c = costBySize(rows);
+  assert.strictEqual(c.S, 7.19);
+  assert.strictEqual(c['2XL'], 8.47);
+});
+
+test('a size cheaper than the base stays cheaper; colours disagreeing on the cheapest core size do not inflate it', () => {
+  const xs = costBySize([{ colorName: 'A', sizeName: 'XS', piecePrice: 6.8 }, { colorName: 'A', sizeName: 'S', piecePrice: 7.2 }]);
+  assert.ok(xs.XS < xs.S, 'XS keeps its lower cost');
+  const rows = [
+    { colorName: 'A', sizeName: 'S', piecePrice: 5 }, { colorName: 'A', sizeName: 'M', piecePrice: 6 },
+    { colorName: 'B', sizeName: 'S', piecePrice: 6 }, { colorName: 'B', sizeName: 'M', piecePrice: 5 },
+  ];
+  const c = costBySize(rows);
+  assert.strictEqual(Math.min(c.S, c.M), 5, 'the cheapest core size is the typical colour base');
+});
+
+test('rows with no colour name are told apart by colour code', () => {
+  const rows = [
+    { colorCode: '01', sizeName: 'S', piecePrice: 5 }, { colorCode: '01', sizeName: 'XL', piecePrice: 5 },
+    { colorCode: '02', sizeName: 'S', piecePrice: 9 }, { colorCode: '02', sizeName: 'XL', piecePrice: 9 },
+    { colorCode: '03', sizeName: 'S', piecePrice: 5 }, { colorCode: '03', sizeName: 'XL', piecePrice: 5 },
+  ];
+  const c = costBySize(rows);
+  assert.strictEqual(c.S, 5); assert.strictEqual(c.XL, 5);
+});
+
 test('sizeOptions makes a size list with values and today\'s extra charges', () => {
   const before = { multiple_options: [{ title: 'S', price: '', default: '' }, { title: 'L', price: '', default: '1' }, { title: '2XL', price: '', default: '' }, { title: '6XL', price: '9.00' }] };
   const after = sizeOptions(before, { S: 3, L: 3, '2XL': 5 }, 3);
@@ -89,9 +122,18 @@ test('the jump guard holds a big move either way; --accept-jumps is the reviewed
   assert.strictEqual(jumpHeld(10, 11, 0.4), false, 'small moves pass');
   assert.strictEqual(jumpHeld(0, 11, 0.4), false, 'no stored cost: nothing to compare');
   const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
-  assert.match(sync, /if \(!ACCEPT_JUMPS && jumpHeld\(was, cost, PRICE_JUMP_GUARD\)\)/);
+  assert.match(sync, /if \(!ACCEPT_JUMPS\.has\(Number\(p\.id\)\) && jumpHeld\(was, cost, PRICE_JUMP_GUARD\)\)/);
+  assert.ok(/ACCEPT_JUMPS\.has\(Number\(p\.id\)\)/.test(sync), 'the override is per product id, not a blanket switch');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.ok(!/ssa-sync\.js'\)[^\n]*--accept-jumps/.test(server), 'the scheduled run never accepts jumps');
+  assert.ok(!server.includes('accept-jumps'), 'the scheduled run never accepts jumps');
+});
+
+test('a held product still gets its size extras rebuilt', () => {
+  const sync = fs.readFileSync(path.join(__dirname, '..', 'tools', 'ssa-sync.js'), 'utf8');
+  const sizes = sync.indexOf('sizeOptions(vals, bySize.bySize, cost)');
+  const held = sync.indexOf('jumpHeld(was, cost, PRICE_JUMP_GUARD)');
+  assert.ok(sizes > 0 && held > sizes, 'sizes are rebuilt before the hold decides');
+  assert.match(sync.slice(held, held + 400), /if \(attrsChanged\) sets\.push\(attrsSet\(\)\)/);
 });
 
 test('readSizes: key, string form, and an unreadable field', () => {

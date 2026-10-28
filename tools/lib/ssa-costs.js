@@ -10,6 +10,7 @@
    the three cannot disagree. */
 const { CORE_SIZES } = require('./garments');
 const { sizeUpcharge } = require('./markup');
+const { median } = require('./team-metrics');
 
 /* REGULAR PRICE ONLY (owner, 2026-10-28: "regular price for everything …
    passing on the sale without labeling them on sale is a problem"; and
@@ -27,39 +28,49 @@ function pieceCost(r) {
   return Number(r.piecePrice || r.customerPrice || r.casePrice || 0);
 }
 
-const median = (xs) => {
-  const a = xs.slice().sort((x, y) => x - y); const m = a.length >> 1;
-  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
-};
-
 /** { size: cost } from S&S product rows: the typical colour's base cost plus
  *  the typical size premium. The premium is measured INSIDE each colour (its
  *  size against its own cheapest core size) and then the median taken, so a
  *  colour priced differently from the rest — a heather, a sale, a closeout —
- *  cannot make a medium dearer than an XL. */
+ *  cannot make a medium dearer than an XL.
+ *
+ *  - Only colours that carry a core size set the base and premiums (a
+ *    tall-only or extended-only colour would otherwise count its 2XL as a
+ *    "base"); with no core size anywhere, every colour counts.
+ *  - A size cheaper than the base (XS, some youth) keeps a negative premium.
+ *  - The cheapest core size of the result IS the typical base: if colours
+ *    disagree on which core size is cheapest, every premium is shifted so the
+ *    lowest core premium is zero, rather than pricing above every colour. */
 function costBySize(rows) {
   const byColour = new Map();
   for (const r of rows || []) {
     const c = pieceCost(r);
     if (!r.sizeName || !(c > 0)) continue;
-    const k = String(r.colorName || '');
+    /* colorCode when a row has no name, so unnamed rows of different colours
+       are not pooled into one; rows with neither share one bucket. */
+    const k = String(r.colorName || r.colorCode || '');
     if (!byColour.has(k)) byColour.set(k, {});
     const sizes = byColour.get(k);
     (sizes[r.sizeName] = sizes[r.sizeName] || []).push(c);
   }
-  const bases = [], prem = {};
+  const colours = [];
   for (const sizes of byColour.values()) {
     const cost = {};
     for (const [z, xs] of Object.entries(sizes)) cost[z] = median(xs);
     const base = baseCostOf(cost);
-    if (!Number.isFinite(base)) continue;
-    bases.push(base);
-    for (const [z, c] of Object.entries(cost)) (prem[z] = prem[z] || []).push(c - base);
+    if (Number.isFinite(base)) colours.push({ cost, base, core: CORE_SIZES.some((z) => cost[z] > 0) });
   }
-  if (!bases.length) return {};
-  const base = median(bases);
+  const use = colours.some((c) => c.core) ? colours.filter((c) => c.core) : colours;
+  if (!use.length) return {};
+  const base = median(use.map((c) => c.base));
+  const prem = {};
+  for (const c of use) for (const [z, v] of Object.entries(c.cost)) (prem[z] = prem[z] || []).push(v - c.base);
+  const typical = {};
+  for (const [z, ps] of Object.entries(prem)) typical[z] = median(ps);
+  const corePrem = CORE_SIZES.map((z) => typical[z]).filter((v) => v !== undefined && v !== null);
+  const shift = corePrem.length ? Math.min(...corePrem) : 0;
   const out = {};
-  for (const [z, ps] of Object.entries(prem)) out[z] = Math.round((base + Math.max(0, median(ps))) * 100) / 100;
+  for (const [z, v] of Object.entries(typical)) out[z] = Math.round((base + v - shift) * 100) / 100;
   return out;
 }
 
