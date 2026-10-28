@@ -32,6 +32,7 @@ const { legacyRedirect, LEGACY_PATHS } = require('./tools/lib/legacy-redirects')
 const { parseFirstTouch, firstTouchLabel } = require('./tools/lib/first-touch');
 const SITEHEALTH = require('./tools/lib/site-health');
 const NUDGE = require('./tools/lib/lead-nudges');
+const DESIGN_FU = require('./tools/lib/design-followups');
 const SIGNAGE = require('./tools/lib/signage');
 const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
@@ -3111,6 +3112,8 @@ function activePromoCode() {
   if (!pool.length) pool.push('SAVE10');
   return pool[Math.floor(Date.now() / 1000 / 604800) % pool.length];
 }
+/** The percentage that code takes off (JT_PROMO_PCT, default 10). */
+function activePromoPct() { return parseInt(process.env.JT_PROMO_PCT, 10) || 10; }
 console.log(`Active recovery promo code this week: ${activePromoCode()}`);
 
 /* HTML escaping, used on every interpolated value in this file.
@@ -6114,6 +6117,55 @@ function designerUrlOk(u) {
   const v = String(u || '');
   return v.length <= 500 && v.startsWith(DESIGNER_BASE + '/') && !/[\s"'<>]/.test(v);
 }
+/** Follow-up emails to people who saved a design (tools/lib/design-followups.js):
+ *  1, 3 and 7 days after, until a quote, a reply or an outcome. Each one is a
+ *  campaign_emails row, campaign "design-fu:<lead id>:<step>", inserted before
+ *  sending: the unique (campaign, email) index means two sweeps can never send
+ *  the same one, and a failed send deletes its row so the next sweep retries.
+ *  Marketing mail, so unsubscribes are honored. */
+const designFuCampaign = (id, step) => `design-fu:${id}:${step}`;
+async function sendDesignFollowups(now = new Date()) {
+  if (!inTextingHours(now)) return '';
+  /* Only leads that can still get one (the same stop rules as
+     DESIGN_FU.stopReason), so finished leads never fill the batch. */
+  const { rows } = await pool.query(
+    `SELECT s.id, s.name, s.email, s.photo_url, s.design_url, s.created_at, s.dismissed_at,
+            s.outcome, s.first_response_at, false AS has_quote,
+            (SELECT COUNT(*)::int FROM campaign_emails c WHERE c.campaign LIKE 'design-fu:' || s.id || ':%') AS design_fu_sent,
+            (SELECT MAX(c.created_at) FROM campaign_emails c WHERE c.campaign LIKE 'design-fu:' || s.id || ':%') AS design_fu_at
+       FROM submissions s
+      WHERE s.source = 'designer' AND s.created_at >= $1
+        AND COALESCE(s.email, '') <> '' AND s.dismissed_at IS NULL AND s.outcome IS NULL AND s.first_response_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id
+                        OR (LOWER(q.email) = LOWER(s.email) AND q.created_at > s.created_at))
+        AND (SELECT COUNT(*) FROM campaign_emails c WHERE c.campaign LIKE 'design-fu:' || s.id || ':%') < $2
+      ORDER BY s.created_at LIMIT 200`, [new Date(DESIGN_FU.START), DESIGN_FU.STEPS.length]);
+  let n = 0;
+  for (const lead of rows) {
+    const step = DESIGN_FU.dueStep(lead, now);
+    if (!step || !designerUrlOk(lead.design_url)) continue;
+    if (await isUnsubscribed(lead.email)) continue;   // nothing would go; not counted as sent
+    const { rows: claim } = await pool.query(
+      `INSERT INTO campaign_emails (campaign, email, status) VALUES ($1, $2, 'sending')
+       ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [designFuCampaign(lead.id, step), lead.email]);
+    if (!claim.length) continue;
+    const m = DESIGN_FU.followupEmail(step, { name: lead.name, link: lead.design_url,
+      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(), pct: activePromoPct() });
+    try {
+      await sendEmail({ to: lead.email, subject: m.subject, html: customerEmailHtml(m.heading, m.inner), marketing: true, promo: false });
+      await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [claim[0].id]);
+      n++;
+    } catch (e) {
+      /* Give the step back so the next sweep tries again: a mail outage or a
+         missing secret must not use up a lead's follow-ups. */
+      await pool.query(`DELETE FROM campaign_emails WHERE id = $1`, [claim[0].id]).catch(() => {});
+      console.error(`design follow-up ${step} for lead ${lead.id} failed:`, e.message);
+      reportError('design-followup', e, `lead ${lead.id}`).catch(() => {});
+    }
+  }
+  return n ? `${n} sent` : '';
+}
+
 const DESIGN_LEAD_FIELDS = new Set(['name', 'email', 'phone', 'note', 'product', 'summary', 'total', 'preview_url',
   'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua']);
 app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 6), async (req, res) => {
@@ -7989,7 +8041,7 @@ app.post('/api/abandoned-cart-email', requireInternalKey, capPerRecipient('aband
       for (const [k, t] of recentCartEmails) if (Date.now() - t > CART_EMAIL_DEDUP_MS) recentCartEmails.delete(k);
     }
     const promoCode = activePromoCode();
-    const promoPct = parseInt(process.env.JT_PROMO_PCT, 10) || 10;
+    const promoPct = activePromoPct();
     const cartLine = `Your cart at June's Tees &amp; Things has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.`;
     const copy = count > 0 ? {
       1: { subject: `Your cart is saved + here's ${promoPct}% off ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready — and code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off at checkout.`, cta: `Pick Up Where I Left Off →` },
@@ -31586,6 +31638,9 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
      15 minutes before its email goes. */
   setInterval(() => step('chat alerts', sendChatAlerts),
     Math.max(5000, Number(process.env.JT_CHAT_ALERT_EVERY_MS) || 5 * 60 * 1000));
+  /* Designer-lead follow-ups: every 30 minutes, daytime only. */
+  setTimeout(() => step('design follow-ups', sendDesignFollowups), 60 * 1000);
+  setInterval(() => step('design follow-ups', sendDesignFollowups), 30 * 60 * 1000);
   /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
   setTimeout(() => step('notifications', notifySweep), 20 * 1000);
   setInterval(() => step('notifications', notifySweep), 2 * 60 * 1000);
