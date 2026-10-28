@@ -149,13 +149,18 @@ test('a JOIN sign-up has no email, so only real addresses are unique', () => {
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS text_signups_email ON text_signups \(email\) WHERE email <> ''/);
 });
 
-test('no promises the shop cannot keep yet: no delivery, no faster turnaround', () => {
+test('no promises the shop cannot keep: no delivery; turnaround is the owner\'s 5–7 / rush-for-a-fee line', () => {
   const t = R.helloText({ first: 'Tom' }).body;
   const m = R.helloEmail({ first: 'Tom', email: 't@example.com' }).html;
   for (const text of [t, m]) {
     assert.doesNotMatch(text, /deliver/i, 'local delivery is paused until it is set up');
-    assert.doesNotMatch(text, /faster|turnaround/i);
+    // owner 2026-10-28: speed is back, never same-day, never a free or priced rush
+    assert.doesNotMatch(text, /same[- ]day|free rush|rush[^.<]{0,40}\d+ ?%/i);
+    assert.match(text, /5.7 business days/);
+    assert.match(text, /Nov 24/);
   }
+  assert.match(m, /Rush turnaround is available for a fee/);
+  assert.ok(t.length <= 320, `hello text stays within two segments (${t.length})`);
   assert.match(m, /choose your garment/i);
   assert.match(m, /design it your way/i);
   for (const cat of [52, 53, 54, 55, 56, 57]) assert.ok(m.includes(`products.php?category_id=${cat}`), `garment ${cat} links to its page`);
