@@ -49,11 +49,12 @@ test('each email links to their design and escapes what they typed', () => {
   assert.doesNotMatch(F.followupEmail(1, { link, code: 'SAVE10' }).inner, /SAVE10/);
 });
 
-test('the sweep claims each send before sending, as marketing mail, daytime only', () => {
-  assert.match(src, /UPDATE submissions SET design_fu_sent = \$2, design_fu_at = NOW\(\) WHERE id = \$1 AND design_fu_sent = \$3/);
+test('the sweep claims each send before sending, as marketing mail, daytime only, with no new schema', () => {
+  assert.match(src, /INSERT INTO campaign_emails \(campaign, email, status\) VALUES \(\$1, \$2, 'sending'\)\s+ON CONFLICT \(campaign, email\) DO NOTHING RETURNING id`, \[designFuCampaign\(lead\.id, step\)/);
   assert.match(src, /async function sendDesignFollowups[\s\S]{0,200}if \(!inTextingHours\(now\)\) return '';/);
   assert.match(src, /customerEmailHtml\(m\.heading, m\.inner\), marketing: true/);
   assert.match(src, /step\('design follow-ups', sendDesignFollowups\)/);
-  assert.match(src, /UPDATE submissions SET design_fu_sent = \$2, design_fu_at = \$4 WHERE id = \$1 AND design_fu_sent = \$3/, 'a failed send gives the step back');
+  assert.match(src, /DELETE FROM campaign_emails WHERE id = \$1`, \[claim\[0\]\.id\]/, 'a failed send gives the step back');
   assert.match(src, /AND s\.dismissed_at IS NULL AND s\.outcome IS NULL AND s\.first_response_at IS NULL/, 'finished leads never fill the batch');
+  assert.doesNotMatch(src, /design_fu_sent INTEGER|quotes_email_lower_idx/, 'no schema change');
 });

@@ -2030,11 +2030,6 @@ async function initStaffTables() {
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS rep_id INTEGER',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS heard_from TEXT',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS heard_rep_text TEXT',
-    // Designer-lead follow-up emails sent, and when the last went (tools/lib/design-followups.js).
-    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS design_fu_sent INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS design_fu_at TIMESTAMPTZ',
-    // The follow-up sweep matches quotes to leads by email, in any case.
-    'CREATE INDEX IF NOT EXISTS quotes_email_lower_idx ON quotes (LOWER(email))',
     "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type TEXT NOT NULL DEFAULT 'shop'",
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type_reason TEXT',
     // A helper's rate on the shop's own leads they close; commission_pct is for their own.
@@ -6117,44 +6112,47 @@ function designerUrlOk(u) {
   return v.length <= 500 && v.startsWith(DESIGNER_BASE + '/') && !/[\s"'<>]/.test(v);
 }
 /** Follow-up emails to people who saved a design (tools/lib/design-followups.js):
- *  1, 3 and 7 days after, until a quote, a reply or an outcome. Each send is
- *  claimed first (design_fu_sent moves on only from the count read), so two
- *  sweeps can never send the same one. Marketing mail: unsubscribes honored. */
+ *  1, 3 and 7 days after, until a quote, a reply or an outcome. Each one is a
+ *  campaign_emails row, campaign "design-fu:<lead id>:<step>", inserted before
+ *  sending: the unique (campaign, email) index means two sweeps can never send
+ *  the same one, and a failed send deletes its row so the next sweep retries.
+ *  Marketing mail, so unsubscribes are honored. */
+const designFuCampaign = (id, step) => `design-fu:${id}:${step}`;
 async function sendDesignFollowups(now = new Date()) {
   if (!inTextingHours(now)) return '';
+  /* Only leads that can still get one (the same stop rules as
+     DESIGN_FU.stopReason), so finished leads never fill the batch. */
   const { rows } = await pool.query(
-    /* Only leads that can still get one (the same stop rules as
-       DESIGN_FU.stopReason), so finished leads never fill the batch. */
     `SELECT s.id, s.name, s.email, s.photo_url, s.design_url, s.created_at, s.dismissed_at,
-            s.outcome, s.first_response_at, s.design_fu_sent, s.design_fu_at, false AS has_quote
+            s.outcome, s.first_response_at, false AS has_quote,
+            (SELECT COUNT(*)::int FROM campaign_emails c WHERE c.campaign LIKE 'design-fu:' || s.id || ':%') AS design_fu_sent,
+            (SELECT MAX(c.created_at) FROM campaign_emails c WHERE c.campaign LIKE 'design-fu:' || s.id || ':%') AS design_fu_at
        FROM submissions s
-      WHERE s.source = 'designer' AND s.design_fu_sent < $1 AND s.created_at >= $2
+      WHERE s.source = 'designer' AND s.created_at >= $1
         AND COALESCE(s.email, '') <> '' AND s.dismissed_at IS NULL AND s.outcome IS NULL AND s.first_response_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id
                         OR (LOWER(q.email) = LOWER(s.email) AND q.created_at > s.created_at))
-      ORDER BY s.created_at LIMIT 200`, [DESIGN_FU.STEPS.length, new Date(DESIGN_FU.START)]);
+        AND (SELECT COUNT(*) FROM campaign_emails c WHERE c.campaign LIKE 'design-fu:' || s.id || ':%') < $2
+      ORDER BY s.created_at LIMIT 200`, [new Date(DESIGN_FU.START), DESIGN_FU.STEPS.length]);
   let n = 0;
   for (const lead of rows) {
     const step = DESIGN_FU.dueStep(lead, now);
     if (!step || !designerUrlOk(lead.design_url)) continue;
-    if (await isUnsubscribed(lead.email)) {   // nothing will go: stop for good, not counted as sent
-      await pool.query(`UPDATE submissions SET design_fu_sent = $2 WHERE id = $1`, [lead.id, DESIGN_FU.STEPS.length]);
-      continue;
-    }
-    const { rowCount } = await pool.query(
-      `UPDATE submissions SET design_fu_sent = $2, design_fu_at = NOW() WHERE id = $1 AND design_fu_sent = $3`,
-      [lead.id, step, step - 1]);
-    if (!rowCount) continue;
+    if (await isUnsubscribed(lead.email)) continue;   // nothing would go; not counted as sent
+    const { rows: claim } = await pool.query(
+      `INSERT INTO campaign_emails (campaign, email, status) VALUES ($1, $2, 'sending')
+       ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [designFuCampaign(lead.id, step), lead.email]);
+    if (!claim.length) continue;
     const m = DESIGN_FU.followupEmail(step, { name: lead.name, link: lead.design_url,
       preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(), pct: activePromoPct() });
     try {
       await sendEmail({ to: lead.email, subject: m.subject, html: customerEmailHtml(m.heading, m.inner), marketing: true, promo: false });
+      await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [claim[0].id]);
       n++;
     } catch (e) {
       /* Give the step back so the next sweep tries again: a mail outage or a
          missing secret must not use up a lead's follow-ups. */
-      await pool.query(`UPDATE submissions SET design_fu_sent = $2, design_fu_at = $4 WHERE id = $1 AND design_fu_sent = $3`,
-        [lead.id, step - 1, step, lead.design_fu_at]).catch(() => {});
+      await pool.query(`DELETE FROM campaign_emails WHERE id = $1`, [claim[0].id]).catch(() => {});
       console.error(`design follow-up ${step} for lead ${lead.id} failed:`, e.message);
       reportError('design-followup', e, `lead ${lead.id}`).catch(() => {});
     }
