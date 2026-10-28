@@ -1,20 +1,35 @@
 'use strict';
 
-/* THE 6 FT TABLE COVER (owner, 2026-10-21): a YCC Linens fitted polyester
- * blank, DTF printed in our shop on one side (front) or two sides (front and
- * back). The ONE place its prices live: tools/add-table-cover.js writes them
- * into the quote engine, and tools/occasion-pages.js prints them on
+/* THE 6 FT TABLE COVER (owner, 2026-10-21; repriced 2026-10-28): a 6 ft
+ * polyester table cover printed in our shop on one side (front) or two sides
+ * (front and back). Ivory and white covers are sublimated (the ink is dyed
+ * into the fabric, no feel); every other color is DTF printed. The ONE place
+ * its prices live: tools/add-table-cover.js writes them into the quote
+ * engine, and tools/occasion-pages.js prints them on
  * /print/table-covers.html, so the page and a quote cannot disagree
  * (tests/table-cover.test.js holds the two together).
  *
- * Band CEILINGS -> price each, all-in (the cover and its delivery included):
- *   1 side:  $75 for 1-2 covers, $65 each from 3.
- *   2 sides: $110 for 1 cover, $95 each for 2, $80 each from 3 (owner,
- *            2026-10-21, replacing $90 / $80 / $80). */
-const ONE_SIDE = { 1: 75, 2: 75, 7000: 65 };
-const TWO_SIDES = { 1: 110, 2: 95, 7000: 80 };
+ * Band CEILINGS -> price each, all-in (the cover and its delivery included).
+ * Owner, 2026-10-28: small steps up to 9 covers (the old ladder dropped $30 a
+ * cover between 1 and 3 for the same cost), real breaks at 50 and 100. The
+ * page calls them estimates; the quote is the final price.
+ *   1 side:  $75 (1-4), $70 (5-9), $60 (10-49), $52 (50-99), $45 (100+).
+ *   2 sides: $105, $95, $85, $75, $65. */
+const ONE_SIDE = { 4: 75, 9: 70, 49: 60, 99: 52, 7000: 45 };
+const TWO_SIDES = { 4: 105, 9: 95, 49: 85, 99: 75, 7000: 65 };
 
-const BLANK_COST = 12.99;   // YCC Linens 6 ft fitted polyester, 1-19 (2026-10-20), for job costs
+/* The bands as the page shows them, built from the ceilings so they cannot
+   drift: [first quantity, label], e.g. [5, '5–9'], and the last '100+'. */
+const CEILINGS = Object.keys(ONE_SIDE).map(Number).sort((a, b) => a - b);
+const BANDS = CEILINGS.map((c, i) => {
+  const from = i ? CEILINGS[i - 1] + 1 : 1;
+  return [from, i === CEILINGS.length - 1 ? from + '+' : from === c ? String(c) : from + '–' + c];
+});
+
+/* Sublimation needs a white or light polyester; these covers get it, the rest DTF. */
+const SUBLIMATED = ['White', 'Ivory'];
+
+const BLANK_COST = 15.39;   // 6 ft polyester cover, 220 gsm, regular price (2026-10-28), for job costs
 
 /* The cover colors YCC Linens sells the 6 ft fitted cover in, exactly as its
  * product page's color picker names them (read in Chrome 2026-10-21,
@@ -35,4 +50,4 @@ function priceEach(qty, sides) {
   return c == null ? null : t[c];
 }
 
-module.exports = { ONE_SIDE, TWO_SIDES, BLANK_COST, COLORS, priceEach };
+module.exports = { ONE_SIDE, TWO_SIDES, BANDS, SUBLIMATED, BLANK_COST, COLORS, priceEach };

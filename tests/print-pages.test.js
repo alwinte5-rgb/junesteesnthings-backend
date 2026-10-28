@@ -106,11 +106,13 @@ test('the "from" line is the lowest price on the page, at its quantity', () => {
     const html = read(p.path);
     const all = [...html.matchAll(/<b>(\$[\d,.]+)<\/b> each/g)].map((m) => money(m[1]));
     const low = Math.min(...all);
-    const badge = html.match(/<span class="hero-badge">From (\$[\d,.]+) each at ([\d,]+)<\/span>/);
+    const badge = html.match(/<span class="hero-badge">From (\$[\d,.]+) each at ([^<( ]+)( \(estimate\))?<\/span>/);
     assert.ok(badge, `${p.path}: from badge`);
     assert.strictEqual(money(badge[1]), low, p.path);
     const sum = O.printSummary(O.printFamilies(p));
-    assert.strictEqual(Number(badge[2].replace(/,/g, '')), sum.low.q, p.path);
+    /* A banded table names the band ("100+"), a run table the run. */
+    assert.strictEqual(badge[2], sum.low.label || sum.low.q.toLocaleString('en-US'), p.path);
+    assert.strictEqual(!!badge[3], sum.low.estimate, `${p.path}: estimate marked only where the price is one`);
   }
 });
 
@@ -191,16 +193,22 @@ test('the table cover page prints the in-house prices the quote engine charges',
   const p = pages.find((x) => x.path === 'print/table-covers.html');
   assert.deepStrictEqual(p.print.families, [INHOUSE]);
   const html = read(p.path);
-  const rows = [...html.matchAll(/<tr><th scope="row">([\d,]+)<\/th>([\s\S]*?)<\/tr>/g)];
-  assert.deepStrictEqual(rows.map((r) => Number(r[1])), [1, 2, 3]);
-  for (const r of rows) {
-    const q = Number(r[1]);
+  const rows = [...html.matchAll(/<tr><th scope="row">([^<]+)<\/th>([\s\S]*?)<\/tr>/g)];
+  assert.deepStrictEqual(rows.map((r) => r[1]), TC.BANDS.map(([, label]) => label));
+  for (const [i, r] of rows.entries()) {
+    const q = TC.BANDS[i][0];
     const each = [...r[2].matchAll(/<b>(\$[\d,.]+)<\/b> each/g)].map((m) => money(m[1]));
-    assert.deepStrictEqual(each, [TC.priceEach(q, 1), TC.priceEach(q, 2)], `${q} covers`);
+    assert.deepStrictEqual(each, [TC.priceEach(q, 1), TC.priceEach(q, 2)], `${r[1]} covers`);
+    assert.doesNotMatch(r[2], / total</, 'a range row shows no total');
   }
-  /* The owner's figures, 2026-10-21. */
-  assert.deepStrictEqual([1, 2, 3, 10].map((q) => TC.priceEach(q, 2)), [110, 95, 80, 80]);
-  assert.deepStrictEqual([1, 2, 3, 10].map((q) => TC.priceEach(q, 1)), [75, 75, 65, 65]);
+  /* The owner's figures, 2026-10-28: small steps to 9 covers, real breaks at 50 and 100. */
+  assert.deepStrictEqual([1, 4, 5, 9, 10, 49, 50, 99, 100, 500].map((q) => TC.priceEach(q, 1)), [75, 75, 70, 70, 60, 60, 52, 52, 45, 45]);
+  assert.deepStrictEqual([1, 4, 5, 9, 10, 49, 50, 99, 100, 500].map((q) => TC.priceEach(q, 2)), [105, 105, 95, 95, 85, 85, 75, 75, 65, 65]);
+  assert.match(html, /Estimated prices: from/);
+  assert.match(html, /These prices are estimates/);
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert.doesNotMatch(text, /fitted/i, 'owner, 2026-10-28: no "fitted"');
+  assert.match(text, /White and Ivory covers are sublimated/);
   assert.match(html, /class="pp-colors"/, 'the cover colors are on the page');
   assert.strictEqual(TC.COLORS.length, 30);
   for (const c of TC.COLORS) assert.ok(html.includes(`<li>${c}</li>`), c);
