@@ -56,3 +56,14 @@ test('letter-only style codes count as the style (Shaka Wear, Atlantis, LEGACY; 
   assert.strictEqual(mismatch('Shaka Wear SHGDH Unisex Los Angeles Garment-Dyed Hoodie Sweatshirt', ['SHGDH'], ['Shaka', 'Wear']), null);
   assert.match(mismatch('Shaka Wear SHGDN Unisex Garment-Dyed Designer Tee', ['SHGDH'], ['Shaka', 'Wear']), /style SHGDH is not in/);
 });
+
+test('in-house sublimation items take their mockups as own-print (mugs, pillows; 2026-10-28)', () => {
+  assert.strictEqual(ownPrintMismatch('White Ceramic Sublimation Mug — 11.8 oz', ['Mug', 'white', 'ceramic']), null);
+  assert.strictEqual(ownPrintMismatch('White Ceramic Sublimation Mug — 15 oz', ['Mug', 'white', 'ceramic']), null);
+  assert.strictEqual(ownPrintMismatch('White Sublimation Throw Pillow — 16x16, filled', ['Pillow', 'white', 'throw']), null);
+  assert.match(ownPrintMismatch('White Sublimation Throw Pillow — 16x16, filled', ['Mug', 'white']), /"Mug" is not in/);
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-'));
+  for (const f of ['523-Mug-white-ceramic.jpg', '530-Pillow-white-throw.jpg']) fs.writeFileSync(path.join(d, f), 'x');
+  assert.deepStrictEqual(readDir(d).map((x) => [x.id, x.styles]), [[523, []], [530, []]], 'no digit in the words, so no style number');
+  fs.rmSync(d, { recursive: true });
+});
