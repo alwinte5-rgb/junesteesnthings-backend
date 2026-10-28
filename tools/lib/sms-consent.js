@@ -92,11 +92,7 @@ function consentCheckboxesHtml() {
   </div>`;
 }
 
-/* Consent sources that mean the person texted STOP (or Twilio says they did).
-   One list for the send-time check and the campaign audiences. */
-const STOP_SOURCES = ['sms-reply:stop', 'twilio:21610'];
-
 module.exports = {
-  STOP_SOURCES, CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
+  CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 };
