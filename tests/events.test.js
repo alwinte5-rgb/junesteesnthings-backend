@@ -15,10 +15,13 @@ test('dates follow their rules', () => {
   assert.strictEqual(E.iso(E.easter(2028)), '2028-04-16');
 });
 
-test('on 6 Oct 2026 orders for the marathon and Halloween have closed (4 weeks ahead) and Thanksgiving is selling; past events roll to next year', () => {
+test('on 6 Oct 2026 marathon orders have closed (2 weeks ahead) and Halloween is selling; on 28 Oct Thanksgiving and Christmas sell; past events roll to next year', () => {
   const up = E.upcoming(new Date('2026-10-06T15:00:00Z'));
-  assert.deepStrictEqual(E.sellingNow(new Date('2026-10-06T15:00:00Z')).map((e) => e.key), ['thanksgiving']);
-  assert.strictEqual(E.iso(up.find((e) => e.key === 'chicago-marathon').orderByDate), '2026-09-13');
+  assert.deepStrictEqual(E.sellingNow(new Date('2026-10-06T15:00:00Z')).map((e) => e.key), ['halloween']);
+  assert.deepStrictEqual(E.sellingNow(new Date('2026-10-28T15:00:00Z')).map((e) => e.key), ['thanksgiving', 'christmas']);
+  assert.strictEqual(E.iso(up.find((e) => e.key === 'chicago-marathon').orderByDate), '2026-09-27');
+  assert.strictEqual(E.iso(up.find((e) => e.key === 'thanksgiving').orderByDate), '2026-11-12');
+  assert.strictEqual(E.iso(up.find((e) => e.key === 'christmas').orderByDate), '2026-11-24', 'owner: Christmas orders close Tue Nov 24');
   assert.strictEqual(E.iso(up.find((e) => e.key === 'breast-cancer-awareness').date), '2027-10-01');
   assert.ok(up.every((e, i) => i === 0 || up[i - 1].date <= e.date));
 });
@@ -34,7 +37,7 @@ test('every email has its dates filled in and links only to jtees.net or design.
   }
 });
 
-test('the campaign: Tuesdays and Thursdays only, selling starts eight weeks ahead, one last call each, on or before the order-by date', () => {
+test('the campaign: Tuesdays and Thursdays only, selling starts six weeks ahead, one last call each, on or before the order-by date', () => {
   const from = new Date('2026-10-06T12:00:00Z');
   const sch = E.schedule(from, 365);
   assert.ok(sch.length > 60);
@@ -69,10 +72,28 @@ test('every campaign email has the logo, a picture with alt text, the order link
   }
 });
 
-test('no event promises less than 4 weeks to order (owner, 2026-10-17)', () => {
-  assert.ok(E.MIN_ORDER_BY >= 28);
+test('no event promises less than 2 weeks to order (owner, 2026-10-28)', () => {
+  assert.ok(E.MIN_ORDER_BY >= 14);
   for (const e of E.upcoming(new Date('2026-10-06T12:00:00Z'))) {
-    assert.ok((e.date - e.orderByDate) / 86400000 >= 28, `${e.key}: order by ${E.iso(e.orderByDate)} for ${E.iso(e.date)}`);
+    assert.ok((e.date - e.orderByDate) / 86400000 >= 14, `${e.key}: order by ${E.iso(e.orderByDate)} for ${E.iso(e.date)}`);
     assert.ok((e.orderByDate - e.start) / 86400000 >= 28, `${e.key}: at least 4 weeks of selling`);
+  }
+});
+
+test('an event sends nothing after its last call, so no "0 days left" email on the order-by date', () => {
+  const sch = E.schedule(new Date('2026-10-06T12:00:00Z'), 365);
+  const done = new Set();
+  for (const x of sch) {
+    const id = x.event.key + E.iso(x.event.date);
+    assert.ok(!done.has(id), `${id} emailed on ${E.iso(x.day)} after its last call`);
+    if (x.beat === 'lastcall') done.add(id);
+  }
+});
+
+test('Christmas orders close the Tuesday before Thanksgiving every year (owner)', () => {
+  for (const [y, want] of [[2026, '2026-11-24'], [2027, '2027-11-23'], [2028, '2028-11-21']]) {
+    const x = E.upcoming(new Date(Date.UTC(y, 0, 2))).find((e) => e.key === 'christmas');
+    assert.strictEqual(E.iso(x.orderByDate), want);
+    assert.strictEqual(x.orderByDate.getUTCDay(), 2);
   }
 });

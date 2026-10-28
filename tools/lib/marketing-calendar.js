@@ -12,8 +12,8 @@
  *   prep      10 weeks before   pick designs and photos, update the page
  *   ads        6 weeks before   Google Ads campaign on, Brevo campaign out
  *                               (6 weeks is the minimum an occasion may set)
- *   order by   4 weeks before the event: standard turnaround is 7 to 14
- *              business days after proof approval, so 2 weeks could miss it
+ *   order by   2 weeks before the event (owner, 2026-10-28): small orders
+ *              take 5–7 business days, larger 7–14; later is a paid rush
  *
  * Social posts run from the ads date to the order-by date. The holiday pages
  * print their "when to order" line from here (tools/occasion-pages.js), and
@@ -23,7 +23,7 @@
  * Dates are plain calendar days (UTC midnight), so no timezone can move one.
  */
 
-const { lastOpenDay } = require('./shop-closed');
+const { lastOpenDay, christmasLastDay } = require('./shop-closed');
 const DAY = 86400000;
 const MIN_ADS_WEEKS = 6;
 
@@ -60,7 +60,7 @@ const OCCASIONS = [
   { id: 'senior-night-fall', name: 'Senior night (fall sports)', event: (y) => d(y, 10, 1), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
   { id: 'chicago-marathon', name: 'Chicago Marathon', event: (y) => nthWeekday(y, 10, 0, 2), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, runner support shirts, race signs' },
   { id: 'halloween', note: 'Halloween is October 31.', name: 'Halloween', event: (y) => d(y, 10, 31), season: (y) => d(y, 9, 1), page: '/occasions/halloween-shirts-chicago.html', push: 'Witch squad and group costume shirts, kids shirts' },
-  { id: 'christmas', note: 'Christmas is December 25.', name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
+  { id: 'christmas', note: 'Christmas is December 25.', orderNote: 'Christmas orders close the Tuesday before Thanksgiving: we close for Thanksgiving and December fills up fast.', closes: (y) => christmasLastDay(y), name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
 ];
 
 /* `end` marks an occasion that is a whole season, not one day: weddings run
@@ -68,7 +68,7 @@ const OCCASIONS = [
    and graduation and prom May into mid-June (owner, 2026-10-17: "graduation
    should be a season too"; its event is the late-May peak, the same date the
    email campaign in tools/lib/events.js counts from). Orders stay open until
-   4 weeks before the season's LAST day, so a season reads "orders closed"
+   2 weeks before the season's LAST day, so a season reads "orders closed"
    only once even its last date can no longer be made. Without `end`, the
    event day is the end. A season opens at least 2 weeks before its last
    order day; datesFor refuses any occasion that breaks that. Seasons that
@@ -76,7 +76,8 @@ const OCCASIONS = [
 
 /* Lead times in weeks before the season start. adsWeeks may be raised per
    occasion; it may never go under MIN_ADS_WEEKS. */
-const DEFAULT_LEAD = { prepWeeks: 10, adsWeeks: 6, orderByDays: 28 };
+const DEFAULT_LEAD = { prepWeeks: 10, adsWeeks: 6, orderByDays: 14 };
+/* Christmas sets its own last day (`closes`, tools/lib/shop-closed.js). */
 const LEAD = {};
 
 function datesFor(o, y) {
@@ -84,7 +85,7 @@ function datesFor(o, y) {
   if (lead.adsWeeks < MIN_ADS_WEEKS) throw new Error(`${o.id}: ads must start at least ${MIN_ADS_WEEKS} weeks before the season`);
   const event = o.event(y), season = o.season(y), end = o.end ? o.end(y) : event;
   /* Never a day the shop is closed (tools/lib/shop-closed.js). */
-  const orderBy = lastOpenDay(addDays(end, -lead.orderByDays));
+  const orderBy = lastOpenDay(o.closes ? o.closes(y) : addDays(end, -lead.orderByDays));
   if ((orderBy - season) / DAY < 14) throw new Error(`${o.id} ${y}: the season must open at least 2 weeks before the last order day`);
   return {
     id: o.id, name: o.name, note: o.note || '', year: y, page: o.page, push: o.push, live: !!o.page,

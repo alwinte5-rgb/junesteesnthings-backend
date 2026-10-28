@@ -42,7 +42,7 @@ const R = {
   reunions: { label: 'Family reunion designs', url: 'https://design.jtees.net/collection.php?c=family-reunion' },
 };
 
-const RULES = 'Shop rules for anything a customer sees: no rush orders, no free shipping, pickup by appointment only, located in Lakeview (never Oak Lawn), 7 to 14 business days, Instagram @jtees228, phone (773) 900-4592.';
+const RULES = 'Shop rules for anything a customer sees: rush only for a fee (never show a percentage), no free shipping, pickup by appointment only, located in Lakeview (never Oak Lawn), small orders 5 to 7 business days and larger ones 7 to 14, Instagram @jtees228, phone (773) 900-4592.';
 
 const t = (lane, goal, title, description, how_to, brief) => ({ lane, goal, title, description, how_to, repeat: 'none', weekday: null, brief });
 const daily = (goal, title, description, how_to, brief) => ({ lane: 'daily', goal, title, description, how_to, repeat: 'daily', weekday: null, brief });

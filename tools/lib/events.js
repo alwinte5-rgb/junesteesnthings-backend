@@ -7,7 +7,7 @@
  *
  * Each event knows how to find its date in any year, how many days ahead to
  * start selling it (`lead`), and how many days before the event an order has
- * to be in to be made in time (`orderBy`, 4 weeks unless an event says more). Everything else - the homepage
+ * to be in to be made in time (`orderBy`, 2 weeks unless an event says more). Everything else - the homepage
  * strip, the email, the ad text, the dashboard - reads from here, so moving a
  * date or a deadline is one edit.
  *
@@ -40,13 +40,15 @@ const LOGO = `${SITE}/assets/images/brand/logo-current-900.png`;
 /* Each event's picture: the shop's own work photos on jtees.net (`photo`),
    chosen per event. Swap in a better one by changing `photo`. */
 const PHOTOS = `${SITE}/assets/images/`;
-/* Orders close 4 weeks before every event (owner, 2026-10-17: "bring those in
-   line at 4 weeks no 3 days"): standard turnaround is 7 to 14 business days
-   after proof approval, so a shorter deadline is a rush promise. */
-const { lastOpenDay } = require('./shop-closed');
-const MIN_ORDER_BY = 28;
+/* Orders close 2 weeks before every event (owner, 2026-10-28, replacing the
+   4 weeks of 2026-10-17): small orders take 5–7 business days and larger
+   ones 7–14, and anything later is a paid rush. */
+const { lastOpenDay, christmasLastDay } = require('./shop-closed');
+/* An occasion page's path, from the one list in marketing-calendar.js. */
+const CAL_PAGE = (id) => require('./marketing-calendar').OCCASIONS.find((o) => o.id === id).page;
+const MIN_ORDER_BY = 14;
 /* At least four weeks of selling before the order-by date (owner, 2026-10-06:
-   "at least a month in advance"), so 8 weeks before the event; longer where an
+   "at least a month in advance"), so 6 weeks before the event; longer where an
    event's own lead says so. */
 const MIN_LEAD = MIN_ORDER_BY + 28;
 /* Two emails a week, on these days (0 = Sunday). */
@@ -80,7 +82,9 @@ const saturdayBefore = (dt) => new Date(dt.getTime() - ((dt.getUTCDay() + 1) % 7
 /* `when(y)` gives the date in year y. `lead` (optional): days ahead the
    selling starts, only where it is more than MIN_LEAD. `orderBy` (optional):
    days before the date an order must be in, only where it is more than
-   MIN_ORDER_BY - shorter is a rush promise and is refused. `email` is what goes
+   MIN_ORDER_BY - shorter is a rush promise and is refused. `closes(y)`
+   (optional): the last order day itself, where it follows a rule of its own.
+   `email` is what goes
    to the list; `ads` is the search ad text and keywords. */
 const EVENTS = [
   {
@@ -126,17 +130,18 @@ const EVENTS = [
            keywords: ['thanksgiving family shirts', 'matching family shirts chicago', 'friendsgiving shirts'] },
   },
   {
-    key: 'christmas', weight: 2, photo: 'email/xmas-family.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25),
-    products: ['Matching Christmas pajama-style family shirts', 'Gifts with their photo: hoodies, totes, baby onesies', 'Holiday party shirts for the office', 'Custom mugs and ornaments (call or text us)'],
-    link: LINKS.hoodies, cta: 'Make a gift',
+    /* Orders close the Tuesday before Thanksgiving (owner; Nov 24 in 2026). */
+    key: 'christmas', weight: 2, closes: christmasLastDay, photo: 'email/xmas-gifts-real.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25),
+    products: ['Matching family Christmas shirts and hoodies', 'Photo gifts: mugs, pillows, totes and baby bodysuits', 'Holiday party shirts for the office or your team', 'Christmas sweatshirts with a name, a year or an inside joke'],
+    link: SITE + CAL_PAGE('christmas'), cta: 'Make a Christmas gift',
     email: {
       subject: 'Gifts with their face on it (order by {orderBy})',
-      preview: 'Photo hoodies, family Christmas shirts and office party tees.',
+      preview: 'Family Christmas shirts, photo mugs and pillows, office party tees.',
       headline: 'The gift nobody else can buy them',
-      intro: 'Christmas is {date}. Put a photo, a name or an inside joke on a hoodie, a tote or a onesie and it is a gift made only for them.',
+      intro: 'Christmas is {date}. Put a photo, a name or an inside joke on a hoodie, a mug, a pillow or a tote and it is a gift made only for them.',
       ps: 'Ordering for the office party or a whole family? Ask us about group pricing.',
     },
-    ads: { headlines: ['Custom Photo Gifts Chicago', 'Matching Christmas Shirts', 'Personalized Hoodies & Totes'],
+    ads: { headlines: ['Custom Photo Gifts Chicago', 'Matching Christmas Shirts', 'Personalized Hoodies & Mugs'],
            keywords: ['custom christmas shirts', 'personalized photo gifts chicago', 'matching family christmas shirts', 'custom hoodie gift'] },
   },
   {
@@ -238,9 +243,9 @@ const EVENTS = [
            keywords: ['mothers day custom shirt', 'mothers day photo gift', 'personalized gift for mom chicago'] },
   },
   {
-    /* The emails aim at the late-May peak (orders by about May 1); the admin
+    /* The emails aim at the late-May peak (orders by about May 15); the admin
        marketing calendar treats graduation as a May-June season and shows the
-       last day for mid-June ceremonies. Both are 4 weeks before a ceremony. */
+       last day for mid-June ceremonies. Both are 2 weeks before a ceremony. */
     key: 'graduation', weight: 2, photo: 'work/custom-printed-banner.jpg', name: 'Graduation', when: (y) => ymd(y, 5, 29), lead: 60,
     products: ['Big head cutouts of the graduate', 'Graduation shirts for the whole family', 'Yard signs and banners', 'Stoles'],
     link: LINKS.graduation, cta: 'Celebrate your grad',
@@ -381,7 +386,8 @@ function occurrence(e, t0) {
   let date = e.when(new Date(t0).getUTCFullYear());
   if (date.getTime() < t0) date = e.when(new Date(t0).getUTCFullYear() + 1);
   const lead = Math.max(e.lead || 0, MIN_LEAD);
-  const orderByDate = lastOpenDay(new Date(date.getTime() - Math.max(e.orderBy || 0, MIN_ORDER_BY) * DAY));
+  const latest = date.getTime() - Math.max(e.orderBy || 0, MIN_ORDER_BY) * DAY;
+  const orderByDate = lastOpenDay(new Date(e.closes ? Math.min(e.closes(date.getUTCFullYear()).getTime(), latest) : latest));
   /* Selling opens early enough to keep 4 full weeks before the order-by
      date, even when a closure pulls that date earlier. */
   const start = new Date(Math.min(date.getTime() - lead * DAY, orderByDate.getTime() - (MIN_LEAD - MIN_ORDER_BY) * DAY));
@@ -440,7 +446,7 @@ function schedule(from = new Date(), days = 365) {
         const toOrderBy = Math.round((o.orderByDate.getTime() - t) / DAY);
         /* The last call goes on one of the last TWO send days on or before
            the order-by date, wherever in the week the deadline falls: with
-           every deadline 4 weeks out, two events often close in the same
+           every deadline 2 weeks out, two events often close in the same
            week, and one slot each would leave one of them with no last call.
            The last week's email likewise has the last ten days. */
         const after = (from) => { let n = from + DAY; while (!SEND_DAYS.includes(new Date(n).getUTCDay())) n += DAY; return n; };
@@ -450,7 +456,10 @@ function schedule(from = new Date(), days = 365) {
         const urgent = lastTwo && !st.lastcall && (finalSlot || st.lastweek) ? 'lastcall'
           : toOrderBy <= 10 && !st.lastweek && !st.lastcall ? 'lastweek' : '';
         return { o, st, toOrderBy, urgent };
-      });
+      })
+      /* After its last call an event sends nothing more: a send day on the
+         order-by date itself used to add "0 days left to order". */
+      .filter((x) => !x.st.lastcall);
     if (!live.length) continue;
     const pick = live.filter((x) => x.urgent).sort((a, b) => (a.urgent === 'lastcall' ? 0 : 1) - (b.urgent === 'lastcall' ? 0 : 1) || a.o.orderByDate - b.o.orderByDate)[0]
       || live.slice().sort((a, b) => a.st.n / (a.o.weight || 1) - b.st.n / (b.o.weight || 1) || a.o.orderByDate - b.o.orderByDate)[0];
@@ -553,7 +562,7 @@ function emailFor(send) {
     <ul style="margin:0 0 16px;padding-left:20px">${w.list.map((p) => `<li style="margin:5px 0">${esc(p)}</li>`).join('')}</ul>` : ''}
     ${showDeadline ? `<p style="margin:0 0 18px;padding:11px 14px;background:#fff1f5;border-left:4px solid ${PINK};border-radius:6px"><b>Order by ${esc(nice(ev.orderByDate))}</b> to have it in hand for ${esc(ev.name)}.</p>` : ''}
     <p style="margin:0 0 20px;text-align:center"><a href="${esc(ev.link)}" style="display:inline-block;background:${BLUE};color:#ffffff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:700;font-size:16px">${esc(ev.cta)}</a></p>
-    <p style="margin:0 0 6px">Questions, or want us to design it? Call or text <a href="tel:+17739004592" style="color:${BLUE}">${PHONE}</a> or reply to this email. Free pickup in Lakeview.</p>
+    <p style="margin:0 0 6px">Questions, or want us to design it? Call or text <a href="tel:+17739004592" style="color:${BLUE}">${PHONE}</a> or reply to this email. Small orders are ready in 5–7 business days; need it sooner? Rush is available for a fee. Free pickup in Lakeview, by appointment.</p>
     ${s.beat === 'announce' && ev.email.ps ? `<p style="margin:16px 0 0;color:#4b5563"><b>P.S.</b> ${esc(fill(ev.email.ps, ev))}</p>` : ''}
     ${s.also ? `<div style="margin-top:22px;padding-top:14px;border-top:1px solid #e5e8f0;font-size:14px;color:#4b5563"><b style="color:${INK}">Also coming up:</b> ${esc(s.also.name)}, ${esc(nice(s.also.date))}. Order by ${esc(nice(s.also.orderByDate))}. <a href="${esc(s.also.link)}" style="color:${BLUE}">${esc(s.also.cta)}</a></div>` : ''}
   </div>
@@ -563,7 +572,7 @@ function emailFor(send) {
 </div></div>`;
   const text = [w.headline, '', ...w.paras, '', ...w.list.map((x) => '- ' + x), '',
     showDeadline ? `Order by ${nice(ev.orderByDate)} to have it in hand for ${ev.name}.` : '',
-    `${ev.cta}: ${ev.link}`, '', `Questions? Call or text ${PHONE}. Free pickup in Lakeview.`,
+    `${ev.cta}: ${ev.link}`, '', `Questions? Call or text ${PHONE}. Small orders are ready in 5–7 business days; rush available for a fee. Free pickup in Lakeview, by appointment.`,
     s.also ? `Also coming up: ${s.also.name}, ${nice(s.also.date)}. Order by ${nice(s.also.orderByDate)}: ${s.also.link}` : ''].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
   return { subject: w.subject, preview: w.preview, html, text };
 }

@@ -6718,7 +6718,7 @@ app.get('/admin/marketing-calendar', requireAdmin, (req, res) => {
 <div class="card">
   <p style="margin:0 0 6px">Each occasion counts back from its <b>season start</b>, the day customers begin ordering:
   <b>prep</b> ${lead.prepWeeks} weeks before (designs, photos, page), <b>ads and email</b> ${lead.adsWeeks} weeks before. <b>Last day to order</b> is
-  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since standard turnaround is 7 to 14 business days
+  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since small orders take 5 to 7 business days and larger ones 7 to 14
   after proof approval. An occasion can set its own lead times; the table always shows its real dates. Nothing here is sent automatically.</p>
 </div>
 ${dueBox}

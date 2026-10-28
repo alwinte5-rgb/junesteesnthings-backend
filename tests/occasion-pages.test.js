@@ -69,11 +69,12 @@ test('a holiday page gives the date rule and lead time, never a computed date th
     assert.ok(o && o.note, `${p.path}: ${p.calendar} has a note`);
     const html = O.render(p, '<style></style>', '', a);
     assert.ok(html.includes(o.note.replace(/'/g, '&#39;')) || html.includes(o.note), `${p.path}: note`);
-    assert.match(html, /Order at least 4 weeks ahead/, p.path);
+    assert.match(html, o.orderNote ? /Small orders take 5–7 business days/ : /Order at least 2 weeks ahead/, p.path);
+    assert.doesNotMatch(html, /four weeks|4 weeks/i, p.path);
     assert.strictEqual(html, O.render(p, '<style></style>', '', b), `${p.path}: the page must not change with the build date`);
   }
 });
 
-test('the calendar order-by leaves room for 14 business days', () => {
-  assert.ok(CAL.DEFAULT_LEAD.orderByDays >= 20);
+test('the calendar order-by leaves room for 7 business days (owner, 2026-10-28: small orders 5-7)', () => {
+  assert.ok(CAL.DEFAULT_LEAD.orderByDays >= 14);
 });

@@ -26,4 +26,13 @@ function lastOpenDay(t) {
   return out;
 }
 
-module.exports = { CLOSED, lastOpenDay };
+/** Last Christmas order day in year `y` (owner, 2026-10-28): the Tuesday
+    before Thanksgiving, since the shop closes for Thanksgiving and December
+    is the busiest month. Thanksgiving is the 4th Thursday of November. */
+function christmasLastDay(y) {
+  const first = new Date(Date.UTC(y, 10, 1)).getUTCDay();
+  const thanksgiving = 1 + ((4 - first + 7) % 7) + 21;
+  return new Date(Date.UTC(y, 10, thanksgiving - 2));
+}
+
+module.exports = { CLOSED, lastOpenDay, christmasLastDay };
