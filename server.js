@@ -4631,14 +4631,16 @@ async function neverAsked(phone, kind) {
   return !rows.length;
 }
 
-async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false, orderUpdate = false, media = [] }) {
+async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false, orderUpdate = false, consentAsk = false, media = [] }) {
   const to = normalizeUsPhone(phone);
   if (!to) return 'no-phone';
   try {
     const c = await smsConsentFor(to);
     const allowed = (kind === 'marketing' ? c.marketing : c.transactional)
       || (replyToContact && await neverAsked(to, kind))
-      || (orderUpdate && kind === 'transactional' && !(await saidStop(to)));
+      || (orderUpdate && kind === 'transactional' && !(await saidStop(to)))
+      /* The one-time "reply JOIN" ask (sendCampaignAsks): never after a STOP. */
+      || (consentAsk && kind === 'transactional' && !(await saidStop(to)));
     if (!allowed) return 'no-consent';
     if (!smsConfigured()) {
       console.log(`sendCustomerSms: skipped ${msg.template} for ${ref} — Twilio not configured`);
@@ -6384,6 +6386,15 @@ async function campaignTextPhones() {
   return REINTRO.marketingPhones(rows, foldSmsConsent);
 }
 
+/** Phones for the "reply JOIN" ask: everyone on file without deals consent
+ *  and without a STOP (REINTRO.askAudience). */
+async function campaignAskPhones() {
+  const [{ rows }, { rows: q }] = await Promise.all([
+    pool.query(`SELECT phone, transactional, marketing, source FROM sms_consents ORDER BY phone, created_at, id`),
+    pool.query(`SELECT DISTINCT phone FROM quotes WHERE COALESCE(phone, '') <> ''`)]);
+  return REINTRO.askAudience(rows, q.map((r) => normalizeUsPhone(r.phone)).filter(Boolean), foldSmsConsent);
+}
+
 /** A single-use 10% code for one sign-up, made in the studio's promo table. */
 async function mintSignupCode(email) {
   const expires = new Date(Date.now() + REINTRO.CODE_DAYS * 86400000).toISOString().slice(0, 10);
@@ -6694,6 +6705,28 @@ async function sendCampaignTexts() {
   }
 }
 
+let campaignAskRunning = false;
+/** The ask (owner, 2026-10-28): one "reply JOIN" text per number on file
+ *  without deals consent, a second apart. The sms_messages dedupe keeps it
+ *  to once per number however often it is started. */
+async function sendCampaignAsks() {
+  if (campaignAskRunning) return;
+  campaignAskRunning = true;
+  try {
+    for (const phone of await campaignAskPhones()) {
+      if (!inTextingHours()) break;   // picks up where it stopped when started again
+      const said = await sendCustomerSms({ phone, kind: 'transactional', ref: 'ask:' + REINTRO.CAMPAIGN,
+        msg: REINTRO.askText(), consentAsk: true });
+      if (said === 'sent') await new Promise((r) => setTimeout(r, 1100));
+    }
+  } catch (e) {
+    console.error('campaign asks failed:', e.message);
+    reportError('reintro:asks', e).catch(() => {});
+  } finally {
+    campaignAskRunning = false;
+  }
+}
+
 /* Marketing calendar (owner, 2026-10-17): every occasion's next date, and when
    to start getting ready, turn ads and email on, and stop taking orders.
    Dates come from tools/lib/marketing-calendar.js, the same list the holiday
@@ -6768,16 +6801,20 @@ async function partnersInviteCard(contacts, brevoErr, cap) {
 app.get('/admin/campaign', requireAdmin, async (req, res) => {
   if (!isOwner()) return res.redirect('/admin/dashboard');
   try {
-    const phones = await campaignTextPhones();
+    const [phones, askPhones] = await Promise.all([campaignTextPhones(), campaignAskPhones()]);
     let contacts = [], brevoErr = '';
     try { contacts = await brevoAllContacts(); } catch (e) { brevoErr = e.message; }
     const audience = REINTRO.emailAudience(contacts, phones);
-    const [{ rows: tx }, { rows: em }, { rows: su }, { rows: runs }] = await Promise.all([
+    const [{ rows: tx }, { rows: em }, { rows: su }, { rows: runs }, { rows: ak }] = await Promise.all([
       pool.query(`SELECT status, COUNT(*)::int AS n FROM sms_messages WHERE ref = $1 GROUP BY status`, ['campaign:' + REINTRO.CAMPAIGN]),
       pool.query(`SELECT status, COUNT(*)::int AS n FROM campaign_emails WHERE campaign = $1 GROUP BY status`, [REINTRO.CAMPAIGN]),
       pool.query(`SELECT COALESCE(source, 'site') AS source, COUNT(*)::int AS n FROM text_signups WHERE campaign = $1 GROUP BY 1`, [REINTRO.CAMPAIGN]),
       pool.query(`SELECT channel, started_at FROM campaign_runs WHERE campaign = $1`, [REINTRO.CAMPAIGN]),
+      pool.query(`SELECT phone, status FROM sms_messages WHERE ref = $1`, ['ask:' + REINTRO.CAMPAIGN]),
     ]);
+    const ask = REINTRO.askText();
+    const asked = new Set(ak.filter((r) => r.status !== 'failed').map((r) => r.phone));
+    const askLeft = askPhones.filter((p) => !asked.has(p)).length;
     const cnt = (rows, st) => rows.filter((r) => st.includes(r.status)).reduce((a, r) => a + r.n, 0);
     const started = (ch) => runs.find((r) => r.channel === ch);
     const text = REINTRO.helloText({ first: 'Tom' });
@@ -6806,6 +6843,19 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
           <button type="submit" class="btn">Send the hello text to ${left} ${left === 1 ? 'person' : 'people'}</button></form>`
           : '<p class="muted">Texts only go out 9am to 6pm Chicago time. Come back then to send.</p>')
           : '<p><b>Done</b>: everyone with deals consent has had the hello text.</p>'}
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2 class="card-title">1b. Ask everyone else first</h2>
+        <p class="muted">One plain text, once, to the <b>${askPhones.length}</b> other numbers on file (orders, quotes, order-update sign-ups),
+          never to anyone who texted STOP. It sells nothing: it asks them to reply JOIN. Everyone who does gets their ${REINTRO.PCT}% code
+          and joins the hello text above, so press <b>Send the hello text</b> again a day or two later.</p>
+        <div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px;white-space:pre-wrap">${escEmail(ask.body)}</div>
+        <p class="muted" style="font-size:12.5px">${ask.body.length} characters. Asked so far: ${asked.size}. Replied JOIN: see "Texted JOIN" below.</p>
+        ${askLeft ? (inTextingHours() ? `
+        <form method="POST" action="/admin/campaign/ask" onsubmit="this.querySelector('button').disabled=true">
+          <button type="submit" class="btn">Ask ${askLeft} ${askLeft === 1 ? 'person' : 'people'}</button></form>`
+          : '<p class="muted">Texts only go out 9am to 6pm Chicago time. Come back then to send.</p>')
+          : '<p><b>Done</b>: every number on file has been asked.</p>'}
       </div>
       <div class="card" style="margin-top:14px">
         <h2 class="card-title">2. The email, with ${REINTRO.PCT}% off for signing up for texts</h2>
@@ -6901,6 +6951,14 @@ app.post('/admin/campaign/text', requireAdmin, async (req, res) => {
   await pool.query(`INSERT INTO campaign_runs (campaign, channel) VALUES ($1, 'text') ON CONFLICT DO NOTHING`, [REINTRO.CAMPAIGN]);
   sendCampaignTexts();
   res.redirect('/admin/campaign?msg=' + encodeURIComponent('Sending now, about one a second. Refresh to see it count up.'));
+});
+
+app.post('/admin/campaign/ask', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.redirect('/admin/dashboard');
+  if (!inTextingHours()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texts only go out 9am to 6pm Chicago time.'));
+  if (!smsConfigured()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texting is not switched on.'));
+  sendCampaignAsks();
+  res.redirect('/admin/campaign?msg=' + encodeURIComponent('Asking now, about one a second. Refresh to see it count up.'));
 });
 
 app.post('/admin/campaign/email', requireAdmin, async (req, res) => {

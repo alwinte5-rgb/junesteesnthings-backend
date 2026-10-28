@@ -221,3 +221,32 @@ test('the sign-up page wears the brand', () => {
   const p = src.slice(src.indexOf('const TEXTS_CSS'), src.indexOf('app.get(REINTRO.SIGNUP_PATH'));
   for (const re of [/#0B1F4B/, /#F0275A/, /Inter/, /\/assets\/images\/brand\/logo-current-900\.png/, /products\.php\?category_id=/]) assert.match(p, re);
 });
+
+test('the ask goes once to everyone on file without deals consent, never after a STOP (owner, 2026-10-28)', () => {
+  const r = (phone, transactional, marketing, source) => ({ phone, transactional, marketing, source });
+  const out = R.askAudience([
+    r('+17735550001', true, false, 'quote'),                                       // order updates only: asked
+    r('+17735550002', true, true, 'popup'),                                        // already has deals: not asked
+    r('+17735550003', true, false, 'quote'), r('+17735550003', false, false, 'sms-reply:stop'),  // STOP: never
+    r('+17735550004', false, false, 'twilio:21610'),                              // Twilio says STOP: never
+    r('+17735550005', true, false, 'quote'), r('+17735550005', false, false, 'sms-reply:stop'),
+    r('+17735550005', true, false, 'sms-reply:start'),                             // STOP then START: asked
+  ], ['+17735550006', '+17735550001', '+17735550003', ''], foldSmsConsent);         // quote-only numbers
+  assert.deepStrictEqual(out, ['+17735550001', '+17735550005', '+17735550006']);
+});
+
+test('the ask sells nothing, names the shop, says JOIN and STOP, and is plain GSM', () => {
+  const m = R.askText();
+  assert.match(m.body, /^June's Tees:/);
+  assert.match(m.body, /Reply JOIN/);
+  assert.match(m.body, /Reply STOP to opt out\.$/);
+  assert.doesNotMatch(m.body, /%|\$|off\b|jtees\.net|http/i, 'no offer, price or link in the ask');
+  assert.ok(isGsm7(m.body));
+  assert.ok(m.body.length <= 306, `${m.body.length} chars: two segments at most`);
+});
+
+test('the ask is sent only through the STOP-checked consentAsk path, once per number', () => {
+  assert.match(src, /consentAsk && kind === 'transactional' && !\(await saidStop\(to\)\)/);
+  assert.match(src, /ref: 'ask:' \+ REINTRO\.CAMPAIGN,\s*msg: REINTRO\.askText\(\), consentAsk: true/);
+  assert.match(src, /app\.post\('\/admin\/campaign\/ask', requireAdmin, async \(req, res\) => \{\n  if \(!isOwner\(\)\)/);
+});

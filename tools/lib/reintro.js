@@ -51,6 +51,46 @@ function codeText({ code }) {
   };
 }
 
+/** The ask (owner, 2026-10-28): one plain text to every number on file that
+ *  has not signed up for deals, asking whether they want them. It sells
+ *  nothing (no offer, no prices); replying JOIN signs them up (joinByText in
+ *  server.js), and only then do they get the hello text. */
+function askText() {
+  return {
+    template: 'reintro-ask',
+    body: `June's Tees: Hi from June's Tees in Lakeview! Would you like our Christmas order dates and deals by text ` +
+      `(up to 4/mo)? Reply JOIN to sign up. Msg & data rates may apply. Reply STOP to opt out.`,
+  };
+}
+
+const STOP_SOURCES = ['sms-reply:stop', 'twilio:21610'];
+
+/**
+ * Who gets the ask: every phone on file (consent rows, oldest first, and
+ * numbers from quotes), minus anyone whose consent already includes deals
+ * and anyone whose newest consent row is a STOP. Phones are normalized US
+ * numbers; one each, in the order first seen.
+ */
+function askAudience(consentRows, otherPhones, fold) {
+  const by = new Map();
+  for (const r of consentRows || []) {
+    if (!r.phone) continue;
+    if (!by.has(r.phone)) by.set(r.phone, []);
+    by.get(r.phone).push(r);
+  }
+  const out = [];
+  const seen = new Set();
+  for (const phone of [...by.keys(), ...(otherPhones || [])]) {
+    if (!phone || seen.has(phone)) continue;
+    seen.add(phone);
+    const rows = by.get(phone) || [];
+    if (rows.length && STOP_SOURCES.includes(rows[rows.length - 1].source)) continue;
+    if (fold(rows).marketing) continue;
+    out.push(phone);
+  }
+  return out;
+}
+
 /** Where a sign-up came from, for the campaign page's count. */
 const SOURCES = { email: 'The hello email', receipt: 'Other emails (quotes, orders)', shop: 'Shop sign (QR)', site: 'Website', popup: 'Website popup', sms: 'Texted JOIN' };
 function cleanSource(s) { return Object.prototype.hasOwnProperty.call(SOURCES, s) ? s : 'site'; }
@@ -215,4 +255,4 @@ function inviteBlock(email) {
   </td></tr></table>`;
 }
 
-module.exports = { inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, newCode, marketingPhones, emailAudience, helloEmail };
+module.exports = { inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, askText, askAudience, newCode, marketingPhones, emailAudience, helloEmail };
