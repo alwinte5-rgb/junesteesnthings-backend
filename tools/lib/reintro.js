@@ -17,7 +17,7 @@
    Twilio or a database. */
 
 const { plain, short } = require('./sms-templates');
-const { normalizeUsPhone, STOP_SOURCES } = require('./sms-consent');
+const { normalizeUsPhone } = require('./sms-consent');
 
 const CAMPAIGN = 'reintro-2026-10';
 const SITE = 'https://www.jtees.net';
@@ -49,44 +49,6 @@ function codeText({ code }) {
       `Use it at jtees.net or mention it on your quote. Up to 4 msgs/mo, msg & data rates may apply. ` +
       `Reply HELP for help, STOP to opt out.`,
   };
-}
-
-/** The ask (owner, 2026-10-28): one plain text to every number on file that
- *  has not signed up for deals, asking whether they want them. It sells
- *  nothing (no offer, no prices); replying JOIN signs them up (joinByText in
- *  server.js), and only then do they get the hello text. */
-function askText() {
-  return {
-    template: 'reintro-ask',
-    body: `June's Tees: Hi from June's Tees in Lakeview! To get our Christmas order dates and deals by text ` +
-      `(up to 4/mo), reply JOIN. Msg & data rates may apply. Reply STOP to opt out.`,
-  };
-}
-
-/**
- * Who gets the ask: every phone on file (consent rows, oldest first, and
- * numbers from quotes), minus anyone whose consent already includes deals
- * and anyone whose newest consent row is a STOP. Phones are normalized US
- * numbers; one each, in the order first seen.
- */
-function askAudience(consentRows, otherPhones, fold) {
-  const by = new Map();
-  for (const r of consentRows || []) {
-    if (!r.phone) continue;
-    if (!by.has(r.phone)) by.set(r.phone, []);
-    by.get(r.phone).push(r);
-  }
-  const out = [];
-  const seen = new Set();
-  for (const phone of [...by.keys(), ...(otherPhones || [])]) {
-    if (!phone || seen.has(phone)) continue;
-    seen.add(phone);
-    const rows = by.get(phone) || [];
-    if (rows.length && STOP_SOURCES.includes(rows[rows.length - 1].source)) continue;
-    if (fold(rows).marketing) continue;
-    out.push(phone);
-  }
-  return out;
 }
 
 /** Where a sign-up came from, for the campaign page's count. */
@@ -253,8 +215,4 @@ function inviteBlock(email) {
   </td></tr></table>`;
 }
 
-/** The ask goes out 11am to 6pm Chicago: 9am Pacific to 7pm Eastern, inside
- *  every mainland US time zone's 8am-9pm quiet-hours window. */
-function inAskHours(chicagoHour) { return chicagoHour >= 11 && chicagoHour < 18; }
-
-module.exports = { inAskHours, inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, askText, askAudience, newCode, marketingPhones, emailAudience, helloEmail };
+module.exports = { inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, newCode, marketingPhones, emailAudience, helloEmail };
