@@ -12,8 +12,8 @@
  *   prep      10 weeks before   pick designs and photos, update the page
  *   ads        6 weeks before   Google Ads campaign on, Brevo campaign out
  *                               (6 weeks is the minimum an occasion may set)
- *   order by   4 weeks before the event: standard turnaround is 7 to 14
- *              business days after proof approval, so 2 weeks could miss it
+ *   order by   2 weeks before the event (owner, 2026-10-28): small orders
+ *              take 5–7 business days, larger 7–14; later is a paid rush
  *
  * Social posts run from the ads date to the order-by date. The holiday pages
  * print their "when to order" line from here (tools/occasion-pages.js), and
@@ -68,7 +68,7 @@ const OCCASIONS = [
    and graduation and prom May into mid-June (owner, 2026-10-17: "graduation
    should be a season too"; its event is the late-May peak, the same date the
    email campaign in tools/lib/events.js counts from). Orders stay open until
-   4 weeks before the season's LAST day, so a season reads "orders closed"
+   2 weeks before the season's LAST day, so a season reads "orders closed"
    only once even its last date can no longer be made. Without `end`, the
    event day is the end. A season opens at least 2 weeks before its last
    order day; datesFor refuses any occasion that breaks that. Seasons that
@@ -76,8 +76,9 @@ const OCCASIONS = [
 
 /* Lead times in weeks before the season start. adsWeeks may be raised per
    occasion; it may never go under MIN_ADS_WEEKS. */
-const DEFAULT_LEAD = { prepWeeks: 10, adsWeeks: 6, orderByDays: 28 };
-const LEAD = {};
+const DEFAULT_LEAD = { prepWeeks: 10, adsWeeks: 6, orderByDays: 14 };
+/* Christmas closes Tue Nov 24 (owner): shut Nov 25-27, busiest month. */
+const LEAD = { christmas: { orderByDays: 31 } };
 
 function datesFor(o, y) {
   const lead = { ...DEFAULT_LEAD, ...(LEAD[o.id] || {}) };
