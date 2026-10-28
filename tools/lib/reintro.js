@@ -17,7 +17,7 @@
    Twilio or a database. */
 
 const { plain, short } = require('./sms-templates');
-const { normalizeUsPhone } = require('./sms-consent');
+const { normalizeUsPhone, STOP_SOURCES } = require('./sms-consent');
 
 const CAMPAIGN = 'reintro-2026-10';
 const SITE = 'https://www.jtees.net';
@@ -58,12 +58,10 @@ function codeText({ code }) {
 function askText() {
   return {
     template: 'reintro-ask',
-    body: `June's Tees: Hi from June's Tees in Lakeview! Would you like our Christmas order dates and deals by text ` +
-      `(up to 4/mo)? Reply JOIN to sign up. Msg & data rates may apply. Reply STOP to opt out.`,
+    body: `June's Tees: Hi from June's Tees in Lakeview! To get our Christmas order dates and deals by text ` +
+      `(up to 4/mo), reply JOIN. Msg & data rates may apply. Reply STOP to opt out.`,
   };
 }
-
-const STOP_SOURCES = ['sms-reply:stop', 'twilio:21610'];
 
 /**
  * Who gets the ask: every phone on file (consent rows, oldest first, and
@@ -255,4 +253,8 @@ function inviteBlock(email) {
   </td></tr></table>`;
 }
 
-module.exports = { inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, askText, askAudience, newCode, marketingPhones, emailAudience, helloEmail };
+/** The ask goes out 11am to 6pm Chicago: 9am Pacific to 7pm Eastern, inside
+ *  every mainland US time zone's 8am-9pm quiet-hours window. */
+function inAskHours(chicagoHour) { return chicagoHour >= 11 && chicagoHour < 18; }
+
+module.exports = { inAskHours, inviteBlock, CAMPAIGN, SIGNUP_PATH, PCT, CODE_DAYS, SOURCES, cleanSource, helloText, codeText, askText, askAudience, newCode, marketingPhones, emailAudience, helloEmail };

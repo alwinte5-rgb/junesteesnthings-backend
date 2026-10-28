@@ -238,7 +238,8 @@ test('the ask goes once to everyone on file without deals consent, never after a
 test('the ask sells nothing, names the shop, says JOIN and STOP, and is plain GSM', () => {
   const m = R.askText();
   assert.match(m.body, /^June's Tees:/);
-  assert.match(m.body, /Reply JOIN/);
+  assert.match(m.body, /reply JOIN/);
+  assert.doesNotMatch(m.body, /\?/, 'not a yes/no question: YES would read as START');
   assert.match(m.body, /Reply STOP to opt out\.$/);
   assert.doesNotMatch(m.body, /%|\$|off\b|jtees\.net|http/i, 'no offer, price or link in the ask');
   assert.ok(isGsm7(m.body));
@@ -249,4 +250,11 @@ test('the ask is sent only through the STOP-checked consentAsk path, once per nu
   assert.match(src, /consentAsk && kind === 'transactional' && !\(await saidStop\(to\)\)/);
   assert.match(src, /ref: 'ask:' \+ REINTRO\.CAMPAIGN,\s*msg: REINTRO\.askText\(\), consentAsk: true/);
   assert.match(src, /app\.post\('\/admin\/campaign\/ask', requireAdmin, async \(req, res\) => \{\n  if \(!isOwner\(\)\)/);
+});
+
+test('YES to the ask joins; the ask goes 11am-6pm Chicago only; failed numbers are never retried', () => {
+  assert.match(src, /kind === 'start' && \/\^\\W\*yes\\W\*\$\/i\.test\(text\) && await wasAskedToJoin\(from\)\) \{[\s\S]{0,200}await joinByText\(from\)/);
+  assert.ok(!R.inAskHours(10) && R.inAskHours(11) && R.inAskHours(17) && !R.inAskHours(18));
+  assert.match(src, /if \(tried\.has\(phone\)\) continue;/);
+  assert.match(src, /STOP_SOURCES\.includes\(r\.source\)/, 'saidStop reads the shared list');
 });

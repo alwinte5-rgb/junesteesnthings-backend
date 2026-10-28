@@ -17,7 +17,7 @@ const {
 initMonitoring();
 const { describeTawkEvent, tawkLead, tawkTranscript, isE164 } = require('./tools/lib/chat-alert');
 const {
-  CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
+  STOP_SOURCES, CONSENT_VERSION, TRANSACTIONAL_TEXT, MARKETING_TEXT,
   normalizeUsPhone, parseSmsConsent, consentCheckboxesHtml, foldSmsConsent,
 } = require('./tools/lib/sms-consent');
 const SHIP = require('./tools/lib/shipping');
@@ -4622,7 +4622,7 @@ function inTextingHours(now = new Date()) {
 async function saidStop(phone) {
   const { rows: [r] } = await pool.query(
     `SELECT source FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [phone]);
-  return !!r && ['sms-reply:stop', 'twilio:21610'].includes(r.source);
+  return !!r && STOP_SOURCES.includes(r.source);
 }
 
 async function neverAsked(phone, kind) {
@@ -4947,6 +4947,10 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
     if (kind === 'stop') {
       await recordSmsConsent({ phone: from, transactional: false, marketing: false }, { source: 'sms-reply:stop' });
     } else if (kind === 'join') {
+      await joinByText(from);
+    } else if (kind === 'start' && /^\W*yes\W*$/i.test(text) && await wasAskedToJoin(from)) {
+      /* "Yes" to the "reply JOIN" ask (sendCampaignAsks) means join: it is the
+         natural answer, and START would record order updates only. */
       await joinByText(from);
     } else if (kind === 'start') {
       // Rejoins order updates only; marketing needs the box ticked again.
@@ -6391,9 +6395,32 @@ async function campaignTextPhones() {
 async function campaignAskPhones() {
   const [{ rows }, { rows: q }] = await Promise.all([
     pool.query(`SELECT phone, transactional, marketing, source FROM sms_consents ORDER BY phone, created_at, id`),
-    pool.query(`SELECT DISTINCT phone FROM quotes WHERE COALESCE(phone, '') <> ''`)]);
-  return REINTRO.askAudience(rows, q.map((r) => normalizeUsPhone(r.phone)).filter(Boolean), foldSmsConsent);
+    /* Quotes from the last two years only: an older number may belong to
+       someone else by now. */
+    pool.query(`SELECT DISTINCT phone FROM quotes WHERE COALESCE(phone, '') <> '' AND created_at > NOW() - INTERVAL '2 years'`)]);
+  /* Never the shop's own phones (the owner's alerts number, the Twilio line). */
+  const own = new Set([process.env.TWILIO_TO_NUMBER, process.env.TWILIO_PHONE_NUMBER].map((p) => normalizeUsPhone(p || '')).filter(Boolean));
+  return REINTRO.askAudience(rows, q.map((r) => normalizeUsPhone(r.phone)).filter(Boolean), foldSmsConsent)
+    .filter((p) => !own.has(p));
 }
+
+/** Numbers the ask has been tried on, sent or not: a landline or a dead
+ *  number fails for good, so it is never retried and never counted as left. */
+async function askedPhones() {
+  const { rows } = await pool.query(`SELECT DISTINCT phone FROM sms_messages WHERE ref = $1`, ['ask:' + REINTRO.CAMPAIGN]);
+  return new Set(rows.map((r) => r.phone));
+}
+
+/** Was this number sent the "reply JOIN" ask? */
+async function wasAskedToJoin(phone) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM sms_messages WHERE phone = $1 AND ref = $2 AND status <> 'failed' LIMIT 1`, [phone, 'ask:' + REINTRO.CAMPAIGN]);
+  return rows.length > 0;
+}
+
+/** The hour in Chicago, for the ask's narrower window (REINTRO.inAskHours). */
+const chicagoHour = (now = new Date()) =>
+  Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hourCycle: 'h23' }).format(now));
 
 /** A single-use 10% code for one sign-up, made in the studio's promo table. */
 async function mintSignupCode(email) {
@@ -6713,11 +6740,15 @@ async function sendCampaignAsks() {
   if (campaignAskRunning) return;
   campaignAskRunning = true;
   try {
-    for (const phone of await campaignAskPhones()) {
-      if (!inTextingHours()) break;   // picks up where it stopped when started again
+    const [phones, tried] = await Promise.all([campaignAskPhones(), askedPhones()]);
+    for (const phone of phones) {
+      if (!REINTRO.inAskHours(chicagoHour())) break;   // picks up where it stopped when started again
+      if (tried.has(phone)) continue;
       const said = await sendCustomerSms({ phone, kind: 'transactional', ref: 'ask:' + REINTRO.CAMPAIGN,
         msg: REINTRO.askText(), consentAsk: true });
-      if (said === 'sent') await new Promise((r) => setTimeout(r, 1100));
+      /* Every attempt waits, failed ones too, so a run of bad numbers cannot
+         push the next real ones past Twilio's rate. */
+      if (said === 'sent' || said === 'failed') await new Promise((r) => setTimeout(r, 1100));
     }
   } catch (e) {
     console.error('campaign asks failed:', e.message);
@@ -6813,7 +6844,8 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
       pool.query(`SELECT phone, status FROM sms_messages WHERE ref = $1`, ['ask:' + REINTRO.CAMPAIGN]),
     ]);
     const ask = REINTRO.askText();
-    const asked = new Set(ak.filter((r) => r.status !== 'failed').map((r) => r.phone));
+    const asked = new Set(ak.map((r) => r.phone));
+    const askFailed = new Set(ak.filter((r) => r.status === 'failed').map((r) => r.phone)).size;
     const askLeft = askPhones.filter((p) => !asked.has(p)).length;
     const cnt = (rows, st) => rows.filter((r) => st.includes(r.status)).reduce((a, r) => a + r.n, 0);
     const started = (ch) => runs.find((r) => r.channel === ch);
@@ -6850,11 +6882,12 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
           never to anyone who texted STOP. It sells nothing: it asks them to reply JOIN. Everyone who does gets their ${REINTRO.PCT}% code
           and joins the hello text above, so press <b>Send the hello text</b> again a day or two later.</p>
         <div style="background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px;white-space:pre-wrap">${escEmail(ask.body)}</div>
-        <p class="muted" style="font-size:12.5px">${ask.body.length} characters. Asked so far: ${asked.size}. Replied JOIN: see "Texted JOIN" below.</p>
-        ${askLeft ? (inTextingHours() ? `
+        <p class="muted" style="font-size:12.5px">${ask.body.length} characters. Asked so far: ${asked.size - askFailed}${askFailed ? `, did not arrive (landline or dead number, not retried): ${askFailed}` : ''}.
+          Replies of JOIN or YES sign them up: see "Texted JOIN" below.${campaignAskRunning ? ' <b>Sending now.</b>' : ''}</p>
+        ${askLeft ? (REINTRO.inAskHours(chicagoHour()) ? `
         <form method="POST" action="/admin/campaign/ask" onsubmit="this.querySelector('button').disabled=true">
           <button type="submit" class="btn">Ask ${askLeft} ${askLeft === 1 ? 'person' : 'people'}</button></form>`
-          : '<p class="muted">Texts only go out 9am to 6pm Chicago time. Come back then to send.</p>')
+          : '<p class="muted">The ask only goes out 11am to 6pm Chicago time (inside every US time zone\'s quiet hours). Come back then.</p>')
           : '<p><b>Done</b>: every number on file has been asked.</p>'}
       </div>
       <div class="card" style="margin-top:14px">
@@ -6955,8 +6988,9 @@ app.post('/admin/campaign/text', requireAdmin, async (req, res) => {
 
 app.post('/admin/campaign/ask', requireAdmin, async (req, res) => {
   if (!isOwner()) return res.redirect('/admin/dashboard');
-  if (!inTextingHours()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texts only go out 9am to 6pm Chicago time.'));
+  if (!REINTRO.inAskHours(chicagoHour())) return res.redirect('/admin/campaign?err=' + encodeURIComponent('The ask only goes out 11am to 6pm Chicago time.'));
   if (!smsConfigured()) return res.redirect('/admin/campaign?err=' + encodeURIComponent('Texting is not switched on.'));
+  if (campaignAskRunning) return res.redirect('/admin/campaign?msg=' + encodeURIComponent('Already sending. Refresh to see it count up.'));
   sendCampaignAsks();
   res.redirect('/admin/campaign?msg=' + encodeURIComponent('Asking now, about one a second. Refresh to see it count up.'));
 });
