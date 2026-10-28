@@ -60,7 +60,7 @@ const OCCASIONS = [
   { id: 'senior-night-fall', name: 'Senior night (fall sports)', event: (y) => d(y, 10, 1), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
   { id: 'chicago-marathon', name: 'Chicago Marathon', event: (y) => nthWeekday(y, 10, 0, 2), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, runner support shirts, race signs' },
   { id: 'halloween', note: 'Halloween is October 31.', name: 'Halloween', event: (y) => d(y, 10, 31), season: (y) => d(y, 9, 1), page: '/occasions/halloween-shirts-chicago.html', push: 'Witch squad and group costume shirts, kids shirts' },
-  { id: 'christmas', note: 'Christmas is December 25.', name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
+  { id: 'christmas', note: 'Christmas is December 25.', orderNote: 'Christmas orders close the Tuesday before Thanksgiving: we close for Thanksgiving and December fills up fast.', name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
 ];
 
 /* `end` marks an occasion that is a whole season, not one day: weddings run

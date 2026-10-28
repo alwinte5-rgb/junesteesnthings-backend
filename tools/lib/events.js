@@ -240,9 +240,9 @@ const EVENTS = [
            keywords: ['mothers day custom shirt', 'mothers day photo gift', 'personalized gift for mom chicago'] },
   },
   {
-    /* The emails aim at the late-May peak (orders by about May 1); the admin
+    /* The emails aim at the late-May peak (orders by about May 15); the admin
        marketing calendar treats graduation as a May-June season and shows the
-       last day for mid-June ceremonies. Both are 4 weeks before a ceremony. */
+       last day for mid-June ceremonies. Both are 2 weeks before a ceremony. */
     key: 'graduation', weight: 2, photo: 'work/custom-printed-banner.jpg', name: 'Graduation', when: (y) => ymd(y, 5, 29), lead: 60,
     products: ['Big head cutouts of the graduate', 'Graduation shirts for the whole family', 'Yard signs and banners', 'Stoles'],
     link: LINKS.graduation, cta: 'Celebrate your grad',
@@ -442,7 +442,7 @@ function schedule(from = new Date(), days = 365) {
         const toOrderBy = Math.round((o.orderByDate.getTime() - t) / DAY);
         /* The last call goes on one of the last TWO send days on or before
            the order-by date, wherever in the week the deadline falls: with
-           every deadline 4 weeks out, two events often close in the same
+           every deadline 2 weeks out, two events often close in the same
            week, and one slot each would leave one of them with no last call.
            The last week's email likewise has the last ten days. */
         const after = (from) => { let n = from + DAY; while (!SEND_DAYS.includes(new Date(n).getUTCDay())) n += DAY; return n; };
