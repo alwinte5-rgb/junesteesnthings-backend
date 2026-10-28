@@ -106,11 +106,13 @@ test('the "from" line is the lowest price on the page, at its quantity', () => {
     const html = read(p.path);
     const all = [...html.matchAll(/<b>(\$[\d,.]+)<\/b> each/g)].map((m) => money(m[1]));
     const low = Math.min(...all);
-    const badge = html.match(/<span class="hero-badge">From (\$[\d,.]+) each at ([\d,]+)<\/span>/);
+    const badge = html.match(/<span class="hero-badge">From (\$[\d,.]+) each at ([^<( ]+)( \(estimate\))?<\/span>/);
     assert.ok(badge, `${p.path}: from badge`);
     assert.strictEqual(money(badge[1]), low, p.path);
     const sum = O.printSummary(O.printFamilies(p));
-    assert.strictEqual(Number(badge[2].replace(/,/g, '')), sum.low.q, p.path);
+    /* A banded table names the band ("100+"), a run table the run. */
+    assert.strictEqual(badge[2], sum.low.label || sum.low.q.toLocaleString('en-US'), p.path);
+    assert.strictEqual(!!badge[3], sum.low.estimate, `${p.path}: estimate marked only where the price is one`);
   }
 });
 

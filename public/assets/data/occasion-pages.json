@@ -3,13 +3,7 @@
  "pages": [
   {
    "path": "occasions/christmas-shirts-chicago.html",
-   "banner": {
-    "src": "/assets/images/seasonal/christmas-2026-banner-1916.webp",
-    "srcset": "/assets/images/seasonal/christmas-2026-banner-960.webp 960w, /assets/images/seasonal/christmas-2026-banner-1916.webp 1916w",
-    "width": 1916,
-    "height": 821,
-    "alt": "Custom Christmas apparel from June's Tees & Things: matching family sets, hoodies, sweatshirts and more. Shop Christmas."
-   },
+      "banner": { "src": "/assets/images/seasonal/christmas-2026-banner-1916.webp", "srcset": "/assets/images/seasonal/christmas-2026-banner-960.webp 960w, /assets/images/seasonal/christmas-2026-banner-1916.webp 1916w", "width": 1916, "height": 821, "alt": "Custom Christmas apparel from June's Tees & Things: matching family sets, hoodies, sweatshirts and more. Shop Christmas." },
    "calendar": "christmas",
    "kind": "holiday",
    "keyword": "custom christmas shirts",

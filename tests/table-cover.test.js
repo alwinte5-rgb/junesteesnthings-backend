@@ -32,7 +32,7 @@ function lift(name) {
 const { priceLine } = vm.runInThisContext(vm.runInThisContext(lift('quotePricingSource') + '\nquotePricingSource()') + '\n({ priceLine })');
 const ladder = (t) => Object.keys(t).map(Number).sort((a, b) => a - b).map((c) => ({ min_qty: c, price: t[c] }));
 const BACK = Object.fromEntries(Object.keys(ONE).map((c) => [c, TWO[c] - ONE[c]]));
-const COVER = { id: 900, title: 'DTF Printing — Table Cover', type: 'fixed', min_order_qty: 0,
+const COVER = { id: 900, title: 'Table Cover Printing — Sublimation or DTF', type: 'fixed', min_order_qty: 0,
   positions: { id: ladder(ONE), mr8a5dlx: ladder(BACK) } };
 const BIG = { id: 64, title: 'DTF Printing — Oversized (up to 252 sq in)', type: 'fixed', min_order_qty: 0,
   positions: { id: [{ min_qty: 7000, price: 14 }], mr8a5dlx: [{ min_qty: 7000, price: 4.95 }] } };
@@ -55,7 +55,8 @@ test('the cover is its own family: an oversized DTF print beside it does not tak
 test('the customer-supplies-the-blanks add-on is never offered on the cover', () => {
   const a = src.indexOf("code: 'own_blanks'");
   const re = eval(src.slice(src.indexOf('appliesTo: ', a) + 11, src.indexOf(",\n", a)).replace('GARMENT_METHOD_RE.source', JSON.stringify('\\bdtf\\b')));
-  assert.ok(!re.test('DTF Printing — Table Cover'));
+  assert.ok(!re.test('Table Cover Printing — Sublimation or DTF'));
+  assert.ok(!re.test('DTF Printing — Table Cover'), 'the old name too');
   assert.ok(re.test('DTF Printing'));
 });
 
@@ -73,7 +74,7 @@ test('the tool refuses a missing or rising price and is dry-run by default', () 
 test('job costs: the cover blank and its delivery are costs, and the front is a 252 sq in print', () => {
   const JC = require('../tools/lib/job-costs');
   const catalog = { products: [{ id: 700, name: 'Table Cover — 6 ft', price: 0, cost: 15.39 }],
-    methods: [{ id: 900, title: 'DTF Printing — Table Cover' }] };
+    methods: [{ id: 900, title: 'Table Cover Printing — Sublimation or DTF' }] };
   const est = JC.estimateJob([{ product_id: 700, method_id: 900, stage: '', qty: 1, unit_price: 75 }], catalog);
   const c = est.lines[0].unit_cost;
   assert.ok(c >= 15.39 + 11.99 + JC.DTF[1][2] - 0.01, `cost ${c}`);

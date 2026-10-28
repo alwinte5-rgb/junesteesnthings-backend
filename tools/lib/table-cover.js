@@ -18,8 +18,13 @@
 const ONE_SIDE = { 4: 75, 9: 70, 49: 60, 99: 52, 7000: 45 };
 const TWO_SIDES = { 4: 105, 9: 95, 49: 85, 99: 75, 7000: 65 };
 
-/* The bands as the page shows them: the first quantity of each, and its label. */
-const BANDS = [[1, '1–4'], [5, '5–9'], [10, '10–49'], [50, '50–99'], [100, '100+']];
+/* The bands as the page shows them, built from the ceilings so they cannot
+   drift: [first quantity, label], e.g. [5, '5–9'], and the last '100+'. */
+const CEILINGS = Object.keys(ONE_SIDE).map(Number).sort((a, b) => a - b);
+const BANDS = CEILINGS.map((c, i) => {
+  const from = i ? CEILINGS[i - 1] + 1 : 1;
+  return [from, i === CEILINGS.length - 1 ? from + '+' : from === c ? String(c) : from + '–' + c];
+});
 
 /* Sublimation needs a white or light polyester; these covers get it, the rest DTF. */
 const SUBLIMATED = ['White', 'Ivory'];

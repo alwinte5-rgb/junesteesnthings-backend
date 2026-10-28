@@ -8,7 +8,8 @@
  * THE OWNER'S PRICES: tools/lib/table-cover.js (each, shipping included).
  *
  * WHAT IT WRITES
- *   1. A decoration method, "DTF Printing — Table Cover", that carries the
+ *   1. A decoration method, "Table Cover Printing — Sublimation or DTF" (was
+ *      "DTF Printing — Table Cover"; the old name is found and renamed), that carries the
  *      whole price (the 3in-button pattern, tools/add-buttons.js): the main
  *      stage is the 1-side price, and the second stage is what the back adds,
  *      so 1 side + back = the 2-side price at every quantity. The engine reads
@@ -34,7 +35,11 @@ const env = varsFile ? JSON.parse(fs.readFileSync(varsFile, 'utf8')) : process.e
 const url = mysqlUrlFrom(env);
 if (!url) { console.error('usage: add-table-cover.js --vars=<(jtees-env) [--apply]'); process.exit(2); }
 
-const METHOD = 'DTF Printing — Table Cover';
+/* Renamed 2026-10-28: ivory and white covers are sublimated, so a quote line
+   must not say DTF alone. Server code keys on "table cover" (own_blanks,
+   dtfKind) and job costs on "dtf" + "table cover", which both names keep. */
+const METHOD = 'Table Cover Printing — Sublimation or DTF';
+const OLD_METHOD = 'DTF Printing — Table Cover';
 const METHOD_DESC = 'Full-color print on a 6 ft table cover, sublimated on ivory and white covers and DTF on every other color: ' +
   'one side is a large print on the front panel; two sides adds the back panel. The price includes the cover and its delivery.';
 const PRODUCT = 'Table Cover — 6 ft';
@@ -79,9 +84,15 @@ const newCalc = {
   },
 };
 
-const existingM = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(METHOD) + ';', { rows: true });
+let existingM = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(METHOD) + ';', { rows: true });
+const oldM = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(OLD_METHOD) + ';', { rows: true });
+if (existingM.length && oldM.length) { console.error('  !! both "' + METHOD + '" (#' + existingM[0].id + ') and "' + OLD_METHOD + '" (#' + oldM[0].id + ') exist — retire one by hand first; refusing'); process.exit(1); }
+if (!existingM.length) existingM = oldM;
 let existingP = mysql(url, 'SELECT id, name, price, active, printings FROM lumise_products WHERE name=' + sq(PRODUCT) + ';', { rows: true });
-if (!existingP.length) existingP = mysql(url, 'SELECT id, name, price, active, printings FROM lumise_products WHERE name=' + sq(OLD_PRODUCT) + ';', { rows: true });
+const oldP = mysql(url, 'SELECT id, name, price, active, printings FROM lumise_products WHERE name=' + sq(OLD_PRODUCT) + ';', { rows: true });
+/* Both names present would publish two cover products (code review): stop. */
+if (existingP.length && oldP.length) { console.error('  !! both "' + PRODUCT + '" (#' + existingP[0].id + ') and "' + OLD_PRODUCT + '" (#' + oldP[0].id + ') exist — retire one by hand first; refusing'); process.exit(1); }
+if (!existingP.length) existingP = oldP;
 console.log('\n  method:  ' + (existingM.length ? 'update #' + existingM[0].id + ' (active=' + existingM[0].active + ', left as it is)' : 'create') + '  ' + METHOD);
 console.log('  product: ' + (existingP.length ? 'update #' + existingP[0].id + ' ($' + existingP[0].price + ' -> $' + blank.toFixed(2) + ')' : 'create (inactive, quote-only)') + '  ' + PRODUCT);
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
@@ -95,7 +106,7 @@ console.log('\n  backup ' + backup);
 let mid;
 if (existingM.length) {
   mid = existingM[0].id;
-  mysql(url, 'UPDATE lumise_printings SET calculate=' + sq(enjson(newCalc)) + ', description=' + sq(METHOD_DESC) +
+  mysql(url, 'UPDATE lumise_printings SET title=' + sq(METHOD) + ', calculate=' + sq(enjson(newCalc)) + ', description=' + sq(METHOD_DESC) +
     ', updated=NOW() WHERE id=' + Number(mid) + ';');
 } else {
   const author = authorRow.author;
