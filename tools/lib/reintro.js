@@ -35,7 +35,7 @@ function helloText({ first }) {
        choosing the garment. Turnaround (owner, 2026-10-28): small orders
        5–7 business days, rush for a fee, Christmas orders by Nov 24. */
     body: `June's Tees: Hi${f ? ' ' + f : ''}! Christmas shirts? Order by Nov 24. Small orders are ready in 5-7 business days ` +
-      `(rush available). New: design your own online, 45+ garments, live prices: ${short(SITE)} Reply STOP to opt out.`,
+      `(rush available). New: design your own online, 190+ products, live prices: ${short(SITE)} Reply STOP to opt out.`,
   };
 }
 
@@ -135,13 +135,15 @@ function helloEmail({ first, email }) {
     alt="The June's Tees Design Lab, designing a shirt online" width="512"
     style="display:block;width:100%;max-width:512px;height:auto;border-radius:12px;border:0"></a></td></tr>
   <tr><td style="padding:14px 24px 4px">
-    <h2 style="font-size:18px;color:#0B1F4B;margin:0 0 4px 4px">New: choose your garment</h2>
-    <p style="line-height:1.6;margin:0 4px 8px">Start with the piece you want: 45+ real garments in your choice of color and size.</p>
+    <h2 style="font-size:18px;color:#0B1F4B;margin:0 0 4px 4px">New: choose your product</h2>
+    <p style="line-height:1.6;margin:0 4px 8px">Start with the piece you want: 190+ real products, from tees and hoodies to mugs, pillows and totes, in your choice of color and size.</p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       ${/* The Design Studio's own listing photos, June's Tees "your design
             here" mark on each (owner 2026-10-28), from the shop feed: products
-            12, 81, 19, 28, 100 and 25, saved as JPG for mail apps without WebP. */ ''}<tr>${garment('listing-tee', 'T-shirts', 52)}${garment('listing-hoodie', 'Hoodies', 53)}${garment('listing-tank', 'Tank tops', 54)}</tr>
+            12, 81, 19, 28, 100, 25 and 27, and the owner's mug and pillow
+            mockups, saved as JPG for mail apps without WebP. Real products only. */ ''}<tr>${garment('listing-tee', 'T-shirts', 52)}${garment('listing-hoodie', 'Hoodies', 53)}${garment('listing-tank', 'Tank tops', 54)}</tr>
       <tr>${garment('listing-youth', 'Kids &amp; youth', 55)}${garment('listing-baby', 'Baby', 56)}${garment('listing-hat', 'Hats', 57)}</tr>
+      <tr>${garment('listing-mug', 'Mugs', 97)}${garment('listing-pillow', 'Pillows', 98)}${garment('listing-tote', 'Totes &amp; bags', 58)}</tr>
     </table>
   </td></tr>
   <tr><td style="padding:14px 28px 4px">
@@ -150,7 +152,7 @@ function helloEmail({ first, email }) {
       ${feature('⬆️', 'Upload your logo or photo', 'Bring your own artwork, or start from ours.')}
       ${feature('🔤', 'Hundreds of fonts and graphics', 'Add names, numbers, dates and designs in a few taps.')}
       ${feature('✨', 'AI design help', 'Describe your idea, like "a family reunion shirt with our last name and year", and get a starting point.')}
-      ${feature('👕', 'See it on the garment instantly', 'Your design on the exact piece and color you picked, in full color.')}
+      ${feature('👕', 'See it on the product instantly', 'Your design on the exact piece and color you picked, in full color.')}
       ${feature('💲', 'Live pricing with volume discounts', 'No minimums online. Order one piece or a whole team.')}
       ${feature('💾', 'Save your designs and track your order', 'Free account, so it is all there next time.')}
     </table>
