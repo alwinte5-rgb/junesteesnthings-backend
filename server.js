@@ -5212,7 +5212,8 @@ async function recordSmsDelivery(p) {
 // ── Twilio calls ──────────────────────────────────────────────────────────────
 // In the Twilio console, set the number's "A call comes in" webhook to exactly
 // https://www.jtees.net/webhooks/twilio/voice (HTTP POST). Calls ring
-// TWILIO_TO_NUMBER from the shop number after a short menu (tools/lib/voice.js).
+// TWILIO_TO_NUMBER from the shop number: straight away in shop hours, after a
+// short menu outside them (tools/lib/voice.js).
 const TWILIO_VOICE_BASE = (process.env.TWILIO_VOICE_BASE || 'https://www.jtees.net').trim().replace(/\/+$/, '');
 
 /* Twilio signs the exact URL it requested, query string included. */
@@ -5364,9 +5365,16 @@ async function ownerCallback(cmd) {
   return sendOwnerSms(`Calling you now. Press 1 when you answer to ring ${VOICE.pretty(to)} from the shop number.`);
 }
 
-app.post(VOICE.PATHS.incoming, (req, res) => {
+app.post(VOICE.PATHS.incoming, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
-  sendTwiml(res, VOICE.incomingTwiml({ base: TWILIO_VOICE_BASE }));
+  const call = {
+    from: callerOf(req), owner: callOwner(), open: VOICE.isOpen(),
+    shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
+  };
+  sendTwiml(res, VOICE.incomingTwiml({ ...call, base: TWILIO_VOICE_BASE }));
+  /* In hours the call rings straight away, so who is calling is texted here. */
+  if (VOICE.ringsDirect(call)) await sendOwnerSms(VOICE.ringText({ from: call.from, reason: 'call', name: req.body.CallerName }))
+    .catch((e) => console.error('ring text failed:', e.message));
 });
 
 app.post(VOICE.PATHS.menu, async (req, res) => {
