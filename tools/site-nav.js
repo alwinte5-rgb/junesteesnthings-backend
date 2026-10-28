@@ -154,6 +154,9 @@ ${ticker}
     </div>
   </div>
   ${sform('jtn-search', 'jtn-search').replace('class="jtn-search"', 'class="jtn-search" hidden')}
+  ${/* Phones hide the header's call and text icons for room, so they get
+        their own row under the menu, inside the sticky block (owner
+        2026-10-28: call and text taps fell to zero). */ ''}<div class="jtn-mob"><a href="${tel}" data-from="mobile_bar">📞 Call ${esc(nav.phone.display)}</a><a href="${sms}" data-from="mobile_bar">💬 Text Us</a></div>
 </div>
 </div>
 <div class="jtn-shade" hidden></div>

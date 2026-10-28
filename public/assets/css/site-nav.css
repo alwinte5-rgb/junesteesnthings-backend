@@ -143,3 +143,12 @@ html{overflow-x:clip;}
 .jtf-legal a{color:rgba(255,255,255,.7)!important;}
 .jtf-bottom{max-width:1200px;margin:2.4rem auto 0;padding:1.2rem 1.5rem 0;border-top:1px solid rgba(255,255,255,.14);display:flex;flex-wrap:wrap;justify-content:space-between;gap:.6rem;font-size:.82rem;color:rgba(255,255,255,.55);}
 @media(max-width:700px){.jtf-in{grid-template-columns:1fr 1fr;}.jtf{padding-bottom:6rem!important;}}
+
+/* Phones: a full-width Call / Text row under the menu (tools/site-nav.js). */
+.jtn-mob{display:none;}
+@media(max-width:1120px){
+  .jtn-mob{display:flex;border-top:1px solid rgba(255,255,255,.12);}
+  .jtn-mob a{flex:1;display:flex;align-items:center;justify-content:center;gap:.35rem;min-height:44px;color:#fff;font:700 .9rem Inter,system-ui,sans-serif;text-decoration:none;}
+  .jtn-mob a:first-child{background:#E0107A;}
+  .jtn-mob a:last-child{background:#0E78B8;}
+}

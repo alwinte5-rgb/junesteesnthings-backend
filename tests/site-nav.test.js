@@ -285,3 +285,17 @@ test('the menu cart shows the Design Studio count from jt_cart_n, as text only',
   ctx.window.jtCartBadge();
   assert.strictEqual(icon.kids.length, 0, 'anything but a number is ignored');
 });
+
+/* Owner 2026-10-28: call and text taps fell to zero; the header hid both on
+   phones. Every page now carries a phone-only Call / Text row, inside the
+   sticky block so it stays on screen. */
+test('phones get a Call and Text row under the menu on every page', () => {
+  const css = read('assets/css/site-nav.css');
+  assert.match(css, /\.jtn-mob\{display:none;\}/);
+  assert.match(css, /@media\(max-width:1120px\)\{\s*\.jtn-mob\{display:flex;/);
+  for (const rel of ['index.html', 'contact.html', 'services/custom-tshirts-chicago.html']) {
+    const html = read(rel);
+    const sticky = html.slice(html.indexOf('<div class="jtn-sticky">'), html.indexOf('<div class="jtn-shade"'));
+    assert.match(sticky, /<div class="jtn-mob"><a href="tel:\+17739004592" data-from="mobile_bar">📞 Call \(773\) 900-4592<\/a><a href="sms:\+17739004592\?&body=[^"]+" data-from="mobile_bar">💬 Text Us<\/a><\/div>/, rel);
+  }
+});
