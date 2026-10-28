@@ -32,10 +32,10 @@ function helloText({ first }) {
   return {
     template: 'reintro',
     /* What is actually new (owner, 2026-10-05): designing your own online and
-       choosing the garment. No delivery or turnaround promises until those
-       are ready. */
-    body: `June's Tees: Hi${f ? ' ' + f : ''}! New at June's Tees: design your own shirts online. Pick from 45+ garments ` +
-      `(tees, hoodies, tanks, kids, hats), add your logo or text, and see the price live. Try it: ${short(SITE)} Reply STOP to opt out.`,
+       choosing the garment. Turnaround (owner, 2026-10-28): small orders
+       5–7 business days, rush for a fee, Christmas orders by Nov 24. */
+    body: `June's Tees: Hi${f ? ' ' + f : ''}! Christmas shirts? Order by Nov 24. Small orders are ready in 5-7 business days ` +
+      `(rush available). New: design your own online, 45+ garments, live prices: ${short(SITE)} Reply STOP to opt out.`,
   };
 }
 
@@ -161,7 +161,17 @@ function helloEmail({ first, email }) {
       <tr>${photo('work/embroidery-machine-polos.jpg', 'Embroidered polos')}${photo('work/screen-printing-press.jpg', 'Our screen printing press in Chicago')}</tr>
     </table>
     <p style="line-height:1.6;margin:10px 4px">Screen printing, embroidery and full-color prints for teams, schools, businesses,
-      churches, birthdays and family reunions. Pick up at the shop in Lakeview.</p>
+      churches, birthdays and family reunions. Pick up at the shop in Lakeview, by appointment.</p>
+  </td></tr>
+  <tr><td style="padding:10px 24px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fdeef6;border:1px solid #f6c3de;border-radius:12px">
+      <tr><td style="padding:16px 20px;text-align:center">
+        <div style="font-size:20px;font-weight:800;color:#0B1F4B">🎄 Christmas orders: order by Nov 24</div>
+        <p style="line-height:1.6;margin:8px 0 12px">⚡ Small orders are ready in <b>5–7 business days</b>, larger orders 7–14.
+          Need it in under 5 days? Rush turnaround is available for a fee.</p>
+        ${btn(`${SITE}/contact`, 'Get a quote')}
+      </td></tr>
+    </table>
   </td></tr>
   <tr><td style="padding:10px 24px">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff8ed;border:1px solid #fde3c0;border-radius:12px">
