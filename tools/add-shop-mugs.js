@@ -99,13 +99,14 @@ const ONE_SIZE = { QTYS: { id: 'QTYS', name: 'Quantity per Size', type: 'quantit
 const PILLOW_STAGES = { front: { label: 'Front', source: 'raws', overlay: false, url: 'products/square_pillow.png',
   edit_zone: { height: 293, width: 293, left: 0, top: 0, radius: '0' },
   product_width: 400, product_height: 400, template: {} } };
-/* `thumb` is the product photo the designer's shop grid and product page show
-   (owner's branded mockups, 2026-10-28), the same files as the jtees.net cards.
-   The drawing the design sits on stays in `stages`. */
+/* `thumb` is only the STARTING listing photo, for a row that has none yet. The
+   real photo (the owner's branded mockups) is set by tools/set-listing-photos.js
+   onto Cloudinary, and a re-run here after a reprice must never put the drawing
+   back over it (code review of #493, 2026-10-28). */
 const DESIGNER = {
-  mug: { stages: MUG_STAGES, thumb: 'https://www.jtees.net/assets/images/shop/listing-p523.jpg',
+  mug: { stages: MUG_STAGES, thumb: 'https://design.jtees.net/core/raws/products/cup_back.png',
     category: { slug: 'custom-mugs-drinkware', name: 'Mugs & Drinkware', order: 8 } },
-  pillow: { stages: PILLOW_STAGES, thumb: 'https://www.jtees.net/assets/images/shop/listing-p530.jpg',
+  pillow: { stages: PILLOW_STAGES, thumb: 'https://design.jtees.net/core/raws/products/square_pillow.png',
     category: { slug: 'custom-pillows-home-decor', name: 'Pillows & Home Decor', order: 9 } },
 };
 for (const m of MUGS) if (m.designer && !DESIGNER[m.designer]) { console.error('no designer drawing "' + m.designer + '" for ' + m.name + ' — refusing'); process.exit(1); }
@@ -177,9 +178,10 @@ for (const key of new Set(MUGS.filter((m) => m.designer).map((m) => m.designer))
 }
 for (const m of MUGS.filter((x) => x.designer)) {
   const d = DESIGNER[m.designer], catId = catIds[m.designer];
-  const id = mysql(url, 'SELECT id FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true })[0].id;
+  const row = mysql(url, 'SELECT id, thumbnail_url FROM lumise_products WHERE name=' + sq(m.name) + ';', { rows: true })[0];
+  const id = row.id, hasPhoto = row.thumbnail_url && row.thumbnail_url !== 'NULL';   // mysql -B prints NULL
   mysql(url, 'UPDATE lumise_products SET stages=' + sq(enjson(d.stages)) + ', attributes=' + sq(enjson(ONE_SIZE)) +
-    ', variations=' + sq(enjson({ default: '', attrs: [], variations: [] })) + ', thumbnail_url=' + sq(d.thumb) +
+    ', variations=' + sq(enjson({ default: '', attrs: [], variations: [] })) + (hasPhoto ? '' : ', thumbnail_url=' + sq(d.thumb)) +
     ', updated=NOW() WHERE id=' + Number(id) + ';');
   const ref = mysql(url, 'SELECT id FROM lumise_categories_reference WHERE category_id=' + Number(catId) + ' AND item_id=' + Number(id) + " AND type='products';", { rows: true });
   if (!ref.length) mysql(url, 'INSERT INTO lumise_categories_reference (category_id, item_id, author, type) VALUES (' + Number(catId) + ', ' + Number(id) + ", '', 'products');");

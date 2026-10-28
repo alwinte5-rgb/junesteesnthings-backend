@@ -57,8 +57,11 @@ function readDir(d) {
   });
 }
 
-/* What an own-print product's name carries; garments carry none of these. */
-const OWN_PRINT = /\b(signs?|banners?|magnets?|graphics?|panels?|canvas|big head)\b/i;
+/* What an own-print product's name carries; garments carry none of these.
+   Mugs, tumblers, pillows and socks are the in-house sublimation items
+   (tools/add-shop-mugs.js, 2026-10-28); their files carry no digits either
+   ("523-Mug-white-ceramic"), since a digit token reads as a style number. */
+const OWN_PRINT = /\b(signs?|banners?|magnets?|graphics?|panels?|canvas|big head|mugs?|tumblers?|pillows?|socks)\b/i;
 
 /** Why `name` is not the own-print product a file says it is, or null. */
 function ownPrintMismatch(name, words) {
