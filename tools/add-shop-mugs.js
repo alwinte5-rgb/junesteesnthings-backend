@@ -99,10 +99,13 @@ const ONE_SIZE = { QTYS: { id: 'QTYS', name: 'Quantity per Size', type: 'quantit
 const PILLOW_STAGES = { front: { label: 'Front', source: 'raws', overlay: false, url: 'products/square_pillow.png',
   edit_zone: { height: 293, width: 293, left: 0, top: 0, radius: '0' },
   product_width: 400, product_height: 400, template: {} } };
+/* `thumb` is the product photo the designer's shop grid and product page show
+   (owner's branded mockups, 2026-10-28), the same files as the jtees.net cards.
+   The drawing the design sits on stays in `stages`. */
 const DESIGNER = {
-  mug: { stages: MUG_STAGES, thumb: 'https://design.jtees.net/core/raws/products/cup_back.png',
+  mug: { stages: MUG_STAGES, thumb: 'https://jtees.net/assets/images/shop/listing-p523.jpg',
     category: { slug: 'custom-mugs-drinkware', name: 'Mugs & Drinkware', order: 8 } },
-  pillow: { stages: PILLOW_STAGES, thumb: 'https://design.jtees.net/core/raws/products/square_pillow.png',
+  pillow: { stages: PILLOW_STAGES, thumb: 'https://jtees.net/assets/images/shop/listing-p530.jpg',
     category: { slug: 'custom-pillows-home-decor', name: 'Pillows & Home Decor', order: 9 } },
 };
 for (const m of MUGS) if (m.designer && !DESIGNER[m.designer]) { console.error('no designer drawing "' + m.designer + '" for ' + m.name + ' — refusing'); process.exit(1); }
