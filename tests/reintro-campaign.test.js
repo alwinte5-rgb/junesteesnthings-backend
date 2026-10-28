@@ -52,7 +52,7 @@ test('the hello text is warm, links to the site, carries the opt-out and fits tw
     assert.match(body, / jtees\.net /);
     assert.doesNotMatch(body, /design\.jtees\.net/);
     assert.match(body, /design your own/);
-    assert.match(body, /45\+ garments/);
+    assert.match(body, /190\+ products/);
     assert.match(body, /Reply STOP to opt out\.$/);
     assert.strictEqual(template, 'reintro');
   }
@@ -89,7 +89,7 @@ test('the email offers the 10% for signing up, links to sign-up with their addre
   }
   assert.match(m.html, /href="https:\/\/www\.jtees\.net"[^>]*>Start designing/);
   assert.match(m.html, />Visit jtees\.net</);
-  for (const f of ['Upload your logo', 'fonts', 'AI design help', '45+ real garments', 'No minimums', 'Save your designs']) {
+  for (const f of ['Upload your logo', 'fonts', 'AI design help', '190+ real products', 'No minimums', 'Save your designs']) {
     assert.ok(m.html.includes(f), `the Design Lab feature "${f}"`);
   }
   assert.match(m.html, /Sign up for our texts/);
@@ -161,9 +161,13 @@ test('no promises the shop cannot keep: no delivery; turnaround is the owner\'s 
   }
   assert.match(m, /Rush turnaround is available for a fee/);
   assert.ok(t.length <= 320, `hello text stays within two segments (${t.length})`);
-  assert.match(m, /choose your garment/i);
+  assert.match(m, /choose your product/i);
+  for (const img of ['listing-tee', 'listing-hoodie', 'listing-tank', 'listing-youth', 'listing-baby', 'listing-hat', 'listing-mug', 'listing-pillow', 'listing-tote']) {
+    assert.match(m, new RegExp('/assets/images/email/' + img + '\\.jpg'), img);
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', 'assets', 'images', 'email', img + '.jpg')), img + ' is in the repo');
+  }
   assert.match(m, /design it your way/i);
-  for (const cat of [52, 53, 54, 55, 56, 57]) assert.ok(m.includes(`products.php?category_id=${cat}`), `garment ${cat} links to its page`);
+  for (const cat of [52, 53, 54, 55, 56, 57, 97, 98, 58]) assert.ok(m.includes(`products.php?category_id=${cat}`), `garment ${cat} links to its page`);
 });
 
 /* withTextsInvite, lifted out and run against a fake pool. */
