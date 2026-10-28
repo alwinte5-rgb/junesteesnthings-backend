@@ -183,6 +183,42 @@ function stagesFor(base, boxes, images, sizes) {
   return st;
 }
 
+/** Which stored stage key is the front, and which the back. Normally the keys
+ *  ARE `front` and `back`; a product built in the Lumise admin can carry random
+ *  ids instead (#14, the Bella+Canvas 3001, has `ZWEnsr7gXm` labelled "Front").
+ *  Saved and shared designs are keyed by those ids, so they are kept and found
+ *  by label rather than renamed. A label shared by two stages matches neither. */
+function sideKeys(stages) {
+  const st = stages || {};
+  const out = {};
+  for (const side of ['front', 'back']) {
+    if (st[side]) { out[side] = side; continue; }
+    const hits = Object.keys(st).filter((k) => st[k] && String(st[k].label || '').trim().toLowerCase() === side);
+    if (hits.length === 1) out[side] = hits[0];
+  }
+  return out;
+}
+
+/** `stages` with its front/back stored under `front`/`back`, and a function
+ *  that puts any stages object built from it back under the stored keys. */
+function aliasStages(stages) {
+  const keys = sideKeys(stages);
+  const norm = {};
+  const back = {};
+  for (const [k, v] of Object.entries(stages || {})) {
+    const side = Object.keys(keys).find((s) => keys[s] === k);
+    norm[side || k] = v;
+    if (side && side !== k) back[side] = k;
+  }
+  const restore = (st) => {
+    if (!st) return st;
+    const out = {};
+    for (const [k, v] of Object.entries(st)) out[back[k] || k] = v;
+    return out;
+  };
+  return { stages: norm, restore };
+}
+
 const isPhoto = (s) => /^https:\/\//.test(String((s && s.image) || ''));
 
 /** The stand-in drawing per side: the product's own stage when it is not a
@@ -213,4 +249,4 @@ function keepUncovered(base, boxes, st) {
   return st;
 }
 
-module.exports = { placementSet, boxesFor, toEditZone, stagesFor, keepUncovered, standins, SETS, BODY_IN, ZIP_FRONT_RE };
+module.exports = { placementSet, boxesFor, toEditZone, stagesFor, keepUncovered, standins, sideKeys, aliasStages, SETS, BODY_IN, ZIP_FRONT_RE };

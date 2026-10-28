@@ -15,6 +15,7 @@
  *     of fetching, cutting, encoding and storing that change nothing.
  */
 const { classify, standin } = require('../lib/garments');
+const { sideKeys } = require('../lib/placements');
 
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 
@@ -44,8 +45,8 @@ function planFor(p, cfg) {
     Object.values(v.stages).some((s) => /^https?:/.test(String(s.image || '')))).length;
 
   const cls = classify(p.name);
-  const sides = Object.keys(stages)
-    .filter((s) => s === 'front' || s === 'back')
+  const keys = sideKeys(stages);
+  const sides = ['front', 'back'].filter((s) => keys[s])
     .filter((s) => !(cls === 'cap' && s === 'back'));
 
   const blocked = [];

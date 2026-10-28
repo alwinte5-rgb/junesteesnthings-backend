@@ -36,7 +36,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('./../lib/db');
-const { placementSet, boxesFor, stagesFor, keepUncovered, standins } = require('./../lib/placements');
+const { placementSet, boxesFor, stagesFor, keepUncovered, standins, aliasStages } = require('./../lib/placements');
 
 const SHEET = (process.argv.find((a) => a.startsWith('--sheet=')) || '').slice(8);
 const OVERRIDES = (() => {
@@ -62,7 +62,11 @@ process.stdin.on('end', () => {
     { rows: true });
   if (!rows.length) { console.error('no product ' + productId); process.exit(1); }
   const p = rows[0];
-  const stages = dejson(p.stages), attrs = dejson(p.attributes);
+  /* Worked on as front/back and written back under the product's own keys
+     (aliasStages): a stage keyed by a random id keeps that id, so designs
+     saved or shared on it still find their side. */
+  const alias = aliasStages(dejson(p.stages));
+  const stages = alias.stages, attrs = dejson(p.attributes);
   /* Find the colour attribute by its TYPE. 15 of 102 active products key it
      'BCOL' rather than 'COL' — #88 among them — and reading attrs.COL reported
      every one of them as having no colour attribute at all, after its 115
@@ -100,7 +104,11 @@ process.stdin.on('end', () => {
     else console.log('  could not measure the photos — keeping the single copied box');
   }
   let productStages = null, sheetItem = null;
-  const STANDIN = standins(stages, dejson(p.variations));
+  const oldVars = dejson(p.variations);
+  for (const v of Object.values((oldVars && oldVars.variations) || {})) {
+    if (v && v.stages) v.stages = aliasStages(v.stages).stages;
+  }
+  const STANDIN = standins(stages, oldVars);
   if (stages && stages.back && !STANDIN.back) {
     console.log('  no stand-in Back left on this product or its colourways — a colour without a back photo gets no Back; restore stages from ~/jtees-backups');
   }
@@ -137,7 +145,7 @@ process.stdin.on('end', () => {
       variations[String(n)] = {
         id: String(n), conditions: { [colKey]: value }, price: '', sku: '',
         minqty: '', maxqty: '', description: '',
-        cfgstages: true, cfgprinting: false, stages: st, printings: null,
+        cfgstages: true, cfgprinting: false, stages: alias.restore(st), printings: null,
       };
       /* The sheet is drawn from the STORED edit zones (converted back the way
          app.js draws them), so it checks the unit conversion too, not just the
@@ -174,7 +182,7 @@ process.stdin.on('end', () => {
     variations[String(n)] = {
       id: String(n), conditions: { [colKey]: value }, price: '', sku: '',
       minqty: '', maxqty: '', description: '',
-      cfgstages: true, cfgprinting: false, stages: st, printings: null,
+      cfgstages: true, cfgprinting: false, stages: alias.restore(st), printings: null,
     };
     console.log('  ' + c.name.padEnd(26) + value + '  ' +
       Object.keys(st).filter((s) => st[s].overlay === false).join('+'));
@@ -237,7 +245,7 @@ process.stdin.on('end', () => {
   /* The product's own stages carry the same placements (the default
      colourway's), so the placement list is the same before a colour is picked. */
   mysql(url, 'UPDATE lumise_products SET variations=' + sq(encoded) +
-    (productStages ? ', stages=' + sq(enjson(productStages)) : '') +
+    (productStages ? ', stages=' + sq(enjson(alias.restore(productStages))) : '') +
     ' WHERE id=' + Number(productId) + ';');
   console.log('  written.');
 });

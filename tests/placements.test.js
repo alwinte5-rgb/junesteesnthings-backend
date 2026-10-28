@@ -158,3 +158,25 @@ test('the stand-in comes from a drawing, never from another colour\'s photo', ()
   assert.deepStrictEqual(Object.keys(keepUncovered(standins(stages, {}), [{ key: 'front', side: 'front' }], { front: {} })), ['front']);
 });
 
+
+/* #14, the Bella+Canvas 3001, was built in the Lumise admin and its stages are
+   keyed by random ids. Two customers' shared designs are keyed by those ids, so
+   the art run must find the sides by label and write them back under the same
+   keys — renaming them to front/back would empty those designs. */
+test('random stage keys are found by label and kept', () => {
+  const { sideKeys, aliasStages } = require('../tools/lib/placements');
+  const st = { ZWEnsr7gXm: { label: 'Front', url: 'a' }, mr83j4pl: { label: 'Back', url: 'b' } };
+  assert.deepStrictEqual(sideKeys(st), { front: 'ZWEnsr7gXm', back: 'mr83j4pl' });
+  const a = aliasStages(st);
+  assert.deepStrictEqual(Object.keys(a.stages), ['front', 'back']);
+  const out = a.restore({ front: { x: 1 }, left_chest: { x: 2 }, back: { x: 3 } });
+  assert.deepStrictEqual(Object.keys(out), ['ZWEnsr7gXm', 'left_chest', 'mr83j4pl']);
+});
+
+test('plain front/back keys are left alone, and a doubled label matches nothing', () => {
+  const { sideKeys, aliasStages } = require('../tools/lib/placements');
+  assert.deepStrictEqual(sideKeys({ front: {}, back: {} }), { front: 'front', back: 'back' });
+  assert.deepStrictEqual(sideKeys({ a: { label: 'Front' }, b: { label: 'front' } }), {});
+  const a = aliasStages({ front: { label: 'Full front' }, left_chest: {}, back: {} });
+  assert.deepStrictEqual(Object.keys(a.restore({ front: 1, left_chest: 2, back: 3 })), ['front', 'left_chest', 'back']);
+});

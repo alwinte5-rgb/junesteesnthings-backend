@@ -29,6 +29,12 @@ function selectWanted(core, batch, { staged = false, only = [] } = {}) {
   return list;
 }
 
+/* Where a new style sorts in the shop and the designer's product picker (both
+   order by `order` ascending). The owner's hand-ranked basics are 1-45 and the
+   rest of the catalogue starts at 100; a new style written as 1 jumped ahead of
+   all of them, which is how a $39 hoodie came to be the shop's second product. */
+const NEW_PRODUCT_ORDER = 500;
+
 const money = (n) => Math.round(Number(n) * 100) / 100;
 
 /** The INSERT for one product. Staged: active=0, supplier='ssa-staged'. The
@@ -41,7 +47,7 @@ function productInsertSql({ name, price, thumb, stages, attributes, printings, s
     'created, updated, supplier, supplier_style_id, supplier_cost, ssa_seen_at)\n' +
     '  SELECT ' + sq(name) + ', ' + money(price) + ", 0, '', " + sq(thumb) + ", '', '', " +
     sq(stages) + ", '', " + sq(attributes) + ', ' + sq(printings) +
-    ', 1, ' + (staged ? 0 : 1) + ", '', NOW(), NOW(), " + sq(staged ? STAGED_SUPPLIER : 'ssa') + ', ' +
+    ', ' + NEW_PRODUCT_ORDER + ', ' + (staged ? 0 : 1) + ", '', NOW(), NOW(), " + sq(staged ? STAGED_SUPPLIER : 'ssa') + ', ' +
     sid + ', ' + money(cost) + ', NOW()\n' +
     '  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_products ' +
     'WHERE supplier_style_id=' + sid + ') AS t);';
@@ -57,4 +63,4 @@ function parseIds(arg) {
   return new Set(parts.map(Number));
 }
 
-module.exports = { STAGED_SUPPLIER, selectWanted, productInsertSql, parseIds };
+module.exports = { STAGED_SUPPLIER, NEW_PRODUCT_ORDER, selectWanted, productInsertSql, parseIds };
