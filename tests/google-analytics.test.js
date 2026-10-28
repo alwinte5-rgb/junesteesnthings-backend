@@ -33,7 +33,7 @@ const REPORTS = [
   { rows: [row(['date_range_0'], [538, 133, 197]), row(['date_range_1'], [400, 100, 150])] },
   { rows: [row(['Organic Search'], [88]), row(['Direct'], [295]), row(['Email'], [61])] },
   { rows: [row(['designer_open'], [40]), row(['add_to_cart'], [3]), row(['quote_submitted'], [12]), row(['purchase'], [2])] },
-  { rows: [row(['/'], [300]), row(['/editor.php?product_base=14'], [20])] },
+  { rows: [row(['/'], [300]), row(['/editor.php?product_base=12'], [20])] },
   { rows: [row(['www.jtees.net'], [350]), row(['design.jtees.net'], [180])] },
 ];
 

@@ -155,7 +155,7 @@ test('the sign-up page sends "Design Lab" and "Start designing" to the designer,
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   // The sign-up page's own code, from its function to its route.
   const page = server.slice(server.indexOf('function textsPage('), server.indexOf('app.get(REINTRO.SIGNUP_PATH'));
-  assert.ok(page.includes('/editor.php?product_base=14'), 'links to the designer');
+  assert.ok(page.includes('/editor.php?product_base=12'), 'links to the designer');
   assert.ok(!/href="\$\{D\}"|href="https:\/\/design\.jtees\.net\/?"/.test(page), 'no link to the studio home page');
   // The discount email's button opens the product list, never the studio home.
   const mail = server.slice(server.lastIndexOf('<a href=', server.indexOf('Start designing &rarr;')), server.indexOf('Start designing &rarr;'));

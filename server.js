@@ -6445,7 +6445,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
   const D = 'https://design.jtees.net';
   // "Design Lab" and "Start designing" open the designer itself, not the
   // studio's home page (owner, 2026-10-18), like every other Design Lab link.
-  const LAB = `${STUDIO_BASE}/editor.php?product_base=14`;
+  const LAB = `${STUDIO_BASE}/editor.php?product_base=12`;
   const garments = [['ssa-33929_f_fm', 'T-shirts', 52], ['ssa-107784_f_fm', 'Hoodies', 53], ['ssa-18365_f_fm', 'Tanks', 54],
     ['ssa-113683_f_fm', 'Kids', 55], ['ssa-36262_f_fm', 'Baby', 56], ['ssa-97052_f_fm', 'Hats', 57]]
     .map(([img, label, cat]) => `<a href="${D}/products.php?category_id=${cat}"><img src="/assets/images/shop/${img}.jpg"
@@ -6543,7 +6543,7 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
         html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
           `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
            <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout in the
-             <a href="${STUDIO_BASE}/editor.php?product_base=14">Design Lab</a>, or mention it when you get a quote. It's good for
+             <a href="${STUDIO_BASE}/editor.php?product_base=12">Design Lab</a>, or mention it when you get a quote. It's good for
              ${REINTRO.CODE_DAYS} days, once.</p>`, null) })
         .catch((e) => console.error('sign-up code email failed:', e.message));
     } else {

@@ -34,7 +34,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('./lib/db');
-const { placementSet, SETS } = require('./lib/placements');
+const { placementSet, SETS, aliasStages } = require('./lib/placements');
 
 const RAISE_IN = 2;
 const MARK = 'jt_front_raised';
@@ -72,7 +72,9 @@ function raised(stage, set) {
 function planProduct(p) {
   const set = placementSet(p.name);
   if (!MOVES.includes(set)) return null;
-  const stages = dejson(p.stages);
+  /* By role, not key: an admin-made product keeps random stage ids (#14). */
+  const pa = aliasStages(dejson(p.stages));
+  const stages = pa.stages;
   if (!stages || !stages.front || stages.front[MARK]) return null;
   const front = raised(stages.front, set);
   if (!front) return null;
@@ -87,12 +89,15 @@ function planProduct(p) {
     variations = dejson(p.variations);
     if (!variations) return { error: 'variations could not be read' };
     for (const v of Object.values(variations.variations || {})) {
-      const f = v && v.stages && v.stages.front;
+      if (!v || !v.stages) continue;
+      const va = aliasStages(v.stages);
+      const f = va.stages.front;
       const ez = f && raised(f, set);
-      if (ez) { v.stages.front = { ...f, edit_zone: ez }; copies++; }
+      if (ez) { va.stages.front = { ...f, edit_zone: ez }; copies++; }
+      v.stages = va.restore(va.stages);
     }
   }
-  return { set, before, after: front.top, stages, variations, copies };
+  return { set, before, after: front.top, stages: pa.restore(stages), variations, copies };
 }
 
 function main(url) {

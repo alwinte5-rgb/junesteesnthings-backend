@@ -27,7 +27,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('../lib/db');
-const { placementSet, boxesFor, toEditZone } = require('../lib/placements');
+const { placementSet, boxesFor, toEditZone, aliasStages } = require('../lib/placements');
 const { canvasVerdict, isCrew, TANK_RE } = require('../lib/canvas');
 const { classify } = require('../lib/garments');
 
@@ -83,7 +83,9 @@ function measureMask(src, mask) {
 
 /** The product's new stages: every box of its set, on its own drawing. */
 function standinStages(p) {
-  const stages = dejson(p.stages) || {};
+  /* By role, not key: an admin-made product keeps random stage ids (#14). */
+  const alias = aliasStages(dejson(p.stages) || {});
+  const stages = alias.stages;
   const set = placementSet(p.name);
   if (!set) return { why: 'no placement set for this garment' };
   const v = canvasVerdict(p), cls = classify(p.name);
@@ -117,7 +119,7 @@ function standinStages(p) {
       label: b.label, edit_zone: toEditZone(b, m[b.side].W, m[b.side].H, pw), product_width: pw,
     });
   }
-  return { set, boxes, stages: out, m };
+  return { set, boxes, stages: alias.restore(out), m };
 }
 
 function run(buf) {

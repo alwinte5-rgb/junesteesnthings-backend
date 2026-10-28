@@ -461,7 +461,7 @@ If a post or website image shows a realistic scene or person made by AI, turn on
       id: 'd6-ai-clean', article: A.aiClean, minutes: 20, tags: 'ai cleanup, garbled text, halo, semi-transparent, backdrop, specks, upscale, vectorize, ai designer, customer designs',
       goals: ['Check AI output against the cleanup list', 'Fix a customer\'s AI design from the website', 'Turn an AI concept into a clean vector'],
       images: [{ src: '/assets/images/work/design-studio-live.jpg', alt: 'The online design studio on jtees.net' }],
-      tryIt: [{ label: 'The online designer', href: 'https://design.jtees.net/editor.php?product_base=14' }],
+      tryIt: [{ label: 'The online designer', href: 'https://design.jtees.net/editor.php?product_base=12' }],
       body:
 `Nothing an AI tool makes goes to print or to a customer as it came out. Every image gets the same checks.
 

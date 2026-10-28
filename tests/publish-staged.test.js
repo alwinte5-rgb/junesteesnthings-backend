@@ -77,9 +77,9 @@ test('--staged writes the product switched off and tagged ssa-staged; plain runs
   const row = { name: "Shaka Wear SHMHO Unisex Max Heavyweight Oversized Tee", price: 13.36, thumb: 'https://x/a.jpg',
     stages: 'st', attributes: 'at', printings: 'pr', styleID: 9161, cost: 6.68 };
   const staged = productInsertSql({ ...row, staged: true });
-  assert.match(staged, /, 1, 0, '', NOW\(\), NOW\(\), 'ssa-staged', 9161, 6\.68, NOW\(\)/);
+  assert.match(staged, /, 900, 0, '', NOW\(\), NOW\(\), 'ssa-staged', 9161, 6\.68, NOW\(\)/);
   const live = productInsertSql({ ...row, staged: false });
-  assert.match(live, /, 1, 1, '', NOW\(\), NOW\(\), 'ssa', 9161, 6\.68, NOW\(\)/);
+  assert.match(live, /, 900, 1, '', NOW\(\), NOW\(\), 'ssa', 9161, 6\.68, NOW\(\)/);
   assert.match(staged, /WHERE supplier_style_id=9161\) AS t\);$/, 'a re-run adds nothing twice');
   assert.throws(() => productInsertSql({ ...row, styleID: 'x' }), /bad style id/);
 });
@@ -189,4 +189,14 @@ test('the 2026-10-19 expansion rows are unique, capped per brand, and each name 
 test('ssa-add-products has every helper it calls (enjson was lost in #352 and the tool crashed on its first style)', () => {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'tools', 'ssa-add-products.js'), 'utf8');
   assert.match(src, /const \{[^}]*\benjson\b[^}]*\} = require\('\.\/lib\/db'\)/);
+});
+
+/* A new style written with `order` 1 sorted ahead of the owner's hand-ranked
+   basics (1-45) in the shop and the designer picker: 171 of them did, and a $39
+   hoodie became the second product shown. New styles go after the basics. */
+test('a new style sorts after the hand-ranked basics', () => {
+  const { productInsertSql, NEW_PRODUCT_ORDER } = require('../tools/lib/ssa-staged');
+  assert.ok(NEW_PRODUCT_ORDER > 45);
+  const sql = productInsertSql({ name: 'X', price: 1, thumb: 't', stages: 's', attributes: 'a', printings: 'p', styleID: 1, cost: 1 });
+  assert.match(sql, new RegExp(', ' + NEW_PRODUCT_ORDER + ', 1, '));
 });

@@ -84,3 +84,10 @@ test('a local raws path in a variation does not count as real art', () => {
   }));
   assert.strictEqual(p.wired, 0);
 });
+
+test('a tee whose stages are keyed by random ids still gets front and back', () => {
+  const p = planFor(product({ name: 'Bella+Canvas 3001 Unisex Jersey Tee',
+    stages: { ZWEnsr7gXm: { label: 'Front' }, mr83j4pl: { label: 'Back' } } }), { includeOwnArt: true });
+  assert.deepStrictEqual(p.sides, ['front', 'back']);
+  assert.ok(!p.blocked.some((b) => /no front\/back stage/.test(b)));
+});

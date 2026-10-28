@@ -209,7 +209,7 @@ function shelves(data, cats, from) {
 }
 
 /* The Design Lab, before the products on every page (owner, 2026-10-17). */
-const EDITOR = 'https://design.jtees.net/editor.php?product_base=14';
+const EDITOR = 'https://design.jtees.net/editor.php?product_base=12';
 const LAB_IMG = '/assets/images/brand/design-lab-live.jpg';
 function labDims() { const d = jpegSize(path.join(PUBLIC, LAB_IMG)); return `width="${d.w}" height="${d.h}"`; }
 function labSection(from) {

@@ -43,3 +43,16 @@ test('a polo and a quarter-zip have a back drawing; a cropped zip hoodie has its
   assert.strictEqual(drawingFor('hoodie', 'Shaka Wear SHGCZ Unisex Garment-Dyed Cropped Full-Zip Hoodie Sweatshirt'), 'cropped_hoodie');
   assert.strictEqual(drawingFor('hoodie', 'Gildan 18500 Unisex Heavy Blend Hooded Sweatshirt'), 'hoodies_sweatshirt');
 });
+
+/* #14 keeps admin-made stage ids; a back added to a colour goes under the
+   product's back id, so every colour and the saved designs agree on it. */
+test('a back added to a random-id product lands under the product\'s back id', () => {
+  const p = { name: 'Bella+Canvas 3001 Unisex Jersey Tee',
+    stages: enjson({ ZWEnsr7gXm: { ...photo('white', 'front'), jt_key: 'front' }, mr83j4pl: { label: 'Back', url: 'products/basic_tshirt_back.png' } }),
+    variations: enjson({ variations: { 1: { cfgstages: true, conditions: { C: '#1' }, stages: { ZWEnsr7gXm: { ...photo('navy', 'front'), jt_key: 'front' } } } } }) };
+  const c = fillBacks(p);
+  assert.strictEqual(c.backs, 1);
+  const st = c.variations.variations[1].stages;
+  assert.deepStrictEqual(Object.keys(st), ['ZWEnsr7gXm', 'mr83j4pl']);
+  assert.strictEqual(st.mr83j4pl.url, 'products/basic_tshirt_back.png');
+});

@@ -3,7 +3,7 @@
   "announcement": [
     {
       "text": "🎨 NEW — Design your own apparel online",
-      "href": "https://design.jtees.net/editor.php?product_base=14"
+      "href": "https://design.jtees.net/editor.php?product_base=12"
     },
     {
       "text": "Visits by appointment only · Pickups: follow the instructions we email or text you"
@@ -80,7 +80,7 @@
         },
         {
           "label": "Design Lab",
-          "href": "https://design.jtees.net/editor.php?product_base=14"
+          "href": "https://design.jtees.net/editor.php?product_base=12"
         },
         {
           "label": "All Products →",
@@ -242,7 +242,7 @@
   },
   "design": {
     "label": "Start Designing",
-    "href": "https://design.jtees.net/editor.php?product_base=14"
+    "href": "https://design.jtees.net/editor.php?product_base=12"
   },
   "search": {
     "label": "Search products",
@@ -312,7 +312,7 @@
       },
       {
         "label": "Design Studio",
-        "href": "https://design.jtees.net/editor.php?product_base=14"
+        "href": "https://design.jtees.net/editor.php?product_base=12"
       },
       {
         "label": "Our Work",
