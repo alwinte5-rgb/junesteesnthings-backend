@@ -2033,6 +2033,8 @@ async function initStaffTables() {
     // Designer-lead follow-up emails sent, and when the last went (tools/lib/design-followups.js).
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS design_fu_sent INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS design_fu_at TIMESTAMPTZ',
+    // The follow-up sweep matches quotes to leads by email, in any case.
+    'CREATE INDEX IF NOT EXISTS quotes_email_lower_idx ON quotes (LOWER(email))',
     "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type TEXT NOT NULL DEFAULT 'shop'",
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS sale_type_reason TEXT',
     // A helper's rate on the shop's own leads they close; commission_pct is for their own.
@@ -3115,6 +3117,8 @@ function activePromoCode() {
   if (!pool.length) pool.push('SAVE10');
   return pool[Math.floor(Date.now() / 1000 / 604800) % pool.length];
 }
+/** The percentage that code takes off (JT_PROMO_PCT, default 10). */
+function activePromoPct() { return parseInt(process.env.JT_PROMO_PCT, 10) || 10; }
 console.log(`Active recovery promo code this week: ${activePromoCode()}`);
 
 /* HTML escaping, used on every interpolated value in this file.
@@ -6119,31 +6123,38 @@ function designerUrlOk(u) {
 async function sendDesignFollowups(now = new Date()) {
   if (!inTextingHours(now)) return '';
   const { rows } = await pool.query(
-    `SELECT s.id, s.name, s.email, s.description, s.photo_url, s.design_url, s.created_at, s.dismissed_at,
-            s.outcome, s.first_response_at, s.design_fu_sent, s.design_fu_at,
-            EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id
-                    OR (s.email <> '' AND LOWER(q.email) = LOWER(s.email) AND q.created_at > s.created_at)) AS has_quote
+    /* Only leads that can still get one (the same stop rules as
+       DESIGN_FU.stopReason), so finished leads never fill the batch. */
+    `SELECT s.id, s.name, s.email, s.photo_url, s.design_url, s.created_at, s.dismissed_at,
+            s.outcome, s.first_response_at, s.design_fu_sent, s.design_fu_at, false AS has_quote
        FROM submissions s
       WHERE s.source = 'designer' AND s.design_fu_sent < $1 AND s.created_at >= $2
+        AND COALESCE(s.email, '') <> '' AND s.dismissed_at IS NULL AND s.outcome IS NULL AND s.first_response_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id
+                        OR (LOWER(q.email) = LOWER(s.email) AND q.created_at > s.created_at))
       ORDER BY s.created_at LIMIT 200`, [DESIGN_FU.STEPS.length, new Date(DESIGN_FU.START)]);
   let n = 0;
   for (const lead of rows) {
     const step = DESIGN_FU.dueStep(lead, now);
     if (!step || !designerUrlOk(lead.design_url)) continue;
+    if (await isUnsubscribed(lead.email)) {   // nothing will go: stop for good, not counted as sent
+      await pool.query(`UPDATE submissions SET design_fu_sent = $2 WHERE id = $1`, [lead.id, DESIGN_FU.STEPS.length]);
+      continue;
+    }
     const { rowCount } = await pool.query(
       `UPDATE submissions SET design_fu_sent = $2, design_fu_at = NOW() WHERE id = $1 AND design_fu_sent = $3`,
       [lead.id, step, step - 1]);
     if (!rowCount) continue;
-    /* The product name is the second part of the lead's description, when it was given. */
-    const part = String(lead.description || '').split(' · ')[1] || '';
-    const product = /[:$]/.test(part) ? '' : part.slice(0, 80);
-    const m = DESIGN_FU.followupEmail(step, { name: lead.name, product, link: lead.design_url,
-      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(),
-      pct: parseInt(process.env.JT_PROMO_PCT, 10) || 10 });
+    const m = DESIGN_FU.followupEmail(step, { name: lead.name, link: lead.design_url,
+      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(), pct: activePromoPct() });
     try {
       await sendEmail({ to: lead.email, subject: m.subject, html: customerEmailHtml(m.heading, m.inner), marketing: true, promo: false });
       n++;
     } catch (e) {
+      /* Give the step back so the next sweep tries again: a mail outage or a
+         missing secret must not use up a lead's follow-ups. */
+      await pool.query(`UPDATE submissions SET design_fu_sent = $2, design_fu_at = $4 WHERE id = $1 AND design_fu_sent = $3`,
+        [lead.id, step - 1, step, lead.design_fu_at]).catch(() => {});
       console.error(`design follow-up ${step} for lead ${lead.id} failed:`, e.message);
       reportError('design-followup', e, `lead ${lead.id}`).catch(() => {});
     }
@@ -7940,7 +7951,7 @@ app.post('/api/abandoned-cart-email', requireInternalKey, capPerRecipient('aband
       for (const [k, t] of recentCartEmails) if (Date.now() - t > CART_EMAIL_DEDUP_MS) recentCartEmails.delete(k);
     }
     const promoCode = activePromoCode();
-    const promoPct = parseInt(process.env.JT_PROMO_PCT, 10) || 10;
+    const promoPct = activePromoPct();
     const cartLine = `Your cart at June's Tees &amp; Things has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.`;
     const copy = count > 0 ? {
       1: { subject: `Your cart is saved + here's ${promoPct}% off ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready — and code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off at checkout.`, cta: `Pick Up Where I Left Off →` },
@@ -31538,6 +31549,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
   setInterval(() => step('chat alerts', sendChatAlerts),
     Math.max(5000, Number(process.env.JT_CHAT_ALERT_EVERY_MS) || 5 * 60 * 1000));
   /* Designer-lead follow-ups: every 30 minutes, daytime only. */
+  setTimeout(() => step('design follow-ups', sendDesignFollowups), 60 * 1000);
   setInterval(() => step('design follow-ups', sendDesignFollowups), 30 * 60 * 1000);
   /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
   setTimeout(() => step('notifications', notifySweep), 20 * 1000);
