@@ -51,4 +51,37 @@ function picksLine(picks) {
   return 'Items: ' + picks.map((p) => p.label + (p.qty ? ' (' + p.qty.toLocaleString('en-US') + ')' : '')).join(', ');
 }
 
-module.exports = { PICKS, MAX_QTY, parsePicks, picksLine };
+/* "Need it sooner?" (owner, 2026-10-28): small orders take 5–7 business
+   days, so anything sooner is a rush, quoted with a fee the owner sets. The
+   box (rush_needed) and an optional date (rush_by, YYYY-MM-DD from the
+   browser's date picker) put a RUSH line at the very top of the enquiry. A
+   date that is not a real calendar date, or is more than a year out, is
+   dropped rather than refused, so a bad date never loses the enquiry. */
+function parseRush(body, now = new Date()) {
+  const b = body || {};
+  if (!ticked(b.rush_needed)) return null;
+  const raw = String(b.rush_by == null ? '' : b.rush_by).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  let by = '';
+  if (m) {
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    const real = d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    if (real && d.getTime() >= today - 864e5 && d.getTime() <= today + 366 * 864e5) by = raw;
+  }
+  return { by };
+}
+
+/** "⚡ RUSH: needs it in under 5 business days, by Tue, Nov 3, 2026" — or ''. */
+function rushLine(rush) {
+  if (!rush) return '';
+  let when = '';
+  if (rush.by) {
+    const [y, mo, d] = rush.by.split('-').map(Number);
+    when = ', by ' + new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('en-US',
+      { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  return '\u26A1 RUSH: needs it in under 5 business days' + when + ' (rush fee applies)';
+}
+
+module.exports = { PICKS, MAX_QTY, parsePicks, picksLine, parseRush, rushLine };

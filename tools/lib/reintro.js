@@ -111,7 +111,7 @@ function helloEmail({ first, email }) {
     style="display:block;width:100%;max-width:262px;height:auto;border-radius:10px;border:0"></a></td>`;
   const garment = (img, label, cat) => `<td width="33%" align="center" style="padding:4px;vertical-align:top">
     <a href="${DESIGN}/products.php?category_id=${cat}" style="text-decoration:none;color:#0B1F4B">
-    <img src="${IMG('shop/' + img + '.jpg')}" alt="Custom ${label.replace('&amp;', '&')}" width="164"
+    <img src="${IMG('email/' + img + '.jpg')}" alt="Custom ${label.replace('&amp;', '&')} with your design" width="164"
       style="display:block;width:100%;max-width:164px;height:auto;border-radius:10px;border:0;margin:0 auto">
     <div style="font-weight:700;font-size:13.5px;margin-top:4px">${label}</div></a></td>`;
   const feature = (icon, title, text) => `<tr><td style="padding:7px 10px 7px 0;vertical-align:top;font-size:20px">${icon}</td>
@@ -138,8 +138,9 @@ function helloEmail({ first, email }) {
     <h2 style="font-size:18px;color:#0B1F4B;margin:0 0 4px 4px">New: choose your garment</h2>
     <p style="line-height:1.6;margin:0 4px 8px">Start with the piece you want: 45+ real garments in your choice of color and size.</p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      <tr>${garment('ssa-33929_f_fm', 'T-shirts', 52)}${garment('ssa-107784_f_fm', 'Hoodies', 53)}${garment('ssa-18365_f_fm', 'Tank tops', 54)}</tr>
-      <tr>${garment('ssa-113683_f_fm', 'Kids &amp; youth', 55)}${garment('ssa-36262_f_fm', 'Baby', 56)}${garment('ssa-97052_f_fm', 'Hats', 57)}</tr>
+      ${/* Blanks with a "your design here" print box (owner 2026-10-28),
+            drawn onto the shop photos ssa-33929, 33306, 18365, 113683, 36262, 97052. */ ''}<tr>${garment('garment-tee', 'T-shirts', 52)}${garment('garment-hoodie', 'Hoodies', 53)}${garment('garment-tank', 'Tank tops', 54)}</tr>
+      <tr>${garment('garment-youth', 'Kids &amp; youth', 55)}${garment('garment-baby', 'Baby', 56)}${garment('garment-hat', 'Hats', 57)}</tr>
     </table>
   </td></tr>
   <tr><td style="padding:14px 28px 4px">
@@ -157,8 +158,8 @@ function helloEmail({ first, email }) {
   <tr><td style="padding:14px 24px 4px">
     <h2 style="font-size:18px;color:#0B1F4B;margin:0 0 8px 4px">Still printing everything you love</h2>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      <tr>${photo('work/full-color-team-logo-print.jpg', 'Full-color team logo print')}${photo('work/company-zip-hoodies.jpg', 'Company zip hoodies')}</tr>
-      <tr>${photo('work/embroidery-machine-polos.jpg', 'Embroidered polos')}${photo('work/screen-printing-press.jpg', 'Our screen printing press in Chicago')}</tr>
+      <tr>${photo('email/work-family-christmas.jpg', 'Family Christmas shirts we printed')}${photo('email/work-santa-came-twice.jpg', 'Santa Came Twice Christmas shirt')}</tr>
+      <tr>${photo('email/work-embroidered-polo.jpg', 'Embroidered logo polo')}${photo('email/work-family-reunion-order.jpg', 'Family reunion shirts, a full box ready for pickup')}</tr>
     </table>
     <p style="line-height:1.6;margin:10px 4px">Screen printing, embroidery and full-color prints for teams, schools, businesses,
       churches, birthdays and family reunions. Pick up at the shop in Lakeview, by appointment.</p>

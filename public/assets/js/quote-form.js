@@ -237,7 +237,13 @@
     '.jtpk .i label{display:flex;align-items:center;gap:.45rem;margin:0;font-weight:400;text-transform:none;letter-spacing:0;font-size:.9rem;cursor:pointer;flex:1;min-width:0}' +
     '.jtpk .i input[type=checkbox]{width:auto;margin:0;flex:none}' +
     '.jtpk .i input[type=number]{width:5.2rem;flex:none;box-sizing:border-box;border:1px solid #D1D5DB;border-radius:6px;padding:.3rem .45rem;font:inherit;font-size:.85rem}' +
-    '@media(max-width:560px){.jtpk .g{grid-template-columns:1fr}}';
+    '@media(max-width:560px){.jtpk .g{grid-template-columns:1fr}}' +
+    '.jtrush{border:1px solid #F6C3DE;background:#FDEEF6;border-radius:10px;padding:.7rem .85rem;margin:0 0 1rem}' +
+    '.jtrush label{display:flex;align-items:flex-start;gap:.5rem;margin:0;font-weight:400;text-transform:none;letter-spacing:0;font-size:.92rem;color:#1f2937;cursor:pointer}' +
+    '.jtrush input[type=checkbox]{width:auto;margin:.2rem 0 0;flex:none}' +
+    '.jtrush b{color:#B80D64}' +
+    '.jtrush-d{margin-top:.6rem}.jtrush-d label{display:block;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#4B5563;margin-bottom:.3rem}' +
+    '.jtrush-d input{width:100%;max-width:14rem;box-sizing:border-box;border:1px solid #D1D5DB;border-radius:6px;padding:.45rem .55rem;font:inherit}';
   /* Which item this page is about, ticked for them: a data-jt-pick on the
      form or anything around it, or ?pick=<key> in the address. */
   function pagePick(form) {
@@ -267,6 +273,23 @@
           '<input type="number" name="pick_' + p[0] + '_qty" min="1" max="100000" step="1" inputmode="numeric" placeholder="Qty" aria-label="How many: ' + p[1].replace(/&/g, '&amp;') + '" hidden></div>';
       }).join('') + '</div>';
     anchor.parentNode.insertBefore(box, anchor);
+    /* "Need it sooner?" (owner, 2026-10-28): /submit reads rush_needed and
+       rush_by (tools/lib/quote-picks.js parseRush) and leads the enquiry with
+       a RUSH line. No fee figure here: the owner quotes it. */
+    var rush = document.createElement('div');
+    rush.className = 'jtrush';
+    var today = new Date(); today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+    rush.innerHTML = '<label for="' + id + 'rush"><input type="checkbox" id="' + id + 'rush" name="rush_needed" value="1">' +
+      '<span><b>\u26A1 Need it sooner?</b> Under 5 business days. Rush fee applies.</span></label>' +
+      '<div class="jtrush-d" hidden><label for="' + id + 'rushby">Date you need it by <span class="opt">(optional)</span></label>' +
+      '<input type="date" id="' + id + 'rushby" name="rush_by" min="' + today.toISOString().slice(0, 10) + '"></div>';
+    anchor.parentNode.insertBefore(rush, anchor);
+    var rushBox = rush.querySelector('input[name=rush_needed]'), rushDate = rush.querySelector('.jtrush-d');
+    var syncRush = function () {
+      rushDate.hidden = !rushBox.checked;
+      if (!rushBox.checked) form.elements.rush_by.value = '';
+    };
+    rushBox.addEventListener('change', syncRush);
     var sync = function () {
       PICKS.forEach(function (p) {
         var cb = form.elements['pick_' + p[0]], q = form.elements['pick_' + p[0] + '_qty'];
@@ -285,7 +308,7 @@
     sync();
     return {
       any: function () { return PICKS.some(function (p) { var cb = form.elements['pick_' + p[0]]; return cb && cb.checked; }); },
-      reset: function () { if (want && form.elements['pick_' + want]) form.elements['pick_' + want].checked = true; sync(); }
+      reset: function () { if (want && form.elements['pick_' + want]) form.elements['pick_' + want].checked = true; sync(); syncRush(); }
     };
   }
 
