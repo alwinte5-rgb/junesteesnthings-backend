@@ -12,19 +12,73 @@ const owner = '+17738491854';
 const shop = '+17739004592';
 const from = '+13125550199';
 
-test('in shop hours a call rings the owner straight away, with no menu', () => {
-  const t = V.incomingTwiml({ base, from, owner, shop, open: true });
+test('in shop hours a known caller rings the owner straight away, with no menu', () => {
+  const t = V.incomingTwiml({ base, from, owner, shop, open: true, known: true });
   assert.match(t, /Thanks for calling June&apos;s Tees\. One moment/);
   assert.match(t, /<Dial [^>]*callerId="\+17739004592"/);
   assert.match(t, /<Dial [^>]*timeout="18"/);
   assert.match(t, /action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/done"/);
   assert.match(t, /<Number>\+17738491854<\/Number>/);
   assert.doesNotMatch(t, /<Gather|press 1/);
-  assert.equal(V.ringsDirect({ from, owner, open: true }), true);
+  assert.equal(V.ringsDirect({ from, owner, open: true, known: true }), true);
+});
+
+test('in shop hours an unknown caller must press a key, and silence leaves a voicemail', () => {
+  for (const c of [{ from }, { from, known: false }, { from: '' }]) {
+    const t = V.incomingTwiml({ base, owner, shop, open: true, ...c });
+    assert.match(t, /<Gather numDigits="1" timeout="6" action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/screen"/);
+    assert.match(t, /Hi, you&apos;ve reached June&apos;s Tees custom printing\. Press 1 and we&apos;ll ring the shop\./);
+    assert.match(t, /<\/Gather><Say[^>]*>Sorry, we didn&apos;t get that\. Please leave a message after the tone\.<\/Say><Record [^>]*action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/voicemail"/);
+    assert.doesNotMatch(t, /<Dial|<Redirect/);
+    assert.equal(V.ringsDirect({ owner, open: true, ...c }), false);
+  }
+});
+
+test('any key on the screen rings the owner; no key goes to voicemail', () => {
+  for (const digits of ['1', '2', '0', '#']) {
+    const t = V.screenAnswerTwiml({ digits, from, owner, shop, base });
+    assert.match(t, /<Dial [^>]*callerId="\+17739004592"/);
+    assert.match(t, /<Number>\+17738491854<\/Number>/);
+    assert.equal(V.screenRings({ digits, from, owner }), true);
+  }
+  for (const digits of ['', undefined, '12', 'x']) {
+    const t = V.screenAnswerTwiml({ digits, from, owner, shop, base });
+    assert.match(t, /<Record /);
+    assert.doesNotMatch(t, /<Dial/);
+    assert.equal(V.screenRings({ digits, from, owner }), false);
+  }
+  /* Pressed as the shop closed: the after-hours voicemail, no ring text. */
+  assert.match(V.screenAnswerTwiml({ digits: '1', from, owner, shop, base, open: false }), /We&apos;re closed right now/);
+  assert.equal(V.screenRings({ digits: '1', from, owner, open: false }), false);
+  assert.equal(V.screenRings({ digits: '1', from: owner, owner }), false);
+});
+
+test('the incoming route looks the caller up only in hours, and fails open', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
+  assert.match(route, /call\.known = VOICE\.ringsInHours\(call\) \? await knownCaller\(call\.from\) : false;/);
+  const fn = src.slice(src.indexOf('async function knownCaller'), src.indexOf('app.post(VOICE.PATHS.incoming'));
+  assert.match(fn, /FROM quotes WHERE/);
+  /* Leads a call made on its own never make a caller known. */
+  assert.match(fn, /NOT \(source = 'text' AND COALESCE\(dedupe_key, ''\) ~ '\^sms:\(missed-call\|voicemail\|transcript\)-'\)/);
+  assert.match(fn, /'slow'\) \{[^}]*return true; \}/);
+  assert.match(fn, /catch \(e\) \{[\s\S]*?return true;/);
+  const screen = src.slice(src.indexOf('app.post(VOICE.PATHS.screen'), src.indexOf('/* The ring ended.'));
+  assert.match(screen, /twilioVoiceOk\(req, res\)/);
+  assert.match(screen, /VOICE\.screenAnswerTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
+  assert.match(screen, /if \(VOICE\.screenRings\(call\)\) await sendOwnerSms\(VOICE\.ringText\(/);
+});
+
+test('call-made leads carry the dedupe keys the known-caller lookup skips', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /'sms:' \+ \(sid \|\| digits/);
+  assert.match(src, /keepCall\(from, leadText, sid \? `\$\{kind\}-\$\{sid\}` : '', kind\)/);
+  assert.match(src, /'transcript-' \+ callSidOf\(req\), 'transcript'\)/);
+  for (const kind of ["'missed-call'", "'voicemail'"]) assert.ok(src.includes(kind + ');'), kind);
 });
 
 test('the menu still answers out of hours, with no owner number, and for the owner calling in', () => {
-  for (const c of [{ from, owner, open: false }, { from, owner: '', open: true }, { from: owner, owner, open: true }]) {
+  for (const c of [{ from, owner, open: false, known: true }, { from, owner: '', open: true, known: true }, { from: owner, owner, open: true, known: true }]) {
     const t = V.incomingTwiml({ base, shop, ...c });
     assert.match(t, /<Gather numDigits="1"/);
     assert.doesNotMatch(t, /<Dial/);

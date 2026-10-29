@@ -5217,7 +5217,8 @@ async function recordSmsDelivery(p) {
 // ── Twilio calls ──────────────────────────────────────────────────────────────
 // In the Twilio console, set the number's "A call comes in" webhook to exactly
 // https://www.jtees.net/webhooks/twilio/voice (HTTP POST). Calls ring
-// TWILIO_TO_NUMBER from the shop number: straight away in shop hours, after a
+// TWILIO_TO_NUMBER from the shop number: in shop hours straight away for a
+// caller the shop knows and after one key press for anyone else, after a
 // short menu outside them (tools/lib/voice.js).
 const TWILIO_VOICE_BASE = (process.env.TWILIO_VOICE_BASE || 'https://www.jtees.net').trim().replace(/\/+$/, '');
 
@@ -5370,12 +5371,41 @@ async function ownerCallback(cmd) {
   return sendOwnerSms(`Calling you now. Press 1 when you answer to ring ${VOICE.pretty(to)} from the shop number.`);
 }
 
+/* Whether a caller is someone the shop knows: a job, or a lead that came
+   from a form, a person or a real text. Leads a phone call made on its own
+   (missed call, voicemail, transcript) do not count, or every robocall that
+   rang once would ring through ever after. A slow or failed lookup counts as
+   known, so a database fault never stands between a customer and the shop. */
+async function knownCaller(from) {
+  const digits = String(from || '').replace(/\D/g, '').slice(-10);
+  if (digits.length !== 10) return false;
+  const same = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+  let timer;
+  const slow = new Promise((resolve) => { timer = setTimeout(() => resolve('slow'), 3000); });
+  try {
+    const found = await Promise.race([slow, pool.query(
+      `SELECT 1 FROM quotes WHERE ${same}
+        UNION ALL SELECT 1 FROM submissions WHERE ${same}
+          AND NOT (source = 'text' AND COALESCE(dedupe_key, '') ~ '^sms:(missed-call|voicemail|transcript)-')
+        LIMIT 1`, [digits])]);
+    if (found === 'slow') { console.warn('known caller lookup slow — ringing through'); return true; }
+    return found.rows.length > 0;
+  } catch (e) {
+    console.error('known caller lookup failed:', e.message);
+    reportError('twilio:known-caller', e).catch(() => {});
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 app.post(VOICE.PATHS.incoming, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
   const call = {
     from: callerOf(req), owner: callOwner(), open: VOICE.isOpen(),
     shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
   };
+  call.known = VOICE.ringsInHours(call) ? await knownCaller(call.from) : false;
   sendTwiml(res, VOICE.incomingTwiml({ ...call, base: TWILIO_VOICE_BASE }));
   /* In hours the call rings straight away, so who is calling is texted here. */
   if (VOICE.ringsDirect(call)) await sendOwnerSms(VOICE.ringText({ from: call.from, reason: 'call', name: req.body.CallerName }))
@@ -5392,6 +5422,19 @@ app.post(VOICE.PATHS.menu, async (req, res) => {
   /* The cell shows the shop number, so who is calling arrives as a text. */
   const reason = VOICE.ringReason(call);
   if (reason) await sendOwnerSms(VOICE.ringText({ from: call.from, reason, name: req.body.CallerName }))
+    .catch((e) => console.error('ring text failed:', e.message));
+});
+
+/* An unknown caller in hours pressed a key (a person), or let the screen
+   time out into voicemail. */
+app.post(VOICE.PATHS.screen, async (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  const call = {
+    digits: req.body.Digits, from: callerOf(req), owner: callOwner(), open: VOICE.isOpen(),
+    shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
+  };
+  sendTwiml(res, VOICE.screenAnswerTwiml({ ...call, base: TWILIO_VOICE_BASE }));
+  if (VOICE.screenRings(call)) await sendOwnerSms(VOICE.ringText({ from: call.from, reason: 'call', name: req.body.CallerName }))
     .catch((e) => console.error('ring text failed:', e.message));
 });
 
