@@ -42987,11 +42987,13 @@ async function addPlaybookArticles() {
       await pool.query(
         /* Spelling-blind: a `was` rebuilt from the partly US-spelled current
            text must still match a live copy saved with every "colour" (Codex #197). */
-        `UPDATE kb_articles SET body = $2, tags = $3, updated_at = NOW()
+        /* Tags follow only for articles added later; a seed article's tags
+           are left as the owner set them (only its old body is replaced). */
+        `UPDATE kb_articles SET body = $2, tags = COALESCE($3, tags), updated_at = NOW()
           WHERE title = $1 AND body <> $2
             AND regexp_replace(body, '([Cc])olour', '\\1olor', 'g')
                 = ANY(SELECT regexp_replace(w, '([Cc])olour', '\\1olor', 'g') FROM unnest($4::text[]) AS w)`,
-        [a.title, a.body, a.tags || '', a.was])
+        [a.title, a.body, KB_SEED.includes(a) ? null : (a.tags || ''), a.was])
         .catch((e) => console.error(`playbook article "${a.title}" not updated:`, e.message));
     }
   }

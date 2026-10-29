@@ -22,15 +22,20 @@ const ROOT = path.join(__dirname, '..');
    ANYTHING prints, or a badge that says so. Same shape as the designer's
    tests/sales-copy.test.cjs. A sentence that names who gets a proof (a design
    we make, a quoted job, screen printing) is scoped and passes. */
-const BLANKET = /\bevery (order|shirt|design|item|piece)\b[^.]{0,60}(proof|review|before (we|it) print)|(proof|review)[^.]{0,30}\bevery (order|shirt|design|item)\b|nothing (prints|goes to production) until|proof before (we|anything) print|proof[^.]{0,40}before anything (is )?print|proofs? first\b|proof before print\b/i;
-const SCOPED = /\b(we (make|design|are designing)|we design it|design it for you|designing it for you|design(s)? we (make|lay out)|lay out for you|our designer creates|send (us )?the (idea|names)|quote[sd]?\b|screen print|this design|your proof\b|approved proof)/i;
+const BLANKET = /\bevery (order|shirt|design|item|piece|job)\b[^.]{0,60}(proof|review|before (we|it) print)|(proof|review)[^.]{0,30}\bevery (order|shirt|design|item|job)\b|nothing (prints|goes to production) until|proof before (we|anything) print|proof[^.]{0,40}before anything (is )?print|proofs? first\b|proof before print\b|real proofs|review (your|the) (artwork|art|design)s? before print|after (you approve the |the )?proof( is)? approv|after proof approval|from (your )?approved proof/i;
+/* Scoped means the sentence says the proof is for a design WE make. A quote or
+   a method name is not enough: designer orders can be 50+ screen prints. */
+const SCOPED = /\b(we (make|lay out|are designing)|we design (it )?for you|we design it\b|design it for you|design (fee|is a separate fee)|designing it for you|design(s)? we (make|lay out)|lay out (it )?for you|lay out your design|our designer creates|send (us )?the (idea|names)|this design)\b/i;
 const unscoped = (t) => BLANKET.test(t) && !SCOPED.test(t);
 
 /* Staff training, the hiring quizzes and the proofs tool talk about quoted jobs, where the proof
    step is real; nothing else is let off. */
-/* public/print/ products are quote-only (Get a Quote, no cart): every one is
-   a job we lay out, so its proof step is real. */
-const ALLOWED_DIRS = ['tools/lib/courses/', 'public/print/'];
+const ALLOWED_DIRS = ['tools/lib/courses/'];
+/* A public/print/ page is quote-only (Get a Quote, no cart): every job on it
+   is one we lay out, so its proof step is real. It stops being let off the
+   moment it links to the designer or a cart. */
+const quoteOnly = (rel, s) => rel.startsWith('public/print/') &&
+  !/editor\.php\?product|add to cart/i.test(s.replace(/<a [^>]*(data-from="(bar|nav|footer)"|jtn-ico-cart)[^>]*>|<a href="[^"]*\/cart\.php">/g, ''));
 const ALLOWED = new Set(['tools/lib/hiring-ads.js', 'tools/lib/hiring-designer.js', 'tools/lib/job-proofs.js']);
 
 function walk(dir, out) {
@@ -50,8 +55,19 @@ test('the blanket check catches the old wordings and passes scoped ones', () => 
     '"Proof first. No minimum."', 'a proof before print and pickup'])
     assert.ok(unscoped(t), t);
   for (const t of ['Every design we make for you gets a proof first.', '🖼️ Proof When We Design It',
-    'a proof of every screen print job before it goes on press', 'We will check it and send you a proof of this design before it prints.'])
+    'a proof when we lay out your design', 'We will check it and send you a proof of this design before it prints.'])
     assert.ok(!unscoped(t), t);
+  for (const t of ['Get a free quote, and every order gets a proof before it prints.', 'Screen print jobs: every order gets a proof first.',
+    '<h2>No Minimums, Real Proofs</h2>', 'Our team will review your artwork before printing.', 'Production begins after proof approval.'])
+    assert.ok(unscoped(t), 'a quote or method name does not scope it: ' + t);
+});
+
+test('a print page is let off only while it is quote-only', () => {
+  const nav = '<a href="https://design.jtees.net/editor.php?product_base=12" data-from="nav">Design Lab</a><a href="https://design.jtees.net/cart.php">Cart</a>';
+  assert.ok(quoteOnly('public/print/x.html', nav + 'Get a Quote'), 'site chrome links do not count');
+  assert.ok(!quoteOnly('public/print/x.html', nav + '<a href="https://design.jtees.net/editor.php?product_base=99">Design it</a>'));
+  assert.ok(!quoteOnly('public/print/x.html', nav + '<button>Add to cart</button>'));
+  assert.ok(!quoteOnly('public/services/x.html', 'Get a Quote'));
 });
 
 test('no page, reply or guide promises a proof on every order', () => {
@@ -60,7 +76,9 @@ test('no page, reply or guide promises a proof on every order', () => {
   for (const f of files) {
     const rel = path.relative(ROOT, f).split(path.sep).join('/');
     if (ALLOWED.has(rel) || ALLOWED_DIRS.some((d) => rel.startsWith(d))) continue;
-    const s = fs.readFileSync(f, 'utf8').replace(/<[^>]+>/g, ' ');
+    const raw = fs.readFileSync(f, 'utf8');
+    if (quoteOnly(rel, raw)) continue;
+    const s = raw.replace(/<[^>]+>/g, ' ');
     for (const t of s.split(/(?<=[.!?"])\s+|\n|<\/?\w|\|/)) if (unscoped(t)) hits.push(rel + ': ' + t.trim().slice(0, 140));
   }
   assert.deepStrictEqual(hits, []);
@@ -87,8 +105,14 @@ function playbook() {
   const fn = s.slice(i, s.indexOf('\nasync function seedPlaybook', i));
   const calls = [];
   const pool = { query: async (sql, args) => { calls.push({ sql, args }); return { rows: [] }; } };
-  const run = new Function('pool', 'console', seed + '\n' + added + '\n' + fn + '\nreturn { KB_SEED, KB_ADDED, addPlaybookArticles };');
-  return { calls, ...run(pool, { error() {}, log() {} }) };
+  let run;
+  try {
+    run = new Function('pool', 'console', seed + '\n' + added + '\n' + fn + '\nreturn { KB_SEED, KB_ADDED, addPlaybookArticles };');
+    return { calls, ...run(pool, { error() {}, log() {} }) };
+  } catch (e) {
+    throw new Error('Could not lift KB_SEED / KB_ADDED / addPlaybookArticles out of server.js (moved, reordered, or now using a ' +
+      'top-level name: pass it in above): ' + e.message);
+  }
 }
 
 test('old live copies of the seed "proof" and "turnaround" replies are updated', async () => {
@@ -101,6 +125,7 @@ test('old live copies of the seed "proof" and "turnaround" replies are updated',
     assert.ok(u, `the ${short} reply's was-update runs`);
     assert.strictEqual(u.args[1], a.body);
     assert.deepStrictEqual(u.args[3], a.was);
+    assert.strictEqual(u.args[2], null, `the ${short} reply keeps the owner's tags`);
   }
 });
 

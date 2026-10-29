@@ -58,7 +58,7 @@ test('#195 the restart route connects inside its try', () => {
   assert.match(r, /if \(client\) client\.release\(\)/);
 });
 test('#197 the spelling update compares both sides normalised, and `was` is spelling-blind', () => {
-  const f = after('async function addPlaybookArticles()', 2200);
+  const f = after('async function addPlaybookArticles()', 3400);
   assert.match(f, /= regexp_replace\(\$2::text, '\(\[Cc\]\)olour'/);
   assert.match(f, /FROM unnest\(\$4::text\[\]\) AS w/);
 });
