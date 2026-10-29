@@ -2,11 +2,14 @@
 
 /* Calls to the shop's Twilio number.
 
-   In shop hours a call rings the owner straight away; outside them the
-   caller hears a short menu. An order option (or no key) rings the
+   In shop hours a caller the shop knows rings the owner straight away; an
+   unknown one is asked to press a key first, which robocalls cannot do.
+   Outside them the caller hears a short menu. An order option (or no key) rings the
    owner's cell (TWILIO_TO_NUMBER) from the shop number, and a text names the
    caller as it rings. Unanswered, or outside shop hours, the caller gets the
-   shop voicemail; the owner is texted about every missed call.
+   shop voicemail; the owner is texted about every call that rang and was
+   missed, and every message left. A caller who hangs up at the screen or the
+   menu without leaving one is not reported.
 
    Every URL here is absolute and fixed, because Twilio's signature covers the
    exact URL it requested (see twilio-webhook.js). */
@@ -14,6 +17,7 @@
 const PATHS = {
   incoming: '/webhooks/twilio/voice',
   menu: '/webhooks/twilio/voice/menu',
+  screen: '/webhooks/twilio/voice/screen',
   done: '/webhooks/twilio/voice/done',
   voicemail: '/webhooks/twilio/voice/voicemail',
   transcript: '/webhooks/twilio/voice/transcript',
@@ -99,16 +103,48 @@ function menuInner({ base, again = false }) {
     `<Redirect method="POST">${xml(base + PATHS.menu)}</Redirect>`);
 }
 
-/* Whether a new call rings the owner straight away: in shop hours, with an
-   owner number, and not the owner calling in. Callers who meet a menu hang
-   up, so in hours there is none; out of hours the menu still gives hours,
-   address and voicemail. */
-function ringsDirect({ from, owner, open }) {
+/* Whether a call in shop hours can reach the owner at all: with an owner
+   number, and not the owner calling in. Callers who meet a menu hang up, so
+   in hours there is none; out of hours the menu still gives hours, address
+   and voicemail. */
+function ringsInHours({ from, owner, open }) {
   return Boolean(open && owner && from !== owner);
 }
 
-function incomingTwiml({ base, from, owner, shop, open = false }) {
-  if (!ringsDirect({ from, owner, open })) return twiml(menuInner({ base }));
+/* Whether a new call rings the owner straight away: in hours, and a caller
+   the shop knows (`known`, looked up in server.js). */
+function ringsDirect({ from, owner, open, known = false }) {
+  return Boolean(ringsInHours({ from, owner, open }) && known);
+}
+
+/* An unknown caller in hours: one key to reach the shop. Spam robocalls
+   cannot press it (owner, 2026-10-29); silence leaves a voicemail, and the
+   owner is texted only when a message was actually recorded. */
+function screenTwiml({ base }) {
+  return twiml(
+    `<Gather numDigits="1" timeout="6" finishOnKey="" action="${xml(base + PATHS.screen)}" method="POST">` +
+    say("Hi, you've reached June's Tees custom printing. Press 1 and we'll ring the shop.") +
+    '</Gather>' +
+    say("Sorry, we didn't get that. Please leave a message after the tone.") +
+    recordTag(base) + '<Hangup/>');
+}
+
+/* Any key on the screen is a person (finishOnKey="" so # counts too). */
+const pressedKey = (digits) => /^[0-9*#]$/.test(String(digits || '').trim());
+
+/* Whether the screen rings the owner: a key, and ringTwiml would dial. */
+function screenRings({ digits, from, owner, open = true }) {
+  return Boolean(pressedKey(digits) && open && owner && from !== owner);
+}
+
+function screenAnswerTwiml({ digits, from, owner, shop, base, open = true }) {
+  if (!pressedKey(digits)) return voicemailTwiml(base);
+  return ringTwiml({ from, owner, shop, base, open });
+}
+
+function incomingTwiml({ base, from, owner, shop, open = false, known = false }) {
+  if (!ringsInHours({ from, owner, open })) return twiml(menuInner({ base }));
+  if (!known) return screenTwiml({ base });
   const callerId = shop ? ` callerId="${xml(shop)}"` : '';
   return twiml(
     say(`Thanks for calling ${SHOP}. One moment while we connect you.`) +
@@ -238,6 +274,6 @@ function transcriptText({ from, text, status }) {
 const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
 
 module.exports = {
-  PATHS, MENU, incomingTwiml, ringsDirect, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
+  PATHS, MENU, incomingTwiml, ringsInHours, ringsDirect, screenTwiml, screenRings, screenAnswerTwiml, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
   voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody, parseCallCommand, callbackTwiml, connectTwiml, transcriptText,
 };

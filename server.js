@@ -4707,6 +4707,9 @@ function alertOwnerOfChat(body) {
 // covers that URL, so it is fixed here rather than read from proxy headers.
 const TWILIO_INBOUND_URL = (process.env.TWILIO_WEBHOOK_URL || 'https://www.jtees.net/webhooks/twilio/sms').trim();
 
+/* A row whose phone is the caller's, by its last ten digits ($1). */
+const SAME_PHONE_SQL = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+
 /* A text from a number with no job in the last four months is a new enquiry,
    kept as a lead (source 'text') so it can be quoted from Leads. A second
    text while that lead is still open is added to it as a note, not a second
@@ -4714,7 +4717,7 @@ const TWILIO_INBOUND_URL = (process.env.TWILIO_WEBHOOK_URL || 'https://www.jtees
 async function textToLead(from, text, sid) {
   const digits = String(from).replace(/\D/g, '').slice(-10);
   if (digits.length !== 10) return {};
-  const samePhone = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+  const samePhone = SAME_PHONE_SQL;
   const { rows: jobs } = await pool.query(
     `SELECT code FROM quotes WHERE ${samePhone} AND created_at > NOW() - INTERVAL '120 days'
       ORDER BY created_at DESC LIMIT 1`, [digits]);
@@ -5217,7 +5220,8 @@ async function recordSmsDelivery(p) {
 // ── Twilio calls ──────────────────────────────────────────────────────────────
 // In the Twilio console, set the number's "A call comes in" webhook to exactly
 // https://www.jtees.net/webhooks/twilio/voice (HTTP POST). Calls ring
-// TWILIO_TO_NUMBER from the shop number: straight away in shop hours, after a
+// TWILIO_TO_NUMBER from the shop number: in shop hours straight away for a
+// caller the shop knows and after one key press for anyone else, after a
 // short menu outside them (tools/lib/voice.js).
 const TWILIO_VOICE_BASE = (process.env.TWILIO_VOICE_BASE || 'https://www.jtees.net').trim().replace(/\/+$/, '');
 
@@ -5359,7 +5363,7 @@ async function ownerCallback(cmd) {
      able to make the shop dial any number (premium-rate toll fraud). */
   if (cmd.number) {
     const digits = to.slice(-10);
-    const same = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+    const same = SAME_PHONE_SQL;
     const { rows } = await pool.query(
       `SELECT 1 FROM owner_text_forwards WHERE ${same}
         UNION ALL SELECT 1 FROM submissions WHERE ${same}
@@ -5370,29 +5374,78 @@ async function ownerCallback(cmd) {
   return sendOwnerSms(`Calling you now. Press 1 when you answer to ring ${VOICE.pretty(to)} from the shop number.`);
 }
 
+/* Whether a caller is someone the shop knows: a job, a lead from a form or
+   a person, or a text they sent. A lead a phone call made on its own (missed
+   call, voicemail) does not count, or every robocall that rang once would
+   ring through ever after; nor does a lead the shop dismissed. A slow or
+   failed lookup counts as known, so a database fault never stands between a
+   customer and the shop. The 3s covers waiting for a pool connection too:
+   Twilio gives up on the call after 15s. */
+let knownCallerReported = 0;
+async function knownCaller(from) {
+  const digits = String(from || '').replace(/\D/g, '').slice(-10);
+  if (digits.length !== 10) return false;
+  let timer;
+  try {
+    const lookup = pool.query({
+      text: `SELECT 1 FROM quotes WHERE ${SAME_PHONE_SQL}
+              UNION ALL SELECT 1 FROM submissions WHERE ${SAME_PHONE_SQL} AND COALESCE(source, '') <> 'text' AND dismissed_at IS NULL
+              UNION ALL SELECT 1 FROM sms_messages WHERE ${SAME_PHONE_SQL} AND kind = 'inbound' AND template = 'reply'
+              LIMIT 1`,
+      values: [digits],
+      query_timeout: 3000,
+    });
+    const slow = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('lookup took over 3s')), 3000); });
+    const { rows } = await Promise.race([lookup, slow]);
+    return rows.length > 0;
+  } catch (e) {
+    console.error('known caller lookup failed — ringing through:', e.message);
+    /* Once per 10 minutes: an outage would otherwise report every call. */
+    if (Date.now() - knownCallerReported > 6e5) {
+      knownCallerReported = Date.now();
+      reportError('twilio:known-caller', e).catch(() => {});
+    }
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* The details every call route works from. */
+const callDetails = (req) => ({
+  from: callerOf(req), owner: callOwner(), open: VOICE.isOpen(),
+  shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
+});
+
+/* Text the owner who is calling, as their cell rings. */
+const textRinging = (from, reason, name) => sendOwnerSms(VOICE.ringText({ from, reason, name }))
+  .catch((e) => console.error('ring text failed:', e.message));
+
 app.post(VOICE.PATHS.incoming, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
-  const call = {
-    from: callerOf(req), owner: callOwner(), open: VOICE.isOpen(),
-    shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
-  };
+  const call = callDetails(req);
+  call.known = VOICE.ringsInHours(call) ? await knownCaller(call.from) : false;
   sendTwiml(res, VOICE.incomingTwiml({ ...call, base: TWILIO_VOICE_BASE }));
   /* In hours the call rings straight away, so who is calling is texted here. */
-  if (VOICE.ringsDirect(call)) await sendOwnerSms(VOICE.ringText({ from: call.from, reason: 'call', name: req.body.CallerName }))
-    .catch((e) => console.error('ring text failed:', e.message));
+  if (VOICE.ringsDirect(call)) await textRinging(call.from, 'call', req.body.CallerName);
 });
 
 app.post(VOICE.PATHS.menu, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
-  const call = {
-    digits: req.body.Digits, from: callerOf(req), owner: callOwner(), open: VOICE.isOpen(),
-    shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
-  };
+  const call = { ...callDetails(req), digits: req.body.Digits };
   sendTwiml(res, VOICE.menuTwiml({ ...call, base: TWILIO_VOICE_BASE }));
   /* The cell shows the shop number, so who is calling arrives as a text. */
   const reason = VOICE.ringReason(call);
-  if (reason) await sendOwnerSms(VOICE.ringText({ from: call.from, reason, name: req.body.CallerName }))
-    .catch((e) => console.error('ring text failed:', e.message));
+  if (reason) await textRinging(call.from, reason, req.body.CallerName);
+});
+
+/* An unknown caller in hours pressed a key: a person. (Silence never posts
+   here; it falls through to the voicemail in screenTwiml.) */
+app.post(VOICE.PATHS.screen, async (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  const call = { ...callDetails(req), digits: req.body.Digits };
+  sendTwiml(res, VOICE.screenAnswerTwiml({ ...call, base: TWILIO_VOICE_BASE }));
+  if (VOICE.screenRings(call)) await textRinging(call.from, 'call', req.body.CallerName);
 });
 
 /* The ring ended. Not accepted = missed, reported now: a caller who hangs up
