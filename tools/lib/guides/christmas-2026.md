@@ -62,7 +62,7 @@ The "Christmas at June's Tees" logo: keep the idea, with these changes.
 
 - **Hero (1920 x 1080):** logo top center; "PRINT THE MAGIC" in a heavy sans over "of Christmas" in script; the family photo below with every print readable; the sub-line at the bottom left and a hot pink "Order by Nov 24" button at the bottom right. Keep words and logo 100 px from every edge.
 - **Lifestyle post (1080 x 1350):** logo, the headline, the photo, a pink "Start your design" button.
-- **Product post (1080 x 1350):** "Your names, your year" at the top, one product on a plain background, "Proof first. No minimum." and the button.
+- **Product post (1080 x 1350):** "Your names, your year" at the top, one product on a plain background, "Your design, printed in Chicago. No minimum." and the button.
 - **Story (1080 x 1920):** "7 DAYS LEFT to order for Christmas", a finished order, "Order by Tue Nov 24" and a pink jtees.net sticker.
 - **Colors:** red, gold, cream and evergreen for the season; hot pink #E0107A on buttons and the order-by date; black #0D0D12 for dark backgrounds.
 
@@ -89,7 +89,7 @@ Name files xmas26-piece-size, for example xmas26-hero-1920x1080.png, and attach 
 - **Supporting lines:** Make every holiday moment picture-perfect. Christmas memories deserve more than a screen. One family. One photo. Matching shirts. Your names, your year, your Christmas. The gift they'll actually keep.
 - **Sub-line:** Matching family shirts, photo gifts and holiday party gear. Made in Lakeview, Chicago.
 - **Calls to action:** Start your design at jtees.net. Get a free quote. Order by Nov 24 for Christmas.
-- **Trust lines:** Every order gets a proof first. No minimum with DTF. Black-owned and women-owned. 4.8 stars on Google.
+- **Trust lines:** Every design we make for you gets a proof first. No minimum with DTF. Black-owned and women-owned. 4.8 stars on Google.
 - **Last call:** "Last day to order for Christmas: Tuesday, Nov 24. We're closed Nov 25 to 27 for Thanksgiving."
 
 ## Before you send

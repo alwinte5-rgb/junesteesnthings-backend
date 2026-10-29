@@ -181,7 +181,7 @@ const CHRISTMAS_2026 = {
       }),
     step(4, 'Nine feed posts',
       'Nine 1080 x 1350 posts with captions for Nov 1 to 16: three a week, one lifestyle and two product posts each week.',
-      '1. Week 1 to 3: start each week with a lifestyle post, then two product posts from your mockups.\n2. Caption: what it is, one detail, "Start your design at jtees.net", and 3 to 5 local hashtags.\n3. One trust line in some of them: "Every order gets a proof first." or "No minimum with DTF."\n4. Save them as drafts in COS Creator Studio.',
+      '1. Week 1 to 3: start each week with a lifestyle post, then two product posts from your mockups.\n2. Caption: what it is, one detail, "Start your design at jtees.net", and 3 to 5 local hashtags.\n3. One trust line in some of them: "Every design we make for you gets a proof first." or "No minimum with DTF."\n4. Save them as drafts in COS Creator Studio.',
       {
         why: 'Three posts a week through November keeps Christmas orders coming before the Nov 24 deadline.',
         gives: ['Your COS Creator Studio login'],
