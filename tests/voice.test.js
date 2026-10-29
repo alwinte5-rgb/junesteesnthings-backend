@@ -58,18 +58,23 @@ test('the incoming route looks the caller up only in hours, and fails open', () 
   const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
   assert.match(route, /call\.known = VOICE\.ringsInHours\(call\) \? await knownCaller\(call\.from\) : false;/);
   const fn = src.slice(src.indexOf('async function knownCaller'), src.indexOf('app.post(VOICE.PATHS.incoming'));
-  assert.match(fn, /FROM quotes WHERE \$\{same\}/);
+  assert.match(fn, /FROM quotes WHERE \$\{SAME_PHONE_SQL\}/);
   /* Leads a call made on its own (source 'text', from keepCall) and dismissed
      leads never make a caller known; a real text they sent does. */
-  assert.match(fn, /FROM submissions WHERE \$\{same\} AND COALESCE\(source, ''\) <> 'text' AND dismissed_at IS NULL/);
-  assert.match(fn, /FROM sms_messages WHERE \$\{same\} AND kind = 'inbound' AND template = 'reply'/);
+  assert.match(fn, /FROM submissions WHERE \$\{SAME_PHONE_SQL\} AND COALESCE\(source, ''\) <> 'text' AND dismissed_at IS NULL/);
+  assert.match(fn, /FROM sms_messages WHERE \$\{SAME_PHONE_SQL\} AND kind = 'inbound' AND template = 'reply'/);
   assert.match(fn, /values: \[digits\]/);
   assert.match(fn, /query_timeout: 3000/);
+  /* The 3s also covers waiting for a pool connection. */
+  assert.match(fn, /Promise\.race\(\[lookup, slow\]\)/);
+  /* An outage reports once per 10 minutes, not on every call. */
+  assert.match(fn, /Date\.now\(\) - knownCallerReported > 6e5/);
   assert.match(fn, /catch \(e\) \{[\s\S]*?reportError\('twilio:known-caller'[\s\S]*?return true;/);
   const screen = src.slice(src.indexOf('app.post(VOICE.PATHS.screen'), src.indexOf('/* The ring ended.'));
   assert.match(screen, /twilioVoiceOk\(req, res\)/);
   assert.match(screen, /VOICE\.screenAnswerTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
-  assert.match(screen, /if \(VOICE\.screenRings\(call\)\) await sendOwnerSms\(VOICE\.ringText\(/);
+  assert.match(screen, /const call = \{ \.\.\.callDetails\(req\), digits: req\.body\.Digits \};/);
+  assert.match(screen, /if \(VOICE\.screenRings\(call\)\) await textRinging\(call\.from, 'call', req\.body\.CallerName\);/);
 });
 
 test('real texts are kept as inbound replies, the row the known-caller lookup trusts', () => {
@@ -92,9 +97,12 @@ test('the incoming route passes the call details and texts the owner only when i
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
   assert.match(route, /twilioVoiceOk\(req, res\)/);
-  assert.match(route, /open: VOICE\.isOpen\(\)/);
+  assert.match(route, /const call = callDetails\(req\);/);
+  const details = src.slice(src.indexOf('const callDetails'), src.indexOf('const textRinging'));
+  assert.match(details, /open: VOICE\.isOpen\(\)/);
+  assert.match(src.slice(src.indexOf('const textRinging'), src.indexOf('app.post(VOICE.PATHS.incoming')), /sendOwnerSms\(VOICE\.ringText\(\{ from, reason, name \}\)\)/);
   assert.match(route, /VOICE\.incomingTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
-  assert.match(route, /if \(VOICE\.ringsDirect\(call\)\) await sendOwnerSms\(VOICE\.ringText\(/);
+  assert.match(route, /if \(VOICE\.ringsDirect\(call\)\) await textRinging\(call\.from, 'call', req\.body\.CallerName\);/);
 });
 
 test('a call opens on the menu out of hours, and silence falls through to the menu handler', () => {
