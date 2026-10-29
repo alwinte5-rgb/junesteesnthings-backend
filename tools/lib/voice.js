@@ -7,7 +7,9 @@
    Outside them the caller hears a short menu. An order option (or no key) rings the
    owner's cell (TWILIO_TO_NUMBER) from the shop number, and a text names the
    caller as it rings. Unanswered, or outside shop hours, the caller gets the
-   shop voicemail; the owner is texted about every missed call.
+   shop voicemail; the owner is texted about every call that rang and was
+   missed, and every message left. A caller who hangs up at the screen or the
+   menu without leaving one is not reported.
 
    Every URL here is absolute and fixed, because Twilio's signature covers the
    exact URL it requested (see twilio-webhook.js). */
