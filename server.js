@@ -6250,7 +6250,9 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
 
     const description = [saved ? 'DESIGN SAVED IN THE DESIGNER (not a quote request)' : 'DESIGN FROM THE DESIGNER', product && `${product}`, summary, total ? `shown $${total.toFixed(2)}` : '',
       note && `note: ${note}`].filter(Boolean).join(' · ').slice(0, 2000);
-    const keyAt = (bucket) => crypto.createHash('sha256').update(['design', email, phone, designUrl, bucket].join('|')).digest('hex');
+    /* A save has its own key: a quote request sent soon after saving the same
+       design is a new lead, not a duplicate of the save (quote keys unchanged). */
+    const keyAt = (bucket) => crypto.createHash('sha256').update([saved ? 'design-save' : 'design', email, phone, designUrl, bucket].join('|')).digest('hex');
     const nowBucket = Math.floor(Date.now() / (10 * 60 * 1000));
     let savedId = null;
     try {

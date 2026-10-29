@@ -76,6 +76,7 @@ test('a saved design is not treated as a quote request', () => {
   assert.match(route, /const saved = b\.kind === 'save';/);
   assert.match(route, /saved \? 'DESIGN SAVED IN THE DESIGNER \(not a quote request\)' : 'DESIGN FROM THE DESIGNER'/);
   assert.match(route, /to: NOTIFY_EMAIL, urgent: !saved,/, 'a quote request is still urgent');
+  assert.match(route, /\[saved \? 'design-save' : 'design', email, phone, designUrl, bucket\]/, 'a quote after a save of the same design is not its duplicate');
   assert.match(route, /saved \? 'Design saved in the designer' : 'New design from the designer'/);
   assert.match(route, /saved \? 'Open it any time to finish it and add it to your cart\.' : 'We’ll be in touch within 1 business day/);
 });
