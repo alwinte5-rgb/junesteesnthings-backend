@@ -67,3 +67,16 @@ test('every customer value in the email HTML is escaped (subjects are plain text
     assert.ok(!new RegExp('\\$\\{' + v + '\\}').test(html), `${v} is printed unescaped`);
   }
 });
+
+/* "Save my design" is only a save (designer #184): kind=save is listed as a
+   saved design, waits for the daily summary, and tells the customer to finish
+   it themselves. Anything else is the quote form, as before. */
+test('a saved design is not treated as a quote request', () => {
+  assert.match(src, /const DESIGN_LEAD_FIELDS = new Set\(\[[^\]]*'kind'\]\)/, 'kind is an expected field, not drift');
+  assert.match(route, /const saved = b\.kind === 'save';/);
+  assert.match(route, /saved \? 'DESIGN SAVED IN THE DESIGNER \(not a quote request\)' : 'DESIGN FROM THE DESIGNER'/);
+  assert.match(route, /to: NOTIFY_EMAIL, urgent: !saved,/, 'a quote request is still urgent');
+  assert.match(route, /\[saved \? 'design-save' : 'design', email, phone, designUrl, bucket\]/, 'a quote after a save of the same design is not its duplicate');
+  assert.match(route, /saved \? 'Design saved in the designer' : 'New design from the designer'/);
+  assert.match(route, /saved \? 'Open it any time to finish it and add it to your cart\.' : 'We’ll be in touch within 1 business day/);
+});
