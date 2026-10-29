@@ -79,3 +79,19 @@ test('job costs: the cover blank and its delivery are costs, and the front is a 
   const c = est.lines[0].unit_cost;
   assert.ok(c >= 15.39 + 11.99 + JC.DTF[1][2] - 0.01, `cost ${c}`);
 });
+
+test('job costs: an ivory or white cover is sublimated, so its prints cost supplies, not DTF transfers', () => {
+  const JC = require('../tools/lib/job-costs');
+  const catalog = { products: [{ id: 700, name: 'Table Cover — 6 ft', price: 0, cost: 15.39 }],
+    methods: [{ id: 900, title: 'Table Cover Printing — Sublimation or DTF' }] };
+  const two = [{ loc: 'front', method_id: 900 }, { loc: 'back', method_id: 900 }];
+  const cost = (extra) => JC.estimateJob([{ product_id: 700, method_id: 900, stage: '', qty: 10, unit_price: 85, ...extra }], catalog).lines[0];
+  const ivory = cost({ colour: 'Ivory', prints: two });
+  assert.strictEqual(r2(ivory.unit_cost), r2(15.39 + 11.99 / 10 + 2 * JC.SUB_PRINT));
+  assert.match(ivory.basis, /sublimation supplies/);
+  const white = cost({ description: 'Table Cover — 6 ft, White', prints: two });
+  assert.strictEqual(r2(white.unit_cost), r2(ivory.unit_cost), 'colour read from the description too');
+  const black = cost({ colour: 'Black', prints: two });
+  assert.ok(black.unit_cost > ivory.unit_cost, 'a dark cover is still a DTF transfer');
+  assert.doesNotMatch(black.basis, /sublimation/);
+});
