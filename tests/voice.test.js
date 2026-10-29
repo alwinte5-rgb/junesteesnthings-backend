@@ -26,7 +26,7 @@ test('in shop hours a known caller rings the owner straight away, with no menu',
 test('in shop hours an unknown caller must press a key, and silence leaves a voicemail', () => {
   for (const c of [{ from }, { from, known: false }, { from: '' }]) {
     const t = V.incomingTwiml({ base, owner, shop, open: true, ...c });
-    assert.match(t, /<Gather numDigits="1" timeout="6" action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/screen"/);
+    assert.match(t, /<Gather numDigits="1" timeout="6" finishOnKey="" action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/screen"/);
     assert.match(t, /Hi, you&apos;ve reached June&apos;s Tees custom printing\. Press 1 and we&apos;ll ring the shop\./);
     assert.match(t, /<\/Gather><Say[^>]*>Sorry, we didn&apos;t get that\. Please leave a message after the tone\.<\/Say><Record [^>]*action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/voicemail"/);
     assert.doesNotMatch(t, /<Dial|<Redirect/);
@@ -58,23 +58,25 @@ test('the incoming route looks the caller up only in hours, and fails open', () 
   const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
   assert.match(route, /call\.known = VOICE\.ringsInHours\(call\) \? await knownCaller\(call\.from\) : false;/);
   const fn = src.slice(src.indexOf('async function knownCaller'), src.indexOf('app.post(VOICE.PATHS.incoming'));
-  assert.match(fn, /FROM quotes WHERE/);
-  /* Leads a call made on its own never make a caller known. */
-  assert.match(fn, /NOT \(source = 'text' AND COALESCE\(dedupe_key, ''\) ~ '\^sms:\(missed-call\|voicemail\|transcript\)-'\)/);
-  assert.match(fn, /'slow'\) \{[^}]*return true; \}/);
-  assert.match(fn, /catch \(e\) \{[\s\S]*?return true;/);
+  assert.match(fn, /FROM quotes WHERE \$\{same\}/);
+  /* Leads a call made on its own (source 'text', from keepCall) and dismissed
+     leads never make a caller known; a real text they sent does. */
+  assert.match(fn, /FROM submissions WHERE \$\{same\} AND COALESCE\(source, ''\) <> 'text' AND dismissed_at IS NULL/);
+  assert.match(fn, /FROM sms_messages WHERE \$\{same\} AND kind = 'inbound' AND template = 'reply'/);
+  assert.match(fn, /values: \[digits\]/);
+  assert.match(fn, /query_timeout: 3000/);
+  assert.match(fn, /catch \(e\) \{[\s\S]*?reportError\('twilio:known-caller'[\s\S]*?return true;/);
   const screen = src.slice(src.indexOf('app.post(VOICE.PATHS.screen'), src.indexOf('/* The ring ended.'));
   assert.match(screen, /twilioVoiceOk\(req, res\)/);
   assert.match(screen, /VOICE\.screenAnswerTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
   assert.match(screen, /if \(VOICE\.screenRings\(call\)\) await sendOwnerSms\(VOICE\.ringText\(/);
 });
 
-test('call-made leads carry the dedupe keys the known-caller lookup skips', () => {
+test('real texts are kept as inbound replies, the row the known-caller lookup trusts', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /'sms:' \+ \(sid \|\| digits/);
-  assert.match(src, /keepCall\(from, leadText, sid \? `\$\{kind\}-\$\{sid\}` : '', kind\)/);
-  assert.match(src, /'transcript-' \+ callSidOf\(req\), 'transcript'\)/);
-  for (const kind of ["'missed-call'", "'voicemail'"]) assert.ok(src.includes(kind + ');'), kind);
+  assert.match(src, /VALUES \(\$1, 'inbound', \$2, 'reply', \$3, 'received', \$4,/);
+  /* Call notes are kept with template 'call', which the lookup skips. */
+  assert.match(src, /VALUES \(\$1, 'inbound', \$2, 'call', \$3, 'received', \$4\)/);
 });
 
 test('the menu still answers out of hours, with no owner number, and for the owner calling in', () => {

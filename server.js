@@ -4711,10 +4711,13 @@ const TWILIO_INBOUND_URL = (process.env.TWILIO_WEBHOOK_URL || 'https://www.jtees
    kept as a lead (source 'text') so it can be quoted from Leads. A second
    text while that lead is still open is added to it as a note, not a second
    lead. Returns { quote } when it belongs to a job, { lead } when it is one. */
+/* A row whose phone is the caller's, by its last ten digits ($1). */
+const SAME_PHONE_SQL = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+
 async function textToLead(from, text, sid) {
   const digits = String(from).replace(/\D/g, '').slice(-10);
   if (digits.length !== 10) return {};
-  const samePhone = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+  const samePhone = SAME_PHONE_SQL;
   const { rows: jobs } = await pool.query(
     `SELECT code FROM quotes WHERE ${samePhone} AND created_at > NOW() - INTERVAL '120 days'
       ORDER BY created_at DESC LIMIT 1`, [digits]);
@@ -5360,7 +5363,7 @@ async function ownerCallback(cmd) {
      able to make the shop dial any number (premium-rate toll fraud). */
   if (cmd.number) {
     const digits = to.slice(-10);
-    const same = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
+    const same = SAME_PHONE_SQL;
     const { rows } = await pool.query(
       `SELECT 1 FROM owner_text_forwards WHERE ${same}
         UNION ALL SELECT 1 FROM submissions WHERE ${same}
@@ -5371,31 +5374,30 @@ async function ownerCallback(cmd) {
   return sendOwnerSms(`Calling you now. Press 1 when you answer to ring ${VOICE.pretty(to)} from the shop number.`);
 }
 
-/* Whether a caller is someone the shop knows: a job, or a lead that came
-   from a form, a person or a real text. Leads a phone call made on its own
-   (missed call, voicemail, transcript) do not count, or every robocall that
-   rang once would ring through ever after. A slow or failed lookup counts as
-   known, so a database fault never stands between a customer and the shop. */
+/* Whether a caller is someone the shop knows: a job, a lead from a form or
+   a person, or a text they sent. A lead a phone call made on its own (missed
+   call, voicemail) does not count, or every robocall that rang once would
+   ring through ever after; nor does a lead the shop dismissed. A slow or
+   failed lookup counts as known, so a database fault never stands between a
+   customer and the shop. */
 async function knownCaller(from) {
   const digits = String(from || '').replace(/\D/g, '').slice(-10);
   if (digits.length !== 10) return false;
-  const same = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
-  let timer;
-  const slow = new Promise((resolve) => { timer = setTimeout(() => resolve('slow'), 3000); });
+  const same = SAME_PHONE_SQL;
   try {
-    const found = await Promise.race([slow, pool.query(
-      `SELECT 1 FROM quotes WHERE ${same}
-        UNION ALL SELECT 1 FROM submissions WHERE ${same}
-          AND NOT (source = 'text' AND COALESCE(dedupe_key, '') ~ '^sms:(missed-call|voicemail|transcript)-')
-        LIMIT 1`, [digits])]);
-    if (found === 'slow') { console.warn('known caller lookup slow — ringing through'); return true; }
-    return found.rows.length > 0;
+    const { rows } = await pool.query({
+      text: `SELECT 1 FROM quotes WHERE ${same}
+              UNION ALL SELECT 1 FROM submissions WHERE ${same} AND COALESCE(source, '') <> 'text' AND dismissed_at IS NULL
+              UNION ALL SELECT 1 FROM sms_messages WHERE ${same} AND kind = 'inbound' AND template = 'reply'
+              LIMIT 1`,
+      values: [digits],
+      query_timeout: 3000,
+    });
+    return rows.length > 0;
   } catch (e) {
-    console.error('known caller lookup failed:', e.message);
+    console.error('known caller lookup failed — ringing through:', e.message);
     reportError('twilio:known-caller', e).catch(() => {});
     return true;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -5425,8 +5427,8 @@ app.post(VOICE.PATHS.menu, async (req, res) => {
     .catch((e) => console.error('ring text failed:', e.message));
 });
 
-/* An unknown caller in hours pressed a key (a person), or let the screen
-   time out into voicemail. */
+/* An unknown caller in hours pressed a key: a person. (Silence never posts
+   here; it falls through to the voicemail in screenTwiml.) */
 app.post(VOICE.PATHS.screen, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
   const call = {

@@ -120,20 +120,23 @@ function ringsDirect({ from, owner, open, known = false }) {
    owner is texted only when a message was actually recorded. */
 function screenTwiml({ base }) {
   return twiml(
-    `<Gather numDigits="1" timeout="6" action="${xml(base + PATHS.screen)}" method="POST">` +
+    `<Gather numDigits="1" timeout="6" finishOnKey="" action="${xml(base + PATHS.screen)}" method="POST">` +
     say("Hi, you've reached June's Tees custom printing. Press 1 and we'll ring the shop.") +
     '</Gather>' +
     say("Sorry, we didn't get that. Please leave a message after the tone.") +
     recordTag(base) + '<Hangup/>');
 }
 
-/* Any key on the screen is a person: ring them through. */
+/* Any key on the screen is a person (finishOnKey="" so # counts too). */
+const pressedKey = (digits) => /^[0-9*#]$/.test(String(digits || '').trim());
+
+/* Whether the screen rings the owner: a key, and ringTwiml would dial. */
 function screenRings({ digits, from, owner, open = true }) {
-  return Boolean(/^[0-9*#]$/.test(String(digits || '').trim()) && open && owner && from !== owner);
+  return Boolean(pressedKey(digits) && open && owner && from !== owner);
 }
 
 function screenAnswerTwiml({ digits, from, owner, shop, base, open = true }) {
-  if (!/^[0-9*#]$/.test(String(digits || '').trim())) return voicemailTwiml(base);
+  if (!pressedKey(digits)) return voicemailTwiml(base);
   return ringTwiml({ from, owner, shop, base, open });
 }
 
