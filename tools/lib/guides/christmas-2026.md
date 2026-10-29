@@ -89,7 +89,7 @@ Name files xmas26-piece-size, for example xmas26-hero-1920x1080.png, and attach 
 - **Supporting lines:** Make every holiday moment picture-perfect. Christmas memories deserve more than a screen. One family. One photo. Matching shirts. Your names, your year, your Christmas. The gift they'll actually keep.
 - **Sub-line:** Matching family shirts, photo gifts and holiday party gear. Made in Lakeview, Chicago.
 - **Calls to action:** Start your design at jtees.net. Get a free quote. Order by Nov 24 for Christmas.
-- **Trust lines:** Every order gets a proof first. No minimum with DTF. Black-owned and women-owned. 4.8 stars on Google.
+- **Trust lines:** Every design we make for you gets a proof first. No minimum with DTF. Black-owned and women-owned. 4.8 stars on Google.
 - **Last call:** "Last day to order for Christmas: Tuesday, Nov 24. We're closed Nov 25 to 27 for Thanksgiving."
 
 ## Before you send

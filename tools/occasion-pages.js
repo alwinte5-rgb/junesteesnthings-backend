@@ -59,7 +59,7 @@ function orderNote(page) {
   if (!page.calendar) return '';
   const o = CAL.OCCASIONS.find((x) => x.id === page.calendar);
   if (!o || !o.note) throw new Error(`${page.path}: calendar "${page.calendar}" has no note in tools/lib/marketing-calendar.js`);
-  return `<p class="lead" style="margin-bottom:0"><strong>When to order:</strong> ${esc(o.note)} ${o.orderNote ? `${esc(o.orderNote)} Small` : 'Order at least 2 weeks ahead: small'} orders take 5–7 business days and larger orders 7–14 after you approve the proof. Need it sooner? Rush is available for a fee.</p>`;
+  return `<p class="lead" style="margin-bottom:0"><strong>When to order:</strong> ${esc(o.note)} ${o.orderNote ? `${esc(o.orderNote)} Small` : 'Order at least 2 weeks ahead: small'} orders take 5–7 business days and larger orders 7–14 after you order (or approve your proof, if we design it). Need it sooner? Rush is available for a fee.</p>`;
 }
 
 /* PRINTED PRODUCTS (kind "print", plan step 5, owner 2026-10-20): calendars,

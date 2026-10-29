@@ -42243,7 +42243,9 @@ const KB_SEED = [
   { kind: 'faq', shortcut: 'quote', title: 'What do you need for a quote?', tags: 'quote, price, estimate, cost',
     body: `Happy to put a quote together! I just need:\n\n- How many pieces, and the size mix\n- The garment (or tell me the vibe and budget and I will suggest some)\n- Where the design goes (front, back, sleeve) and how many colors\n- Your artwork, or a description\n- The date you need them by` },
   { kind: 'faq', shortcut: 'proof', title: 'Will I see a proof?', tags: 'proof, mockup, approve',
-    body: `Yes. We send a digital proof before anything is printed, and nothing goes to production until you approve it in writing. Please check spelling, colours and placement carefully; we print exactly what is approved.` },
+    body: `If we are designing it for you, yes: we send a digital proof before anything is printed, and nothing goes to production until you approve it in writing. If you designed it yourself in our online designer, it prints exactly as you made it, so please check spelling, colours and placement before you check out.`,
+    /* 2026-10-29: designer orders print as submitted; proofs are for designs we make and Premium. */
+    was: [`Yes. We send a digital proof before anything is printed, and nothing goes to production until you approve it in writing. Please check spelling, colours and placement carefully; we print exactly what is approved.`] },
   { kind: 'faq', shortcut: 'taxexempt', title: 'We are tax exempt', tags: 'tax exempt, school, church, nonprofit, resale, certificate',
     body: `Great, we can take the tax off. Please send your Illinois exemption letter (the E-number) or, if you are buying to resell, a completed CRT-61. Your quote page has a place to upload it, and we remove the tax once it is approved.` },
   { kind: 'faq', shortcut: 'quotevalid', title: 'How long is my quote good for?', tags: 'quote expiry, valid, price hold',
