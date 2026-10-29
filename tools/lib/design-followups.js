@@ -60,7 +60,7 @@ function followupEmail(step, { name, product, link, preview, code, pct = 10 }) {
       subject: 'Your design is saved',
       heading: 'Your design is saved',
       inner: `<p>${hi}</p><p>Thanks for designing with us. We saved ${what} so you can pick up right where you left off.</p>${img}
-        ${btn('Open my design')}<p>Small orders are ready in 5–7 business days after you approve the proof.</p>${help}`,
+        ${btn('Open my design')}<p>Small orders are ready in 5–7 business days after you order, larger ones in 7–14.</p>${help}`,
     };
   }
   if (step === 2) {
@@ -68,7 +68,7 @@ function followupEmail(step, { name, product, link, preview, code, pct = 10 }) {
       subject: 'Want us to look over your design?',
       heading: 'A second pair of eyes',
       inner: `<p>${hi}</p><p>If you are not sure about the size, the placement or the garment for ${what}, reply and tell us
-        what it is for. We will check it and send a proof before anything prints.</p>
+        what it is for. We will check it and send you a proof of this design before it prints.</p>
         ${btn('Open my design')}${help}`,
     };
   }

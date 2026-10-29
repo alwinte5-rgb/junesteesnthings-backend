@@ -62,7 +62,7 @@ The "Christmas at June's Tees" logo: keep the idea, with these changes.
 
 - **Hero (1920 x 1080):** logo top center; "PRINT THE MAGIC" in a heavy sans over "of Christmas" in script; the family photo below with every print readable; the sub-line at the bottom left and a hot pink "Order by Nov 24" button at the bottom right. Keep words and logo 100 px from every edge.
 - **Lifestyle post (1080 x 1350):** logo, the headline, the photo, a pink "Start your design" button.
-- **Product post (1080 x 1350):** "Your names, your year" at the top, one product on a plain background, "Proof first. No minimum." and the button.
+- **Product post (1080 x 1350):** "Your names, your year" at the top, one product on a plain background, "Your design, printed in Chicago. No minimum." and the button.
 - **Story (1080 x 1920):** "7 DAYS LEFT to order for Christmas", a finished order, "Order by Tue Nov 24" and a pink jtees.net sticker.
 - **Colors:** red, gold, cream and evergreen for the season; hot pink #E0107A on buttons and the order-by date; black #0D0D12 for dark backgrounds.
 

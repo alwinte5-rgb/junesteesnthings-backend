@@ -4,7 +4,7 @@
  *
  * Owner, 2026-10-29: orders built in the online designer print exactly as
  * submitted; a proof comes with designs we make for the customer (quotes)
- * and with Premium designs. Pages, FAQ rich results, staff canned replies and
+ * Pages, FAQ rich results, staff canned replies and
  * the marketing guides all said "every order gets a proof", so a self-serve
  * buyer was promised a step that never happens.
  *
@@ -18,22 +18,20 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 
-/* Blanket promises: a proof on EVERY order, or before ANYTHING prints. */
-const BLANKET = [
-  /every order gets a proof/i,
-  /proof for approval on every order/i,
-  /review every order before it prints/i,
-  /digital proof before anything is printed, and nothing goes to production/i,
-  /seeing a proof before anything prints/i,
-];
+/* Blanket promises, in any wording: a proof on EVERY order, a look before
+   ANYTHING prints, or a badge that says so. Same shape as the designer's
+   tests/sales-copy.test.cjs. A sentence that names who gets a proof (a design
+   we make, a quoted job, screen printing) is scoped and passes. */
+const BLANKET = /\bevery (order|shirt|design|item|piece)\b[^.]{0,60}(proof|review|before (we|it) print)|(proof|review)[^.]{0,30}\bevery (order|shirt|design|item)\b|nothing (prints|goes to production) until|proof before (we|anything) print|proof[^.]{0,40}before anything (is )?print|proofs? first\b|proof before print\b/i;
+const SCOPED = /\b(we (make|design|are designing)|we design it|design it for you|designing it for you|design(s)? we (make|lay out)|lay out for you|our designer creates|send (us )?the (idea|names)|quote[sd]?\b|screen print|this design|your proof\b|approved proof)/i;
+const unscoped = (t) => BLANKET.test(t) && !SCOPED.test(t);
 
-/* Where the blanket wording is still true: screen printing starts at 50 and is
-   always quoted; the follow-up email goes to people who sent us their design;
-   the canned reply keeps its old wording in `was` so live copies update. */
-const ALLOWED = new Set([
-  'public/services/screen-printing.html',
-  'tools/lib/design-followups.js',
-]);
+/* Staff training, the hiring quizzes and the proofs tool talk about quoted jobs, where the proof
+   step is real; nothing else is let off. */
+/* public/print/ products are quote-only (Get a Quote, no cart): every one is
+   a job we lay out, so its proof step is real. */
+const ALLOWED_DIRS = ['tools/lib/courses/', 'public/print/'];
+const ALLOWED = new Set(['tools/lib/hiring-ads.js', 'tools/lib/hiring-designer.js', 'tools/lib/job-proofs.js']);
 
 function walk(dir, out) {
   for (const name of fs.readdirSync(dir)) {
@@ -46,14 +44,24 @@ function walk(dir, out) {
   return out;
 }
 
+test('the blanket check catches the old wordings and passes scoped ones', () => {
+  for (const t of ['Every order gets a proof.', '🖼️ Proof Before We Print', 'a proof before we print, pickup in Lakeview',
+    'We send a digital proof before anything is printed, and nothing goes to production until you approve it.',
+    '"Proof first. No minimum."', 'a proof before print and pickup'])
+    assert.ok(unscoped(t), t);
+  for (const t of ['Every design we make for you gets a proof first.', '🖼️ Proof When We Design It',
+    'a proof of every screen print job before it goes on press', 'We will check it and send you a proof of this design before it prints.'])
+    assert.ok(!unscoped(t), t);
+});
+
 test('no page, reply or guide promises a proof on every order', () => {
   const files = walk(path.join(ROOT, 'public'), []).concat(walk(path.join(ROOT, 'tools', 'lib'), []));
   const hits = [];
   for (const f of files) {
     const rel = path.relative(ROOT, f).split(path.sep).join('/');
-    if (ALLOWED.has(rel)) continue;
-    const s = fs.readFileSync(f, 'utf8');
-    for (const re of BLANKET) if (re.test(s)) hits.push(rel + ': ' + re.source);
+    if (ALLOWED.has(rel) || ALLOWED_DIRS.some((d) => rel.startsWith(d))) continue;
+    const s = fs.readFileSync(f, 'utf8').replace(/<[^>]+>/g, ' ');
+    for (const t of s.split(/(?<=[.!?"])\s+|\n|<\/?\w|\|/)) if (unscoped(t)) hits.push(rel + ': ' + t.trim().slice(0, 140));
   }
   assert.deepStrictEqual(hits, []);
 });
@@ -67,12 +75,54 @@ test('holiday and gift pages start the clock at the order, or the proof if we de
   assert.ok(!/after proof approval|after you approve the proof/.test(data));
 });
 
-test('the staff "proof" reply splits designer orders from designs we make', () => {
+/* The playbook's replies live in two lists. seedPlaybook only fills an empty
+   table, so an unedited live copy of an old reply is brought up to date only
+   by addPlaybookArticles walking BOTH lists' `was` texts. Run it for real
+   against a fake pool and check the updates it sends. */
+function playbook() {
   const s = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-  const i = s.indexOf("shortcut: 'proof'");
-  assert.ok(i > -1);
-  const entry = s.slice(i, s.indexOf('kind:', i + 10));
-  assert.ok(/If we are designing it for you, yes/.test(entry));
-  assert.ok(/prints exactly as you made it/.test(entry));
-  assert.ok(/was: \[`Yes\. We send a digital proof/.test(entry), 'old wording kept in was so live copies update');
+  const seed = s.slice(s.indexOf('const KB_SEED = ['), s.indexOf('\n];', s.indexOf('const KB_SEED = [')) + 3);
+  const added = s.slice(s.indexOf('const KB_ADDED = ['), s.indexOf('\n];', s.indexOf('const KB_ADDED = [')) + 3);
+  const i = s.indexOf('async function addPlaybookArticles()');
+  const fn = s.slice(i, s.indexOf('\nasync function seedPlaybook', i));
+  const calls = [];
+  const pool = { query: async (sql, args) => { calls.push({ sql, args }); return { rows: [] }; } };
+  const run = new Function('pool', 'console', seed + '\n' + added + '\n' + fn + '\nreturn { KB_SEED, KB_ADDED, addPlaybookArticles };');
+  return { calls, ...run(pool, { error() {}, log() {} }) };
+}
+
+test('old live copies of the seed "proof" and "turnaround" replies are updated', async () => {
+  const { calls, KB_SEED, addPlaybookArticles } = playbook();
+  await addPlaybookArticles();
+  const was = calls.filter((c) => /= ANY\(SELECT/.test(c.sql));
+  for (const short of ['proof', 'turnaround']) {
+    const a = KB_SEED.find((x) => x.shortcut === short);
+    const u = was.find((c) => c.args[0] === a.title);
+    assert.ok(u, `the ${short} reply's was-update runs`);
+    assert.strictEqual(u.args[1], a.body);
+    assert.deepStrictEqual(u.args[3], a.was);
+  }
+});
+
+test('the staff "proof" reply splits designer orders from designs we make', () => {
+  const a = playbook().KB_SEED.find((x) => x.shortcut === 'proof');
+  assert.match(a.body, /If we are designing it for you, yes/);
+  assert.match(a.body, /prints exactly as you made it/);
+  assert.doesNotMatch(a.body, /colour/);
+  assert.ok(a.was.some((w) => /^Yes\. We send a digital proof/.test(w)));
+});
+
+test('the staff "turnaround" reply: 5-7 / 7-14 days, rush for a fee, no percentages', () => {
+  const a = playbook().KB_SEED.find((x) => x.shortcut === 'turnaround');
+  assert.match(a.body, /5–7 business days and larger ones in 7–14/);
+  assert.match(a.body, /Rush is available for a fee/);
+  assert.doesNotMatch(a.body, /\d+\s*%/);
+  assert.ok(a.was.some((w) => /about 10 business days/.test(w)), 'the last live wording is in was');
+  assert.ok(a.was.some((w) => /\[standard turnaround\]/.test(w)), 'and the one before it');
+});
+
+test('the marketing calendar does not start every clock at the proof', () => {
+  const s = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  assert.ok(!/7 to 14\s+after proof approval/.test(s));
+  assert.match(s, /7 to 14\s+from the order \(or from the proof, when we design it\)/);
 });

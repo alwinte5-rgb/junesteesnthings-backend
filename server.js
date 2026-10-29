@@ -6824,7 +6824,7 @@ app.get('/admin/marketing-calendar', requireAdmin, (req, res) => {
   <p style="margin:0 0 6px">Each occasion counts back from its <b>season start</b>, the day customers begin ordering:
   <b>prep</b> ${lead.prepWeeks} weeks before (designs, photos, page), <b>ads and email</b> ${lead.adsWeeks} weeks before. <b>Last day to order</b> is
   ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since small orders take 5 to 7 business days and larger ones 7 to 14
-  after proof approval. An occasion can set its own lead times; the table always shows its real dates. Nothing here is sent automatically.</p>
+  from the order (or from the proof, when we design it). An occasion can set its own lead times; the table always shows its real dates. Nothing here is sent automatically.</p>
 </div>
 ${dueBox}
 <div class="card" style="overflow-x:auto">
@@ -42227,10 +42227,10 @@ function customerReplyText(body) {
    in [square brackets] is for the owner to fill in. */
 const KB_SEED = [
   { kind: 'faq', shortcut: 'turnaround', title: 'How long will my order take?', tags: 'turnaround, lead time, timing, when',
-    body: `Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`,
-    /* 2026-10-13: the standard turnaround the owner approved, and rush on DTF
-       only (owner, 2026-10-12). An unedited live copy updates. */
-    was: [`Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
+    body: `Thanks for asking! Small orders are ready in 5–7 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\n\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`,
+    /* Owner, 2026-10-28: small 5-7 / larger 7-14 business days; rush for a fee,
+       no percentages shown. An unedited live copy of either older text updates. */
+    was: [`Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
     body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
   { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',
@@ -42243,8 +42243,8 @@ const KB_SEED = [
   { kind: 'faq', shortcut: 'quote', title: 'What do you need for a quote?', tags: 'quote, price, estimate, cost',
     body: `Happy to put a quote together! I just need:\n\n- How many pieces, and the size mix\n- The garment (or tell me the vibe and budget and I will suggest some)\n- Where the design goes (front, back, sleeve) and how many colors\n- Your artwork, or a description\n- The date you need them by` },
   { kind: 'faq', shortcut: 'proof', title: 'Will I see a proof?', tags: 'proof, mockup, approve',
-    body: `If we are designing it for you, yes: we send a digital proof before anything is printed, and nothing goes to production until you approve it in writing. If you designed it yourself in our online designer, it prints exactly as you made it, so please check spelling, colours and placement before you check out.`,
-    /* 2026-10-29: designer orders print as submitted; proofs are for designs we make and Premium. */
+    body: `If we are designing it for you, yes: we send a digital proof before anything is printed, and nothing goes to production until you approve it in writing. If you designed it yourself in our online designer, it prints exactly as you made it, so please check spelling, colors and placement before you check out.`,
+    /* 2026-10-29: designer orders print as submitted; proofs are for designs we make. */
     was: [`Yes. We send a digital proof before anything is printed, and nothing goes to production until you approve it in writing. Please check spelling, colours and placement carefully; we print exactly what is approved.`] },
   { kind: 'faq', shortcut: 'taxexempt', title: 'We are tax exempt', tags: 'tax exempt, school, church, nonprofit, resale, certificate',
     body: `Great, we can take the tax off. Please send your Illinois exemption letter (the E-number) or, if you are buying to resell, a completed CRT-61. Your quote page has a place to upload it, and we remove the tax once it is approved.` },
@@ -42978,6 +42978,11 @@ async function addPlaybookArticles() {
        ON CONFLICT DO NOTHING`,
       [a.kind, a.title, a.shortcut || null, a.body, a.tags || '', a.decoration || null, !!a.needsReview])
       .catch((e) => console.error(`playbook article "${a.title}" not added:`, e.message));
+  }
+  /* A `was` list rewrites an unedited live copy of an older text. Seed articles
+     carry them too (the "proof" and "turnaround" replies), and seedPlaybook
+     only runs on an empty table, so both lists are walked here. */
+  for (const a of [...KB_SEED, ...KB_ADDED]) {
     if (a.was && a.was.length) {
       await pool.query(
         /* Spelling-blind: a `was` rebuilt from the partly US-spelled current
