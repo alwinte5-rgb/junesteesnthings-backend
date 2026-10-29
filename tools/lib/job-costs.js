@@ -209,6 +209,15 @@ function placesCost(places, bandQty, decoSellEach, dark = false) {
    shipment (2026-10-20), inside the cover's all-in price. */
 const INBOUND_SHIP = 11.99;
 
+/* An ivory or white table cover is sublimated in the shop, not DTF printed
+   (owner, 2026-10-28): each print costs paper, ink and tape, about $4 (the
+   owner's F570 estimate, $8 for front and back), with no transfer bought.
+   The cover's colour is the line's colour if it has one, else its
+   description ("Table Cover — 6 ft, Ivory"). */
+const SUB_PRINT = 4;
+const SUBLIMATED_RE = /\b(ivory|white)\b/i;
+const isTableCover = (m) => /table cover/i.test(String((m && m.title) || ''));
+
 function addonCosts(addons) {
   let outsourced = 0, shipping = 0, perLine = 0;
   for (const a of addons || []) {
@@ -321,6 +330,8 @@ function fromWording(it, catalog, bandQty) {
  * Returns { complete, lines: [{ ix, unit_cost, basis, estimated }], outsourced, shipping,
  *           missing: [description] }. Lines that already carry a cost keep it.
  */
+const desc0 = (it) => String((it && it.description) || '');
+
 function estimateJob(items, catalog) {
   const list = Array.isArray(items) ? items : [];
   const products = new Map(((catalog && catalog.products) || []).map((p) => [Number(p.id), p]));
@@ -392,7 +403,11 @@ function estimateJob(items, catalog) {
     /* Always with the base: Anchorfish lays and bills it on every garment.
        garment_dark (false on lines saved before 2026-10-07) only keeps an old
        quote's SELLING price; it says nothing about what the job costs (Codex #178). */
-    const deco = placesCost(places, bandQty, decoSellEach, true);
+    let deco = placesCost(places, bandQty, decoSellEach, true);
+    if (places.length && places.every((p) => isTableCover(p.method)) &&
+        SUBLIMATED_RE.test(String(it.colour || '') + ' ' + desc0(it))) {
+      deco = { each: SUB_PRINT * places.length, basis: ['sublimation supplies'] };
+    }
     basis.push(...deco.basis);
 
     const each = garmentEach + deco.each + ad.perLine / qty;
@@ -404,5 +419,5 @@ function estimateJob(items, catalog) {
   return out;
 }
 
-module.exports = { SCREEN_PRINT, SCREEN_MIN_QTY, SCREEN_COST, SCREEN_FEE, DTF, EMBROIDERY, SHOP_MARKUP, SERVICE_WORDS,
+module.exports = { SUB_PRINT, SCREEN_PRINT, SCREEN_MIN_QTY, SCREEN_COST, SCREEN_FEE, DTF, EMBROIDERY, SHOP_MARKUP, SERVICE_WORDS,
   methodKind, embroideryColumn, decorationEach, linePlaces, placesCost, addonCosts, garmentFromWords, decorationFromWords, fromWording, estimateJob };
