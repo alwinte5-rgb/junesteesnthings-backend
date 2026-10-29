@@ -6214,7 +6214,7 @@ async function sendDesignFollowups(now = new Date()) {
 }
 
 const DESIGN_LEAD_FIELDS = new Set(['name', 'email', 'phone', 'note', 'product', 'summary', 'total', 'preview_url',
-  'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua']);
+  'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua', 'kind']);
 app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 6), async (req, res) => {
   try {
     const b = req.body || {};
@@ -6236,6 +6236,10 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     const total = Number.isFinite(Number(b.total)) ? Math.max(0, Math.min(100000, Number(b.total))) : 0;
     const previewUrl = String(b.preview_url || '').trim();
     const designUrl  = String(b.design_url || '').trim();
+    /* "Save my design" is only a save (designer #184): it is listed and
+       followed up as a saved design, not chased as a quote request. Anything
+       but 'save' is the quote form, as every lead was before. */
+    const saved = b.kind === 'save';
     if (!name || (!email && !phone)) return res.status(400).json({ error: 'A name and an email or phone are required.' });
     if (email && !isValidEmail(email)) return res.status(400).json({ error: 'That email address does not look valid.' });
     if (b.phone && phone.length !== 10) return res.status(400).json({ error: 'That phone number does not look right.' });
@@ -6244,7 +6248,7 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     await recordSmsConsent(parseSmsConsent(b),
       { source: 'design-lead', ip: String(b.ip || '').slice(0, 64), userAgent: String(b.ua || '').slice(0, 300) });
 
-    const description = ['DESIGN FROM THE DESIGNER', product && `${product}`, summary, total ? `shown $${total.toFixed(2)}` : '',
+    const description = [saved ? 'DESIGN SAVED IN THE DESIGNER (not a quote request)' : 'DESIGN FROM THE DESIGNER', product && `${product}`, summary, total ? `shown $${total.toFixed(2)}` : '',
       note && `note: ${note}`].filter(Boolean).join(' · ').slice(0, 2000);
     const keyAt = (bucket) => crypto.createHash('sha256').update(['design', email, phone, designUrl, bucket].join('|')).digest('hex');
     const nowBucket = Math.floor(Date.now() / (10 * 60 * 1000));
@@ -6274,11 +6278,13 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     const img = previewUrl ? `<p><img src="${escEmail(previewUrl)}" alt="Design preview" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></p>` : '';
     try {
       await sendEmail({
-        to: NOTIFY_EMAIL, urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
+        /* A quote request is a customer writing: never held for the daily
+           summary (owner, 2026-10-19). A save waits for it. */
+        to: NOTIFY_EMAIL, urgent: !saved,
         replyTo: email || NOTIFY_EMAIL,
-        subject: `${savedId ? '' : 'NOT SAVED: '}New design from the designer — ${name}${total ? ` ($${total.toFixed(2)})` : ''}`,
+        subject: `${savedId ? '' : 'NOT SAVED: '}${saved ? 'Design saved in the designer' : 'New design from the designer'} — ${name}${total ? ` ($${total.toFixed(2)})` : ''}`,
         html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-          <h2 style="color:#1848B8;">A customer sent their design</h2>
+          <h2 style="color:#1848B8;">${saved ? 'A customer saved their design (not a quote request)' : 'A customer sent their design'}</h2>
           ${savedId ? '' : `<p style="background:#fef3c7;border:1px solid #fcd34d;padding:8px 10px;border-radius:6px">
             <b>This lead did not save</b>, so it is not on the leads page and nothing will follow it up.
             This email is the only record: add it as a lead by hand.</p>`}
@@ -6304,7 +6310,7 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
           ${img}
           <p>${escEmail(product)}${summary ? '<br>' + escEmail(summary).replace(/\n/g, '<br>') : ''}${total ? `<br>Price: <b>$${total.toFixed(2)}</b>` : ''}</p>
           <p><a href="${escEmail(designUrl)}" style="display:inline-block;background:#1848B8;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Open my design</a></p>
-          <p>We’ll be in touch within 1 business day to help you finish it. Questions? Call or text <a href="tel:+17739004592">(773) 900-4592</a>.</p>
+          <p>${saved ? 'Open it any time to finish it and add it to your cart.' : 'We’ll be in touch within 1 business day to help you finish it.'} Questions? Call or text <a href="tel:+17739004592">(773) 900-4592</a>.</p>
           <p style="color:#999;font-size:12px;margin-top:24px;">June’s Tees &amp; Things · Chicago, IL</p></div>`,
       }).then(() => true).catch((err) => {
         /* They asked to be emailed; a failure must reach the error digest so
