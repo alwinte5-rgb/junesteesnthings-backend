@@ -28875,14 +28875,20 @@ app.post('/api/order-notification', requireInternalKey, capPerRecipient('order-n
             : delivery.source === 'free' ? '&mdash; free shipping, so the postage is yours.'
             : delivery.source === 'flat' ? `&mdash; flat ${money(b.shipping)} charged (live rates were down at checkout).`
             : '') + ' Buy the label on Shipping.';
+    /* What the customer typed in checkout's Comments box, which includes the
+       date they need it by when they gave one (designer, 2026-10-29). It was
+       never saved before; this email is where the shop sees it. */
+    const customerNote = String(b.customer_note || '').replace(/\r\n?/g, '\n').trim().slice(0, 1000);
+    const neededBy = (/^Needed by: (\d{2}\/\d{2}\/\d{4})/m.exec(customerNote) || [])[1] || '';
     await sendEmail({
       to,
       replyTo: isValidEmail(String(b.email || '')) ? String(b.email) : undefined,
-      subject: `🧾 New order #${b.order_id} — ${money(b.total)}${delivery ? (delivery.method === 'pickup' ? ' — PICKUP' : delivery.method === 'local' ? ' — LOCAL DELIVERY' : ' — SHIP') : ''}${exempt && exempt.status === 'pending' ? ' — tax-exempt, check the certificate' : ''}`,
+      subject: `🧾 New order #${b.order_id} — ${money(b.total)}${neededBy ? ` — NEEDED BY ${neededBy}` : ''}${delivery ? (delivery.method === 'pickup' ? ' — PICKUP' : delivery.method === 'local' ? ' — LOCAL DELIVERY' : ' — SHIP') : ''}${exempt && exempt.status === 'pending' ? ' — tax-exempt, check the certificate' : ''}`,
       html: orderShell({
         heading: 'New order received',
         intro: `<strong>${escEmail(b.name || 'A customer')}</strong>${b.email ? ` (${escEmail(b.email)})` : ''} just checked out${b.payment ? ` via ${escEmail(b.payment)}` : ''}.${
-          shipNote ? `<br><span style="display:inline-block;margin-top:8px;padding:8px 12px;border-radius:8px;background:#eef2fd;color:#0B1F4B">${shipNote}</span>` : ''}`,
+          shipNote ? `<br><span style="display:inline-block;margin-top:8px;padding:8px 12px;border-radius:8px;background:#eef2fd;color:#0B1F4B">${shipNote}</span>` : ''}${
+          customerNote ? `<br><span style="display:block;margin-top:8px;padding:8px 12px;border-radius:8px;background:#FFF8E6;border:1px solid #F5D38A;color:#1B2333"><b>Customer note:</b><br>${escEmail(customerNote).replace(/\n/g, '<br>')}</span>` : ''}`,
         orderId: b.order_id, items: b.items, total: b.total,
         shipping: b.shipping, tax: b.tax, address: b.address, exempt, delivery,
         footer: (exempt ? `<p style="color:#374151;line-height:1.6;">${exempt.status === 'pending'
