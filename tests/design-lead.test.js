@@ -80,3 +80,40 @@ test('a saved design is not treated as a quote request', () => {
   assert.match(route, /saved \? 'Design saved in the designer' : 'New design from the designer'/);
   assert.match(route, /saved \? 'Open it any time to finish it and add it to your cart\.' : 'We’ll be in touch within 1 business day/);
 });
+
+/* A quote sent from checkout carries the cart (designer, 2026-10-30): the
+   editor is blank there, so each saved line comes with its own preview and
+   reopen link, and every one shows in the shop's email. */
+test('a cart quote lists every line with its own preview and link', () => {
+  assert.match(src, /const DESIGN_LEAD_FIELDS = new Set\(\[[^\]]*'lines', 'kind'\]\)/, 'lines is an expected field');
+  assert.match(route, /const \{ lines, dropped \} = designLeadLines\(b\.lines\);/);
+  const fnSrc = (name) => { const i = src.indexOf(`function ${name}(`); return src.slice(i, src.indexOf('\n}\n', i) + 3); };
+  const DESIGNER_BASE = 'https://design.jtees.net';
+  const reported = [];
+  const a = src.indexOf('const leadTotal = '), z = src.indexOf("app.post('/api/design-lead'");
+  /* The real escEmail and designerUrlOk from server.js, not stand-ins. */
+  const lib = new Function('DESIGNER_BASE', 'reportError',
+    fnSrc('escEmail') + fnSrc('designerUrlOk') + src.slice(a, z) + 'return { designLeadLines, designLeadLinesHtml };')(DESIGNER_BASE,
+    (k, e) => { reported.push(k + ': ' + e.message); return Promise.resolve(); });
+  const ok = (n) => ({ product: `Tee <${n}>`, total: 20, preview_url: `${DESIGNER_BASE}/data/shares/${n}.jpg`, design_url: `${DESIGNER_BASE}/editor.php?share=${n}` });
+  assert.deepStrictEqual(lib.designLeadLines('nope'), { lines: [], dropped: 0 });
+  const got = lib.designLeadLines([ok(1), { ...ok(2), preview_url: 'https://evil.example/x.jpg' }, ok(3)]);
+  assert.strictEqual(got.lines.length, 2, 'a line with a foreign link is dropped, not the lead');
+  assert.strictEqual(got.dropped, 1);
+  assert.ok(reported.some((r) => /lines-dropped: 1 of 3/.test(r)), 'and the drop is reported');
+  assert.strictEqual(lib.designLeadLines(Array.from({ length: 12 }, (_, i) => ok(i))).dropped, 4, 'at most 8 lines; the rest count as dropped');
+  lib.designLeadLines([{ ...ok(4), preview: 'x' }]);
+  assert.ok(reported.some((r) => /unknown-line-fields: preview/.test(r)), 'a renamed line field is reported as drift');
+  const html = lib.designLeadLinesHtml(got.lines, got.dropped, false);
+  assert.match(html, /2 designs in the cart/);
+  assert.match(html, /shares\/1\.jpg/);
+  assert.match(html, /shares\/3\.jpg/);
+  assert.match(html, /1 more design from the cart could not be shown/, 'the shop is told a design is missing');
+  assert.ok(!html.includes('<1>') && html.includes('Tee &lt;1&gt;'), 'product names are escaped by the real escEmail');
+  const mine = lib.designLeadLinesHtml(got.lines, got.dropped, true);
+  assert.match(mine, /Your 2 designs:/);
+  assert.ok(!/could not be shown|in the cart/.test(mine), 'the customer gets their own wording');
+  assert.match(lib.designLeadLinesHtml(got.lines.slice(0, 1), 0, false), /1 design in the cart/, 'one surviving line still shows as a line');
+  assert.match(route, /const img = cartQuote \? designLeadLinesHtml\(lines, dropped, false\) : oneImg;/);
+  assert.match(route, /cartQuote && `\$\{lines\.length\} design/, 'the cart links come before the summary in the stored description');
+});
