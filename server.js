@@ -6214,7 +6214,25 @@ async function sendDesignFollowups(now = new Date()) {
 }
 
 const DESIGN_LEAD_FIELDS = new Set(['name', 'email', 'phone', 'note', 'product', 'summary', 'total', 'preview_url',
-  'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua', 'kind']);
+  'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua', 'lines', 'kind']);
+/* A quote sent from checkout carries the cart: each saved line with its own
+   preview and reopen link (designer, 2026-10-30). Both links must be the
+   designer's own; a line that is not is dropped, never the lead. */
+function designLeadLines(v) {
+  if (!Array.isArray(v)) return [];
+  return v.slice(0, 8).map((l) => ({
+    product: String((l && l.product) || '').trim().slice(0, 200),
+    total: Number.isFinite(Number(l && l.total)) ? Math.max(0, Math.min(100000, Number(l.total))) : 0,
+    previewUrl: String((l && l.preview_url) || '').trim(),
+    designUrl: String((l && l.design_url) || '').trim(),
+  })).filter((l) => designerUrlOk(l.previewUrl) && designerUrlOk(l.designUrl));
+}
+function designLeadLinesHtml(lines) {
+  if (lines.length < 2) return '';
+  return `<p><b>${lines.length} designs in the cart:</b></p>` + lines.map((l, i) => `<div style="margin:0 0 14px">
+            <p style="margin:0 0 6px">${i + 1}. ${escEmail(l.product)}${l.total ? ` &middot; $${l.total.toFixed(2)}` : ''} &middot; <a href="${escEmail(l.designUrl)}">Open this design</a></p>
+            <img src="${escEmail(l.previewUrl)}" alt="Design ${i + 1}" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></div>`).join('');
+}
 app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 6), async (req, res) => {
   try {
     const b = req.body || {};
@@ -6240,6 +6258,7 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
        followed up as a saved design, not chased as a quote request. Anything
        but 'save' is the quote form, as every lead was before. */
     const saved = b.kind === 'save';
+    const lines = designLeadLines(b.lines);
     if (!name || (!email && !phone)) return res.status(400).json({ error: 'A name and an email or phone are required.' });
     if (email && !isValidEmail(email)) return res.status(400).json({ error: 'That email address does not look valid.' });
     if (b.phone && phone.length !== 10) return res.status(400).json({ error: 'That phone number does not look right.' });
@@ -6249,7 +6268,8 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
       { source: 'design-lead', ip: String(b.ip || '').slice(0, 64), userAgent: String(b.ua || '').slice(0, 300) });
 
     const description = [saved ? 'DESIGN SAVED IN THE DESIGNER (not a quote request)' : 'DESIGN FROM THE DESIGNER', product && `${product}`, summary, total ? `shown $${total.toFixed(2)}` : '',
-      note && `note: ${note}`].filter(Boolean).join(' · ').slice(0, 2000);
+      note && `note: ${note}`,
+      lines.length > 1 && `${lines.length} designs: ${lines.map((l, i) => `${i + 1}. ${l.product} ${l.designUrl}`).join(' ; ')}`].filter(Boolean).join(' · ').slice(0, 2000);
     /* A save has its own key: a quote request sent soon after saving the same
        design is a new lead, not a duplicate of the save (quote keys unchanged). */
     const keyAt = (bucket) => crypto.createHash('sha256').update([saved ? 'design-save' : 'design', email, phone, designUrl, bucket].join('|')).digest('hex');
@@ -6277,7 +6297,9 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
       reportError('design-lead:save', err).catch(() => {});
     }
 
-    const img = previewUrl ? `<p><img src="${escEmail(previewUrl)}" alt="Design preview" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></p>` : '';
+    /* A cart of several designs shows every one; one design shows as before. */
+    const img = lines.length > 1 ? designLeadLinesHtml(lines)
+      : previewUrl ? `<p><img src="${escEmail(previewUrl)}" alt="Design preview" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></p>` : '';
     try {
       await sendEmail({
         /* A quote request is a customer writing: never held for the daily

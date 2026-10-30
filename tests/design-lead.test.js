@@ -80,3 +80,27 @@ test('a saved design is not treated as a quote request', () => {
   assert.match(route, /saved \? 'Design saved in the designer' : 'New design from the designer'/);
   assert.match(route, /saved \? 'Open it any time to finish it and add it to your cart\.' : 'We’ll be in touch within 1 business day/);
 });
+
+/* A quote sent from checkout carries the cart (designer, 2026-10-30): the
+   editor is blank there, so each saved line comes with its own preview and
+   reopen link, and every one shows in the shop's email. */
+test('a cart quote lists every line with its own preview and link', () => {
+  assert.match(src, /const DESIGN_LEAD_FIELDS = new Set\(\[[^\]]*'lines', 'kind'\]\)/, 'lines is an expected field');
+  assert.match(route, /const lines = designLeadLines\(b\.lines\);/);
+  const a = src.indexOf('function designLeadLines('), z = src.indexOf("app.post('/api/design-lead'");
+  const DESIGNER_BASE = 'https://design.jtees.net';
+  const escEmail = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const designerUrlOk = new Function('DESIGNER_BASE', src.slice(src.indexOf('function designerUrlOk('), src.indexOf('\n}\n', src.indexOf('function designerUrlOk(')) + 3) + 'return designerUrlOk;')(DESIGNER_BASE);
+  const lib = new Function('designerUrlOk', 'escEmail', src.slice(a, z) + 'return { designLeadLines, designLeadLinesHtml };')(designerUrlOk, escEmail);
+  const ok = (n) => ({ product: `Tee <${n}>`, total: 20, preview_url: `${DESIGNER_BASE}/data/shares/${n}.jpg`, design_url: `${DESIGNER_BASE}/editor.php?share=${n}` });
+  assert.deepStrictEqual(lib.designLeadLines('nope'), []);
+  const got = lib.designLeadLines([ok(1), { ...ok(2), preview_url: 'https://evil.example/x.jpg' }, ok(3)]);
+  assert.strictEqual(got.length, 2, 'a line with a foreign link is dropped, not the lead');
+  assert.strictEqual(lib.designLeadLines(Array.from({ length: 12 }, (_, i) => ok(i))).length, 8, 'at most 8 lines');
+  const html = lib.designLeadLinesHtml(got);
+  assert.match(html, /2 designs in the cart/);
+  assert.match(html, /shares\/1\.jpg/);
+  assert.match(html, /shares\/3\.jpg/);
+  assert.ok(!html.includes('<1>') && html.includes('Tee &lt;1&gt;'), 'product names are escaped');
+  assert.strictEqual(lib.designLeadLinesHtml(got.slice(0, 1)), '', 'one design keeps the single preview');
+});

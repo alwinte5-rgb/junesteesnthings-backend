@@ -79,7 +79,7 @@ test('#178 old no-base quotes keep their price on edit; cost and capacity always
 
 test('#179 / #221 lead-email fields are fixed; design-lead drift is reported and an unsaved lead says so', () => {
   assert.match(after("app.post('/admin/lead/:id/email'", 600), /\['subject', 'body', 'back'\]\.includes\(k\)/);
-  const d = after("app.post('/api/design-lead'", 5000);
+  const d = after("app.post('/api/design-lead'", 7000);
   assert.match(d, /reportError\('design-lead:unknown-fields'/);
   assert.match(d, /savedId \? '' : 'NOT SAVED: '/);
 });
