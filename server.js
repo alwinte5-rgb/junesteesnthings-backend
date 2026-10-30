@@ -6215,23 +6215,38 @@ async function sendDesignFollowups(now = new Date()) {
 
 const DESIGN_LEAD_FIELDS = new Set(['name', 'email', 'phone', 'note', 'product', 'summary', 'total', 'preview_url',
   'design_url', 'sms_transactional', 'sms_marketing', 'ip', 'ua', 'lines', 'kind']);
+/* A price the designer showed: a number from 0 to 100000, anything else 0. */
+const leadTotal = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(100000, Number(v))) : 0);
+const DESIGN_LEAD_LINE_FIELDS = new Set(['product', 'total', 'preview_url', 'design_url']);
 /* A quote sent from checkout carries the cart: each saved line with its own
    preview and reopen link (designer, 2026-10-30). Both links must be the
-   designer's own; a line that is not is dropped, never the lead. */
+   designer's own; a line that is not is dropped, never the lead, and every
+   drop (or a line past 8, or a field the designer renamed) is reported. */
 function designLeadLines(v) {
-  if (!Array.isArray(v)) return [];
-  return v.slice(0, 8).map((l) => ({
-    product: String((l && l.product) || '').trim().slice(0, 200),
-    total: Number.isFinite(Number(l && l.total)) ? Math.max(0, Math.min(100000, Number(l.total))) : 0,
-    previewUrl: String((l && l.preview_url) || '').trim(),
-    designUrl: String((l && l.design_url) || '').trim(),
-  })).filter((l) => designerUrlOk(l.previewUrl) && designerUrlOk(l.designUrl));
+  if (!Array.isArray(v)) return { lines: [], dropped: 0 };
+  const odd = new Set();
+  const lines = v.slice(0, 8).map((l) => {
+    Object.keys((l && typeof l === 'object') ? l : {}).forEach((k) => { if (!DESIGN_LEAD_LINE_FIELDS.has(k)) odd.add(k); });
+    return {
+      product: String((l && l.product) || '').trim().slice(0, 200),
+      total: leadTotal(l && l.total),
+      previewUrl: String((l && l.preview_url) || '').trim(),
+      designUrl: String((l && l.design_url) || '').trim(),
+    };
+  }).filter((l) => designerUrlOk(l.previewUrl) && designerUrlOk(l.designUrl));
+  if (odd.size) reportError('design-lead:unknown-line-fields', new Error([...odd].slice(0, 10).join(', '))).catch(() => {});
+  const dropped = v.length - lines.length;
+  if (dropped) reportError('design-lead:lines-dropped', new Error(`${dropped} of ${v.length} lines dropped`)).catch(() => {});
+  return { lines, dropped };
 }
-function designLeadLinesHtml(lines) {
-  if (lines.length < 2) return '';
-  return `<p><b>${lines.length} designs in the cart:</b></p>` + lines.map((l, i) => `<div style="margin:0 0 14px">
+/** The cart's designs in an email: the shop's wording, or the customer's. */
+function designLeadLinesHtml(lines, dropped, forCustomer) {
+  if (!lines.length) return '';
+  const head = forCustomer ? `Your ${lines.length === 1 ? 'design' : `${lines.length} designs`}:` : `${lines.length} design${lines.length === 1 ? '' : 's'} in the cart:`;
+  return `<p><b>${head}</b></p>` + lines.map((l, i) => `<div style="margin:0 0 14px">
             <p style="margin:0 0 6px">${i + 1}. ${escEmail(l.product)}${l.total ? ` &middot; $${l.total.toFixed(2)}` : ''} &middot; <a href="${escEmail(l.designUrl)}">Open this design</a></p>
-            <img src="${escEmail(l.previewUrl)}" alt="Design ${i + 1}" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></div>`).join('');
+            <img src="${escEmail(l.previewUrl)}" alt="Design ${i + 1}" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></div>`).join('')
+    + (dropped && !forCustomer ? `<p style="background:#fef3c7;border:1px solid #fcd34d;padding:8px 10px;border-radius:6px">${dropped} more design${dropped === 1 ? '' : 's'} from the cart could not be shown: ask the customer for ${dropped === 1 ? 'it' : 'them'}.</p>` : '');
 }
 app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 6), async (req, res) => {
   try {
@@ -6251,14 +6266,16 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     const note  = String(b.note || '').trim().slice(0, 1000);
     const product = String(b.product || '').trim().slice(0, 200);
     const summary = String(b.summary || '').trim().slice(0, 1200);
-    const total = Number.isFinite(Number(b.total)) ? Math.max(0, Math.min(100000, Number(b.total))) : 0;
+    const total = leadTotal(b.total);
     const previewUrl = String(b.preview_url || '').trim();
     const designUrl  = String(b.design_url || '').trim();
     /* "Save my design" is only a save (designer #184): it is listed and
        followed up as a saved design, not chased as a quote request. Anything
        but 'save' is the quote form, as every lead was before. */
     const saved = b.kind === 'save';
-    const lines = designLeadLines(b.lines);
+    /* A cart quote shows its lines, however many survive; a single design has none. */
+    const cartQuote = Array.isArray(b.lines);
+    const { lines, dropped } = designLeadLines(b.lines);
     if (!name || (!email && !phone)) return res.status(400).json({ error: 'A name and an email or phone are required.' });
     if (email && !isValidEmail(email)) return res.status(400).json({ error: 'That email address does not look valid.' });
     if (b.phone && phone.length !== 10) return res.status(400).json({ error: 'That phone number does not look right.' });
@@ -6267,9 +6284,13 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
     await recordSmsConsent(parseSmsConsent(b),
       { source: 'design-lead', ip: String(b.ip || '').slice(0, 64), userAgent: String(b.ua || '').slice(0, 300) });
 
-    const description = [saved ? 'DESIGN SAVED IN THE DESIGNER (not a quote request)' : 'DESIGN FROM THE DESIGNER', product && `${product}`, summary, total ? `shown $${total.toFixed(2)}` : '',
-      note && `note: ${note}`,
-      lines.length > 1 && `${lines.length} designs: ${lines.map((l, i) => `${i + 1}. ${l.product} ${l.designUrl}`).join(' ; ')}`].filter(Boolean).join(' · ').slice(0, 2000);
+    /* The cart's links come right after the product: the description is cut
+       at 2000 characters, and they are the only record of designs 2 to 8. */
+    const cartLinks = lines.map((l, i) => `${i + 1}. ${l.designUrl}`).join(' ; ');
+    const description = [saved ? 'DESIGN SAVED IN THE DESIGNER (not a quote request)' : 'DESIGN FROM THE DESIGNER', product && `${product}`,
+      cartQuote && `${lines.length} design${lines.length === 1 ? '' : 's'}: ${cartLinks}${dropped ? ` (${dropped} not shown)` : ''}`,
+      summary, total ? `shown $${total.toFixed(2)}` : '',
+      note && `note: ${note}`].filter(Boolean).join(' · ').slice(0, 2000);
     /* A save has its own key: a quote request sent soon after saving the same
        design is a new lead, not a duplicate of the save (quote keys unchanged). */
     const keyAt = (bucket) => crypto.createHash('sha256').update([saved ? 'design-save' : 'design', email, phone, designUrl, bucket].join('|')).digest('hex');
@@ -6297,9 +6318,10 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
       reportError('design-lead:save', err).catch(() => {});
     }
 
-    /* A cart of several designs shows every one; one design shows as before. */
-    const img = lines.length > 1 ? designLeadLinesHtml(lines)
-      : previewUrl ? `<p><img src="${escEmail(previewUrl)}" alt="Design preview" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></p>` : '';
+    /* A cart quote shows every design it carries; one design shows as before. */
+    const oneImg = previewUrl ? `<p><img src="${escEmail(previewUrl)}" alt="Design preview" style="max-width:100%;border:1px solid #e3e8f2;border-radius:8px"></p>` : '';
+    const img = cartQuote ? designLeadLinesHtml(lines, dropped, false) : oneImg;
+    const customerImg = cartQuote ? designLeadLinesHtml(lines, 0, true) : oneImg;
     try {
       await sendEmail({
         /* A quote request is a customer writing: never held for the daily
@@ -6331,9 +6353,9 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
         subject: 'Your June’s Tees design and price',
         html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
           <h2 style="color:#1848B8;">Here’s your design, ${escEmail(name.split(' ')[0])}!</h2>
-          ${img}
-          <p>${escEmail(product)}${summary ? '<br>' + escEmail(summary).replace(/\n/g, '<br>') : ''}${total ? `<br>Price: <b>$${total.toFixed(2)}</b>` : ''}</p>
-          <p><a href="${escEmail(designUrl)}" style="display:inline-block;background:#1848B8;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Open my design</a></p>
+          ${customerImg}
+          <p>${cartQuote ? '' : escEmail(product) + (summary ? '<br>' : '')}${summary ? escEmail(summary).replace(/\n/g, '<br>') : ''}${total ? `<br>Price: <b>$${total.toFixed(2)}</b>` : ''}</p>
+          ${cartQuote ? '' : `<p><a href="${escEmail(designUrl)}" style="display:inline-block;background:#1848B8;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Open my design</a></p>`}
           <p>${saved ? 'Open it any time to finish it and add it to your cart.' : 'We’ll be in touch within 1 business day to help you finish it.'} Questions? Call or text <a href="tel:+17739004592">(773) 900-4592</a>.</p>
           <p style="color:#999;font-size:12px;margin-top:24px;">June’s Tees &amp; Things · Chicago, IL</p></div>`,
       }).then(() => true).catch((err) => {
