@@ -3309,6 +3309,16 @@ function keepContactsWhenPhoneFails(instance) {
   return instance;
 }
 
+/* Where an enquiry came from, as the Brevo SOURCE attribute (owner,
+   2026-10-31: 656 of 924 contacts had none). Last touch, like the designer's
+   /api/crm-contact sources: a newer enquiry names the newer way in. The keys
+   are submissions.source; the quote form leaves it empty. */
+function brevoLeadSource(src) {
+  const s = String(src || 'form');
+  return ({ form: 'quote-form', embroidery: 'embroidery-form', designer: 'design-lead' })[s]
+    || ('lead-' + s.replace(/[^a-z0-9_-]/gi, '')).slice(0, 40);
+}
+
 async function syncToBrevo(s) {
   if (isSpamName(s.name)) {
     console.warn('syncToBrevo: skipping spam contact:', s.name);
@@ -3324,6 +3334,7 @@ async function syncToBrevo(s) {
       FIRSTNAME: firstname || '',
       LASTNAME:  rest.join(' ') || '',
       SMS:       s.phone || '',        // made E.164, or dropped: keepContactsWhenPhoneFails
+      SOURCE:    brevoLeadSource(s.source),
     },
     listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
     updateEnabled:  true,
@@ -3347,7 +3358,7 @@ const BREVO_CATCH_UP_TRIES = 5;
 async function brevoCatchUp() {
   if (!process.env.BREVO_API_KEY) return '';
   const { rows } = await pool.query(
-    `SELECT id, name, phone, email FROM submissions
+    `SELECT id, name, phone, email, source FROM submissions
       WHERE brevo_synced_at IS NULL AND COALESCE(brevo_attempts, 0) < $2
         AND human_check IS DISTINCT FROM 'missing' AND created_at >= $1
       ORDER BY created_at LIMIT 20`, [BREVO_CATCH_UP_SINCE, BREVO_CATCH_UP_TRIES]);
@@ -3385,7 +3396,7 @@ async function syncTawkContactToBrevo({ name, email }) {
   const listId = process.env.BREVO_TAWK_LIST_ID || process.env.BREVO_LIST_ID;
   await brevo.post('/contacts', {
     email,
-    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '' },
+    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '', SOURCE: 'chat' },
     listIds:       listId ? [parseInt(listId)] : [],
     updateEnabled: true,
   });
@@ -6169,7 +6180,7 @@ app.post('/api/embroidery-quote', countFormFailures('embroidery'), orderRateLimi
     /* Into Brevo too, which is the CRM (owner, 2026-09-26). Not awaited. A saved
        request that fails here is retried by brevoCatchUp; an unsaved one can
        only be reported. */
-    syncToBrevo({ name, email, phone })
+    syncToBrevo({ name, email, phone, source: 'embroidery' })
       .then(() => savedId && pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [savedId]))
       .catch((err) => { if (!savedId) reportError('embroidery:brevo', err).catch(() => {}); });
     if (email) {
@@ -6387,7 +6398,7 @@ app.post('/api/design-lead', requireInternalKey, capPerRecipient('design-lead', 
       reportError('design-lead:notify-shop', err).catch(() => {});
       if (!savedId) throw err;
     }
-    syncToBrevo({ name, email, phone })
+    syncToBrevo({ name, email, phone, source: 'designer' })
       .then(() => savedId && pool.query('UPDATE submissions SET brevo_synced_at = NOW() WHERE id = $1', [savedId]))
       .catch((err) => { if (!savedId) reportError('design-lead:brevo', err).catch(() => {}); });
     let customerEmailed = null;
@@ -10842,6 +10853,9 @@ async function syncQuoteToBrevo(q, { note = true } = {}) {
     const attrs = { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '' };
     const e164 = toE164(phone);
     if (e164) attrs.SMS = e164;
+    // The first time a quote lands (no deal yet) is a new touch; a re-sync of
+    // the same quote is not (brevoLeadSource).
+    if (!q.brevo_deal_id) attrs.SOURCE = 'quote';
     const body = {
       attributes: attrs,
       listIds: process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],

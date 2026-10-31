@@ -51,7 +51,7 @@ test('a saved lead survives a failed shop email; an unsaved one does not pretend
 });
 
 test('it reaches Brevo and the staff leads page shows it with the design', () => {
-  assert.match(route, /syncToBrevo\(\{ name, email, phone \}\)/);
+  assert.match(route, /syncToBrevo\(\{ name, email, phone, source: 'designer' \}\)/);
   assert.match(src, /designer:\s+\['Designer', 'blue'\]/);
   assert.match(src, /const SOURCES = \['all', 'form', 'designer'/);
   assert.match(src, /'design_url TEXT'\]\) \{/);

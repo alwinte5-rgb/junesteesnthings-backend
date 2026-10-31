@@ -207,3 +207,37 @@ test('a synced enquiry is marked so the catch-up leaves it alone', () => {
   assert.match(submit, /brevoResult\.status === 'fulfilled' && !unverified/);
   assert.match(submit, /SET brevo_synced_at = NOW\(\)/);
 });
+
+/* ── where each contact came from (Brevo SOURCE) ───────────────────────────
+   Owner, 2026-10-31: 656 of 924 contacts had no SOURCE, because only the
+   designer's /api/crm-contact wrote one. */
+
+/* Up to the function's closing brace at column 0: extractFn stops at a
+   destructured parameter list's brace. */
+const fnBody = (anchor) => { const at = src.indexOf(anchor); assert.notStrictEqual(at, -1, anchor); return src.slice(at, src.indexOf('\n}\n', at)); };
+
+const brevoLeadSource = vm.runInThisContext(`(${extractFn('function brevoLeadSource(')})`);
+
+test('an enquiry names the form it came from', () => {
+  assert.strictEqual(brevoLeadSource(undefined), 'quote-form', 'the quote form leaves submissions.source empty');
+  assert.strictEqual(brevoLeadSource('form'), 'quote-form');
+  assert.strictEqual(brevoLeadSource('embroidery'), 'embroidery-form');
+  assert.strictEqual(brevoLeadSource('designer'), 'design-lead');
+  assert.strictEqual(brevoLeadSource('text'), 'lead-text', 'texts and calls reach Brevo through the hourly catch-up');
+  assert.strictEqual(brevoLeadSource('x"<y>' + 'z'.repeat(60)).length <= 40, true);
+});
+
+test('every enquiry path passes its source to Brevo', () => {
+  assert.match(extractFn('async function syncToBrevo('), /SOURCE:\s*brevoLeadSource\(s\.source\)/);
+  assert.match(extractFn('async function brevoCatchUp('), /SELECT id, name, phone, email, source FROM submissions/,
+    'a retried enquiry keeps its source');
+  assert.match(src, /syncToBrevo\(\{ name, email, phone, source: 'embroidery' \}\)/);
+  assert.match(src, /syncToBrevo\(\{ name, email, phone, source: 'designer' \}\)/);
+  assert.match(fnBody('async function syncTawkContactToBrevo('), /SOURCE: 'chat'/);
+});
+
+test('a quote sets SOURCE only when it first lands, never on a re-sync', () => {
+  assert.match(fnBody('async function syncQuoteToBrevo('), /if \(!q\.brevo_deal_id\) attrs\.SOURCE = 'quote';/);
+  assert.doesNotMatch(fnBody('async function syncQuoteContact('), /SOURCE/,
+    'status updates (won, paid) are not a new way in');
+});
