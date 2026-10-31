@@ -75,7 +75,7 @@ function fakeBrevo(fail = {}) {
 
 /* In this realm (vm.runInThisContext), so what comes back compares with
    deepStrictEqual; the collaborators are parameters, shadowing any global. */
-const makeSync = vm.runInThisContext(`((brevo, BREVO_PIPELINE, BREVO_STAGE, money, quoteLink, fmtDate, process, console) => {
+const makeSync = vm.runInThisContext(`((brevo, BREVO_PIPELINE, BREVO_STAGE, money, quoteLink, fmtDate, process, console, quoteBrevoSource = async () => 'quote') => {
   ${extract('toE164')}
   ${extract('quoteStage')}
   ${extract('syncQuoteToBrevo')}
@@ -263,4 +263,43 @@ test('cancelling and un-cancelling push the stage to the deal', () => {
     assert.match(r, /RETURNING \*/, sig);
     assert.match(r, /if \(rows\.length\) syncDealStage\(rows\[0\]\)/, sig);
   }
+});
+
+/* ── SOURCE: a quote's first landing is a touch (keepFirstSource, on the
+   client, keeps an earlier SOURCE: tests/brevo-contacts.test.js) ────────── */
+
+async function firstPost(q, postData) {
+  const b = fakeBrevo();
+  const post = b.client.post;
+  b.client.post = async (url, body) => (url === '/contacts' && postData ? (b.calls.push({ verb: 'POST', url, body }), postData) : post(url, body));
+  const syncQuoteToBrevo = makeSync(b.client, 'pipe', STAGES, String, String, String, { env: {} }, quiet);
+  const out = await syncQuoteToBrevo({ code: 'AB12CD', name: 'Dana Reed', email: 'dana@example.com', total: 1, items: [], ...q });
+  return { out, body: b.calls.find((c) => c.verb === 'POST' && c.url === '/contacts').body, did: b.calls.map((c) => `${c.verb} ${c.url}`) };
+}
+
+test('a quote\'s first sync names it "quote"; only until its contact is confirmed', async () => {
+  assert.strictEqual((await firstPost({})).body.attributes.SOURCE, 'quote');
+  assert.strictEqual((await firstPost({ brevo_deal_id: 'd7' })).body.attributes.SOURCE, 'quote',
+    'a deal without a confirmed contact may still name it (only a blank SOURCE is filled)');
+  assert.ok(!('SOURCE' in (await firstPost({ brevo_contact_id: '42' })).body.attributes),
+    'once its contact is confirmed, a save is not a way in');
+});
+
+test('the contact id comes from the write when Brevo made it, else from a look-up', async () => {
+  let r = await firstPost({}, { data: { id: 77 } });
+  assert.strictEqual(r.out.contactId, '77');
+  assert.ok(!r.did.includes('GET /contacts/dana%40example.com'), 'no second look-up');
+  r = await firstPost({}, { data: '' });                                  // an update: no id back
+  assert.strictEqual(r.out.contactId, '42');
+  assert.ok(r.did.includes('GET /contacts/dana%40example.com'));
+  assert.strictEqual(r.out.dealId, 'new-deal', 'and the deal is still made and linked');
+});
+
+test('a quote built from an enquiry names the enquiry\'s way in', async () => {
+  const realSource = vm.runInThisContext(`((pool, brevoLeadSource, console = { error() {} }) => { ${extract('quoteBrevoSource')}; return quoteBrevoSource; })`);
+  const pool = (rows, fail) => ({ query: async () => { if (fail) throw new Error('db'); return { rows }; } });
+  const lead = (s) => (s === 'embroidery' ? 'embroidery-form' : 'quote-form');
+  assert.strictEqual(await realSource(pool([{ source: 'embroidery' }]), lead)({ from_submission_id: 9 }), 'embroidery-form');
+  assert.strictEqual(await realSource(pool([]), lead)({}), 'quote', 'a quote made from scratch');
+  assert.strictEqual(await realSource(pool([], true), lead)({ from_submission_id: 9 }), null, 'a failed read names nothing rather than a wrong source');
 });
