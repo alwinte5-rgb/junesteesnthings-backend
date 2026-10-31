@@ -12,84 +12,46 @@ const owner = '+17738491854';
 const shop = '+17739004592';
 const from = '+13125550199';
 
-test('in shop hours a known caller rings the owner straight away, with no menu', () => {
-  const t = V.incomingTwiml({ base, from, owner, shop, open: true, known: true });
-  assert.match(t, /Thanks for calling June&apos;s Tees\. One moment/);
-  assert.match(t, /<Dial [^>]*callerId="\+17739004592"/);
-  assert.match(t, /<Dial [^>]*timeout="18"/);
-  assert.match(t, /action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/done"/);
-  assert.match(t, /<Number>\+17738491854<\/Number>/);
-  assert.doesNotMatch(t, /<Gather|press 1/);
-  assert.equal(V.ringsDirect({ from, owner, open: true, known: true }), true);
-});
-
-test('in shop hours an unknown caller must press a key, and silence leaves a voicemail', () => {
-  for (const c of [{ from }, { from, known: false }, { from: '' }]) {
-    const t = V.incomingTwiml({ base, owner, shop, open: true, ...c });
-    assert.match(t, /<Gather numDigits="1" timeout="6" finishOnKey="" action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/screen"/);
-    assert.match(t, /Hi, you&apos;ve reached June&apos;s Tees custom printing\. Press 1 and we&apos;ll ring the shop\./);
-    assert.match(t, /<\/Gather><Say[^>]*>Sorry, we didn&apos;t get that\. Please leave a message after the tone\.<\/Say><Record [^>]*action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/voicemail"/);
-    assert.doesNotMatch(t, /<Dial|<Redirect/);
-    assert.equal(V.ringsDirect({ owner, open: true, ...c }), false);
-  }
-});
-
-test('any key on the screen rings the owner; no key goes to voicemail', () => {
-  for (const digits of ['1', '2', '0', '#']) {
-    const t = V.screenAnswerTwiml({ digits, from, owner, shop, base });
+test('every caller rings the owner straight away, at any hour, with no menu or press-1', () => {
+  for (const c of [{ from }, { from: '' }, { from: '+442071234567' }]) {
+    const t = V.incomingTwiml({ base, owner, shop, ...c });
+    assert.match(t, /Thanks for calling June&apos;s Tees\. One moment/);
     assert.match(t, /<Dial [^>]*callerId="\+17739004592"/);
+    assert.match(t, /<Dial [^>]*timeout="18"/);
+    assert.match(t, /action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/done"/);
     assert.match(t, /<Number>\+17738491854<\/Number>/);
-    assert.equal(V.screenRings({ digits, from, owner }), true);
+    assert.doesNotMatch(t, /<Gather|press 1|Press 1/);
+    assert.equal(V.ringsOwner({ owner, ...c }), true);
   }
-  for (const digits of ['', undefined, '12', 'x']) {
-    const t = V.screenAnswerTwiml({ digits, from, owner, shop, base });
-    assert.match(t, /<Record /);
-    assert.doesNotMatch(t, /<Dial/);
-    assert.equal(V.screenRings({ digits, from, owner }), false);
-  }
-  /* Pressed as the shop closed: the after-hours voicemail, no ring text. */
-  assert.match(V.screenAnswerTwiml({ digits: '1', from, owner, shop, base, open: false }), /We&apos;re closed right now/);
-  assert.equal(V.screenRings({ digits: '1', from, owner, open: false }), false);
-  assert.equal(V.screenRings({ digits: '1', from: owner, owner }), false);
 });
 
-test('the incoming route looks the caller up only in hours, and fails open', () => {
+test('a blocked caller gets a busy line, and no ring, voicemail or text', () => {
+  const t = V.incomingTwiml({ base, from, owner, shop, blocked: true });
+  assert.match(t, /^<\?xml[^>]*><Response><Reject reason="busy"\/><\/Response>$/);
+  assert.equal(V.ringsOwner({ from, owner, blocked: true }), false);
+});
+
+test('the incoming route checks the block list, fails open, and remembers who rang', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
-  assert.match(route, /call\.known = VOICE\.ringsInHours\(call\) \? await knownCaller\(call\.from\) : false;/);
-  const fn = src.slice(src.indexOf('async function knownCaller'), src.indexOf('app.post(VOICE.PATHS.incoming'));
-  assert.match(fn, /FROM quotes WHERE \$\{SAME_PHONE_SQL\}/);
-  /* Leads a call made on its own (source 'text', from keepCall) and dismissed
-     leads never make a caller known; a real text they sent does. */
-  assert.match(fn, /FROM submissions WHERE \$\{SAME_PHONE_SQL\} AND COALESCE\(source, ''\) <> 'text' AND dismissed_at IS NULL/);
-  assert.match(fn, /FROM sms_messages WHERE \$\{SAME_PHONE_SQL\} AND kind = 'inbound' AND template = 'reply'/);
-  assert.match(fn, /values: \[digits\]/);
+  assert.match(route, /call\.blocked = VOICE\.ringsOwner\(call\) \? await blockedCaller\(call\.from\) : false;/);
+  assert.match(route, /if \(VOICE\.ringsOwner\(call\)\) \{\s*if \(call\.from\) noteRing\(call\.from\);\s*await textRinging\(call\.from, 'call', req\.body\.CallerName\);/);
+  const fn = src.slice(src.indexOf('async function blockedCaller'), src.indexOf('app.post(VOICE.PATHS.incoming'));
+  assert.match(fn, /FROM blocked_callers WHERE phone = \$1/);
   assert.match(fn, /query_timeout: 3000/);
-  /* The 3s also covers waiting for a pool connection. */
   assert.match(fn, /Promise\.race\(\[lookup, slow\]\)/);
-  /* An outage reports once per 10 minutes, not on every call. */
-  assert.match(fn, /Date\.now\(\) - knownCallerReported > 6e5/);
-  assert.match(fn, /catch \(e\) \{[\s\S]*?reportError\('twilio:known-caller'[\s\S]*?return true;/);
-  const screen = src.slice(src.indexOf('app.post(VOICE.PATHS.screen'), src.indexOf('/* The ring ended.'));
-  assert.match(screen, /twilioVoiceOk\(req, res\)/);
-  assert.match(screen, /VOICE\.screenAnswerTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
-  assert.match(screen, /const call = \{ \.\.\.callDetails\(req\), digits: req\.body\.Digits \};/);
-  assert.match(screen, /if \(VOICE\.screenRings\(call\)\) await textRinging\(call\.from, 'call', req\.body\.CallerName\);/);
+  assert.match(fn, /Date\.now\(\) - blockedCallerReported > 6e5/);
+  assert.match(fn, /catch \(e\) \{[\s\S]*?reportError\('twilio:blocked-caller'[\s\S]*?return false;/);
+  assert.match(src, /CREATE TABLE IF NOT EXISTS blocked_callers \(\s*phone\s+TEXT PRIMARY KEY/);
+  assert.doesNotMatch(src, /VOICE\.PATHS\.screen|knownCaller/);
 });
 
-test('real texts are kept as inbound replies, the row the known-caller lookup trusts', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /VALUES \(\$1, 'inbound', \$2, 'reply', \$3, 'received', \$4,/);
-  /* Call notes are kept with template 'call', which the lookup skips. */
-  assert.match(src, /VALUES \(\$1, 'inbound', \$2, 'call', \$3, 'received', \$4\)/);
-});
-
-test('the menu still answers out of hours, with no owner number, and for the owner calling in', () => {
-  for (const c of [{ from, owner, open: false, known: true }, { from, owner: '', open: true, known: true }, { from: owner, owner, open: true, known: true }]) {
+test('the menu answers only with no owner number, or for the owner calling in', () => {
+  for (const c of [{ from, owner: '' }, { from: owner, owner }]) {
     const t = V.incomingTwiml({ base, shop, ...c });
     assert.match(t, /<Gather numDigits="1"/);
     assert.doesNotMatch(t, /<Dial/);
-    assert.equal(V.ringsDirect(c), false);
+    assert.equal(V.ringsOwner(c), false);
   }
 });
 
@@ -102,10 +64,9 @@ test('the incoming route passes the call details and texts the owner only when i
   assert.match(details, /open: VOICE\.isOpen\(\)/);
   assert.match(src.slice(src.indexOf('const textRinging'), src.indexOf('app.post(VOICE.PATHS.incoming')), /sendOwnerSms\(VOICE\.ringText\(\{ from, reason, name \}\)\)/);
   assert.match(route, /VOICE\.incomingTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
-  assert.match(route, /if \(VOICE\.ringsDirect\(call\)\) await textRinging\(call\.from, 'call', req\.body\.CallerName\);/);
 });
 
-test('a call opens on the menu out of hours, and silence falls through to the menu handler', () => {
+test('the menu, when it plays, lets silence falls through to the menu handler', () => {
   const t = V.incomingTwiml({ base });
   assert.match(t, /Thanks for calling June&apos;s Tees and Things/);
   assert.match(t, /<Gather numDigits="1"[^>]*action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/menu"/);
@@ -130,11 +91,10 @@ test('the owner is texted who is calling, only when the cell will ring', () => {
   assert.equal(V.ringReason({ digits: '', from, owner }), 'call');
   assert.equal(V.ringReason({ digits: '3', from, owner }), null);
   assert.equal(V.ringReason({ digits: '4', from, owner }), null);
-  assert.equal(V.ringReason({ digits: '1', from, owner, open: false }), null);
   assert.equal(V.ringReason({ digits: '1', from: owner, owner }), null);
   assert.equal(V.ringReason({ digits: '1', from, owner: '' }), null);
-  assert.equal(V.ringText({ from, reason: 'new' }), '\u{1F4DE} New order from (312) 555-0199. Ringing you now.');
-  assert.equal(V.ringText({ from, reason: 'existing', name: 'KIM LEE' }), '\u{1F4DE} Existing order from KIM LEE (312) 555-0199. Ringing you now.');
+  assert.equal(V.ringText({ from, reason: 'new' }), '\u{1F4DE} New order from (312) 555-0199. Ringing you now. Spam? Text BLOCK.');
+  assert.equal(V.ringText({ from, reason: 'existing', name: 'KIM LEE' }), '\u{1F4DE} Existing order from KIM LEE (312) 555-0199. Ringing you now. Spam? Text BLOCK.');
   assert.doesNotMatch(V.ringText({ from, reason: 'call', name: '<b>x</b>\nhttp://evil' }), /[<>\n:\/]/);
 });
 
@@ -168,13 +128,13 @@ test('no owner number, or the owner calling in, goes to voicemail rather than a 
   assert.match(V.menuTwiml({ digits: '1', from: owner, owner, base }), /<Record /);
 });
 
-test('after hours, an order call goes to the closed greeting and voicemail, never the cell', () => {
-  const t = V.menuTwiml({ digits: '1', from, owner, base, open: false });
-  assert.match(t, /We&apos;re closed right now/);
-  assert.match(t, /<Record /);
-  assert.doesNotMatch(t, /<Dial/);
-  assert.doesNotMatch(V.menuTwiml({ digits: '', from, owner, base, open: false }), /<Dial/);
-  assert.match(V.menuTwiml({ digits: '3', from, owner, base, open: false }), /3047 North Lincoln/);
+test('after hours a call still rings the owner; missed, it gets the closed greeting', () => {
+  assert.match(V.menuTwiml({ digits: '1', from, owner, shop, base }), /<Dial /);
+  const missed = V.doneTwiml({ accepted: false, base, open: false });
+  assert.match(missed, /We&apos;re closed right now/);
+  assert.match(missed, /<Record /);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /VOICE\.doneTwiml\(\{ accepted, base: TWILIO_VOICE_BASE, open: VOICE\.isOpen\(\) \}\)/);
 });
 
 test('shop hours are Mon-Fri 10:30-6 Chicago time, across daylight saving', () => {
@@ -221,6 +181,7 @@ test('after the ring: answered ends, anything else gets the voicemail', () => {
   assert.match(V.doneTwiml({ accepted: true, base }), /<Hangup\/>/);
   assert.doesNotMatch(V.doneTwiml({ accepted: true, base }), /Record/);
   assert.match(V.doneTwiml({ accepted: false, base }), /<Record /);
+  assert.doesNotMatch(V.doneTwiml({ accepted: false, base }), /closed right now/);
 });
 
 test('caller-controlled text is escaped in TwiML', () => {
@@ -267,6 +228,9 @@ test('a callback asks the owner to press 1 before the customer is dialled', () =
     /<Dial callerId="\+17739004592" timeout="30"><Number>\+13125550199<\/Number><\/Dial>/);
   assert.match(V.connectTwiml({ digits: '', to: '3125550199', shop: '+17739004592' }), /^<\?xml[^>]*><Response><Hangup\/><\/Response>$/);
   assert.match(V.connectTwiml({ digits: '1', to: '1900555', shop: '+17739004592' }), /<Hangup\/>/);
+  for (const to of ['9005550199', '8765550199', '3129765555']) {
+    assert.doesNotMatch(V.connectTwiml({ digits: '1', to, shop: '+17739004592' }), /<Dial/, to);
+  }
 });
 
 test('voicemail is transcribed, and only a finished transcript is sent on', () => {
@@ -295,10 +259,43 @@ test('server: callbacks only from the owner, once per text; text-back respects c
   }
 });
 
-test('server: CALL with a number only dials a customer already on file', () => {
+test('server: CALL dials any US number, never premium or Caribbean ones', () => {
+  for (const n of ['+13125550199', '+17875550199', '+14165550199']) assert.equal(V.callable(n), true, n);
+  for (const n of ['+19005550199', '+18765550199', '+17005550123', '+15335550123', '+14565550123', '+18095550199', '+13129765555', '+1312555019', '+442071234567', '']) {
+    assert.equal(V.callable(n), false, n);
+  }
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const cb = src.slice(src.indexOf('async function ownerCallback'), src.indexOf('app.post(VOICE.PATHS.incoming'));
-  const check = cb.indexOf('is not a customer on file');
-  assert.ok(check > 0 && check < cb.indexOf('await twilioCall('), 'the on-file check runs before dialling');
-  assert.match(cb, /FROM owner_text_forwards[\s\S]*FROM submissions[\s\S]*FROM quotes/);
+  const cb = src.slice(src.indexOf('async function ownerCallback'), src.indexOf('/* The last caller who rang'));
+  assert.doesNotMatch(cb, /not a customer on file/);
+  const check = cb.indexOf('if (!VOICE.callable(to))');
+  assert.ok(check > 0 && check < cb.indexOf('await twilioCall('), 'the premium check runs before dialling');
+
+});
+
+test('the owner texting BLOCK / UNBLOCK; anything else is a normal reply', () => {
+  assert.deepEqual(V.parseBlockCommand('BLOCK'), { unblock: false, number: '' });
+  assert.deepEqual(V.parseBlockCommand(' block 312-555-0199'), { unblock: false, number: '+13125550199' });
+  assert.deepEqual(V.parseBlockCommand('Unblock (312) 555 0199'), { unblock: true, number: '+13125550199' });
+  assert.deepEqual(V.parseBlockCommand('UNBLOCK'), { unblock: true, error: 'number' });
+  assert.deepEqual(V.parseBlockCommand('block 555-0199'), { unblock: false, error: 'number' });
+  assert.deepEqual(V.parseBlockCommand('block +44 7700 900123'), { unblock: false, number: '+447700900123' });
+  assert.deepEqual(V.parseBlockCommand('UNBLOCK +447700900123'), { unblock: true, number: '+447700900123' });
+  for (const t of ['Block letters are fine', 'blocked off friday', 'blocking', '', 'Block 2 is printed, pickup tomorrow', 'Unblock 3 colors ok?']) {
+    assert.equal(V.parseBlockCommand(t), null, t);
+  }
+});
+
+test('server: BLOCK works on any number, only from the owner, before the reply relay', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const sms = src.slice(src.indexOf("app.post('/webhooks/twilio/sms'"), src.indexOf("app.post('/webhooks/twilio/sms'") + 3500);
+  const ownerBranch = sms.indexOf('if (ownerDigits && from.replace');
+  const block = sms.indexOf('if (await ownerBlockCommand(text, req.body.MessageSid)) return;');
+  assert.ok(ownerBranch > 0 && block > ownerBranch && block < sms.indexOf('relayOwnerReply('), 'BLOCK is read in the owner branch, before relaying');
+  const fn = src.slice(src.indexOf('async function ownerBlockCommand'), src.indexOf('async function blockedCaller'));
+  assert.doesNotMatch(fn, /customer on file|FROM quotes|FROM submissions/);
+  assert.match(fn, /INSERT INTO blocked_callers \(phone\) VALUES \(\$1\) ON CONFLICT DO NOTHING/);
+  assert.match(fn, /DELETE FROM blocked_callers WHERE phone = \$1/);
+  assert.match(fn, /if \(!CALL_COMMANDS\.add\(messageSid\)\) return true;/);
+  assert.match(fn, /if \(recent\.length > 1\)/, 'two recent callers: ask, never guess');
+  assert.match(sms, /ownerBlockCommand\(text, req\.body\.MessageSid\)/);
 });

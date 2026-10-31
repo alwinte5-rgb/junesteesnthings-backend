@@ -2,14 +2,13 @@
 
 /* Calls to the shop's Twilio number.
 
-   In shop hours a caller the shop knows rings the owner straight away; an
-   unknown one is asked to press a key first, which robocalls cannot do.
-   Outside them the caller hears a short menu. An order option (or no key) rings the
-   owner's cell (TWILIO_TO_NUMBER) from the shop number, and a text names the
-   caller as it rings. Unanswered, or outside shop hours, the caller gets the
-   shop voicemail; the owner is texted about every call that rang and was
-   missed, and every message left. A caller who hangs up at the screen or the
-   menu without leaving one is not reported.
+   Every caller rings the owner's cell (TWILIO_TO_NUMBER) straight away, at
+   any hour, from the shop number, and a text names the caller as it rings
+   (owner, 2026-10-30). A number the owner blocked (texting BLOCK) hears a
+   busy line. Unanswered, the caller gets the shop voicemail (the closed
+   greeting outside shop hours); the owner is texted about every call that
+   rang and was missed, and every message left. Only the owner calling in, or
+   no owner number set, hears the menu.
 
    Every URL here is absolute and fixed, because Twilio's signature covers the
    exact URL it requested (see twilio-webhook.js). */
@@ -17,7 +16,6 @@
 const PATHS = {
   incoming: '/webhooks/twilio/voice',
   menu: '/webhooks/twilio/voice/menu',
-  screen: '/webhooks/twilio/voice/screen',
   done: '/webhooks/twilio/voice/done',
   voicemail: '/webhooks/twilio/voice/voicemail',
   transcript: '/webhooks/twilio/voice/transcript',
@@ -51,8 +49,8 @@ const INFO = "You'll find us at 3047 North Lincoln Avenue, suite 4 35, in Chicag
   'Come up to the 4th floor and have a seat in the lobby, and we will be right with you. ' +
   'You can also start a quote any time at j tees dot net.';
 
-/* When calls ring the owner: the shop's pickup hours, Chicago time. Outside
-   them a call goes to voicemail. */
+/* The shop's pickup hours, Chicago time: which voicemail greeting a missed
+   caller hears, and whether the text-back gives the hours. */
 const OPEN = { days: [1, 2, 3, 4, 5], from: 10 * 60 + 30, to: 18 * 60 };
 const DAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
@@ -103,48 +101,20 @@ function menuInner({ base, again = false }) {
     `<Redirect method="POST">${xml(base + PATHS.menu)}</Redirect>`);
 }
 
-/* Whether a call in shop hours can reach the owner at all: with an owner
-   number, and not the owner calling in. Callers who meet a menu hang up, so
-   in hours there is none; out of hours the menu still gives hours, address
-   and voicemail. */
-function ringsInHours({ from, owner, open }) {
-  return Boolean(open && owner && from !== owner);
+/* Whether a call can reach the owner at all: with an owner number, and not
+   the owner calling in. The press-1 screen for unknown callers (#499) and the
+   after-hours menu lost real customers; every caller now rings (owner,
+   2026-10-30), and spam is blocked number by number. */
+function ringsOwner({ from, owner, blocked = false }) {
+  return Boolean(owner && from !== owner && !blocked);
 }
 
-/* Whether a new call rings the owner straight away: in hours, and a caller
-   the shop knows (`known`, looked up in server.js). */
-function ringsDirect({ from, owner, open, known = false }) {
-  return Boolean(ringsInHours({ from, owner, open }) && known);
-}
+/* A blocked number hears a busy line: no voicemail, no lead, no texts. */
+const BUSY = () => twiml('<Reject reason="busy"/>');
 
-/* An unknown caller in hours: one key to reach the shop. Spam robocalls
-   cannot press it (owner, 2026-10-29); silence leaves a voicemail, and the
-   owner is texted only when a message was actually recorded. */
-function screenTwiml({ base }) {
-  return twiml(
-    `<Gather numDigits="1" timeout="6" finishOnKey="" action="${xml(base + PATHS.screen)}" method="POST">` +
-    say("Hi, you've reached June's Tees custom printing. Press 1 and we'll ring the shop.") +
-    '</Gather>' +
-    say("Sorry, we didn't get that. Please leave a message after the tone.") +
-    recordTag(base) + '<Hangup/>');
-}
-
-/* Any key on the screen is a person (finishOnKey="" so # counts too). */
-const pressedKey = (digits) => /^[0-9*#]$/.test(String(digits || '').trim());
-
-/* Whether the screen rings the owner: a key, and ringTwiml would dial. */
-function screenRings({ digits, from, owner, open = true }) {
-  return Boolean(pressedKey(digits) && open && owner && from !== owner);
-}
-
-function screenAnswerTwiml({ digits, from, owner, shop, base, open = true }) {
-  if (!pressedKey(digits)) return voicemailTwiml(base);
-  return ringTwiml({ from, owner, shop, base, open });
-}
-
-function incomingTwiml({ base, from, owner, shop, open = false, known = false }) {
-  if (!ringsInHours({ from, owner, open })) return twiml(menuInner({ base }));
-  if (!known) return screenTwiml({ base });
+function incomingTwiml({ base, from, owner, shop, blocked = false }) {
+  if (!owner || from === owner) return twiml(menuInner({ base }));
+  if (blocked) return BUSY();
   const callerId = shop ? ` callerId="${xml(shop)}"` : '';
   return twiml(
     say(`Thanks for calling ${SHOP}. One moment while we connect you.`) +
@@ -156,8 +126,7 @@ function incomingTwiml({ base, from, owner, shop, open = false, known = false })
    as "June's Tees Customer" reads as one before it is answered and is never
    held by unknown-caller screening; who is calling comes in a text
    (ringText). `from`, `owner` and `shop` are +1XXXXXXXXXX or ''. */
-function ringTwiml({ from, owner, shop, base, open = true }) {
-  if (!open) return afterHoursTwiml(base);
+function ringTwiml({ from, owner, shop, base }) {
   if (!owner || (from && from === owner)) return voicemailTwiml(base);
   const callerId = shop ? ` callerId="${xml(shop)}"` : '';
   return twiml(
@@ -167,8 +136,8 @@ function ringTwiml({ from, owner, shop, base, open = true }) {
 }
 
 /* Why a menu choice rings the owner, or null when it does not ring. */
-function ringReason({ digits, from, owner, open = true }) {
-  if (!open || !owner || (from && from === owner)) return null;
+function ringReason({ digits, from, owner }) {
+  if (!owner || (from && from === owner)) return null;
   const pick = MENU[String(digits || '').trim()];
   if (!pick) return 'call';
   return pick.reason || null;
@@ -178,21 +147,23 @@ function ringReason({ digits, from, owner, open = true }) {
 function ringText({ from, reason, name }) {
   const what = REASONS[Object.hasOwn(REASONS, reason) ? reason : 'call'];
   const who = name ? `${String(name).replace(/[^\w .,'&-]/g, '').trim().slice(0, 40)} ` : '';
-  return `\u{1F4DE} ${what.charAt(0).toUpperCase() + what.slice(1)} from ${who}${pretty(from)}. Ringing you now.`;
+  return `\u{1F4DE} ${what.charAt(0).toUpperCase() + what.slice(1)} from ${who}${pretty(from)}. Ringing you now. Spam? Text BLOCK.`;
 }
 
 /* What a menu key does. `digits` is '' when the caller pressed nothing. */
-function menuTwiml({ digits, from, owner, shop, base, open = true }) {
+function menuTwiml({ digits, from, owner, shop, base }) {
   const pick = MENU[String(digits || '').trim()];
-  if (!pick) return ringTwiml({ from, owner, shop, base, open });
+  if (!pick) return ringTwiml({ from, owner, shop, base });
   if (pick.info) return twiml(say(INFO) + menuInner({ base, again: true }));
   if (pick.voicemail) return twiml(say("Leave your name, number and what you need after the tone, and we'll get right back to you.") + recordTag(base) + '<Hangup/>');
-  return ringTwiml({ from, owner, shop, base, open });
+  return ringTwiml({ from, owner, shop, base });
 }
 
-/* After the ring. `accepted` = the owner's cell picked up. */
-function doneTwiml({ accepted, base }) {
-  return accepted ? twiml('<Hangup/>') : voicemailTwiml(base);
+/* After the ring. `accepted` = the owner's cell picked up; a missed caller
+   outside shop hours hears the closed greeting. */
+function doneTwiml({ accepted, base, open = true }) {
+  if (accepted) return twiml('<Hangup/>');
+  return open ? voicemailTwiml(base) : afterHoursTwiml(base);
 }
 
 function pretty(e164) {
@@ -231,12 +202,10 @@ function textBackBody({ open }) {
     (open ? '' : ' We\'re open Mon-Fri 10:30am-6pm.') + ' Reply STOP to opt out.';
 }
 
-/* The owner texting CALL (the last caller) or CALL and a number. null when
-   the text is not a call command; number '' means "the last caller". */
-function parseCallCommand(text) {
-  const m = /^\s*call\b[\s:,-]*(.*)$/i.exec(String(text || ''));
-  if (!m) return null;
-  const rest = m[1].trim();
+/* What follows CALL or BLOCK: '' (the last caller), a US number, an error
+   for something that starts like a number but is not one, or null for
+   words (an ordinary reply, passed on to the customer). */
+function commandNumber(rest) {
   if (!rest) return { number: '' };
   const d = rest.replace(/\D/g, '');
   if (/^[\d\s().+-]+$/.test(rest) && (d.length === 10 || (d.length === 11 && d[0] === '1'))) return { number: '+1' + d.slice(-10) };
@@ -244,6 +213,44 @@ function parseCallCommand(text) {
      tell the owner, never relay it to a customer as a message. */
   if (/^[\d(+]/.test(rest)) return { error: 'number' };
   return null;
+}
+
+/* The owner texting CALL (the last caller) or CALL and a number. null when
+   the text is not a call command; number '' means "the last caller". */
+function parseCallCommand(text) {
+  const m = /^\s*call\b[\s:,-]*(.*)$/i.exec(String(text || ''));
+  return m ? commandNumber(m[1].trim()) : null;
+}
+
+/* The owner texting BLOCK (the last caller) or BLOCK / UNBLOCK and a number,
+   US or overseas in +44... form. null when the text is not one ("Block 2 is
+   printed" is a reply to a customer); UNBLOCK always needs the number. */
+function parseBlockCommand(text) {
+  const m = /^\s*(un)?block\b[\s:,-]*(.*)$/i.exec(String(text || ''));
+  if (!m) return null;
+  const rest = m[2].trim();
+  if (/[a-z]/i.test(rest)) return null;
+  const unblock = Boolean(m[1]);
+  const intl = rest.replace(/[\s().-]/g, '');
+  if (/^\+[2-9]\d{7,14}$/.test(intl)) return { unblock, number: intl };
+  const cmd = commandNumber(rest);
+  if (!cmd) return null;
+  if (unblock && cmd.number === '') return { unblock, error: 'number' };
+  return { unblock, ...cmd };
+}
+
+/* Area codes on the +1 plan that are not the US or Canada (the Caribbean and
+   Bermuda: one-ring scam territory, billed like overseas calls), 900 premium
+   lines, and the non-geographic codes (5XX personal numbers, 456, 700) that
+   can be billed by the carrier; 976 is a premium exchange in any area code. */
+const NOT_US = new Set(['242', '246', '264', '268', '284', '345', '441', '473', '649', '658', '664', '721',
+  '758', '767', '784', '809', '829', '849', '868', '869', '876', '900', '456', '500', '700',
+  '521', '522', '523', '524', '525', '526', '527', '528', '529', '530', '531', '532', '533', '544', '566', '577', '588']);
+
+/* Whether the shop number may dial `to` (+1XXXXXXXXXX) for the owner. */
+function callable(to) {
+  const m = /^\+1([2-9]\d{2})([2-9]\d{2})\d{4}$/.exec(String(to || ''));
+  return Boolean(m && !NOT_US.has(m[1]) && m[2] !== '976');
 }
 
 /* The owner's cell is rung first (from the shop number, a saved contact);
@@ -259,7 +266,7 @@ function callbackTwiml({ to, shop, base }) {
 /* After the owner's key: dial the customer, or end. `to` is 10 digits from
    the signed URL. */
 function connectTwiml({ digits, to, shop }) {
-  if (String(digits || '').trim() !== '1' || !/^\d{10}$/.test(String(to || ''))) return twiml('<Hangup/>');
+  if (String(digits || '').trim() !== '1' || !callable('+1' + String(to || ''))) return twiml('<Hangup/>');
   return twiml(`<Dial callerId="${xml(shop)}" timeout="30"><Number>+1${to}</Number></Dial>`);
 }
 
@@ -274,6 +281,7 @@ function transcriptText({ from, text, status }) {
 const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
 
 module.exports = {
-  PATHS, MENU, incomingTwiml, ringsInHours, ringsDirect, screenTwiml, screenRings, screenAnswerTwiml, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml,
-  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody, parseCallCommand, callbackTwiml, connectTwiml, transcriptText,
+  PATHS, MENU, incomingTwiml, ringsOwner, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml, BUSY,
+  voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody,
+  parseCallCommand, parseBlockCommand, callable, callbackTwiml, connectTwiml, transcriptText,
 };

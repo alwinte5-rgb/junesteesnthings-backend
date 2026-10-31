@@ -429,6 +429,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
       return { rows: [] };
     } },
     ownerCallCommand: async (t) => { const c = require('../tools/lib/voice').parseCallCommand(t); if (c) callbacks.push(c); return Boolean(c); },
+    ownerBlockCommand: async (t) => Boolean(require('../tools/lib/voice').parseBlockCommand(t)),
     RELAY: require('../tools/lib/text-relay'), QUOTE_CODE_RE: /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/,
     twilioSend: async (to, b) => { if (twilioFails) throw Object.assign(new Error('nope'), { twilioCode: twilioFails }); sent.push([to, b]); return { sid: 'SMx' }; },
     markLeadResponded: async () => {},

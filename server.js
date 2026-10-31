@@ -1215,6 +1215,13 @@ async function initDB() {
       name        TEXT,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`).catch((e) => console.error('owner_text_forwards:', e.message));
+  /* Numbers the owner blocked by texting BLOCK: their calls hear a busy line
+     (tools/lib/voice.js, 2026-10-30). Kept as E.164. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS blocked_callers (
+      phone       TEXT PRIMARY KEY,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch((e) => console.error('blocked_callers:', e.message));
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS client_emails_inbound_once
                       ON client_emails (inbound_id) WHERE inbound_id IS NOT NULL`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS client_emails_quote_idx ON client_emails (quote_code, created_at DESC)`)
@@ -4911,6 +4918,7 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
   const ownerDigits = String(process.env.TWILIO_TO_NUMBER || '').replace(/\D/g, '').slice(-10);
   if (ownerDigits && from.replace(/\D/g, '').slice(-10) === ownerDigits) {
     if (await ownerCallCommand(text, req.body.MessageSid)) return;
+    if (await ownerBlockCommand(text, req.body.MessageSid)) return;
     const ownerSid = String(req.body.MessageSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
     await relayOwnerReply(text, ownerSid, TMEDIA.mediaOf(req.body)).catch((e) => {
       console.error('owner reply relay failed:', e.message);
@@ -5359,53 +5367,95 @@ async function ownerCallback(cmd) {
   }
   if (!to) return sendOwnerSms('Not calling: nobody has called or texted today. Text CALL and their number, e.g. CALL 312 555 0199.');
   if (to === owner || to === shop) return sendOwnerSms('Not calling: that is your own number.');
-  /* Only numbers the shop already knows: a spoofed "owner" text must not be
-     able to make the shop dial any number (premium-rate toll fraud). */
-  if (cmd.number) {
-    const digits = to.slice(-10);
-    const same = SAME_PHONE_SQL;
-    const { rows } = await pool.query(
-      `SELECT 1 FROM owner_text_forwards WHERE ${same}
-        UNION ALL SELECT 1 FROM submissions WHERE ${same}
-        UNION ALL SELECT 1 FROM quotes WHERE ${same} LIMIT 1`, [digits]);
-    if (!rows.length) return sendOwnerSms(`Not calling: ${VOICE.pretty(to)} is not a customer on file. Call them from your phone instead.`);
-  }
+  /* Any US number (owner, 2026-10-30): the owner's own cell rings first and
+     must press 1 before anyone is dialled, so a spoofed "owner" text cannot
+     place a call by itself. Premium and Caribbean numbers (toll fraud) never. */
+  if (!VOICE.callable(to)) return sendOwnerSms(`Not calling: ${VOICE.pretty(to)} is a premium-rate or overseas number. Call them from your phone if you mean to.`);
   await twilioCall(owner, VOICE.callbackTwiml({ to, shop, base: TWILIO_VOICE_BASE }));
   return sendOwnerSms(`Calling you now. Press 1 when you answer to ring ${VOICE.pretty(to)} from the shop number.`);
 }
 
-/* Whether a caller is someone the shop knows: a job, a lead from a form or
-   a person, or a text they sent. A lead a phone call made on its own (missed
-   call, voicemail) does not count, or every robocall that rang once would
-   ring through ever after; nor does a lead the shop dismissed. A slow or
-   failed lookup counts as known, so a database fault never stands between a
-   customer and the shop. The 3s covers waiting for a pool connection too:
-   Twilio gives up on the call after 15s. */
-let knownCallerReported = 0;
-async function knownCaller(from) {
-  const digits = String(from || '').replace(/\D/g, '').slice(-10);
-  if (digits.length !== 10) return false;
+/* Callers who rang the owner in the last ten minutes, newest last, for
+   BLOCK with no number. Kept in memory: after a restart the owner is asked
+   for the number instead. */
+const RECENT_RING_MS = 10 * 60e3;
+let recentRings = [];
+function noteRing(phone) {
+  const now = Date.now();
+  recentRings = recentRings.filter((r) => now - r.at < RECENT_RING_MS && r.phone !== phone);
+  recentRings.push({ phone, at: now });
+}
+
+/* The owner texted BLOCK or UNBLOCK: handled here (true), or false to pass
+   it on as a reply to a customer. Any number may be blocked, customer or
+   not. One action per text, like CALL (Twilio can deliver a text twice). */
+async function ownerBlockCommand(text, messageSid) {
+  const cmd = VOICE.parseBlockCommand(text);
+  if (!cmd) return false;
+  if (!CALL_COMMANDS.add(messageSid)) return true;
+  const word = cmd.unblock ? 'UNBLOCK' : 'BLOCK';
+  const tell = (msg) => sendOwnerSms(msg).catch((e) => console.error('block reply failed:', e.message));
+  if (cmd.error) {
+    await tell(`Not done: text ${word} and the full number, e.g. ${word} 312 555 0199` +
+      (cmd.unblock ? '.' : ', or BLOCK alone for the last caller.'));
+    return true;
+  }
+  let phone = cmd.number;
+  if (!phone) {
+    /* Never guess between two callers: blocking the wrong one turns a
+       customer away with a busy line. */
+    const recent = recentRings.filter((r) => Date.now() - r.at < RECENT_RING_MS);
+    if (recent.length > 1) {
+      await tell(`Not blocked: ${recent.length} people called just now. Text BLOCK and the number: ` +
+        recent.map((r) => VOICE.pretty(r.phone)).join(', ') + '.');
+      return true;
+    }
+    if (!recent.length) {
+      await tell('Not blocked: no call in the last 10 minutes. Text BLOCK and the number, e.g. BLOCK 312 555 0199.');
+      return true;
+    }
+    phone = recent[0].phone;
+  }
+  try {
+    if (cmd.unblock) await pool.query(`DELETE FROM blocked_callers WHERE phone = $1`, [phone]);
+    else await pool.query(`INSERT INTO blocked_callers (phone) VALUES ($1) ON CONFLICT DO NOTHING`, [phone]);
+  } catch (e) {
+    console.error('block command failed:', e.message);
+    reportError('twilio:block', e).catch(() => {});
+    await tell(`Could not ${word.toLowerCase()} ${VOICE.pretty(phone)}. Try again in a minute.`);
+    return true;
+  }
+  const typed = VOICE.pretty(phone).replace(/[()]/g, '');
+  await tell(cmd.unblock ? `Unblocked ${VOICE.pretty(phone)}. Their calls ring you again.`
+    : `Blocked ${VOICE.pretty(phone)}. Their calls get a busy line. To undo, text UNBLOCK ${typed}.`);
+  return true;
+}
+
+/* Whether the owner blocked this caller. A slow or failed lookup counts as
+   not blocked, so a database fault never stands between a customer and the
+   shop. The 3s covers waiting for a pool connection too: Twilio gives up on
+   the call after 15s. */
+let blockedCallerReported = 0;
+async function blockedCaller(from) {
+  if (!from) return false;
   let timer;
   try {
     const lookup = pool.query({
-      text: `SELECT 1 FROM quotes WHERE ${SAME_PHONE_SQL}
-              UNION ALL SELECT 1 FROM submissions WHERE ${SAME_PHONE_SQL} AND COALESCE(source, '') <> 'text' AND dismissed_at IS NULL
-              UNION ALL SELECT 1 FROM sms_messages WHERE ${SAME_PHONE_SQL} AND kind = 'inbound' AND template = 'reply'
-              LIMIT 1`,
-      values: [digits],
+      text: `SELECT 1 FROM blocked_callers WHERE phone = $1 LIMIT 1`,
+      values: [from],
       query_timeout: 3000,
     });
     const slow = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('lookup took over 3s')), 3000); });
     const { rows } = await Promise.race([lookup, slow]);
     return rows.length > 0;
   } catch (e) {
-    console.error('known caller lookup failed — ringing through:', e.message);
+    console.error('blocked caller lookup failed — ringing through:', e.message);
     /* Once per 10 minutes: an outage would otherwise report every call. */
-    if (Date.now() - knownCallerReported > 6e5) {
-      knownCallerReported = Date.now();
-      reportError('twilio:known-caller', e).catch(() => {});
+    if (Date.now() - blockedCallerReported > 6e5) {
+      blockedCallerReported = Date.now();
+      reportError('twilio:blocked-caller', e).catch(() => {});
     }
-    return true;
+    return false;
   } finally {
     clearTimeout(timer);
   }
@@ -5424,10 +5474,13 @@ const textRinging = (from, reason, name) => sendOwnerSms(VOICE.ringText({ from, 
 app.post(VOICE.PATHS.incoming, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
   const call = callDetails(req);
-  call.known = VOICE.ringsInHours(call) ? await knownCaller(call.from) : false;
+  call.blocked = VOICE.ringsOwner(call) ? await blockedCaller(call.from) : false;
   sendTwiml(res, VOICE.incomingTwiml({ ...call, base: TWILIO_VOICE_BASE }));
-  /* In hours the call rings straight away, so who is calling is texted here. */
-  if (VOICE.ringsDirect(call)) await textRinging(call.from, 'call', req.body.CallerName);
+  /* The call rings straight away, so who is calling is texted here. */
+  if (VOICE.ringsOwner(call)) {
+    if (call.from) noteRing(call.from);
+    await textRinging(call.from, 'call', req.body.CallerName);
+  }
 });
 
 app.post(VOICE.PATHS.menu, async (req, res) => {
@@ -5439,21 +5492,12 @@ app.post(VOICE.PATHS.menu, async (req, res) => {
   if (reason) await textRinging(call.from, reason, req.body.CallerName);
 });
 
-/* An unknown caller in hours pressed a key: a person. (Silence never posts
-   here; it falls through to the voicemail in screenTwiml.) */
-app.post(VOICE.PATHS.screen, async (req, res) => {
-  if (!twilioVoiceOk(req, res)) return;
-  const call = { ...callDetails(req), digits: req.body.Digits };
-  sendTwiml(res, VOICE.screenAnswerTwiml({ ...call, base: TWILIO_VOICE_BASE }));
-  if (VOICE.screenRings(call)) await textRinging(call.from, 'call', req.body.CallerName);
-});
-
 /* The ring ended. Not accepted = missed, reported now: a caller who hangs up
    here never reaches the voicemail route. */
 app.post(VOICE.PATHS.done, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
   const accepted = req.body.DialCallStatus === 'completed';
-  sendTwiml(res, VOICE.doneTwiml({ accepted, base: TWILIO_VOICE_BASE }));
+  sendTwiml(res, VOICE.doneTwiml({ accepted, base: TWILIO_VOICE_BASE, open: VOICE.isOpen() }));
   if (accepted) return;
   const from = callerOf(req);
   const text = VOICE.missedCallText({ from });
