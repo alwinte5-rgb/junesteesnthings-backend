@@ -3264,10 +3264,10 @@ function explainFailures(instance, service) {
    them and not the other, so every CRM call authenticated with a dead key
    while sending looked fine. Two homes for one secret is two chances to rotate
    half of it. */
-const brevo = keepContactsWhenPhoneFails(explainFailures(axios.create({
+const brevo = keepFirstSource(keepContactsWhenPhoneFails(explainFailures(axios.create({
   baseURL: 'https://api.brevo.com/v3',
   headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
-}), 'Brevo'));
+}), 'Brevo')));
 
 /** The phone rule, where every contact write passes through. Brevo's SMS
  *  attribute must be E.164, and a phone it cannot use — typed as
@@ -3320,21 +3320,41 @@ function brevoLeadSource(src) {
   return Object.prototype.hasOwnProperty.call(LEAD_SOURCES, s) ? 'lead-' + s : 'lead-other';
 }
 
-/* `source`, unless the contact already has one. These paths are not the way a
-   customer came in when Brevo already knows them: staff quoting an enquiry,
-   a lead typed in by hand, an hourly retry, a chat from a known customer —
-   any of those would otherwise overwrite the real first touch. `key` is the
-   email, or the E.164 phone of a phone-only contact. A failed look-up sends
-   no SOURCE at all: better blank than wrong. */
-async function brevoSourceIfNew(key, source) {
-  if (!key) return null;
-  try {
-    const by = String(key).includes('@') ? '' : '?identifierType=phone_id';
-    const { data } = await brevo.get(`/contacts/${encodeURIComponent(key)}${by}`);
-    return data && data.attributes && data.attributes.SOURCE ? null : source;
-  } catch (err) {
-    return err && err.response && err.response.status === 404 ? source : null;
-  }
+/** Where a contact came from, on the client every contact write passes
+ *  through (owner, 2026-10-31: both). A write naming a SOURCE records it as
+ *  LAST_SOURCE, the latest way in, always; SOURCE itself is the FIRST way in
+ *  and is dropped from the write when Brevo already has one. So a quote built
+ *  from an enquiry, a lead typed in by hand, an hourly retry or a later
+ *  designer sign-in never overwrites how the person found us, and the sign-in
+ *  links still show up as LAST_SOURCE.
+ *
+ *  The look-up is by email (lower-cased) or, for a phone-only contact, by the
+ *  E.164 phone (identifierType=phone_id). It is capped at 3 seconds; when it
+ *  fails, SOURCE is left out (better blank than wrong) and the write goes on.
+ *  The contact id it finds rides on the response as config.jtContactId.
+ *  tests/brevo-contacts.test.js. */
+function keepFirstSource(instance) {
+  instance.interceptors.request.use(async (cfg) => {
+    const d = cfg.data;
+    if (cfg.jtSourceChecked || String(cfg.method).toLowerCase() !== 'post' || cfg.url !== '/contacts'
+        || !d || typeof d !== 'object' || !d.attributes || !d.attributes.SOURCE) return cfg;
+    const attributes = { ...d.attributes, LAST_SOURCE: d.attributes.SOURCE };
+    const key = d.email ? String(d.email).trim().toLowerCase() : toE164(d.SMS || attributes.SMS);
+    let keep = false;
+    if (key) {
+      try {
+        const by = key.includes('@') ? '' : '?identifierType=phone_id';
+        const { data } = await instance.get(`/contacts/${encodeURIComponent(key)}${by}`, { timeout: 3000 });
+        keep = !(data && data.attributes && data.attributes.SOURCE);
+        if (data && data.id) cfg.jtContactId = String(data.id);
+      } catch (err) {
+        keep = !!(err && err.response && err.response.status === 404);
+      }
+    }
+    if (!keep) delete attributes.SOURCE;
+    return { ...cfg, data: { ...d, attributes }, jtSourceChecked: true };
+  });
+  return instance;
 }
 
 async function syncToBrevo(s) {
@@ -3346,14 +3366,13 @@ async function syncToBrevo(s) {
   // Brevo keys a contact on its email, or on the phone when there is none.
   const email = String(s.email || '').trim();
   if (!email && !toE164(s.phone)) return;
-  const source = await brevoSourceIfNew(email || toE164(s.phone), brevoLeadSource(s.source));
   await brevo.post('/contacts', {
     ...(email ? { email } : {}),
     attributes: {
       FIRSTNAME: firstname || '',
       LASTNAME:  rest.join(' ') || '',
       SMS:       s.phone || '',        // made E.164, or dropped: keepContactsWhenPhoneFails
-      ...(source ? { SOURCE: source } : {}),
+      SOURCE:    brevoLeadSource(s.source),   // the first way in stays: keepFirstSource
     },
     listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
     updateEnabled:  true,
@@ -3413,10 +3432,9 @@ async function syncTawkContactToBrevo({ name, email }) {
   }
   const [firstname, ...rest] = (name || '').trim().split(' ');
   const listId = process.env.BREVO_TAWK_LIST_ID || process.env.BREVO_LIST_ID;
-  const source = await brevoSourceIfNew(email, 'chat');
   await brevo.post('/contacts', {
     email,
-    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '', ...(source ? { SOURCE: source } : {}) },
+    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '', SOURCE: 'chat' },
     listIds:       listId ? [parseInt(listId)] : [],
     updateEnabled: true,
   });
@@ -10858,6 +10876,15 @@ function toE164(phone) {
  *  Returns the ids it holds, and `error`: the first thing Brevo refused, so the
  *  hourly catch-up can tell Brevo refusing the server (401) from a refusal about
  *  this one quote. Store the ids with keepBrevoIds(). */
+/** SOURCE for a quote's contact: its enquiry's, when it was built from one. */
+async function quoteBrevoSource(q) {
+  if (!q.from_submission_id) return 'quote';
+  try {
+    const { rows: [l] } = await pool.query('SELECT source FROM submissions WHERE id = $1', [q.from_submission_id]);
+    return l ? brevoLeadSource(l.source) : 'quote';
+  } catch { return 'quote'; }
+}
+
 async function syncQuoteToBrevo(q, { note = true } = {}) {
   const out = { contactId: q.brevo_contact_id || null, dealId: q.brevo_deal_id || null, error: null };
   // A quote waiting for the owner's approval is not a deal yet (staff_approvals).
@@ -10873,12 +10900,11 @@ async function syncQuoteToBrevo(q, { note = true } = {}) {
     const attrs = { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '' };
     const e164 = toE164(phone);
     if (e164) attrs.SMS = e164;
-    // A quote names its contact's way in only when nothing earlier did
-    // (brevoSourceIfNew): a quote built from an enquiry keeps the enquiry's.
-    if (!q.brevo_deal_id) {
-      const source = await brevoSourceIfNew(email || e164, 'quote');
-      if (source) attrs.SOURCE = source;
-    }
+    // A quote's first landing is a touch; a re-sync of it is not. A quote
+    // built from an enquiry names the enquiry's way in, even when the
+    // enquiry itself is still waiting for brevoCatchUp; keepFirstSource keeps
+    // any earlier SOURCE.
+    if (!q.brevo_deal_id) attrs.SOURCE = await quoteBrevoSource(q);
     const body = {
       attributes: attrs,
       listIds: process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
@@ -10888,9 +10914,12 @@ async function syncQuoteToBrevo(q, { note = true } = {}) {
     if (email) body.email = email;
     else if (e164) body.SMS = e164;
     else return out;                       // nothing to key on
-    await brevo.post('/contacts', body);
-
-    if (email) {
+    const posted = await brevo.post('/contacts', body);
+    // A new contact's id comes back from the POST; a known one's from the
+    // look-up keepFirstSource just made. Ask again only when neither has it.
+    const known = (posted && posted.data && posted.data.id) || (posted && posted.config && posted.config.jtContactId);
+    if (known) out.contactId = String(known);
+    else if (email) {
       const c = await brevo.get(`/contacts/${encodeURIComponent(email)}`);
       out.contactId = c.data && c.data.id ? String(c.data.id) : null;
     }
