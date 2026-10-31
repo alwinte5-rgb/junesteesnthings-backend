@@ -45,6 +45,7 @@ function extractFn(anchor) {
 
 const keepContactsWhenPhoneFails = vm.runInThisContext(`(() => {
   ${extractFn('function toE164(')}
+  ${extractFn('function contactWriteBody(')}
   ${extractFn('function keepContactsWhenPhoneFails(')}
   return keepContactsWhenPhoneFails;
 })()`);
@@ -218,32 +219,40 @@ const fnBody = (anchor) => { const at = src.indexOf(anchor); assert.notStrictEqu
 
 /* The real client stack and writers, against a Brevo that behaves like the
    real one: a create-only write (updateEnabled false) of a contact it already
-   has is refused 400 duplicate_parameter. `known` holds email/phone keys. */
-function sourceSandbox({ known = [], status = null } = {}) {
-  const posted = [];
-  const have = new Set(known);
+   has is refused 400 — `dupMessage` picks the wording. `known` maps an email
+   or phone to the contact's attributes. */
+function sourceSandbox({ known = {}, status = null, getStatus = null, dupMessage = 'Contact already exist' } = {}) {
+  const posted = [], looked = [];
+  const have = new Map(Object.entries(known));
   const adapter = async (config) => {
     const res = (code, data) => {
       const r = { status: code, statusText: 'x', headers: {}, config, data };
       if (code >= 400) throw new axios.AxiosError('Request failed with status code ' + code, 'ERR_BAD_REQUEST', config, null, r);
       return r;
     };
+    if (config.method === 'get') {
+      looked.push(config.url);
+      if (getStatus) return res(getStatus, {});
+      const key = decodeURIComponent(config.url.slice('/contacts/'.length).split('?')[0]);
+      return have.has(key) ? res(200, { id: 5, attributes: have.get(key) }) : res(404, { code: 'document_not_found' });
+    }
     const body = JSON.parse(config.data);
     posted.push(body);
     if (status) return res(status, { code: 'x', message: 'down' });
-    const key = body.email || (body.attributes && body.attributes.SMS);
-    if (have.has(key)) return body.updateEnabled ? res(204, '') : res(400, { code: 'duplicate_parameter', message: 'Contact already exist' });
-    have.add(key);
+    const key = body.email ? String(body.email).toLowerCase() : body.SMS || (body.attributes && body.attributes.SMS);   // Brevo ignores email case
+    if (have.has(key)) return body.updateEnabled ? res(204, '') : res(400, { code: 'duplicate_parameter', message: dupMessage });
+    have.set(key, body.attributes);
     return res(201, { id: 900 + posted.length });
   };
-  const ctx = { process: { env: {} }, console: { warn() {} }, isSpamName: () => false, parseInt };
+  const ctx = { process: { env: {} }, console: { warn() {}, error() {} }, isSpamName: () => false, parseInt };
   vm.createContext(ctx);
   vm.runInContext([src.slice(src.indexOf('const LEAD_SOURCES = {'), src.indexOf('};', src.indexOf('const LEAD_SOURCES = {')) + 2),
-    extractFn('function toE164('), extractFn('function keepContactsWhenPhoneFails('), fnBody('function keepFirstSource('),
-    extractFn('function brevoLeadSource('), fnBody('async function syncToBrevo('), fnBody('async function syncTawkContactToBrevo('),
+    extractFn('function toE164('), extractFn('function contactWriteBody('), extractFn('function keepContactsWhenPhoneFails('),
+    fnBody('function keepFirstSource('), extractFn('function brevoLeadSource('), fnBody('async function syncToBrevo('),
+    fnBody('async function syncTawkContactToBrevo('),
     'this.f = { keepFirstSource, keepContactsWhenPhoneFails, brevoLeadSource, syncToBrevo, syncTawkContactToBrevo };'].join('\n'), ctx);
   ctx.brevo = ctx.f.keepFirstSource(ctx.f.keepContactsWhenPhoneFails(axios.create({ baseURL: 'https://api.brevo.test/v3', adapter })));
-  return { ...ctx.f, brevo: ctx.brevo, posted, last: () => posted[posted.length - 1] };
+  return { ...ctx.f, brevo: ctx.brevo, posted, looked, last: () => posted[posted.length - 1] };
 }
 
 test('the live Brevo client carries the rule', () => {
@@ -271,9 +280,9 @@ test('a new contact is made in one call, with SOURCE and LAST_SOURCE', async () 
 });
 
 test('a known contact keeps its first way in; the new one is LAST_SOURCE', async () => {
-  const b = sourceSandbox({ known: ['ann@x.com'] });
-  await b.syncToBrevo({ name: 'Ann Lee', email: 'ann@x.com', phone: '', source: 'manual' });
-  assert.strictEqual(b.posted.length, 2);
+  const b = sourceSandbox({ known: { 'ann@x.com': { SOURCE: 'quote-form' } } });
+  await b.syncToBrevo({ name: 'Ann Lee', email: 'Ann@X.com', phone: '', source: 'manual' });
+  assert.match(b.looked[0], /ann%40x\.com$/, 'looked up lower-cased');
   assert.strictEqual(b.last().updateEnabled, true, 'then the update the caller asked for');
   assert.ok(!('SOURCE' in b.last().attributes), 'a lead typed in by hand does not replace the real way in');
   assert.strictEqual(b.last().attributes.LAST_SOURCE, 'lead-manual');
@@ -284,31 +293,56 @@ test('a known contact keeps its first way in; the new one is LAST_SOURCE', async
   assert.strictEqual(b.last().attributes.LAST_SOURCE, 'login-designer', 'the sign-in links still show');
 });
 
+test('a known contact with no SOURCE yet gets one from its next touch', async () => {
+  const b = sourceSandbox({ known: { 'ann@x.com': { FIRSTNAME: 'Ann' } } });
+  await b.syncToBrevo({ name: 'Ann Lee', email: 'ann@x.com', phone: '' });
+  assert.strictEqual(b.last().attributes.SOURCE, 'quote-form', 'the 656 blank contacts fill in over time');
+});
+
+test('a failed look-up leaves SOURCE out rather than guess; the write still lands', async () => {
+  const b = sourceSandbox({ known: { 'ann@x.com': { FIRSTNAME: 'Ann' } }, getStatus: 500 });
+  await b.syncToBrevo({ name: 'Ann', email: 'ann@x.com', phone: '', source: 'designer' });
+  assert.strictEqual(b.last().updateEnabled, true);
+  assert.ok(!('SOURCE' in b.last().attributes));
+  assert.strictEqual(b.last().attributes.LAST_SOURCE, 'design-lead');
+});
+
 test('two writers racing for a new contact: the one Brevo made first keeps SOURCE', async () => {
   const b = sourceSandbox();
   await Promise.all([
     b.syncToBrevo({ name: 'Ann', email: 'ann@x.com', phone: '', source: 'designer' }),
     b.brevo.post('/contacts', { email: 'ann@x.com', attributes: { SOURCE: 'login-designer' }, updateEnabled: true }),
   ]);
-  const sources = b.posted.filter((p) => p.updateEnabled === true).map((p) => p.attributes.SOURCE);
-  assert.deepStrictEqual(sources, [undefined], 'the loser updates without SOURCE');
+  const updates = b.posted.filter((p) => p.updateEnabled === true);
+  assert.strictEqual(updates.length, 1);
+  assert.ok(!('SOURCE' in updates[0].attributes), 'the loser updates without SOURCE');
+});
+
+test('an existing contact refused over its own phone keeps the phone', async () => {
+  const b = sourceSandbox({ known: { 'ann@x.com': { SOURCE: 'chat' } },
+    dupMessage: 'Unable to create contact, SMS is already associated with another Contact' });
+  await b.syncToBrevo({ name: 'Ann', email: 'ann@x.com', phone: '773-555-1234', source: 'designer' });
+  assert.strictEqual(b.last().updateEnabled, true);
+  assert.strictEqual(b.last().attributes.SMS, '+17735551234', 'not dropped as a "bad phone"');
 });
 
 test('a phone-only contact Brevo already has keeps its SOURCE', async () => {
-  const b = sourceSandbox({ known: ['+17735551234'] });
+  const b = sourceSandbox({ known: { '+17735551234': { SOURCE: 'quote-form' } } });
   await b.syncToBrevo({ name: 'Bo', email: '', phone: '(773) 555-1234', source: 'text' });
+  assert.strictEqual(b.looked[0], '/contacts/%2B17735551234?identifierType=phone_id');
   assert.ok(!('SOURCE' in b.last().attributes));
   assert.strictEqual(b.last().attributes.LAST_SOURCE, 'lead-text');
 });
 
-test('a late retry sets SOURCE for a new contact but never LAST_SOURCE', async () => {
+test('a late write: a new contact gets both fields, a known one\'s LAST_SOURCE is left alone', async () => {
   let b = sourceSandbox();
   await b.syncToBrevo({ name: 'Ann', email: 'ann@x.com', phone: '' }, { retry: true });
   assert.strictEqual(b.last().attributes.SOURCE, 'quote-form');
-  assert.ok(!('LAST_SOURCE' in b.last().attributes), 'an older touch must not cover a newer one');
-  b = sourceSandbox({ known: ['ann@x.com'] });
+  assert.strictEqual(b.last().attributes.LAST_SOURCE, 'quote-form', 'their only touch so far');
+  b = sourceSandbox({ known: { 'ann@x.com': { SOURCE: 'chat' } } });
   await b.syncToBrevo({ name: 'Ann', email: 'ann@x.com', phone: '' }, { retry: true });
-  assert.ok(!('SOURCE' in b.last().attributes) && !('LAST_SOURCE' in b.last().attributes));
+  assert.ok(!('SOURCE' in b.last().attributes) && !('LAST_SOURCE' in b.last().attributes),
+    'an older touch must not cover a newer one');
 });
 
 test('any other refusal is the caller\'s error, as before', async () => {
@@ -318,25 +352,27 @@ test('any other refusal is the caller\'s error, as before', async () => {
   assert.strictEqual(b.posted.length, 1, 'no second try');
 });
 
-test('a chat names a new contact "chat", and leaves a known one\'s alone', async () => {
+test('a chat is one touch: its transcript names no source', async () => {
   let b = sourceSandbox();
   await b.syncTawkContactToBrevo({ name: 'Cy', email: 'cy@x.com' });
   assert.strictEqual(b.last().attributes.SOURCE, 'chat');
-  b = sourceSandbox({ known: ['cy@x.com'] });
-  await b.syncTawkContactToBrevo({ name: 'Cy', email: 'cy@x.com' });
-  assert.ok(!('SOURCE' in b.last().attributes));
+  b = sourceSandbox({ known: { 'cy@x.com': { SOURCE: 'quote-form' } } });
+  await b.syncTawkContactToBrevo({ name: 'Cy', email: 'cy@x.com' }, { touch: false });
+  assert.strictEqual(b.posted.length, 1, 'a plain update, no create-only try');
+  assert.ok(!('SOURCE' in b.last().attributes) && !('LAST_SOURCE' in b.last().attributes));
+  assert.match(src, /syncTawkContactToBrevo\(\{ name: transcript\.name, email: transcript\.email \}, \{ touch: false \}\)/);
 });
 
 test('writes with no SOURCE pass straight through', async () => {
-  const b = sourceSandbox({ known: ['a@x.com'] });
+  const b = sourceSandbox({ known: { 'a@x.com': {} } });
   await b.brevo.post('/contacts', { email: 'a@x.com', attributes: { QUOTE_CODE: 'AB' }, updateEnabled: true });
   assert.strictEqual(b.posted.length, 1);
   assert.deepStrictEqual(Object.keys(b.posted[0].attributes), ['QUOTE_CODE']);
 });
 
-test('the hourly retries are marked late', () => {
+test('the hourly enquiry retry is marked late; quotes never move LAST_SOURCE', () => {
   assert.match(extractFn('async function brevoCatchUp('), /syncToBrevo\(s, \{ retry: true \}\)/);
-  assert.match(fnBody('async function brevoQuoteCatchUp('), /syncQuoteToBrevo\(q, \{ retry: true \}\)/);
+  assert.match(fnBody('async function syncQuoteToBrevo('), /brevo\.post\('\/contacts', body, \{ jtNotLatest: true \}\)/);
 });
 
 test('the hourly retry carries each enquiry\'s source', () => {

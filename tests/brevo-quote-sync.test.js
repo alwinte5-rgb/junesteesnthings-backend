@@ -295,10 +295,10 @@ test('the contact id comes from the write when Brevo made it, else from a look-u
 });
 
 test('a quote built from an enquiry names the enquiry\'s way in', async () => {
-  const realSource = vm.runInThisContext(`((pool, brevoLeadSource) => { ${extract('quoteBrevoSource')}; return quoteBrevoSource; })`);
+  const realSource = vm.runInThisContext(`((pool, brevoLeadSource, console = { error() {} }) => { ${extract('quoteBrevoSource')}; return quoteBrevoSource; })`);
   const pool = (rows, fail) => ({ query: async () => { if (fail) throw new Error('db'); return { rows }; } });
   const lead = (s) => (s === 'embroidery' ? 'embroidery-form' : 'quote-form');
   assert.strictEqual(await realSource(pool([{ source: 'embroidery' }]), lead)({ from_submission_id: 9 }), 'embroidery-form');
   assert.strictEqual(await realSource(pool([]), lead)({}), 'quote', 'a quote made from scratch');
-  assert.strictEqual(await realSource(pool([], true), lead)({ from_submission_id: 9 }), 'quote', 'a failed read still names it');
+  assert.strictEqual(await realSource(pool([], true), lead)({ from_submission_id: 9 }), null, 'a failed read names nothing rather than a wrong source');
 });
