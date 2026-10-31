@@ -277,11 +277,12 @@ async function firstPost(q, postData) {
   return { out, body: b.calls.find((c) => c.verb === 'POST' && c.url === '/contacts').body, did: b.calls.map((c) => `${c.verb} ${c.url}`) };
 }
 
-test('a quote\'s first sync names it "quote"; a re-sync names nothing', async () => {
+test('a quote\'s first sync names it "quote"; only until its contact is confirmed', async () => {
   assert.strictEqual((await firstPost({})).body.attributes.SOURCE, 'quote');
-  assert.ok(!('SOURCE' in (await firstPost({ brevo_deal_id: 'd7' })).body.attributes));
+  assert.strictEqual((await firstPost({ brevo_deal_id: 'd7' })).body.attributes.SOURCE, 'quote',
+    'a deal without a confirmed contact may still name it (only a blank SOURCE is filled)');
   assert.ok(!('SOURCE' in (await firstPost({ brevo_contact_id: '42' })).body.attributes),
-    'a deal that keeps failing does not make every save a first landing');
+    'once its contact is confirmed, a save is not a way in');
 });
 
 test('the contact id comes from the write when Brevo made it, else from a look-up', async () => {
