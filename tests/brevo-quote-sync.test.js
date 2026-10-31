@@ -280,15 +280,17 @@ async function firstPost(q, postData) {
 test('a quote\'s first sync names it "quote"; a re-sync names nothing', async () => {
   assert.strictEqual((await firstPost({})).body.attributes.SOURCE, 'quote');
   assert.ok(!('SOURCE' in (await firstPost({ brevo_deal_id: 'd7' })).body.attributes));
+  assert.ok(!('SOURCE' in (await firstPost({ brevo_contact_id: '42' })).body.attributes),
+    'a deal that keeps failing does not make every save a first landing');
 });
 
-test('the contact id comes from the write when it can, with no second look-up', async () => {
-  let r = await firstPost({}, { data: { id: 77 } });                      // Brevo made the contact
+test('the contact id comes from the write when Brevo made it, else from a look-up', async () => {
+  let r = await firstPost({}, { data: { id: 77 } });
   assert.strictEqual(r.out.contactId, '77');
-  assert.ok(!r.did.includes('GET /contacts/dana%40example.com'));
-  r = await firstPost({}, { data: '', config: { jtContactId: '42' } });   // keepFirstSource found it
+  assert.ok(!r.did.includes('GET /contacts/dana%40example.com'), 'no second look-up');
+  r = await firstPost({}, { data: '' });                                  // an update: no id back
   assert.strictEqual(r.out.contactId, '42');
-  assert.ok(!r.did.includes('GET /contacts/dana%40example.com'));
+  assert.ok(r.did.includes('GET /contacts/dana%40example.com'));
   assert.strictEqual(r.out.dealId, 'new-deal', 'and the deal is still made and linked');
 });
 
