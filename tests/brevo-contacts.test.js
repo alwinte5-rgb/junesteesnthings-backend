@@ -210,34 +210,83 @@ test('a synced enquiry is marked so the catch-up leaves it alone', () => {
 
 /* ── where each contact came from (Brevo SOURCE) ───────────────────────────
    Owner, 2026-10-31: 656 of 924 contacts had no SOURCE, because only the
-   designer's /api/crm-contact wrote one. */
+   designer's /api/crm-contact wrote one. The server's own paths fill it in only
+   when Brevo has none, so a quote or a typed-in lead never overwrites the real
+   way in. */
 
-/* Up to the function's closing brace at column 0: extractFn stops at a
-   destructured parameter list's brace. */
-const fnBody = (anchor) => { const at = src.indexOf(anchor); assert.notStrictEqual(at, -1, anchor); return src.slice(at, src.indexOf('\n}\n', at)); };
+const fnBody = (anchor) => { const at = src.indexOf(anchor); assert.notStrictEqual(at, -1, anchor); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
 
-const brevoLeadSource = vm.runInThisContext(`(${extractFn('function brevoLeadSource(')})`);
+/* The real functions, against a Brevo that knows `known` (key -> attributes)
+   and answers every look-up with `getStatus` when that is set. */
+function sourceSandbox({ known = {}, getStatus = null } = {}) {
+  const posted = [], looked = [];
+  const brevo = {
+    get: async (url) => {
+      looked.push(url);
+      const key = decodeURIComponent(url.slice('/contacts/'.length).split('?')[0]);
+      const status = getStatus || (known[key] ? 200 : 404);
+      if (status !== 200) { const e = new Error(String(status)); e.response = { status }; throw e; }
+      return { data: { attributes: known[key] } };
+    },
+    post: async (url, body) => { posted.push(body); return { data: {} }; },
+  };
+  const ctx = { brevo, process: { env: {} }, console: { warn() {} }, isSpamName: () => false, parseInt };
+  vm.createContext(ctx);
+  vm.runInContext([src.slice(src.indexOf('const LEAD_SOURCES = {'), src.indexOf('};', src.indexOf('const LEAD_SOURCES = {')) + 2),
+    extractFn('function toE164('), extractFn('function brevoLeadSource('), fnBody('async function brevoSourceIfNew('),
+    fnBody('async function syncToBrevo('), fnBody('async function syncTawkContactToBrevo('),
+    'this.f = { brevoLeadSource, syncToBrevo, syncTawkContactToBrevo };'].join('\n'), ctx);
+  return { ...ctx.f, posted, looked };
+}
 
-test('an enquiry names the form it came from', () => {
+test('an enquiry names the form it came from, in one spelling per channel', () => {
+  const { brevoLeadSource } = sourceSandbox();
   assert.strictEqual(brevoLeadSource(undefined), 'quote-form', 'the quote form leaves submissions.source empty');
-  assert.strictEqual(brevoLeadSource('form'), 'quote-form');
   assert.strictEqual(brevoLeadSource('embroidery'), 'embroidery-form');
   assert.strictEqual(brevoLeadSource('designer'), 'design-lead');
-  assert.strictEqual(brevoLeadSource('text'), 'lead-text', 'texts and calls reach Brevo through the hourly catch-up');
-  assert.strictEqual(brevoLeadSource('x"<y>' + 'z'.repeat(60)).length <= 40, true);
+  assert.strictEqual(brevoLeadSource('chat'), 'chat', 'the same value the tawk path writes');
+  assert.strictEqual(brevoLeadSource('offline'), 'chat');
+  assert.strictEqual(brevoLeadSource('Text'), 'lead-text', 'Leads page keys, lower-cased');
+  assert.strictEqual(brevoLeadSource('!!!'), 'lead-other', 'never "lead-" or a new spelling');
 });
 
-test('every enquiry path passes its source to Brevo', () => {
-  assert.match(extractFn('async function syncToBrevo('), /SOURCE:\s*brevoLeadSource\(s\.source\)/);
-  assert.match(extractFn('async function brevoCatchUp('), /SELECT id, name, phone, email, source FROM submissions/,
-    'a retried enquiry keeps its source');
-  assert.match(src, /syncToBrevo\(\{ name, email, phone, source: 'embroidery' \}\)/);
-  assert.match(src, /syncToBrevo\(\{ name, email, phone, source: 'designer' \}\)/);
-  assert.match(fnBody('async function syncTawkContactToBrevo('), /SOURCE: 'chat'/);
+test('a new contact gets its source; one Brevo already knows keeps the one it has', async () => {
+  let b = sourceSandbox();
+  await b.syncToBrevo({ name: 'Ann Lee', email: 'ann@x.com', phone: '', source: 'embroidery' });
+  assert.strictEqual(b.posted[0].attributes.SOURCE, 'embroidery-form');
+
+  b = sourceSandbox({ known: { 'ann@x.com': { SOURCE: 'login-designer' } } });
+  await b.syncToBrevo({ name: 'Ann Lee', email: 'ann@x.com', phone: '', source: 'manual' });
+  assert.ok(!('SOURCE' in b.posted[0].attributes), 'a lead typed in by hand does not replace the real way in');
+
+  b = sourceSandbox({ known: { 'ann@x.com': { FIRSTNAME: 'Ann' } } });
+  await b.syncToBrevo({ name: 'Ann Lee', email: 'ann@x.com', phone: '' });
+  assert.strictEqual(b.posted[0].attributes.SOURCE, 'quote-form', 'known but blank: filled in');
 });
 
-test('a quote sets SOURCE only when it first lands, never on a re-sync', () => {
-  assert.match(fnBody('async function syncQuoteToBrevo('), /if \(!q\.brevo_deal_id\) attrs\.SOURCE = 'quote';/);
-  assert.doesNotMatch(fnBody('async function syncQuoteContact('), /SOURCE/,
-    'status updates (won, paid) are not a new way in');
+test('a phone-only contact is looked up by its phone', async () => {
+  const b = sourceSandbox();
+  await b.syncToBrevo({ name: 'Bo', email: '', phone: '(773) 555-1234', source: 'text' });
+  assert.match(b.looked[0], /^\/contacts\/%2B17735551234\?identifierType=phone_id$/);
+  assert.strictEqual(b.posted[0].attributes.SOURCE, 'lead-text');
+});
+
+test('a failed look-up sends no source rather than a wrong one, and the contact still lands', async () => {
+  const b = sourceSandbox({ getStatus: 500 });
+  await b.syncToBrevo({ name: 'Ann Lee', email: 'ann@x.com', phone: '', source: 'designer' });
+  assert.strictEqual(b.posted.length, 1);
+  assert.ok(!('SOURCE' in b.posted[0].attributes));
+});
+
+test('a chat names a new contact "chat", and leaves a known one alone', async () => {
+  let b = sourceSandbox();
+  await b.syncTawkContactToBrevo({ name: 'Cy', email: 'cy@x.com' });
+  assert.strictEqual(b.posted[0].attributes.SOURCE, 'chat');
+  b = sourceSandbox({ known: { 'cy@x.com': { SOURCE: 'quote-form' } } });
+  await b.syncTawkContactToBrevo({ name: 'Cy', email: 'cy@x.com' });
+  assert.ok(!('SOURCE' in b.posted[0].attributes));
+});
+
+test('the hourly retry carries each enquiry\'s source', () => {
+  assert.match(extractFn('async function brevoCatchUp('), /email, source FROM submissions/);
 });

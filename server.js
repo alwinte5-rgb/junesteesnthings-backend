@@ -3309,14 +3309,32 @@ function keepContactsWhenPhoneFails(instance) {
   return instance;
 }
 
-/* Where an enquiry came from, as the Brevo SOURCE attribute (owner,
-   2026-10-31: 656 of 924 contacts had none). Last touch, like the designer's
-   /api/crm-contact sources: a newer enquiry names the newer way in. The keys
-   are submissions.source; the quote form leaves it empty. */
+/* Where a contact first came from, as the Brevo SOURCE attribute (owner,
+   2026-10-31: 656 of 924 contacts had none). The keys are submissions.source
+   (LEAD_SOURCES, the Leads page's own list); the quote form leaves it empty.
+   Anything else is 'lead-other', so a channel never splits into spellings. */
 function brevoLeadSource(src) {
-  const s = String(src || 'form');
-  return ({ form: 'quote-form', embroidery: 'embroidery-form', designer: 'design-lead' })[s]
-    || ('lead-' + s.replace(/[^a-z0-9_-]/gi, '')).slice(0, 40);
+  const s = String(src || 'form').trim().toLowerCase();
+  const named = { form: 'quote-form', embroidery: 'embroidery-form', designer: 'design-lead', chat: 'chat', offline: 'chat' };
+  if (named[s]) return named[s];
+  return Object.prototype.hasOwnProperty.call(LEAD_SOURCES, s) ? 'lead-' + s : 'lead-other';
+}
+
+/* `source`, unless the contact already has one. These paths are not the way a
+   customer came in when Brevo already knows them: staff quoting an enquiry,
+   a lead typed in by hand, an hourly retry, a chat from a known customer —
+   any of those would otherwise overwrite the real first touch. `key` is the
+   email, or the E.164 phone of a phone-only contact. A failed look-up sends
+   no SOURCE at all: better blank than wrong. */
+async function brevoSourceIfNew(key, source) {
+  if (!key) return null;
+  try {
+    const by = String(key).includes('@') ? '' : '?identifierType=phone_id';
+    const { data } = await brevo.get(`/contacts/${encodeURIComponent(key)}${by}`);
+    return data && data.attributes && data.attributes.SOURCE ? null : source;
+  } catch (err) {
+    return err && err.response && err.response.status === 404 ? source : null;
+  }
 }
 
 async function syncToBrevo(s) {
@@ -3328,13 +3346,14 @@ async function syncToBrevo(s) {
   // Brevo keys a contact on its email, or on the phone when there is none.
   const email = String(s.email || '').trim();
   if (!email && !toE164(s.phone)) return;
+  const source = await brevoSourceIfNew(email || toE164(s.phone), brevoLeadSource(s.source));
   await brevo.post('/contacts', {
     ...(email ? { email } : {}),
     attributes: {
       FIRSTNAME: firstname || '',
       LASTNAME:  rest.join(' ') || '',
       SMS:       s.phone || '',        // made E.164, or dropped: keepContactsWhenPhoneFails
-      SOURCE:    brevoLeadSource(s.source),
+      ...(source ? { SOURCE: source } : {}),
     },
     listIds:        process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],
     updateEnabled:  true,
@@ -3394,9 +3413,10 @@ async function syncTawkContactToBrevo({ name, email }) {
   }
   const [firstname, ...rest] = (name || '').trim().split(' ');
   const listId = process.env.BREVO_TAWK_LIST_ID || process.env.BREVO_LIST_ID;
+  const source = await brevoSourceIfNew(email, 'chat');
   await brevo.post('/contacts', {
     email,
-    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '', SOURCE: 'chat' },
+    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '', ...(source ? { SOURCE: source } : {}) },
     listIds:       listId ? [parseInt(listId)] : [],
     updateEnabled: true,
   });
@@ -10853,9 +10873,12 @@ async function syncQuoteToBrevo(q, { note = true } = {}) {
     const attrs = { FIRSTNAME: first || '', LASTNAME: rest.join(' ') || '' };
     const e164 = toE164(phone);
     if (e164) attrs.SMS = e164;
-    // The first time a quote lands (no deal yet) is a new touch; a re-sync of
-    // the same quote is not (brevoLeadSource).
-    if (!q.brevo_deal_id) attrs.SOURCE = 'quote';
+    // A quote names its contact's way in only when nothing earlier did
+    // (brevoSourceIfNew): a quote built from an enquiry keeps the enquiry's.
+    if (!q.brevo_deal_id) {
+      const source = await brevoSourceIfNew(email || e164, 'quote');
+      if (source) attrs.SOURCE = source;
+    }
     const body = {
       attributes: attrs,
       listIds: process.env.BREVO_LIST_ID ? [parseInt(process.env.BREVO_LIST_ID)] : [],

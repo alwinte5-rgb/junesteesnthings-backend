@@ -78,6 +78,7 @@ function fakeBrevo(fail = {}) {
 const makeSync = vm.runInThisContext(`((brevo, BREVO_PIPELINE, BREVO_STAGE, money, quoteLink, fmtDate, process, console) => {
   ${extract('toE164')}
   ${extract('quoteStage')}
+  ${extract('brevoSourceIfNew')}
   ${extract('syncQuoteToBrevo')}
   return syncQuoteToBrevo;
 })`);
@@ -94,7 +95,7 @@ async function sync(q, opts, fail) {
 test('a new quote: its contact, one deal, the two linked, and a note of the job', async () => {
   const { out, did } = await sync({});
   assert.deepStrictEqual(out, { contactId: '42', dealId: 'new-deal', error: null });
-  assert.deepStrictEqual(did, ['POST /contacts', 'GET /contacts/dana%40example.com', 'POST /crm/deals',
+  assert.deepStrictEqual(did, ['GET /contacts/dana%40example.com', 'POST /contacts', 'GET /contacts/dana%40example.com', 'POST /crm/deals',
     'PATCH /crm/deals/new-deal', 'POST /crm/notes']);
 });
 
@@ -263,4 +264,28 @@ test('cancelling and un-cancelling push the stage to the deal', () => {
     assert.match(r, /RETURNING \*/, sig);
     assert.match(r, /if \(rows\.length\) syncDealStage\(rows\[0\]\)/, sig);
   }
+});
+
+/* ── SOURCE: a quote names the way in only when nothing earlier did ──────── */
+
+async function quoteSource(existing, q = {}) {
+  const b = fakeBrevo();
+  const get = b.client.get;
+  b.client.get = async (url) => {
+    if (existing === 404) { const e = new Error('404'); e.response = { status: 404 }; throw e; }
+    return url.startsWith('/contacts/') && existing ? { data: { id: 42, attributes: existing } } : get(url);
+  };
+  const syncQuoteToBrevo = makeSync(b.client, 'pipe', STAGES, String, String, String, { env: {} }, quiet);
+  await syncQuoteToBrevo({ code: 'AB12CD', name: 'Dana Reed', email: 'dana@example.com', total: 1, items: [], ...q });
+  return b.calls.find((c) => c.verb === 'POST' && c.url === '/contacts').body.attributes.SOURCE;
+}
+
+test('a quote for a new contact names it "quote"', async () => {
+  assert.strictEqual(await quoteSource(404), 'quote');
+  assert.strictEqual(await quoteSource({ FIRSTNAME: 'Dana' }), 'quote', 'known, but with no source yet');
+});
+
+test('a quote for someone who came in another way keeps their way in', async () => {
+  assert.strictEqual(await quoteSource({ SOURCE: 'quote-form' }), undefined, 'staff quoting an enquiry is not a new touch');
+  assert.strictEqual(await quoteSource(404, { brevo_deal_id: 'd7' }), undefined, 'a re-sync never names a source');
 });
