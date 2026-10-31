@@ -380,3 +380,10 @@ test('the hourly enquiry retry is marked late; quotes never move LAST_SOURCE', (
 test('the hourly retry carries each enquiry\'s source', () => {
   assert.match(extractFn('async function brevoCatchUp('), /email, source FROM submissions/);
 });
+
+test('a known contact\'s id rides back on the response, so a quote need not look it up again', async () => {
+  const b = sourceSandbox({ known: { '+17735551234': { SOURCE: 'chat' } } });
+  const r = await b.brevo.post('/contacts', { SMS: '+17735551234', attributes: { SOURCE: 'quote' }, updateEnabled: true });
+  assert.strictEqual(r.config.jtContactId, '5', 'phone-only too, which an email look-up never found');
+  assert.match(fnBody('async function syncQuoteToBrevo('), /posted\.config\.jtContactId/);
+});

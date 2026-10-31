@@ -3356,8 +3356,10 @@ function keepFirstSource(instance) {
         const by = key.includes('@') ? '' : '?identifierType=phone_id';
         const { data } = await instance.get(`/contacts/${encodeURIComponent(key)}${by}`, { timeout: 3000 });
         known = { source: !!(data && data.attributes && data.attributes.SOURCE) };
+        if (data && data.id) cfg = { ...cfg, jtContactId: String(data.id) };   // read back by syncQuoteToBrevo
       } catch (err) {
         if (err && err.response && err.response.status === 404) known = false;
+        else console.warn('brevo: source look-up failed, SOURCE left out —', err && err.message);
       }
     }
     if (known !== false && (known === null || known.source)) delete attributes.SOURCE;
@@ -3446,7 +3448,7 @@ async function syncTawkContactToBrevo({ name, email }, { late = false } = {}) {
   const listId = process.env.BREVO_TAWK_LIST_ID || process.env.BREVO_LIST_ID;
   await brevo.post('/contacts', {
     email,
-    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '', SOURCE: 'chat' },
+    attributes:    { FIRSTNAME: firstname || '', LASTNAME: rest.join(' ') || '', SOURCE: brevoLeadSource('chat') },
     listIds:       listId ? [parseInt(listId)] : [],
     updateEnabled: true,
   }, { jtNotLatest: late });
@@ -10937,8 +10939,9 @@ async function syncQuoteToBrevo(q, { note = true } = {}) {
     // The shop makes a quote: it names a NEW contact's way in, but is not the
     // customer's latest touch, so it never moves LAST_SOURCE (keepFirstSource).
     const posted = await brevo.post('/contacts', body, { jtNotLatest: true });
-    // A contact Brevo just made comes back with its id; an update does not.
-    const made = posted && posted.data && posted.data.id;
+    // A contact Brevo just made comes back with its id; a known one's was
+    // found by keepFirstSource's look-up (phone-only ones too).
+    const made = (posted && posted.data && posted.data.id) || (posted && posted.config && posted.config.jtContactId);
     if (made) out.contactId = String(made);
     else if (email) {
       const c = await brevo.get(`/contacts/${encodeURIComponent(email)}`);
