@@ -10,8 +10,9 @@
  *
  * The quote form lists every active method. The online designer offers it on
  * every product that already offers method #1 and that lib/garments.js
- * decorationsFor() gives the 'dtf:chest' role — adult garments: the oversized
- * print's list plus vests (owner, 2026-10-26) — with the value #1 has there.
+ * decorationsFor() gives the 'dtf:chest' role — the oversized print's classes
+ * plus vests (owner, 2026-10-26), youth and toddler sizes included (owner,
+ * 2026-10-31) — with the value #1 has there.
  *
  * Re-running is safe: it re-prices the method in place WITHOUT touching its
  * on/off switch, and only adds the product link where it is missing. Re-run it
@@ -87,7 +88,7 @@ const skipped = hasDtf.filter((p) => !fits(p));
 
 console.log('\n  ' + (existing.length ? 'update #' + existing[0].id + ' (active=' + existing[0].active + ', left as it is)' : 'create') + '  ' + TITLE);
 console.log('  offer it on ' + withDtf.length + ' product(s) that already offer standard DTF');
-console.log('  skip ' + skipped.length + ' that are not adult garments (bags, kids, caps, non-garments): ' + skipped.map((p) => '#' + p.id).join(' '));
+console.log('  skip ' + skipped.length + ' whose class takes no chest logo (bags, caps, non-garments): ' + skipped.map((p) => '#' + p.id).join(' '));
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
 const dir = path.join(os.homedir(), 'jtees-backups');

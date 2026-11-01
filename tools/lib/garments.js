@@ -238,9 +238,11 @@ function resolveRoles(methods) {
 const OPTIONAL_ROLES = ['dtf:oversized', 'dtf:chest'];
 
 /* A youth hoodie is a 'hoodie' (the class is about the cut), but its back is
-   nowhere near 12" x 18", so it never gets the oversized print — nor the chest
-   logo, which follows the oversized print's adult-only list. */
-const ADULT_ONLY = ['dtf:oversized', 'dtf:chest'];
+   nowhere near 12" x 18", so it never gets the oversized print. The chest logo
+   is NOT adult-only (owner, 2026-10-31): a small chest logo on a kid's hoodie
+   costs the same chest rate as on an adult's, and the designer draws the Left
+   chest box on youth items too. */
+const ADULT_ONLY = ['dtf:oversized'];
 const KIDS_SIZE_RE = /\b(youth|toddler|infant|baby|kids?)\b/i;
 
 /** The decoration roles one product can take — DECORATIONS for its class, less
