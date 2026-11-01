@@ -15,10 +15,22 @@ test('adult garments and vests get the chest logo', () => {
   assert.ok(DECORATIONS.vest.includes('dtf:chest'), 'vests');
 });
 
-test('kids, bags, caps and non-garments do not', () => {
-  for (const n of ['Liberty Bags 8502 Cotton Tote Bag', 'Gildan 5000B Youth Heavy Cotton Tee',
-    'Gildan 18500B Youth Heavy Blend Hoodie', 'Bella+Canvas 3001T — Toddler Jersey Tee',
-    'Rabbit Skins RS4400 — Infant Short Sleeve Bodysuit', 'Richardson 112 Trucker Cap', '3in Buttons'])
+test('youth and toddler sizes get it too (owner, 2026-10-31), never the oversized print', () => {
+  /* The 12 youth items the designer shows the Left chest box on, linked live 2026-10-31. */
+  for (const n of ['Gildan 18500B Youth Heavy Blend Hoodie', 'Rabbit Skins 3326 — Toddler Pullover Fleece Hoodie',
+    'Comfort Colors 1467Y Youth Garment-Dyed Lightweight Hooded Sweatshirt',
+    'Independent Trading Co. PRM1500Y Youth Midweight Pigment-Dyed Hooded Sweatshirt',
+    'Gildan SF000B Youth Softstyle® Midweight Crewneck Sweatshirt', 'Independent Trading Co. SS3001Y Youth Midweight Crewneck Sweatshirt',
+    'Paragon 221T Toddler Bahama Hooded Long Sleeve T-Shirt', 'Badger 2105 Youth B-Core Hooded Long Sleeve T-Shirt',
+    'Champion S790 Youth Powerblend® Hooded Sweatshirt', 'Gildan 18000B Youth Heavy Blend™ Crewneck Sweatshirt',
+    'C2 Sport 5520 Youth Fleece Hooded Sweatshirt', 'C2 Sport 5521 Youth Crewneck Sweatshirt']) {
+    assert.ok(fits(n), n);
+    assert.ok(!(decorationsFor(n) || []).includes('dtf:oversized'), n + ': no oversized');
+  }
+});
+
+test('bags, caps and non-garments do not', () => {
+  for (const n of ['Liberty Bags 8502 Cotton Tote Bag', 'Richardson 112 Trucker Cap', '3in Buttons'])
     assert.ok(!fits(n), n);
 });
 

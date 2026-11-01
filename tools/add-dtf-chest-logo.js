@@ -10,11 +10,9 @@
  *
  * The quote form lists every active method. The online designer offers it on
  * every product that already offers method #1 and that lib/garments.js
- * decorationsFor() gives the 'dtf:chest' role — adult garments: the oversized
- * print's list plus vests (owner, 2026-10-26) — with the value #1 has there.
- * It also goes on every product whose designer Front shows the Left chest box
- * (lib/chest-box.js), youth and toddler items included (owner, 2026-10-31), so
- * a chest logo placed in that box is never charged as a full front.
+ * decorationsFor() gives the 'dtf:chest' role — the oversized print's classes
+ * plus vests (owner, 2026-10-26), youth and toddler sizes included (owner,
+ * 2026-10-31) — with the value #1 has there.
  *
  * Re-running is safe: it re-prices the method in place WITHOUT touching its
  * on/off switch, and only adds the product link where it is missing. Re-run it
@@ -27,7 +25,6 @@ const path = require('path');
 const { mysqlUrlFrom, mysql, enjson, dejson, sq } = require('./lib/db');
 const { CHEST_LOGO_LADDER } = require('./lib/dtf-chest-logo');
 const { decorationsFor } = require('./lib/garments');
-const { showsChestBox } = require('./lib/chest-box');
 
 const APPLY = process.argv.includes('--apply');
 const url = mysqlUrlFrom(process.env);
@@ -82,19 +79,16 @@ const newCalc = {
 };
 
 const existing = mysql(url, 'SELECT id, active FROM lumise_printings WHERE title=' + sq(TITLE) + ';', { rows: true });
-const products = mysql(url, 'SELECT id, name, printings, stages FROM lumise_products;', { rows: true });
+const products = mysql(url, 'SELECT id, name, printings FROM lumise_products;', { rows: true });
 const parse = (p) => { try { const o = JSON.parse(decodeURIComponent(p || '')); return o && typeof o === 'object' ? o : null; } catch { return null; } };
 const hasDtf = products.filter((p) => { const o = parse(p.printings); return o && Object.prototype.hasOwnProperty.call(o, '_1'); });
-const byRole = (p) => (decorationsFor(p.name) || []).includes('dtf:chest');
-const fits = (p) => byRole(p) || showsChestBox(p.stages);
+const fits = (p) => (decorationsFor(p.name) || []).includes('dtf:chest');
 const withDtf = hasDtf.filter(fits);
 const skipped = hasDtf.filter((p) => !fits(p));
 
 console.log('\n  ' + (existing.length ? 'update #' + existing[0].id + ' (active=' + existing[0].active + ', left as it is)' : 'create') + '  ' + TITLE);
-const byBox = withDtf.filter((p) => !byRole(p));
 console.log('  offer it on ' + withDtf.length + ' product(s) that already offer standard DTF');
-console.log('  of those, ' + byBox.length + ' by their Left chest box alone (youth, toddler): ' + byBox.map((p) => '#' + p.id).join(' '));
-console.log('  skip ' + skipped.length + ' that are neither adult garments nor show the chest box (bags, caps, non-garments, kids without it): ' + skipped.map((p) => '#' + p.id).join(' '));
+console.log('  skip ' + skipped.length + ' whose class takes no chest logo (bags, caps, non-garments): ' + skipped.map((p) => '#' + p.id).join(' '));
 if (!APPLY) { console.log('\n  dry run — pass --apply to write'); process.exit(0); }
 
 const dir = path.join(os.homedir(), 'jtees-backups');
