@@ -6,7 +6,8 @@
  *        Left chest · Right chest · Back       (no full front: zipper/placket)
  *   tees, long sleeves, tanks, pullover hoodies and crews
  *        Full front · Left chest · Back
- *   kids, infant bodysuits, totes      Front · Back
+ *   kids                               Front · Left chest · Back (owner, 2026-11-02)
+ *   infant bodysuits, totes            Front · Back
  *   caps                               Front only (decided 2026-09-12)
  *
  * Before this every garment had one front box the size of a tee's chest, so a
@@ -90,6 +91,10 @@ const SETS = {
   ],
   kids: [
     { key: 'front', label: 'Front', side: 'front', w: 11, h: 14, x: 0, top: 1.5 },  // 2" up, as closed
+    /* Owner, 2026-11-02: kids get a left chest too (the adult chest scaled
+       to a kids body). tools/add-kids-left-chest.js added it to the ones
+       already in the shop. */
+    { key: 'left_chest', label: 'Left chest', side: 'front', w: 4.5, h: 4.5, x: 3.5, cy: 5 },
     { key: 'back',  label: 'Back',  side: 'back',  w: 11, h: 15, x: 0, top: 3 },
   ],
   onesie: [

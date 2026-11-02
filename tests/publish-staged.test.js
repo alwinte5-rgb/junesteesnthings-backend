@@ -150,7 +150,7 @@ test('a drawing of the wrong garment is never accepted', () => {
     stages: drawn('hoodies_sweatshirt_front', 'hoodies_sweatshirt_back') };
   assert.match(notReady(crew), /drawing is the wrong garment .*a hood on a crewneck/);
   assert.strictEqual(notReady({ ...crew, name: 'Gildan 18500 Unisex Heavy Blend Hooded Sweatshirt' }), null, 'a hooded sweatshirt is fine');
-  const kids = ['front', 'back'];
+  const kids = ['front', 'left_chest', 'back'];
   const tank = { ...tee, name: 'Shaka Wear SHKTT Youth Tank', variations: '', stages: drawn('kids_babies_front', 'kids_babies_back', kids) };
   assert.match(notReady(tank), /sleeves on a tank/);
   assert.strictEqual(notReady({ ...tank, stages: drawn('tank_tops_front', 'tank_tops_back', kids) }), null, 'on the tank drawing it is fine');
