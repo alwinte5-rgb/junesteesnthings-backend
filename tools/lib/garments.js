@@ -203,7 +203,9 @@ const DECORATIONS = {
   /* Decorated as the shirt it was filed as; the class only stops it being
      sold as a shirt. */
   apron:   ['dtf', 'dtf:oversized', 'dtf:chest', 'screen', ...EMB_FULL],
-  kids:    ['dtf', 'screen'],
+  /* Owner, 2026-11-02: kids garments have a Left chest side now
+     (tools/add-kids-left-chest.js), so they take the chest-logo price too. */
+  kids:    ['dtf', 'dtf:chest', 'screen'],
   onesie:  ['dtf', 'screen'],
 };
 
