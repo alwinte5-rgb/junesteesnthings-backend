@@ -33,8 +33,9 @@ function helloText({ first }) {
     template: 'reintro',
     /* What is actually new (owner, 2026-10-05): designing your own online and
        choosing the garment. Turnaround (owner, 2026-10-28): small orders
-       5–7 business days, rush for a fee, Christmas orders by Nov 24. */
-    body: `June's Tees: Hi${f ? ' ' + f : ''}! Christmas shirts? Order by Nov 24. Small orders are ready in 5-7 business days ` +
+       5–7 business days, rush for a fee, Christmas orders by Dec 10 (owner,
+       2026-10-29; rush fees after it). */
+    body: `June's Tees: Hi${f ? ' ' + f : ''}! Christmas shirts? Order by Dec 10. Rush fees apply after Dec 10 due to holiday demand. Small orders are ready in 5-7 business days ` +
       `(rush available). New: design your own online, 190+ products, live prices: ${short(SITE)} Reply STOP to opt out.`,
   };
 }
@@ -170,8 +171,8 @@ function helloEmail({ first, email }) {
   <tr><td style="padding:10px 24px">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fdeef6;border:1px solid #f6c3de;border-radius:12px">
       <tr><td style="padding:16px 20px;text-align:center">
-        <div style="font-size:20px;font-weight:800;color:#0B1F4B">🎄 Christmas orders: order by Nov 24</div>
-        <p style="line-height:1.6;margin:8px 0 12px">⚡ Small orders are ready in <b>5–7 business days</b>, larger orders 7–14.
+        <div style="font-size:20px;font-weight:800;color:#0B1F4B">🎄 Christmas orders: order by Dec 10</div>
+        <p style="line-height:1.6;margin:8px 0 12px">Rush fees apply after Dec 10 due to holiday demand.<br>⚡ Small orders are ready in <b>5–7 business days</b>, larger orders 7–14.
           Need it in under 5 days? Rush turnaround is available for a fee.</p>
         ${btn(`${SITE}/contact`, 'Get a quote')}
       </td></tr>

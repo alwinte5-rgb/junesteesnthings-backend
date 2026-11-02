@@ -43,7 +43,7 @@ const PHOTOS = `${SITE}/assets/images/`;
 /* Orders close 2 weeks before every event (owner, 2026-10-28, replacing the
    4 weeks of 2026-10-17): small orders take 5–7 business days and larger
    ones 7–14, and anything later is a paid rush. */
-const { lastOpenDay, christmasLastDay } = require('./shop-closed');
+const { lastOpenDay, christmasLastDay, CHRISTMAS_RUSH_NOTE } = require('./shop-closed');
 /* An occasion page's path, from the one list in marketing-calendar.js. */
 const CAL_PAGE = (id) => require('./marketing-calendar').OCCASIONS.find((o) => o.id === id).page;
 const MIN_ORDER_BY = 14;
@@ -84,6 +84,7 @@ const saturdayBefore = (dt) => new Date(dt.getTime() - ((dt.getUTCDay() + 1) % 7
    days before the date an order must be in, only where it is more than
    MIN_ORDER_BY - shorter is a rush promise and is refused. `closes(y)`
    (optional): the last order day itself, where it follows a rule of its own.
+   `rushNote` (optional): a sentence said wherever its order-by date is.
    `email` is what goes
    to the list; `ads` is the search ad text and keywords. */
 const EVENTS = [
@@ -130,8 +131,9 @@ const EVENTS = [
            keywords: ['thanksgiving family shirts', 'matching family shirts chicago', 'friendsgiving shirts'] },
   },
   {
-    /* Orders close the Tuesday before Thanksgiving (owner; Nov 24 in 2026). */
-    key: 'christmas', weight: 2, closes: christmasLastDay, photo: 'email/xmas-gifts-real.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25),
+    /* Orders close Dec 10 (owner, 2026-10-29; was the Tuesday before
+       Thanksgiving). `lead` keeps selling from Oct 27, as before the move. */
+    key: 'christmas', weight: 2, closes: christmasLastDay, rushNote: CHRISTMAS_RUSH_NOTE, lead: 59, photo: 'email/xmas-gifts-real.jpg', name: 'Christmas & holiday gifts', when: (y) => ymd(y, 12, 25),
     products: ['Matching family Christmas shirts and hoodies', 'Photo gifts: mugs, pillows, totes and baby bodysuits', 'Holiday party shirts for the office or your team', 'Christmas sweatshirts with a name, a year or an inside joke'],
     link: SITE + CAL_PAGE('christmas'), cta: 'Make a Christmas gift',
     email: {
@@ -479,6 +481,8 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const BLUE = '#1f4bb8';
 const PINK = '#e8245c';
 const INK = '#14203a';
+/* An event's rushNote, to follow its order-by date: ' ' + the note, or ''. */
+const rush = (ev) => (ev.rushNote ? ' ' + ev.rushNote : '');
 
 /** The words of one email: {subject, preview, headline, paras[], list[], listTitle}. */
 function words(send) {
@@ -531,7 +535,7 @@ function words(send) {
     default:
       return { subject: `Last call: order by ${short(ev.orderByDate)} for ${ev.name}`, preview: 'This is the last day we can promise it in time.',
                headline: 'Last call',
-               paras: [`${short(ev.orderByDate)} is the last day to order for ${ev.name} and have it in time. Call or text us if you need help deciding.`],
+               paras: [`${short(ev.orderByDate)} is the last day to order for ${ev.name} and have it in time.${rush(ev)} Call or text us if you need help deciding.`],
                listTitle: '', list: [] };
   }
 }
@@ -560,20 +564,20 @@ function emailFor(send) {
     ${w.paras.map((p) => `<p style="margin:0 0 14px">${esc(p)}</p>`).join('')}
     ${w.list.length ? `${w.listTitle ? `<p style="margin:0 0 6px;font-weight:700">${esc(w.listTitle)}</p>` : ''}
     <ul style="margin:0 0 16px;padding-left:20px">${w.list.map((p) => `<li style="margin:5px 0">${esc(p)}</li>`).join('')}</ul>` : ''}
-    ${showDeadline ? `<p style="margin:0 0 18px;padding:11px 14px;background:#fff1f5;border-left:4px solid ${PINK};border-radius:6px"><b>Order by ${esc(nice(ev.orderByDate))}</b> to have it in hand for ${esc(ev.name)}.</p>` : ''}
+    ${showDeadline ? `<p style="margin:0 0 18px;padding:11px 14px;background:#fff1f5;border-left:4px solid ${PINK};border-radius:6px"><b>Order by ${esc(nice(ev.orderByDate))}</b> to have it in hand for ${esc(ev.name)}.${esc(rush(ev))}</p>` : ''}
     <p style="margin:0 0 20px;text-align:center"><a href="${esc(ev.link)}" style="display:inline-block;background:${BLUE};color:#ffffff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:700;font-size:16px">${esc(ev.cta)}</a></p>
     <p style="margin:0 0 6px">Questions, or want us to design it? Call or text <a href="tel:+17739004592" style="color:${BLUE}">${PHONE}</a> or reply to this email. Small orders are ready in 5–7 business days; need it sooner? Rush is available for a fee. Free pickup in Lakeview, by appointment.</p>
     ${s.beat === 'announce' && ev.email.ps ? `<p style="margin:16px 0 0;color:#4b5563"><b>P.S.</b> ${esc(fill(ev.email.ps, ev))}</p>` : ''}
-    ${s.also ? `<div style="margin-top:22px;padding-top:14px;border-top:1px solid #e5e8f0;font-size:14px;color:#4b5563"><b style="color:${INK}">Also coming up:</b> ${esc(s.also.name)}, ${esc(nice(s.also.date))}. Order by ${esc(nice(s.also.orderByDate))}. <a href="${esc(s.also.link)}" style="color:${BLUE}">${esc(s.also.cta)}</a></div>` : ''}
+    ${s.also ? `<div style="margin-top:22px;padding-top:14px;border-top:1px solid #e5e8f0;font-size:14px;color:#4b5563"><b style="color:${INK}">Also coming up:</b> ${esc(s.also.name)}, ${esc(nice(s.also.date))}. Order by ${esc(nice(s.also.orderByDate))}.${esc(rush(s.also))} <a href="${esc(s.also.link)}" style="color:${BLUE}">${esc(s.also.cta)}</a></div>` : ''}
   </div>
   <div style="padding:14px 26px 18px;background:#f7f8fb;font-size:12px;color:#6b7280;line-height:1.5">
     You are getting this because you ordered from, asked for a quote from, or signed up with June’s Tees &amp; Things.
   </div>
 </div></div>`;
   const text = [w.headline, '', ...w.paras, '', ...w.list.map((x) => '- ' + x), '',
-    showDeadline ? `Order by ${nice(ev.orderByDate)} to have it in hand for ${ev.name}.` : '',
+    showDeadline ? `Order by ${nice(ev.orderByDate)} to have it in hand for ${ev.name}.${rush(ev)}` : '',
     `${ev.cta}: ${ev.link}`, '', `Questions? Call or text ${PHONE}. Small orders are ready in 5–7 business days; rush available for a fee. Free pickup in Lakeview, by appointment.`,
-    s.also ? `Also coming up: ${s.also.name}, ${nice(s.also.date)}. Order by ${nice(s.also.orderByDate)}: ${s.also.link}` : ''].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
+    s.also ? `Also coming up: ${s.also.name}, ${nice(s.also.date)}. Order by ${nice(s.also.orderByDate)}${s.also.rushNote ? '.' + rush(s.also) : ':'} ${s.also.link}` : ''].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
   return { subject: w.subject, preview: w.preview, html, text };
 }
 

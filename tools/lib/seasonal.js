@@ -99,6 +99,8 @@ const HOME_EVENTS = {
     /* The banner is the occasion page's own (occasion-pages.json), so one
        record holds its picture and words. */
     banner: 'occasions/christmas-shirts-chicago.html',
+    /* Said beside its order-by date (owner, 2026-10-29). */
+    rushNote: require('./shop-closed').CHRISTMAS_RUSH_NOTE,
     /* Owner, 2026-10-25: "the large 4 cards gifts first then the clothing". */
     rows: [
       { title: 'Christmas gifts', products: ['p523', 'p530', 'p27', 'p154'], large: true },
@@ -206,7 +208,7 @@ function homeBlock(events, now) {
     const b = bannerFor(c);
     const page = b ? b.href : (e.page || '');
     const banner = b ? bannerImg(b, { href: b.href, cls: 'ss-banner', from }) : '';
-    const tag = day <= cal.ymd(e.orderBy) ? `${esc(e.name)} &middot; order by ${esc(cal.longDate(e.orderBy))}` : esc(e.name);
+    const tag = day <= cal.ymd(e.orderBy) ? `${esc(e.name)} &middot; order by ${esc(cal.longDate(e.orderBy))}${c.rushNote ? ` &middot; ${esc(c.rushNote)}` : ''}` : esc(e.name);
     /* The first row carries the event's name, its order-by note and the link
        to its page; the ones after it just their own heading. */
     const rows = (c.rows || [{ title: c.title, products: c.products }]).map((r, i) => {

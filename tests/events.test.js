@@ -21,7 +21,7 @@ test('on 6 Oct 2026 marathon orders have closed (2 weeks ahead) and Halloween is
   assert.deepStrictEqual(E.sellingNow(new Date('2026-10-28T15:00:00Z')).map((e) => e.key), ['thanksgiving', 'christmas']);
   assert.strictEqual(E.iso(up.find((e) => e.key === 'chicago-marathon').orderByDate), '2026-09-27');
   assert.strictEqual(E.iso(up.find((e) => e.key === 'thanksgiving').orderByDate), '2026-11-12');
-  assert.strictEqual(E.iso(up.find((e) => e.key === 'christmas').orderByDate), '2026-11-24', 'owner: Christmas orders close Tue Nov 24');
+  assert.strictEqual(E.iso(up.find((e) => e.key === 'christmas').orderByDate), '2026-12-10', 'owner: Christmas orders close Thu Dec 10');
   assert.strictEqual(E.iso(up.find((e) => e.key === 'breast-cancer-awareness').date), '2027-10-01');
   assert.ok(up.every((e, i) => i === 0 || up[i - 1].date <= e.date));
 });
@@ -90,10 +90,24 @@ test('an event sends nothing after its last call, so no "0 days left" email on t
   }
 });
 
-test('Christmas orders close the Tuesday before Thanksgiving every year (owner)', () => {
-  for (const [y, want] of [[2026, '2026-11-24'], [2027, '2027-11-23'], [2028, '2028-11-21']]) {
+test('Christmas orders close Dec 10 every year (owner, 2026-10-29), selling from Oct 27 as before', () => {
+  for (const y of [2026, 2027, 2028]) {
     const x = E.upcoming(new Date(Date.UTC(y, 0, 2))).find((e) => e.key === 'christmas');
-    assert.strictEqual(E.iso(x.orderByDate), want);
-    assert.strictEqual(x.orderByDate.getUTCDay(), 2);
+    assert.strictEqual(E.iso(x.orderByDate), `${y}-12-10`);
+    assert.strictEqual(E.iso(x.start), `${y}-10-27`);
   }
+});
+
+test('every Christmas deadline in the emails says rush fees apply after Dec 10; no rush price', () => {
+  const note = 'Rush fees apply after Dec 10 due to holiday demand.';
+  const sch = E.schedule(new Date('2026-10-27T12:00:00Z'), 60);
+  const xmas = sch.filter((x) => x.event.key === 'christmas');
+  assert.ok(xmas.some((x) => x.beat === 'lastcall'), 'Christmas gets a last call');
+  for (const x of xmas) {
+    const m = E.emailFor(x);
+    assert.ok(m.html.includes(note) && m.text.includes(note), `${x.beat} on ${E.iso(x.day)}`);
+    assert.doesNotMatch(m.html + m.text, /same[- ]day|rush[^.<]{0,40}(\$|\d+ ?%)/i);
+  }
+  const other = sch.find((x) => x.event.key !== 'christmas' && (!x.also || x.also.key !== 'christmas'));
+  if (other) assert.ok(!E.emailFor(other).text.includes(note), 'only Christmas carries it');
 });

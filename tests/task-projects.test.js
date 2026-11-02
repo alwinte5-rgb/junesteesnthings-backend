@@ -37,7 +37,7 @@ test('Christmas 2026 is the written-out project, dated from Oct 23 to Oct 30', (
   const p = P.seasonProject(season('christmas', 2026), { now, longDate: CAL.longDate });
   assert.strictEqual(p.title, 'Christmas 2026: Print the Magic of Christmas');
   assert.strictEqual(p.auto_ref, 'mcal:christmas:2026');
-  assert.strictEqual(p.key_date, '2026-11-24', 'the shop is closed Nov 25 to 27');
+  assert.strictEqual(p.key_date, '2026-12-10', 'owner 2026-10-29: last day to order Thu Dec 10');
   assert.deepStrictEqual(p.steps.map((s) => s.due_on),
     ['2026-10-23', '2026-10-26', '2026-10-27', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30']);
   assert.deepStrictEqual(p.steps.map((s) => s.step_no), [1, 2, 3, 4, 5, 6, 7]);

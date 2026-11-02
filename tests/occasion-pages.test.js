@@ -45,7 +45,9 @@ test('each page is written for search', () => {
     const first = (p.sections[0].p.join(' ')).split(/\s+/).slice(0, 100).join(' ').toLowerCase();
     assert.ok(h1.includes(kw.replace(/^custom /, '')) || p.title.replace(/ & /g, ' and ').toLowerCase().includes(kw), `${p.path}: keyword in the H1 or title`);
     assert.ok(first.includes(kw), `${p.path}: keyword in the first 100 words`);
-    assert.doesNotMatch(p.title + p.meta + copy + faq, /fast (local )?turnaround|same[- ]week|free shipping|1.2 days|\brush\b/i, p.path);
+    // The one rush line allowed in page copy is the owner's Christmas note (2026-10-29).
+    const noRushNote = (p.title + p.meta + copy + faq).split("Rush fees apply after Dec 10 due to holiday demand.").join('');
+    assert.doesNotMatch(noRushNote, /fast (local )?turnaround|same[- ]week|free shipping|1.2 days|\brush\b/i, p.path);
   }
 });
 
