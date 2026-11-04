@@ -5290,10 +5290,9 @@ async function recordSmsDelivery(p) {
 
 // ── Twilio calls ──────────────────────────────────────────────────────────────
 // In the Twilio console, set the number's "A call comes in" webhook to exactly
-// https://www.jtees.net/webhooks/twilio/voice (HTTP POST). Calls ring
-// TWILIO_TO_NUMBER from the shop number: in shop hours straight away for a
-// caller the shop knows and after one key press for anyone else, after a
-// short menu outside them (tools/lib/voice.js).
+// https://www.jtees.net/webhooks/twilio/voice (HTTP POST). External callers
+// press 1 before TWILIO_TO_NUMBER rings from the shop number. Unanswered
+// calls retain the shop voicemail (tools/lib/voice.js).
 const TWILIO_VOICE_BASE = (process.env.TWILIO_VOICE_BASE || 'https://www.jtees.net').trim().replace(/\/+$/, '');
 
 /* Twilio signs the exact URL it requested, query string included. */
@@ -5539,11 +5538,7 @@ app.post(VOICE.PATHS.incoming, async (req, res) => {
   const call = callDetails(req);
   call.blocked = VOICE.ringsOwner(call) ? await blockedCaller(call.from) : false;
   sendTwiml(res, VOICE.incomingTwiml({ ...call, base: TWILIO_VOICE_BASE }));
-  /* The call rings straight away, so who is calling is texted here. */
-  if (VOICE.ringsOwner(call)) {
-    if (call.from) noteRing(call.from);
-    await textRinging(call.from, 'call', req.body.CallerName);
-  }
+  /* Screening alone must never ring or send a ringing notification. */
 });
 
 app.post(VOICE.PATHS.menu, async (req, res) => {
@@ -5553,6 +5548,19 @@ app.post(VOICE.PATHS.menu, async (req, res) => {
   /* The cell shows the shop number, so who is calling arrives as a text. */
   const reason = VOICE.ringReason(call);
   if (reason) await textRinging(call.from, reason, req.body.CallerName);
+});
+
+/* Only a caller who presses 1 passes the spam screen. Check the block list
+   again here, before the Dial, so direct signed callbacks cannot skip it. */
+app.post(VOICE.PATHS.screen, async (req, res) => {
+  if (!twilioVoiceOk(req, res)) return;
+  const call = { ...callDetails(req), digits: String(req.body.Digits || '').trim(), retry: req.query.retry === '1' };
+  call.blocked = VOICE.ringsOwner(call) ? await blockedCaller(call.from) : false;
+  sendTwiml(res, VOICE.screenTwiml({ ...call, base: TWILIO_VOICE_BASE }));
+  if (call.digits === '1' && VOICE.ringsOwner(call)) {
+    if (call.from) noteRing(call.from);
+    await textRinging(call.from, 'call', req.body.CallerName);
+  }
 });
 
 /* The ring ended. Not accepted = missed, reported now: a caller who hangs up
