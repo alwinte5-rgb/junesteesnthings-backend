@@ -12,16 +12,39 @@ const owner = '+17738491854';
 const shop = '+17739004592';
 const from = '+13125550199';
 
-test('every caller rings the owner straight away, at any hour, with no menu or press-1', () => {
+test('incoming callers hear a short press-1 prompt, never an immediate Dial', () => {
   for (const c of [{ from }, { from: '' }, { from: '+442071234567' }]) {
     const t = V.incomingTwiml({ base, owner, shop, ...c });
-    assert.match(t, /Thanks for calling June&apos;s Tees\. One moment/);
-    assert.match(t, /<Dial [^>]*callerId="\+17739004592"/);
-    assert.match(t, /<Dial [^>]*timeout="18"/);
-    assert.match(t, /action="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/done"/);
-    assert.match(t, /<Number>\+17738491854<\/Number>/);
-    assert.doesNotMatch(t, /<Gather|press 1|Press 1/);
-    assert.equal(V.ringsOwner({ owner, ...c }), true);
+    assert.match(t, /Thank you for calling June&apos;s Tees and Things\. To connect with us, please press 1\./);
+    assert.match(t, /<Gather input="dtmf" numDigits="1" timeout="8" actionOnEmptyResult="true"/);
+    assert.ok(t.includes(`action="${base}${V.PATHS.screen}"`));
+    assert.match(t, /<\/Gather><Hangup\/>/);
+    assert.doesNotMatch(t, /<Dial|<Record|press 2|press 3/);
+  }
+});
+
+test('only 1 passes the screen; invalid input and silence get one retry, then end', () => {
+  const call = { from, owner, shop, base };
+  for (const retry of [false, true]) {
+    const yes = V.screenTwiml({ ...call, digits: '1', retry });
+    assert.match(yes, /<Dial [^>]*callerId="\+17739004592"/);
+    assert.match(yes, /<Dial [^>]*timeout="18"/);
+    assert.ok(yes.includes(`action="${base}${V.PATHS.done}"`));
+    assert.ok(yes.includes(`<Number>${owner}</Number>`));
+    for (const digits of ['', '0', '2', '9', '#', '11', '<Dial/>']) {
+      const no = V.screenTwiml({ ...call, digits, retry });
+      assert.doesNotMatch(no, /<Dial|<Record/);
+      if (!retry) assert.ok(no.includes(`${V.PATHS.screen}?retry=1`));
+      else { assert.doesNotMatch(no, /<Gather/); assert.match(no, /<Hangup\/>/); }
+    }
+  }
+});
+
+test('screening retains blocking and never dials the owner back into the shop', () => {
+  assert.equal(V.screenTwiml({ base, owner, from, digits: '1', blocked: true }), V.BUSY());
+  for (const c of [{ owner: '', from }, { owner, from: owner }]) {
+    const t = V.screenTwiml({ base, digits: '1', ...c });
+    assert.doesNotMatch(t, /<Dial/); assert.match(t, /<Record/);
   }
 });
 
@@ -31,11 +54,11 @@ test('a blocked caller gets a busy line, and no ring, voicemail or text', () => 
   assert.equal(V.ringsOwner({ from, owner, blocked: true }), false);
 });
 
-test('the incoming route checks the block list, fails open, and remembers who rang', () => {
+test('the incoming route checks the block list and never sends ringing alerts before screening', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
   assert.match(route, /call\.blocked = VOICE\.ringsOwner\(call\) \? await blockedCaller\(call\.from\) : false;/);
-  assert.match(route, /if \(VOICE\.ringsOwner\(call\)\) \{\s*if \(call\.from\) noteRing\(call\.from\);\s*await textRinging\(call\.from, 'call', req\.body\.CallerName\);/);
+  assert.doesNotMatch(route, /noteRing\(|textRinging\(/);
   const fn = src.slice(src.indexOf('async function blockedCaller'), src.indexOf('app.post(VOICE.PATHS.incoming'));
   assert.match(fn, /FROM blocked_callers WHERE phone = \$1/);
   assert.match(fn, /query_timeout: 3000/);
@@ -43,7 +66,7 @@ test('the incoming route checks the block list, fails open, and remembers who ra
   assert.match(fn, /Date\.now\(\) - blockedCallerReported > 6e5/);
   assert.match(fn, /catch \(e\) \{[\s\S]*?reportError\('twilio:blocked-caller'[\s\S]*?return false;/);
   assert.match(src, /CREATE TABLE IF NOT EXISTS blocked_callers \(\s*phone\s+TEXT PRIMARY KEY/);
-  assert.doesNotMatch(src, /VOICE\.PATHS\.screen|knownCaller/);
+  assert.doesNotMatch(src, /knownCaller/);
 });
 
 test('the menu answers only with no owner number, or for the owner calling in', () => {
@@ -55,7 +78,7 @@ test('the menu answers only with no owner number, or for the owner calling in', 
   }
 });
 
-test('the incoming route passes the call details and texts the owner only when it rings direct', () => {
+test('the incoming route passes the call details to the prompt', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
   assert.match(route, /twilioVoiceOk\(req, res\)/);
@@ -64,6 +87,17 @@ test('the incoming route passes the call details and texts the owner only when i
   assert.match(details, /open: VOICE\.isOpen\(\)/);
   assert.match(src.slice(src.indexOf('const textRinging'), src.indexOf('app.post(VOICE.PATHS.incoming')), /sendOwnerSms\(VOICE\.ringText\(\{ from, reason, name \}\)\)/);
   assert.match(route, /VOICE\.incomingTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
+});
+
+test('the signed screen handler blocks before dialing, and alerts only for an accepted 1', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const route = src.slice(src.indexOf('app.post(VOICE.PATHS.screen'), src.indexOf('app.post(VOICE.PATHS.done'));
+  assert.ok(route.indexOf('twilioVoiceOk(req, res)') < route.indexOf('callDetails(req)'));
+  assert.ok(route.indexOf('await blockedCaller(call.from)') < route.indexOf('VOICE.screenTwiml('));
+  assert.match(route, /if \(call\.digits === '1' && VOICE\.ringsOwner\(call\)\) \{/);
+  assert.match(route, /noteRing\(call\.from\);/);
+  assert.match(route, /textRinging\(call\.from, 'call', req\.body\.CallerName\)/);
+  assert.match(route, /retry: req\.query\.retry === '1'/);
 });
 
 test('the menu, when it plays, lets silence falls through to the menu handler', () => {
@@ -298,4 +332,47 @@ test('server: BLOCK works on any number, only from the owner, before the reply r
   assert.match(fn, /if \(!CALL_COMMANDS\.add\(messageSid\)\) return true;/);
   assert.match(fn, /if \(recent\.length > 1\)/, 'two recent callers: ask, never guess');
   assert.match(sms, /ownerBlockCommand\(text, req\.body\.MessageSid\)/);
+});
+
+
+/* Execute the actual route and signature guard without sending SMS or calls. */
+test('voice routes reject unsigned/tampered requests and notify only after a valid 1', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const auth = src.slice(src.indexOf('function twilioVoiceOk('), src.indexOf('/* Owner CALL texts'));
+  async function request(kind, { digits = '', signed = true, blocked = false, tampered = false, token = 'unit-token' } = {}) {
+    const start = src.indexOf(`app.post(VOICE.PATHS.${kind},`);
+    const end = src.indexOf('\napp.post(', start + 1);
+    let handler, lookups = 0, rings = 0, notices = 0;
+    new Function('app', 'VOICE', 'verifyTwilioSignature', 'TWILIO_VOICE_BASE', 'process', 'console',
+      'callDetails', 'blockedCaller', 'sendTwiml', 'noteRing', 'textRinging', auth + src.slice(start, end))(
+      { post: (_path, fn) => { handler = fn; } }, V, verifyTwilioSignature, base,
+      { env: { TWILIO_AUTH_TOKEN: token } }, { warn() {} },
+      () => ({ from, owner, shop }), async () => { lookups++; return blocked; },
+      (res, xml) => { res.xml = xml; }, () => { rings++; }, async () => { notices++; });
+    const url = V.PATHS[kind];
+    const body = { Digits: digits, From: from };
+    const signature = signed ? twilioSignature('unit-token', base + url, body) : '';
+    const res = { sendStatus(code) { this.status = code; } };
+    await handler({ body, query: {}, originalUrl: url + (tampered ? '?retry=1' : ''), get: () => signature }, res);
+    return { ...res, lookups, rings, notices };
+  }
+  for (const kind of ['incoming', 'screen']) {
+    for (const opts of [{ signed: false }, { tampered: true }, { token: '' }]) {
+      const r = await request(kind, { digits: '1', ...opts });
+      assert.strictEqual(r.status, opts.token === '' ? 503 : 401);
+      assert.strictEqual(r.lookups + r.rings + r.notices, 0);
+      assert.strictEqual(r.xml, undefined);
+    }
+  }
+  const incoming = await request('incoming');
+  assert.match(incoming.xml, /<Gather/); assert.doesNotMatch(incoming.xml, /<Dial/);
+  assert.strictEqual(incoming.rings + incoming.notices, 0);
+  for (const digits of ['', '2', '9']) {
+    const r = await request('screen', { digits });
+    assert.doesNotMatch(r.xml, /<Dial/); assert.strictEqual(r.rings + r.notices, 0);
+  }
+  const yes = await request('screen', { digits: '1' });
+  assert.match(yes.xml, /<Dial/); assert.strictEqual(yes.rings, 1); assert.strictEqual(yes.notices, 1);
+  const denied = await request('screen', { digits: '1', blocked: true });
+  assert.match(denied.xml, /<Reject/); assert.strictEqual(denied.rings + denied.notices, 0);
 });

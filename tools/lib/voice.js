@@ -1,21 +1,14 @@
 'use strict';
 
-/* Calls to the shop's Twilio number.
-
-   Every caller rings the owner's cell (TWILIO_TO_NUMBER) straight away, at
-   any hour, from the shop number, and a text names the caller as it rings
-   (owner, 2026-10-30). A number the owner blocked (texting BLOCK) hears a
-   busy line. Unanswered, the caller gets the shop voicemail (the closed
-   greeting outside shop hours); the owner is texted about every call that
-   rang and was missed, and every message left. Only the owner calling in, or
-   no owner number set, hears the menu.
-
-   Every URL here is absolute and fixed, because Twilio's signature covers the
-   exact URL it requested (see twilio-webhook.js). */
+/* Incoming shop calls require the caller to press 1 before the owner's
+   cell rings (owner, 2026-11-03: spam callers). Blocking, caller identity,
+   unanswered-call voicemail and outbound callbacks retain their existing
+   behavior. All callback URLs are fixed so Twilio signatures remain valid. */
 
 const PATHS = {
   incoming: '/webhooks/twilio/voice',
   menu: '/webhooks/twilio/voice/menu',
+  screen: '/webhooks/twilio/voice/screen',
   done: '/webhooks/twilio/voice/done',
   voicemail: '/webhooks/twilio/voice/voicemail',
   transcript: '/webhooks/twilio/voice/transcript',
@@ -101,10 +94,8 @@ function menuInner({ base, again = false }) {
     `<Redirect method="POST">${xml(base + PATHS.menu)}</Redirect>`);
 }
 
-/* Whether a call can reach the owner at all: with an owner number, and not
-   the owner calling in. The press-1 screen for unknown callers (#499) and the
-   after-hours menu lost real customers; every caller now rings (owner,
-   2026-10-30), and spam is blocked number by number. */
+/* Whether the owner is eligible to receive this call. Incoming calls
+   still need a successful press-1 response before ringing or notifying. */
 function ringsOwner({ from, owner, blocked = false }) {
   return Boolean(owner && from !== owner && !blocked);
 }
@@ -112,14 +103,28 @@ function ringsOwner({ from, owner, blocked = false }) {
 /* A blocked number hears a busy line: no voicemail, no lead, no texts. */
 const BUSY = () => twiml('<Reject reason="busy"/>');
 
-function incomingTwiml({ base, from, owner, shop, blocked = false }) {
+/* Two chances to press 1. Silence is posted to the signed screen handler;
+   the final Hangup is a fail-safe, never an unconditional Dial. */
+function screenInner(base, retry = false) {
+  const action = base + PATHS.screen + (retry ? '?retry=1' : '');
+  const prompt = retry ? 'To connect with us, please press 1.'
+    : `Thank you for calling ${SHOP_FULL}. To connect with us, please press 1.`;
+  return `<Gather input="dtmf" numDigits="1" timeout="8" actionOnEmptyResult="true" action="${xml(action)}" method="POST">` +
+    say(prompt) + '</Gather><Hangup/>';
+}
+
+function incomingTwiml({ base, from, owner, blocked = false }) {
   if (!owner || from === owner) return twiml(menuInner({ base }));
   if (blocked) return BUSY();
-  const callerId = shop ? ` callerId="${xml(shop)}"` : '';
-  return twiml(
-    say(`Thanks for calling ${SHOP}. One moment while we connect you.`) +
-    `<Dial timeout="${RING_SECONDS}" answerOnBridge="true"${callerId} action="${xml(base + PATHS.done)}" method="POST">` +
-    `<Number>${xml(owner)}</Number></Dial>`);
+  return twiml(screenInner(base));
+}
+
+function screenTwiml({ digits, from, owner, shop, base, blocked = false, retry = false }) {
+  if (blocked) return BUSY();
+  if (!ringsOwner({ from, owner })) return voicemailTwiml(base);
+  if (String(digits || '').trim() === '1') return ringTwiml({ from, owner, shop, base });
+  if (!retry) return twiml(say("Sorry, we didn't get that.") + screenInner(base, true));
+  return twiml(say('Please call again or text this number to reach us. Goodbye.') + '<Hangup/>');
 }
 
 /* Ring the owner. The cell shows the SHOP number (`shop`), so a call saved
@@ -281,7 +286,8 @@ function transcriptText({ from, text, status }) {
 const THANKS = () => twiml(say('Thank you. Goodbye.') + '<Hangup/>');
 
 module.exports = {
-  PATHS, MENU, incomingTwiml, ringsOwner, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml, BUSY,
+  PATHS, MENU, incomingTwiml, screenTwiml, ringsOwner, menuTwiml, ringTwiml, ringReason, ringText, doneTwiml, BUSY,
   voicemailTwiml, afterHoursTwiml, isOpen, missedCallText, voicemailText, callerNumber, THANKS, pretty, textBackBody,
   parseCallCommand, parseBlockCommand, callable, callbackTwiml, connectTwiml, transcriptText,
 };
+
