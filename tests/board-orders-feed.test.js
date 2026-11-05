@@ -108,7 +108,10 @@ test('an empty lane and a broken lane look different', () => {
 /* ── orders are read-only here ───────────────────────────────────────────── */
 
 test('the board never offers to edit an order', () => {
-  assert.doesNotMatch(SECTION, /<form/,
+  /* The one form is Remove, which writes only the backend's own hidden_studio
+     row (2026-11-05): the studio's order is never written from here. */
+  const forms = [...SECTION.matchAll(/<form[^>]*action="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual(forms, ['/admin/studio/hide'],
     'order state is edited in the studio admin; two writers is how the two drift apart');
   assert.match(SECTION, /Open in studio/,
     'the row must hand off to the place the order can actually be changed');
@@ -127,7 +130,7 @@ test('order stages map onto the board vocabulary, not a second one', () => {
 });
 
 test('the studio lane appears on the board, not only on its own page', () => {
-  assert.match(src, /\$\{studioOrdersSection\(studio, \{ disputes, unpaidOnly: VIEW === 'work' \}\)\}/,
+  assert.match(src, /\$\{studioOrdersSection\(studio, \{ disputes, unpaidOnly: VIEW === 'work', hidden: /,
     'one page showing both halves of the shop is the entire point');
   assert.match(src, /app\.get\('\/admin\/orders', requireAdmin/,
     'and the nav entry needs a real route behind it');

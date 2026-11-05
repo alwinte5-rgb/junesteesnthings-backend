@@ -246,6 +246,8 @@ const WANTED = [
 const STREETWEAR = require('./data/ssa-streetwear-2026-10');
 /* Youth and baby, workwear, core tees and fleece, more streetwear (2026-10-19). */
 const EXPANSION = require('./data/ssa-expansion-2026-10');
+/* Long sleeves for the quote form (2026-11-05). */
+const LONGSLEEVE = require('./data/ssa-longsleeve-2026-11');
 
 /* Sublimation needs a poly garment, so it is added only where the fabric
    supports it rather than offered everywhere and refused later. Matched by
@@ -430,7 +432,7 @@ async function run(env) {
   const subId = subMethod ? Number(subMethod.id) : null;
 
   let list;
-  try { list = selectWanted(WANTED, STREETWEAR.concat(EXPANSION), { staged: STAGED, only: ONLY }); }
+  try { list = selectWanted(WANTED, STREETWEAR.concat(EXPANSION, LONGSLEEVE), { staged: STAGED, only: ONLY }); }
   catch (e) { console.error(e.message); process.exit(2); }
   const seenIds = new Set();
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + list.length + ' styles' +

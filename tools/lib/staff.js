@@ -255,6 +255,8 @@ const ROUTES = {
   'GET /admin/shipping': 'production.stage',
   'POST /admin/shipping/shipped': 'production.stage',
   'POST /admin/studio/:id/delivered': 'production.stage',
+  'POST /admin/studio/hide': 'leads.dismiss',
+  'POST /admin/settings/auto-art': 'owner',
   'POST /admin/shipping/address': 'production.stage',
   'POST /admin/shipping/check': 'production.stage',
   'POST /admin/shipping/buy': 'shipping.labels',
