@@ -33,6 +33,8 @@ const KINDS = {
   review:   { label: 'Reviews to approve',           email: false, who: 'owner' },
   task:     { label: 'Tasks: new for you, or finished', email: false, who: 'any' },
   backlog:  { label: 'Backlog running low',          email: false, who: 'owner' },
+  studio_order:    { label: 'New studio orders',        email: false, who: 'owner' },
+  studio_checkout: { label: 'Studio checkouts left unpaid', email: false, who: 'owner' },
 };
 
 /* The ding and the browser pop-up (owner, 2026-10-21: "the notifications

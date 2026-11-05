@@ -101,7 +101,7 @@ test('an unavailable feed is stated on the page, never rendered as zero orders',
 });
 
 test('an empty lane and a broken lane look different', () => {
-  assert.match(SECTION, /!feed\.orders\.length && !feed\.error/,
+  assert.match(SECTION, /!orders\.length && !left && !feed\.error/,
     'the "no open orders" message must only appear when the feed actually answered');
 });
 
@@ -117,7 +117,9 @@ test('the board never offers to edit an order', () => {
 test('order stages map onto the board vocabulary, not a second one', () => {
   const stage = extractFn('function studioStage(');
   const stages = src.slice(src.indexOf('const JOB_STAGES = ['), src.indexOf('];', src.indexOf('const JOB_STAGES = [')));
-  for (const label of [...stage.matchAll(/label: '([^']+)'/g)].map((m) => m[1])) {
+  /* "Not paid yet" is a payment state, not a production stage: an unpaid
+     order never reaches the lanes (studioLane), so it names no lane. */
+  for (const label of [...stage.matchAll(/label: '([^']+)'/g)].map((m) => m[1]).filter((l) => l !== 'Not paid yet')) {
     assert.ok(stages.includes(`label: '${label}'`), `"${label}" must match a JOB_STAGES label, not invent a new word`);
   }
   assert.match(stage, /In production/);
@@ -125,7 +127,7 @@ test('order stages map onto the board vocabulary, not a second one', () => {
 });
 
 test('the studio lane appears on the board, not only on its own page', () => {
-  assert.match(src, /\$\{studioOrdersSection\(studio, \{ disputes \}\)\}/,
+  assert.match(src, /\$\{studioOrdersSection\(studio, \{ disputes, unpaidOnly: VIEW === 'work' \}\)\}/,
     'one page showing both halves of the shop is the entire point');
   assert.match(src, /app\.get\('\/admin\/orders', requireAdmin/,
     'and the nav entry needs a real route behind it');

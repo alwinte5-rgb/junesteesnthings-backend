@@ -95,7 +95,9 @@ function load() {
     /* The button the card shows, from the real expression. */
     function nextAction(q, c) { ${ACT_SRC} return act; }
     /* The columns the board renders, from the real expression. */
-    function board(rows) { ${LIVE_SRC} ${COLS_SRC} return cols; }
+    ${extractFn('studioLane')}
+    function studioFullyRefunded() { return false; }
+    function board(rows, studio = { orders: [] }) { ${LIVE_SRC} ${COLS_SRC} return cols; }
     /* The SET clause the stage POST builds for a given target index. */
     function setsFor(target, keepLater = false) { ${SETS_SRC} return sets; }
     return { JOB_STAGES, jobStageIndex, nextAction, board, setsFor };

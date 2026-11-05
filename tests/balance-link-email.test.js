@@ -116,6 +116,8 @@ const board = vm.runInThisContext(`(() => {
   const STUDIO_BASE = 'https://design.jtees.net';
   ${extractFn('function escEmail(')}
   ${extractFn('function studioStage(')}
+  ${extractFn('function studioFullyRefunded(')}
+  ${extractFn('function studioLane(')}
   ${extractFn('function studioExemptChip(')}
   ${extractFn('function studioOrdersSection(')}
   return studioOrdersSection;
