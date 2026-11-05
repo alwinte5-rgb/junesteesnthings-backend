@@ -95,8 +95,10 @@ function load() {
     /* The button the card shows, from the real expression. */
     function nextAction(q, c) { ${ACT_SRC} return act; }
     /* The columns the board renders, from the real expression. */
+    const STUDIO_SHIPPED_DAYS = 14;
+    ${extractFn('studioFullyRefunded')}
     ${extractFn('studioLane')}
-    function studioFullyRefunded() { return false; }
+    const round2 = (n) => Math.round(Number(n) * 100) / 100;
     function board(rows, studio = { orders: [] }) { ${LIVE_SRC} ${COLS_SRC} return cols; }
     /* The SET clause the stage POST builds for a given target index. */
     function setsFor(target, keepLater = false) { ${SETS_SRC} return sets; }

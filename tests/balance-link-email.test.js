@@ -117,7 +117,10 @@ const board = vm.runInThisContext(`(() => {
   ${extractFn('function escEmail(')}
   ${extractFn('function studioStage(')}
   ${extractFn('function studioFullyRefunded(')}
+  const JOB_STAGES = [];
+  const STUDIO_SHIPPED_DAYS = 14;
   ${extractFn('function studioLane(')}
+  ${extractFn('function studioNeedsList(')}
   ${extractFn('function studioExemptChip(')}
   ${extractFn('function studioOrdersSection(')}
   return studioOrdersSection;

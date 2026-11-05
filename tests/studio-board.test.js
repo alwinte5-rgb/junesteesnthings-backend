@@ -49,7 +49,9 @@ const lib = vm.runInThisContext(`(function () {
   ${extractConst('const JOB_STAGES = [')}
   ${extractFn('studioStage')}
   ${extractFn('studioFullyRefunded')}
+  ${src.match(/const STUDIO_SHIPPED_DAYS = \d+;/)[0]}
   ${extractFn('studioLane')}
+  ${extractFn('studioNeedsList')}
   ${extractFn('studioExemptChip')}
   ${extractFn('studioCard')}
   ${extractFn('studioOrdersSection')}
@@ -59,7 +61,8 @@ const lib = vm.runInThisContext(`(function () {
 })`)();
 
 const OUT = lib.JOB_STAGES.findIndex((s) => s.key === 'out');
-const order = (o) => ({ id: 7, status: 'processing', total: 40, paid: 40, refunded: 0, name: 'Kim', email: 'kim@example.com', ...o });
+const NOW = new Date().toISOString();
+const order = (o) => ({ id: 7, status: 'processing', updated: NOW, total: 40, paid: 40, refunded: 0, name: 'Kim', email: 'kim@example.com', ...o });
 
 test('an unpaid studio order is never "In production"', () => {
   assert.strictEqual(lib.studioStage('pending', 0).label, 'Not paid yet');
@@ -160,4 +163,45 @@ test('the bell: a new paid studio order and a left checkout, cleared once dealt 
   }
   assert.strictEqual(NOTIFY.safeLink('/admin/production#studio-card-7'), '/admin/production#studio-card-7');
   assert.strictEqual(NOTIFY.safeLink('/admin/production#studio-unpaid'), '/admin/production#studio-unpaid');
+});
+
+test('a shipped order from weeks ago is not waiting to arrive', () => {
+  const old = new Date(Date.now() - 30 * 86400000).toISOString();
+  assert.strictEqual(lib.studioLane(order({ status: 'shipped', shipped_at: old })), null);
+  assert.strictEqual(lib.studioLane(order({ status: 'shipped', updated: old })), null);
+  assert.strictEqual(lib.studioLane(order({ status: 'shipped', shipped_at: NOW })), OUT);
+  const html = lib.studioOrdersSection({ error: null, orders: [order({ id: 4, status: 'shipped', shipped_at: old })], abandoned: [] }, { unpaidOnly: true });
+  assert.doesNotMatch(html, /Order #4</, 'nor is it listed under the board');
+});
+
+test('money received wins over a pending status', () => {
+  assert.strictEqual(lib.studioStage('pending', 40).label, 'In production');
+  assert.strictEqual(lib.studioLane(order({ status: 'pending', paid: 40 })), 0);
+});
+
+test('nothing that needs someone falls off the board', () => {
+  const feed = { error: null, abandoned: [], orders: [
+    order({ id: 5, status: 'shipped', paid: 0 }),
+    order({ id: 6, refunded: 40 }),
+    order({ id: 8, status: 'complete', paid: 0 }),
+  ] };
+  const html = lib.studioOrdersSection(feed, { unpaidOnly: true });
+  assert.match(html, /Order #5</, 'shipped but still owing');
+  assert.match(html, /Order #6</, 'refunded before it shipped');
+  assert.match(html, /don&rsquo;t produce/);
+  assert.doesNotMatch(html, /Order #8</, 'delivered is done');
+});
+
+test('an unpaid order shows the phone the feed sends in ship_to', () => {
+  const html = lib.studioOrdersSection({ error: null, abandoned: [],
+    orders: [order({ id: 2, status: 'pending', paid: 0, ship_to: { phone: '773-555-0142' } })] }, { unpaidOnly: true });
+  assert.match(html, /773-555-0142/);
+});
+
+test('Delivered names the real failure and guards a second tap', () => {
+  const route = src.slice(src.indexOf("app.post('/admin/studio/:id/delivered'"), src.indexOf("app.post('/admin/shipping/shipped'"));
+  assert.match(route, /403: 'refused'/);
+  assert.match(route, /404: 'not-found'/);
+  for (const k of ['refused', 'not-found', 'failed', 'unreachable', 'not-shipped']) assert.ok(lib.STUDIO_BOARD_ERRORS[k], k);
+  assert.match(lib.studioCard(order({ status: 'shipped' }), null), /b\.disabled=true/);
 });
