@@ -1,4 +1,4 @@
-The campaign is **Print the Magic of Christmas**. It runs Nov 1 to Nov 24, the last day to order for Christmas, and sells matching family shirts and photo gifts made in our Lakeview shop.
+The campaign is **Print the Magic of Christmas**. It runs Nov 1 to Dec 10, the last day to order for Christmas, and sells matching family shirts and photo gifts made in our Lakeview shop. Rush fees apply after Dec 10 due to holiday demand.
 
 ## The message
 
@@ -41,10 +41,10 @@ The "Christmas at June's Tees" logo: keep the idea, with these changes.
 
 - **Design and approval:** Oct 23 to Oct 30. Hero and logo to June by Tue Oct 27; everything else by Fri Oct 30.
 - **Launch:** Sun Nov 1.
-- **Main push (Nov 1 to 16):** 3 posts a week: one lifestyle, two flat product posts.
-- **Last call (Nov 17 to 24):** a post or story every day, counting down to Nov 24.
-- **Last day to order:** Tue Nov 24. The shop is closed Nov 25 to 27 for Thanksgiving.
-- **After Nov 24:** post finished customer orders (with permission). Never promise Christmas delivery on new orders.
+- **Main push (Nov 1 to Dec 2):** 3 posts a week: one lifestyle, two flat product posts.
+- **Last call (Dec 3 to 10):** a post or story every day, counting down to Dec 10.
+- **Last day to order:** Thu Dec 10. Rush fees apply after Dec 10 due to holiday demand. The shop is closed Nov 25 to 27 for Thanksgiving.
+- **After Dec 10:** post finished customer orders (with permission). Never promise Christmas delivery on new orders.
 
 ## What we are selling, in priority order
 
@@ -60,10 +60,10 @@ The "Christmas at June's Tees" logo: keep the idea, with these changes.
 
 ## Graphic direction
 
-- **Hero (1920 x 1080):** logo top center; "PRINT THE MAGIC" in a heavy sans over "of Christmas" in script; the family photo below with every print readable; the sub-line at the bottom left and a hot pink "Order by Nov 24" button at the bottom right. Keep words and logo 100 px from every edge.
+- **Hero (1920 x 1080):** logo top center; "PRINT THE MAGIC" in a heavy sans over "of Christmas" in script; the family photo below with every print readable; the sub-line at the bottom left and a hot pink "Order by Dec 10" button at the bottom right. Keep words and logo 100 px from every edge.
 - **Lifestyle post (1080 x 1350):** logo, the headline, the photo, a pink "Start your design" button.
 - **Product post (1080 x 1350):** "Your names, your year" at the top, one product on a plain background, "Your design, printed in Chicago. No minimum." and the button.
-- **Story (1080 x 1920):** "7 DAYS LEFT to order for Christmas", a finished order, "Order by Tue Nov 24" and a pink jtees.net sticker.
+- **Story (1080 x 1920):** "7 DAYS LEFT to order for Christmas", a finished order, "Order by Thu Dec 10" and a pink jtees.net sticker.
 - **Colors:** red, gold, cream and evergreen for the season; hot pink #E0107A on buttons and the order-by date; black #0D0D12 for dark backgrounds.
 
 ## What to make
@@ -88,9 +88,9 @@ Name files xmas26-piece-size, for example xmas26-hero-1920x1080.png, and attach 
 - **Headline:** Print the Magic of Christmas
 - **Supporting lines:** Make every holiday moment picture-perfect. Christmas memories deserve more than a screen. One family. One photo. Matching shirts. Your names, your year, your Christmas. The gift they'll actually keep.
 - **Sub-line:** Matching family shirts, photo gifts and holiday party gear. Made in Lakeview, Chicago.
-- **Calls to action:** Start your design at jtees.net. Get a free quote. Order by Nov 24 for Christmas.
+- **Calls to action:** Start your design at jtees.net. Get a free quote. Order by Dec 10 for Christmas. Rush fees apply after Dec 10 due to holiday demand.
 - **Trust lines:** Every design we make for you gets a proof first. No minimum with DTF. Black-owned and women-owned. 4.8 stars on Google.
-- **Last call:** "Last day to order for Christmas: Tuesday, Nov 24. We're closed Nov 25 to 27 for Thanksgiving."
+- **Last call:** "Last day to order for Christmas: Thursday, Dec 10. Rush fees apply after Dec 10 due to holiday demand."
 
 ## Before you send
 

@@ -101,7 +101,7 @@ test('the homepage in Christmas season: banner, row, hoodies first', () => {
   const html = read('public/index.html');
   const out = S.dressPage(html, 'index.html', at('2026-10-25'));
   assert.match(out, /class="ss-banner" href="\/occasions\/christmas-shirts-chicago\.html"/);
-  assert.match(out, /Christmas &middot; order by Tuesday, November 24/);
+  assert.match(out, /Christmas &middot; order by Thursday, December 10 &middot; Rush fees apply after Dec 10 due to holiday demand\./);
   assert.match(out, /<h2 id="ss-christmas-h">Christmas gifts<\/h2>/, 'gifts first (owner)');
   assert.match(out, /<h2 id="ss-christmas-1-h">Matching Christmas clothing<\/h2>/, 'then the clothing');
   assert.ok(out.indexOf('ss-christmas-h') < out.indexOf('ss-christmas-1-h'));

@@ -4,8 +4,8 @@
    lands inside a closure moves back to the last open day before it. Both the
    marketing calendar (homepage, occasion pages, tasks) and the email events
    count their order-by dates through lastOpenDay().
-   2026-10-22: closed Nov 25 to 27 for Thanksgiving, last Christmas order day
-   Tuesday Nov 24. */
+   2026-10-22: closed Nov 25 to 27 for Thanksgiving. 2026-10-29: the last
+   Christmas order day moved from Tuesday Nov 24 to Thursday Dec 10. */
 const CLOSED = [
   ['2026-11-25', '2026-11-27'],
 ];
@@ -26,13 +26,15 @@ function lastOpenDay(t) {
   return out;
 }
 
-/** Last Christmas order day in year `y` (owner, 2026-10-28): the Tuesday
-    before Thanksgiving, since the shop closes for Thanksgiving and December
-    is the busiest month. Thanksgiving is the 4th Thursday of November. */
+/** Last Christmas order day in year `y` (owner, 2026-10-29): December 10,
+    replacing the Tuesday before Thanksgiving (2026-10-28). Orders after it
+    are rush orders, at the owner's price, never one worked out here. */
 function christmasLastDay(y) {
-  const first = new Date(Date.UTC(y, 10, 1)).getUTCDay();
-  const thanksgiving = 1 + ((4 - first + 7) % 7) + 21;
-  return new Date(Date.UTC(y, 10, thanksgiving - 2));
+  return new Date(Date.UTC(y, 11, 10));
 }
 
-module.exports = { CLOSED, lastOpenDay, christmasLastDay };
+/* Said everywhere the Christmas order deadline is shown (owner, 2026-10-29).
+   Copy only: no rush fee is added anywhere. */
+const CHRISTMAS_RUSH_NOTE = 'Rush fees apply after Dec 10 due to holiday demand.';
+
+module.exports = { CLOSED, lastOpenDay, christmasLastDay, CHRISTMAS_RUSH_NOTE };

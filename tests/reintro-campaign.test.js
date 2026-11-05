@@ -157,7 +157,8 @@ test('no promises the shop cannot keep: no delivery; turnaround is the owner\'s 
     // owner 2026-10-28: speed is back, never same-day, never a free or priced rush
     assert.doesNotMatch(text, /same[- ]day|free rush|rush[^.<]{0,40}\d+ ?%/i);
     assert.match(text, /5.7 business days/);
-    assert.match(text, /Nov 24/);
+    assert.match(text, /Dec 10/);
+    assert.match(text, /Rush fees apply after Dec 10 due to holiday demand\./);
   }
   assert.match(m, /Rush turnaround is available for a fee/);
   assert.ok(t.length <= 320, `hello text stays within two segments (${t.length})`);
