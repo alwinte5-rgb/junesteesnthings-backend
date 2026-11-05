@@ -25094,7 +25094,11 @@ async function artMove(code, move, actor, { note = '', assignTo = null } = {}) {
        ON CONFLICT (quote_code) DO UPDATE SET status = 'waiting', requested_by = $2, assigned_to = $3, files = '[]'::jsonb,
          events = art_requests.events || jsonb_build_array(jsonb_set((($4::jsonb)->0), '{set_aside}', art_requests.files)),
          ack_at = NULL, ack_by = NULL, updated_at = NOW()
-       WHERE art_requests.status = 'approved'`, [code, me, assignTo, ev]);
+       WHERE art_requests.status = 'approved'
+          /* An automatic review request (autoArtSweep) never blocks the
+             owner sending the job by hand, to anyone, with a note. */
+          OR (art_requests.status = 'waiting' AND jsonb_array_length(art_requests.files) = 0
+              AND art_requests.events -> 0 ->> 'auto' = 'true')`, [code, me, assignTo, ev]);
     if (rowCount) notifyDesignersOfArt(code, move, assignTo).catch((e) => console.error(`art alert ${code} failed:`, e.message));
     return rowCount ? { ok: true, msg: 'Sent to the designer. They have been emailed, and it stays at the top of their pages until they press Got it.' }
       : { ok: false, msg: 'The designer already has this job.' };
@@ -25546,7 +25550,7 @@ async function autoArtSetting() {
 /** Open quotes: not cancelled, not delivered, and either accepted or still
  *  within their price (a quote that ran out months ago is not open work), from
  *  the last 60 days. Drafts included: the designer reviews before it goes. */
-const AUTO_ART_OPEN_SQL = `q.cancelled_at IS NULL AND q.delivered_at IS NULL
+const AUTO_ART_OPEN_SQL = `q.cancelled_at IS NULL AND q.delivered_at IS NULL AND q.shipped_at IS NULL
   AND (q.accepted_at IS NOT NULL OR q.valid_until IS NULL OR q.valid_until >= CURRENT_DATE)
   AND q.created_at > NOW() - interval '60 days'`;
 let autoArtAt = 0;
