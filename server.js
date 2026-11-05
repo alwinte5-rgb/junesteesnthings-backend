@@ -8782,7 +8782,14 @@ function quoteSchedule(q) {
      started, so its dates are what it WOULD need, not steps already missed;
      the dates still show, the warnings do not. Cancelled work is not work. */
   const inHand = Number(q.paid_amount || 0) > 0 && !q.cancelled_at;
-  const late = (d, done) => DEADLINE_ALERTS && inHand && !done && d < today;
+  /* A step whose latest safe date had already passed when the job came in was
+     never missable by the shop: the ready date (deposit day + the quoted days)
+     is closer than the full lead-time chain. Such a step gets the arrival day
+     + 2 business days instead, so a job is not "late" the day it arrives. */
+  const arrivedAt = q.accepted_at || q.paid_at;
+  const arrived = arrivedAt ? new Date(new Date(arrivedAt).toDateString()) : null;
+  const grace = arrived ? addBusinessDays(arrived, 2) : null;
+  const late = (d, done) => DEADLINE_ALERTS && inHand && !done && (grace && d < grace ? grace : d) < today;
 
   return {
     ship_by: shipBy, qc_by: qcBy, press_by: pressBy,
@@ -24099,8 +24106,8 @@ async function renderBoard(VIEW, req, res) {
               const risk = q._sched && q._sched.risks.length;
               const due = days === null ? '' :
                 days < 0 ? (DEADLINE_ALERTS ? `<b style="color:#b91c1c">${-days}d late</b>` : 'date passed') :
-                days === 0 ? '<b style="color:#b45309">today</b>' :
-                days <= 3 ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
+                days === 0 ? (DEADLINE_ALERTS ? '<b style="color:#b45309">today</b>' : 'today') :
+                days <= 3 && DEADLINE_ALERTS ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
               /* The next action finishes the column the card is sitting in, it
                  does not jump to the one after it. Targeting c.i+1 meant a card
                  in Check & ship offered only "✓ Delivered": checked-and-shipped
@@ -25797,7 +25804,7 @@ app.get('/admin/schedule', requireAdmin, async (req, res) => {
       const byDate = q.needed_by || q.target_date;
       const days = byDate ? Math.round((new Date(byDate) - today0) / 86400000) : null;
       const due = days === null ? '' : days < 0 ? (DEADLINE_ALERTS ? `<b style="color:#b91c1c">${-days}d late</b>` : 'date passed')
-        : days === 0 ? '<b style="color:#b45309">today</b>' : days <= 3 ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
+        : days === 0 ? (DEADLINE_ALERTS ? '<b style="color:#b45309">today</b>' : 'today') : days <= 3 && DEADLINE_ALERTS ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
       const risk = sched && sched.risks.length;
       const pct = Math.round((cl.done / cl.of) * 100);
       const art = q.art_status && ART.STATES[q.art_status] ? ART.STATES[q.art_status] : null;
@@ -29636,7 +29643,7 @@ async function sendDailyDigest() {
       const when = days === null ? 'no deadline set'
         : days < 0 ? (DEADLINE_ALERTS ? `<b style="color:#b91c1c">${-days}d overdue</b>`
           : `date was ${escEmail(dayShort(q.needed_by || q.target_date))}`)
-        : days === 0 ? '<b style="color:#b45309">due today</b>'
+        : days === 0 ? (DEADLINE_ALERTS ? '<b style="color:#b45309">due today</b>' : 'due today')
         : `due in ${days}d`;
       /* The slipped step, named. "Late" on the day is useless; "blanks should
          have been ordered 3 days ago" is still actionable. */
@@ -32914,7 +32921,7 @@ async function helperScore(staffId, from, to) {
     answered: leads.rows.length,
     medianReply: TEAM.median(replyMins),
     drafted: q.drafted, sent: q.sent, accepted: q.accepted, convBase: q.conv_base, convWon: q.conv_won,
-    tasksDone: t.done, onTime: t.on_time, overdue: t.overdue,
+    tasksDone: t.done, onTime: t.on_time, overdue: DEADLINE_ALERTS ? t.overdue : 0,
     collected: money_.rows[0].collected,
     hours: totalHours, hoursBy: hours.rows,
   };
@@ -32970,7 +32977,7 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
           { label: 'Quotes sent', value: String(x.sent), tone: 'navy', sub: `${x.drafted} drafted` },
           { label: 'Accepted', value: String(x.accepted), tone: 'green', sub: `conversion ${conv}` },
           { label: 'Tasks done', value: String(x.tasksDone), tone: x.overdue ? 'amber' : 'green',
-            sub: `${x.onTime} on time &middot; ${x.overdue} overdue` },
+            sub: `${x.onTime} on time${DEADLINE_ALERTS ? ` &middot; ${x.overdue} overdue` : ''}` },
           { label: 'Leads found', value: String(proofs[i].found), tone: 'blue',
             sub: `${proofs[i].contacted} contacted &middot; ${proofs[i].replied} answered${proofs[i].perHour == null ? '' : ` &middot; ${proofs[i].perHour.toFixed(1)}/clocked h`}${
               proofs[i].runs ? ` &middot; ${proofs[i].runs} AI searches` : ''}` },
@@ -33125,7 +33132,7 @@ app.get('/admin/my-stats', requireAdmin, async (req, res) => {
       ${section('Activity', [
         { label: 'Days active', value: String(e.days_active), tone: 'blue' },
         { label: 'Actions', value: String(e.actions), tone: 'gray', sub: 'leads, quotes, messages and more' },
-        { label: 'Tasks done', value: String(x.tasksDone), tone: x.overdue ? 'amber' : 'green', sub: `${x.onTime} on time · ${x.overdue} overdue` },
+        { label: 'Tasks done', value: String(x.tasksDone), tone: x.overdue ? 'amber' : 'green', sub: `${x.onTime} on time${DEADLINE_ALERTS ? ` · ${x.overdue} overdue` : ''}` },
       ])}
 `, 'mystats'));
   } catch (err) {
@@ -36334,7 +36341,7 @@ function projectCard(p, steps, roster, { owner, today }) {
   const late = cur && PROJECTS.ymdOf(cur.due_on) && PROJECTS.ymdOf(cur.due_on) < today;
   return `<div class="card pj-card"><div class="pj-step-h"><a href="/admin/projects/${Number(p.id)}"><b style="font-size:16px">${escEmail(p.title)}</b></a>
       <span class="muted">${owner ? `${escEmail(p.assigned_to != null ? nameOf(roster, p.assigned_to) : 'Nobody yet')} &middot; ` : ''}${done} of ${states.length} steps done</span></div>
-    <div class="pj-tl">${PROJECTS.timelineSvg(p, steps, { today, compact: true })}</div>
+    <div class="pj-tl">${PROJECTS.timelineSvg(p, steps, { today, compact: true, overdue: DEADLINE_ALERTS })}</div>
     <div class="pj-next"><span>${cur ? `<b>Step ${Number(cur.step_no)}:</b> ${escEmail(cur.title)} <span class="muted">&middot; due ${escEmail(PROJECTS.withDay(PROJECTS.ymdOf(cur.due_on)))}</span> ${DEADLINE_ALERTS && late ? pill('overdue', 'red') : ''}`
       : states.length ? pill('all steps completed', 'green') : '<span class="muted">No steps yet.</span>'}</span>
       <a class="btn" href="/admin/projects/${Number(p.id)}${cur ? `#step-${Number(cur.id)}` : ''}">${!owner && cur ? 'Continue' : 'Open'} &rarr;</a></div></div>`;
@@ -36567,7 +36574,7 @@ app.get('/admin/projects/:id', requireAdmin, async (req, res) => {
       ${flash(req.query)}
       ${p.archived_at ? '<div class="warn">This project is archived.</div>' : ''}
       <div class="card"><h2 class="card-title">Timeline <span class="muted">${done} of ${states.length} steps done</span></h2>
-        ${steps.length ? `${PROJECTS.timelineSvg(p, steps, { today })}
+        ${steps.length ? `${PROJECTS.timelineSvg(p, steps, { today, overdue: DEADLINE_ALERTS })}
         <div class="pj-legend"><span><i class="pj-dot" style="background:#16a34a"></i>Done</span><span><i class="pj-dot" style="background:#E0107A"></i>The step now</span>
           <span><i class="pj-dot" style="background:#94a3b8"></i>Opens later</span><span><i class="pj-dot" style="background:#dc2626"></i>Overdue</span>
           <span>Steps open one at a time. Click a bar to jump to its step.</span></div>` : emptyState('No steps yet.')}</div>

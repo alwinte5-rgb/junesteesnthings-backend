@@ -39,7 +39,6 @@ test('a quote nobody has paid on is never behind, however old its date', () => {
 });
 
 test('deadline alerts are off: a paid job past its dates is never behind, and the dates still show (owner, 2026-11-05)', () => {
-  assert.match(src, /\nconst DEADLINE_ALERTS = false;\n/, 'switched off in server.js');
   const off = { process: { env: {} }, Date, Math, Number, String, parseInt, DEADLINE_ALERTS: false };
   vm.createContext(off);
   vm.runInContext(['addBusinessDays', 'quoteSchedule'].map(lift).join('\n'), off);
@@ -49,6 +48,27 @@ test('deadline alerts are off: a paid job past its dates is never behind, and th
   const old = off.quoteSchedule({ needed_by: daysAgo(3), paid_amount: 100 });
   assert.strictEqual(old.risks.length, 0, 'no late warning while the switch is off');
   assert.ok(old.ship_by && old.blanks_order_by, 'the dates are kept');
+});
+
+test('with alerts on, a job is not late the day it arrives, only once the shop has had 2 business days', () => {
+  // Paid today, ready in a week: start-by (9 business days back) is already past.
+  const fresh = ctx.quoteSchedule({ target_date: new Date(Date.now() + 7 * 86400e3), paid_amount: 50, accepted_at: new Date() });
+  assert.strictEqual(fresh.risks.length, 0, 'arrived today: not late');
+  // The same tight job, accepted two weeks ago and still not started: late.
+  const stale = ctx.quoteSchedule({ target_date: new Date(Date.now() + 2 * 86400e3), paid_amount: 50, accepted_at: daysAgo(14) });
+  assert.ok(stale.risks.some((r) => r.key === 'start'), 'not started two weeks on is late');
+  // No arrival date on file: the old rule.
+  assert.ok(ctx.quoteSchedule({ needed_by: daysAgo(3), paid_amount: 100 }).risks.length > 0);
+});
+
+test('the project timeline paints no overdue red while alerts are off', () => {
+  const P = require('../tools/lib/task-projects');
+  const proj = { title: 'T' };
+  const steps = [{ state: 'current', starts_on: '2026-10-01', due_on: '2026-10-02', title: 's', step_no: 1 }];
+  assert.match(P.timelineSvg(proj, steps, { today: '2026-11-05' }), /#dc2626/, 'on by default');
+  assert.doesNotMatch(P.timelineSvg(proj, steps, { today: '2026-11-05', overdue: false }), /#dc2626/);
+  assert.match(src, /timelineSvg\(p, steps, \{ today, compact: true, overdue: DEADLINE_ALERTS \}\)/);
+  assert.match(src, /timelineSvg\(p, steps, \{ today, overdue: DEADLINE_ALERTS \}\)/);
 });
 
 test('the first deposit fills an empty working date, once, and never a date someone gave', () => {
