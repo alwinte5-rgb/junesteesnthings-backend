@@ -24098,7 +24098,7 @@ async function renderBoard(VIEW, req, res) {
               const days = q._days;
               const risk = q._sched && q._sched.risks.length;
               const due = days === null ? '' :
-                days < 0 ? `<b style="color:#b91c1c">${-days}d late</b>` :
+                days < 0 ? (DEADLINE_ALERTS ? `<b style="color:#b91c1c">${-days}d late</b>` : 'date passed') :
                 days === 0 ? '<b style="color:#b45309">today</b>' :
                 days <= 3 ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
               /* The next action finishes the column the card is sitting in, it
@@ -25796,7 +25796,7 @@ app.get('/admin/schedule', requireAdmin, async (req, res) => {
     const card = ({ q, sched, cl }) => {
       const byDate = q.needed_by || q.target_date;
       const days = byDate ? Math.round((new Date(byDate) - today0) / 86400000) : null;
-      const due = days === null ? '' : days < 0 ? `<b style="color:#b91c1c">${-days}d late</b>`
+      const due = days === null ? '' : days < 0 ? (DEADLINE_ALERTS ? `<b style="color:#b91c1c">${-days}d late</b>` : 'date passed')
         : days === 0 ? '<b style="color:#b45309">today</b>' : days <= 3 ? `<b style="color:#b45309">${days}d</b>` : `${days}d`;
       const risk = sched && sched.risks.length;
       const pct = Math.round((cl.done / cl.of) * 100);
