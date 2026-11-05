@@ -396,7 +396,7 @@ function guideHtml(md) {
  *  its start to its due day, done green, the current one pink, overdue red,
  *  the rest grey; today as a dashed line and the key date as a diamond. Every
  *  word is escaped. `compact` draws a short one for My Day (no step names). */
-function timelineSvg(project, steps, { today, compact = false } = {}) {
+function timelineSvg(project, steps, { today, compact = false, overdue = true } = {}) {
   const rows = stepStates(steps).filter((s) => parse(ymdOf(s.starts_on)) != null && parse(ymdOf(s.due_on)) != null);
   if (!rows.length) return '';
   const key = parse(ymdOf(project.key_date));
@@ -417,7 +417,8 @@ function timelineSvg(project, steps, { today, compact = false } = {}) {
   for (let t = t0; t <= t1 - DAY; t += step * DAY) ticks.push(t);
   const color = (s) => {
     if (s.state === 'done') return '#16a34a';
-    if (s.state !== 'locked' && ymdOf(s.due_on) < today) return '#dc2626';
+    // `overdue: false` while deadline alerts are off (server.js DEADLINE_ALERTS).
+    if (overdue && s.state !== 'locked' && ymdOf(s.due_on) < today) return '#dc2626';
     return s.state === 'current' ? '#E0107A' : '#94a3b8';
   };
   const out = [`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${escHtml(`Timeline: ${project.title}`)}" style="width:100%;height:auto;display:block" font-family="inherit">`];
