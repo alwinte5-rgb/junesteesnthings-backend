@@ -23151,12 +23151,12 @@ app.post('/admin/quote/:code/stage', requireAdmin, async (req, res) => {
    shows a visible note, never an empty lane — an empty lane reads as "no
    orders", which is a lie the old setup already told for weeks. */
 const STUDIO_BASE = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net').replace(/\/+$/, '');
-let _studioCache = { at: 0, orders: [], carts: [], error: null };
+let _studioCache = { at: 0, orders: [], carts: [], abandoned: [], error: null };
 
 async function fetchStudioOrders() {
   if (Date.now() - _studioCache.at < 60000) return _studioCache;
   const key = process.env.JT_INTERNAL_KEY;
-  if (!key) return (_studioCache = { at: Date.now(), orders: [], carts: [], error: 'JT_INTERNAL_KEY not set' });
+  if (!key) return (_studioCache = { at: Date.now(), orders: [], abandoned: [], carts: [], error: 'JT_INTERNAL_KEY not set' });
   try {
     const r = await studioFetch(`${STUDIO_BASE}/orders_feed.php`);
     if (!r.ok) throw new Error(`feed answered ${r.status}`);
@@ -23166,24 +23166,113 @@ async function fetchStudioOrders() {
       /* Older deploys of the feed do not send this. Defaulting to [] rather
          than undefined keeps every caller from needing to know that. */
       carts: Array.isArray(d.carts) ? d.carts : [],
+      /* Checkouts placed and left unpaid (feed since 2026-11-05). */
+      abandoned: Array.isArray(d.abandoned) ? d.abandoned : [],
       error: null });
   } catch (e) {
     console.error('studio orders feed failed:', e.message);
     /* Keep whatever was last known good — a stale order list beats no list, as
        long as the page says which it is. */
     return (_studioCache = { at: Date.now(), orders: _studioCache.orders,
-      carts: _studioCache.carts || [], error: e.message });
+      carts: _studioCache.carts || [], abandoned: _studioCache.abandoned || [], error: e.message });
   }
 }
 
 /** Map an order's single status onto the board's vocabulary. Deliberately
  *  coarse: the designer has no per-step checklist, so pretending it does would
  *  invent progress nobody recorded. */
-function studioStage(status) {
+function studioStage(status, paid = null) {
   const st = String(status || '').toLowerCase();
   if (st === 'complete') return { label: 'Delivered', color: '#166534', bg: '#e7f6ec' };
   if (st === 'shipped')  return { label: 'Ready / Shipped', color: '#8a5a00', bg: '#fff8ed' };
+  /* An order is saved before the card page, so `pending` with nothing paid is
+     a checkout still open, not work: it read "In production" (2026-11-05). */
+  /* Money received wins over the status: a payment booked by hand can leave
+     an order at `pending`, and it is work, not an open checkout. */
+  if (paid === null ? st === 'pending' : !(Number(paid) > 0)) return { label: 'Not paid yet', color: '#6b7280', bg: '#f3f4f6' };
   return { label: 'In production', color: '#1848B8', bg: '#eef2fd' };
+}
+
+/** Is a studio order's money all gone back? Then it is not work. */
+function studioFullyRefunded(o) {
+  const refunded = round2(Number(o.refunded || 0));
+  return refunded > 0 && refunded >= Number(o.paid || 0) - 0.005;
+}
+
+/** The Production lane a studio order sits in (JOB_STAGES index), or null when
+ *  it is not production work: unpaid, fully refunded, or delivered. The
+ *  studio has one status, so a paid order waits in To start until it ships. */
+const STUDIO_SHIPPED_DAYS = 14;
+function studioLane(o, now = Date.now()) {
+  const st = String(o.status || '').toLowerCase();
+  if (!(Number(o.paid) > 0) || studioFullyRefunded(o) || st === 'complete' || st === 'cancel') return null;
+  if (st !== 'shipped') return 0;
+  /* Nothing on jtees.net could mark a studio order delivered before
+     2026-11-05, so years of them sit at `shipped`. Only a recent one is
+     still waiting to arrive; an older one is treated as delivered. */
+  const at = new Date(o.shipped_at || o.updated || o.created || 0).getTime();
+  if (!(at > 0) || now - at > STUDIO_SHIPPED_DAYS * 86400000) return null;
+  return JOB_STAGES.findIndex((x) => x.key === 'out');
+}
+
+/** Under the Production board: a studio order that is in no lane but still
+ *  needs someone, so it is never invisible there. Unpaid (a shipped one
+ *  still owing included), and paid-then-refunded before it shipped, with its
+ *  chips. Not delivered ones, and not old shipped ones (see studioLane). */
+function studioNeedsList(o) {
+  const st = String(o.status || '').toLowerCase();
+  if (studioLane(o) !== null || st === 'complete') return false;
+  if (!(Number(o.paid) > 0)) return true;
+  return st !== 'shipped' && studioFullyRefunded(o);
+}
+
+/** What the board's studio Delivered button did, from a fixed list. */
+const STUDIO_BOARD_ERRORS = {
+  'not-shipped': 'is not marked ready or shipped in the studio yet, so it was not marked delivered.',
+  unreachable: 'was not marked delivered: the studio could not be reached. Try again in a minute.',
+  refused: 'was not marked delivered: the studio refused this app’s key. The internal key must be the same on both services.',
+  'not-found': 'was not marked delivered: the studio has no such order.',
+  failed: 'was not marked delivered: the studio said no. Open it in the studio to see why.',
+};
+function studioBoardNote(query) {
+  const num = (v) => (/^\d{1,9}$/.test(String(v || '')) ? Number(v) : 0);
+  const done = num(query.studio_done);
+  const errId = num(query.studio_id);
+  const err = Object.hasOwn(STUDIO_BOARD_ERRORS, String(query.studio_err || '')) ? STUDIO_BOARD_ERRORS[String(query.studio_err)] : '';
+  return (done ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">Studio order <b>#${done}</b> marked delivered.</div>` : '')
+    + (err && errId ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">Studio order <b>#${errId}</b> ${err}</div>` : '');
+}
+
+/** A paid studio order as a Production card. Its moves go through the
+ *  studio (studioShip): shipping happens on the Shipping page, where the label
+ *  and the customer's email are, and Delivered is the board's own button. */
+function studioCard(o, disputes) {
+  const lane = studioLane(o);
+  const id = Number(o.id);
+  const owed = round2(Math.max(0, Number(o.total || 0) - Number(o.paid || 0)));
+  const refunded = round2(Number(o.refunded || 0));
+  const next = lane === 0
+    ? `<a class="kbtn kbtn-next" style="display:block;text-align:center;text-decoration:none" href="/admin/shipping#studio-${id}">📦 Ship or ready for pickup &rarr;</a>`
+    : `<form method="POST" action="/admin/studio/${id}/delivered" class="knext"
+        onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;b.textContent='Marking…';return true;">
+        <button type="submit" class="kbtn kbtn-next" title="In their hands">✓ Delivered</button></form>`;
+  return `<article class="kcard" id="studio-card-${id}">
+    <div class="kcard-top">
+      <a href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(id)}" target="_blank" rel="noopener"
+         class="kcard-name">${escEmail(o.name || `Order #${id}`)}</a>
+      <span class="chip" style="background:#eef1f8;color:#46505f;font-size:11px">Studio</span>
+    </div>
+    <div class="kcard-sub">#${id} · ${money(o.total)}${owed > 0 ? ` · <span style="color:#b45309">${money(owed)} due</span>` : ''}</div>
+    <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">
+      ${refunded > 0 ? `<span class="chip" style="background:#fff8ed;color:#8a5a00">${money(refunded)} refunded</span>` : ''}
+      ${disputes ? disputeChip(disputes.byOrder.get(String(o.id))) : ''}
+      ${studioExemptChip(o)}
+    </div>
+    ${next}
+    <div class="kmove"><span></span>
+      <a class="kbtn kbtn-link" href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(id)}"
+         target="_blank" rel="noopener" title="Design previews, print files and the packing slip">Open in studio</a></div>
+  </article>`;
 }
 
 /** A tax-exempt studio order's state, from the feed's `tax_exempt` (since
@@ -23207,20 +23296,24 @@ function studioExemptChip(o) {
   return '';
 }
 
-function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
-  const rows = feed.orders.map((o) => {
-    const stage = studioStage(o.status);
+function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly = false } = {}) {
+  /* On the Production board paid orders are cards in the lanes, so the list
+     under it keeps only what is not work yet: unpaid, and left checkouts. */
+  const orders = unpaidOnly ? feed.orders.filter((o) => studioNeedsList(o)) : feed.orders;
+  const rows = orders.map((o) => {
+    const stage = studioStage(o.status, o.paid);
     const owed = round2(Math.max(0, Number(o.total || 0) - Number(o.paid || 0)));
     /* Refunds (the feed's `refunded`, since 2026-09-26). Before, a refunded
        order read as paid here and could go to press. `paid` stays what was
        received, so a refund never shows up as money the customer owes. */
     const refunded = round2(Number(o.refunded || 0));
-    const fullRefund = refunded > 0 && refunded >= Number(o.paid || 0) - 0.005;
+    const fullRefund = studioFullyRefunded(o);
     return `<div class="card" style="padding:12px 14px">
       <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
         <span class="chip" style="background:#eef1f8;color:#46505f">Studio</span>
         <b>Order #${escEmail(String(o.id))}</b>
-        <span class="muted">${escEmail(o.name || 'no name')}${o.email ? ' &middot; ' + escEmail(o.email) : ''}</span>
+        <span class="muted">${escEmail(o.name || 'no name')}${o.email ? ' &middot; ' + escEmail(o.email) : ''}${
+          unpaidOnly && (o.phone || (o.ship_to && o.ship_to.phone)) ? ' &middot; ' + escEmail(o.phone || o.ship_to.phone) : ''}</span>
         <span style="margin-left:auto;white-space:nowrap">${money(o.total)}${
           owed > 0 ? ` <span style="color:#b91c1c">&middot; ${money(owed)} due</span>` : ''}</span>
       </div>
@@ -23248,12 +23341,32 @@ function studioOrdersSection(feed, { heading = true, disputes = null } = {}) {
         feed.orders.length ? ' — showing the last known list' : ''}. (${escEmail(feed.error)})</div>`
     : '';
 
-  const empty = (!feed.orders.length && !feed.error)
-    ? '<div class="card"><p class="muted">No open studio orders.</p></div>' : '';
+  /* Checkouts placed and then left (feed's `abandoned`): who, how to reach
+     them, and what they were buying, so the shop can follow up. */
+  const left = unpaidOnly ? (feed.abandoned || []).map((a) => {
+    const items = (Array.isArray(a.items) ? a.items : []).slice(0, 4)
+      .map((l) => `${Number(l.qty) || 1} &times; ${escEmail(String(l.name || '').slice(0, 80))}`).join(', ');
+    const tel = String(a.phone || '').replace(/[^\d+]/g, '');
+    return `<div class="card" style="padding:12px 14px">
+      <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
+        <span class="chip" style="background:#fff8ed;color:#8a5a00">Left checkout</span>
+        <b>#${escEmail(String(a.id))}</b>
+        <span class="muted">${escEmail(a.name || 'no name')}${
+          a.email ? ` &middot; <a href="mailto:${escEmail(encodeURIComponent(String(a.email)).replace(/%40/g, '@'))}">${escEmail(a.email)}</a>` : ''}${
+          tel ? ` &middot; <a href="tel:${escEmail(tel)}">${escEmail(a.phone)}</a>` : ''}</span>
+        <span style="margin-left:auto;white-space:nowrap">${money(a.total)}</span>
+      </div>
+      <div class="muted" style="margin-top:4px;font-size:12.5px">${a.created ? `${escEmail(dayShort(a.created))} &middot; ` : ''}${items || 'no items listed'}</div>
+    </div>`;
+  }).join('') : '';
 
-  return `${heading ? `<h2 style="margin:22px 0 6px;font-size:19px">Studio orders</h2>
-    <div class="sub" style="margin-bottom:10px">Placed online at design.jtees.net &middot; read-only here</div>` : ''}
-    ${warn}${rows}${empty}`;
+  const empty = (!orders.length && !left && !feed.error)
+    ? `<div class="card"><p class="muted">${unpaidOnly ? 'No unpaid or refunded studio orders, and no left checkouts.' : 'No open studio orders.'}</p></div>` : '';
+
+  return `${heading ? `<h2 id="studio-unpaid" style="margin:22px 0 6px;font-size:19px">${unpaidOnly ? 'Studio: not paid yet, refunded, or left checkout' : 'Studio orders'}</h2>
+    <div class="sub" style="margin-bottom:10px">Placed online at design.jtees.net${unpaidOnly
+      ? ' &middot; paid studio orders are cards in the lanes above' : ' &middot; read-only here'}</div>` : ''}
+    ${warn}${rows}${left}${empty}`;
 }
 
 /* The cancel form, wherever a job is looked at: the money board and the job
@@ -23969,7 +24082,8 @@ async function renderBoard(VIEW, req, res) {
         const failed = APPLY_ERRORS[String(req.query.apply_err || '')];
         return (QUOTE_CODE_RE.test(applied) ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">
             The Stripe payment is on quote <b>${applied}</b> now.</div>` : '') +
-          (failed ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(failed)}</div>` : '') + textNote;
+          (failed ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(failed)}</div>` : '') + textNote
+          + studioBoardNote(req.query);
       })()}
       <p style="margin-bottom:14px">
         <a class="btn" href="/admin/quote/new">New quote</a>
@@ -24093,12 +24207,16 @@ async function renderBoard(VIEW, req, res) {
            wrapped onto a second row. The move buttons still target it by index. */
         const cols = JOB_STAGES.slice(0, -1).map((st, i) => ({
           ...st, i, jobs: live.filter(q => jobStageIndex(q) === i),
+          /* Paid studio orders (design.jtees.net) in the same lanes, so both
+             halves of the shop are worked from one board (2026-11-05). */
+          studio: studio.orders.filter((o) => studioLane(o) === i),
         }));
+        const studioLive = cols.reduce((n, c) => n + c.studio.length, 0);
         return `<div class="kanban">${cols.map(c => `
           <section class="kcol">
             <header class="kcol-head">
               <span>${c.label}</span>
-              <span class="kcount">${c.jobs.length}</span>
+              <span class="kcount">${c.jobs.length + c.studio.length}</span>
             </header>
             <div class="kcol-hint">${c.hint}</div>
             ${c.jobs.map(q => {
@@ -24157,12 +24275,13 @@ async function renderBoard(VIEW, req, res) {
                   <a class="kbtn kbtn-link" href="/admin/production/${q.code}">Open job</a>
                 </div>
               </article>`;
-            }).join('') || '<div class="kempty">—</div>'}
+            }).join('')}${c.studio.map((o) => studioCard(o, disputes)).join('')}${
+              c.jobs.length + c.studio.length ? '' : '<div class="kempty">—</div>'}
           </section>`).join('')}</div>
-          ${live.length === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
+          ${live.length + studioLive === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
       })() : (body ? `${body}${groupScript}` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
 
-      ${studioOrdersSection(studio, { disputes })}
+      ${studioOrdersSection(studio, { disputes, unpaidOnly: VIEW === 'work' })}
       ${VIEW === 'work' ? STAGE_ASK_SCRIPT : ''}
       <script>
         /* Moving a kanban card posts in the background and re-renders just
@@ -30503,6 +30622,24 @@ app.post('/admin/shipping/check', requireAdmin, async (req, res) => {
     console.error('shipping check failed:', e.message);
   }
   return shipBack(res, r.ref, 'err', (body && body.error) || 'The studio could not say.');
+});
+
+/* A studio order in their hands: the Production board's last move for it, so
+   the shop never has to open the studio admin to finish one. The studio only
+   moves a Shipped order forward (jt-ship.php `delivered`). */
+app.post('/admin/studio/:id/delivered', requireAdmin, async (req, res) => {
+  const id = /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : 0;
+  if (!(id > 0)) return res.redirect('/admin/production');
+  const { status, body } = await studioShip({ action: 'delivered', order_id: id }, 20000);
+  _studioCache.at = 0;
+  /* The board shows only fixed words from its link, so the studio's own reason
+     goes to the log and the page says which kind of failure it was. */
+  if (!body || !body.ok) {
+    console.error(`studio delivered #${id} failed (${status}):`, body && body.error);
+    const why = { 409: 'not-shipped', 403: 'refused', 404: 'not-found', 0: 'unreachable' }[status] || 'failed';
+    return res.redirect(`/admin/production?studio_err=${why}&studio_id=${id}#studio-card-${id}`);
+  }
+  return res.redirect(`/admin/production?studio_done=${id}`);
 });
 
 /* Out of the door, or ready to collect: the customer is told, once. A shipped
@@ -39483,6 +39620,30 @@ async function ownerNotices(roster, leads) {
       out.push({ recipient: 'owner', kind: 'payment', ref: String(p.id), link: `/admin/production/${encodeURIComponent(p.quote_code)}`,
         title: `Payment received: ${money(Number(p.amount))} on ${p.quote_code}${p.method ? ` (${p.method})` : ''}` });
     }
+  }
+  /* Studio orders (design.jtees.net) in the bell (2026-11-05): a new paid
+     order until it ships, and a checkout left unpaid while the feed still
+     lists it. A feed that failed is skipped, not cleared: its stale list must
+     never read as "dealt with". */
+  const feed = await notifyPart('studio', fetchStudioOrders());
+  if (feed && !feed.error) {
+    /* The feed's `created` is the studio's MySQL time with no zone, read here
+       as this server's: a day of slack so a clock difference never skips a
+       new one at the edge. */
+    const studioSince = since - 86400000;
+    const fresh = feed.orders.filter((o) => studioLane(o) === 0 && new Date(o.created).getTime() >= studioSince);
+    for (const o of fresh) {
+      out.push({ recipient: 'owner', kind: 'studio_order', ref: String(Number(o.id)), link: `/admin/production#studio-card-${Number(o.id)}`,
+        title: `New studio order #${Number(o.id)} paid ${money(Number(o.paid))}${o.name ? ` (${o.name})` : ''}` });
+    }
+    await notifyClearResolved('owner', 'studio_order', feed.orders.filter((o) => studioLane(o) === 0).map((o) => String(Number(o.id))));
+    const left = (feed.abandoned || []).filter((a) => Number(a.id) > 0);
+    for (const a of left) {
+      if (new Date(a.created).getTime() < studioSince) continue;
+      out.push({ recipient: 'owner', kind: 'studio_checkout', ref: String(Number(a.id)), link: '/admin/production#studio-unpaid',
+        title: `#${Number(a.id)} left checkout, ${a.name || a.email || 'no name'}, ${money(Number(a.total))}` });
+    }
+    await notifyClearResolved('owner', 'studio_checkout', left.map((a) => String(Number(a.id))));
   }
   /* Late jobs, once per spell of being late: the schedule check is the
      heaviest, so every 10 minutes, and the clock only moves once it worked.
