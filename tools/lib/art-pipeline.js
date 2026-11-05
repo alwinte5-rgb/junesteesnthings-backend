@@ -10,6 +10,10 @@
  *                        ▼   │                 ▼                      ▼ (a new round)
  *                     needs_info          changes ──submit──▶ submitted
  *
+ *   An automatic review request (every quote to one designer, autoArtSweep in
+ *   server.js) can also be closed with `review`: waiting ──review──▶ reviewed.
+ *   Nothing to make, the designer has seen it. A request sent by hand cannot.
+ *
  * One row per job (art_requests.quote_code is unique). Every move is checked
  * here and again in the UPDATE's WHERE, so two people clicking at once cannot
  * skip a step. The history of every move is kept in `events`.
@@ -25,17 +29,21 @@ const STATES = {
   submitted:  { label: 'Final art waiting for the owner', tone: 'blue' },
   changes:    { label: 'Owner asked for changes', tone: 'amber' },
   approved:   { label: 'Final art approved', tone: 'green' },
+  reviewed:   { label: 'Reviewed by the designer', tone: 'green' },
 };
+/* States where the art is finished: off the to-do lists, and nothing owed. */
+const DONE_STATES = ['approved', 'reviewed'];
 
 /* Each move: the states it may start from, where it goes, and who may make it.
    `who` is a permission key, or 'owner'. A null `from` entry is "no request yet". */
 const MOVES = {
-  request:  { from: [null, 'approved'], to: 'waiting', who: 'art.request' },
+  request:  { from: [null, 'approved', 'reviewed'], to: 'waiting', who: 'art.request' },
   question: { from: ['waiting', 'changes'], to: 'needs_info', who: 'art.work' },
   answer:   { from: ['needs_info'], to: 'waiting', who: 'art.request' },
   submit:   { from: ['waiting', 'changes'], to: 'submitted', who: 'art.work' },
   approve:  { from: ['submitted'], to: 'approved', who: 'owner' },
   changes:  { from: ['submitted'], to: 'changes', who: 'owner' },
+  review:   { from: ['waiting'], to: 'reviewed', who: 'art.work', autoOnly: true },
 };
 const FILE_STATES = ['waiting', 'changes', 'needs_info'];
 
@@ -50,6 +58,17 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024;
 function canMove(move, state) {
   const m = Object.prototype.hasOwnProperty.call(MOVES, move) ? MOVES[move] : null;
   return !!m && m.from.includes(state == null ? null : state);
+}
+
+/** Was the request now open made automatically (autoArtSweep), not by hand?
+ *  The LAST request decides: the owner sending the job by hand over an
+ *  automatic one makes it real art work. Mirrors ART_AUTO_SQL in server.js. */
+function isAutoRequest(events) {
+  const list = Array.isArray(events) ? events : [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i] && list[i].action === 'request') return list[i].auto === true;
+  }
+  return false;
 }
 
 /** May files be added in this state? */
@@ -75,5 +94,5 @@ function cleanNote(note) {
   return String(note || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, NOTE_MAX);
 }
 
-module.exports = { STATES, MOVES, FILE_STATES, NOTE_MAX, MAX_FILES, FOLDER, ACCEPT, MAX_FILE_BYTES,
-  canMove, canAddFile, artUrlOk, cleanName, cleanNote };
+module.exports = { STATES, DONE_STATES, MOVES, FILE_STATES, NOTE_MAX, MAX_FILES, FOLDER, ACCEPT, MAX_FILE_BYTES,
+  canMove, canAddFile, isAutoRequest, artUrlOk, cleanName, cleanNote };

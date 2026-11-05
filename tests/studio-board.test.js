@@ -37,6 +37,7 @@ function extractConst(anchor) {
   return src.slice(start, src.indexOf('];', start) + 2);
 }
 
+globalThis.__studioBoardSTAFF = require('../tools/lib/staff');
 const lib = vm.runInThisContext(`(function () {
   const STUDIO_BASE = 'https://design.example';
   const round2 = (n) => Math.round(Number(n) * 100) / 100;
@@ -46,18 +47,24 @@ const lib = vm.runInThisContext(`(function () {
   const disputeChip = () => '';
   const firstTouchLabel = () => '';
   const parseFirstTouch = () => null;
+  const STAFF = globalThis.__studioBoardSTAFF;
+  const OWNER_ACTOR = { kind: 'owner', id: null, perms: null };
+  let actor = null;
+  const currentActor = () => actor;
   ${extractConst('const JOB_STAGES = [')}
   ${extractFn('studioStage')}
   ${extractFn('studioFullyRefunded')}
   ${src.match(/const STUDIO_SHIPPED_DAYS = \d+;/)[0]}
   ${extractFn('studioLane')}
   ${extractFn('studioNeedsList')}
+  ${extractFn('studioRemovable')}
   ${extractFn('studioExemptChip')}
   ${extractFn('studioCard')}
   ${extractFn('studioOrdersSection')}
   ${extractFn('studioBoardNote')}
   const STUDIO_BOARD_ERRORS = ${src.slice(src.indexOf('const STUDIO_BOARD_ERRORS = ') + 'const STUDIO_BOARD_ERRORS = '.length, src.indexOf('};', src.indexOf('const STUDIO_BOARD_ERRORS = ')) + 1)};
-  return { JOB_STAGES, studioStage, studioLane, studioCard, studioOrdersSection, studioBoardNote: (q) => studioBoardNote(q), STUDIO_BOARD_ERRORS };
+  return { studioRemovable, JOB_STAGES, studioStage, studioLane, studioCard, studioOrdersSection, studioBoardNote: (q) => studioBoardNote(q), STUDIO_BOARD_ERRORS,
+    as: (a) => { actor = a; } };
 })`)();
 
 const OUT = lib.JOB_STAGES.findIndex((s) => s.key === 'out');
@@ -204,4 +211,61 @@ test('Delivered names the real failure and guards a second tap', () => {
   assert.match(route, /404: 'not-found'/);
   for (const k of ['refused', 'not-found', 'failed', 'unreachable', 'not-shipped']) assert.ok(lib.STUDIO_BOARD_ERRORS[k], k);
   assert.match(lib.studioCard(order({ status: 'shipped' }), null), /b\.disabled=true/);
+});
+
+test('Remove: only on unpaid orders and left checkouts, and a removed one leaves the list', () => {
+  assert.strictEqual(lib.studioRemovable(order({ status: 'pending', paid: 0 })), true);
+  assert.strictEqual(lib.studioRemovable(order()), false, 'paid work is never removable');
+  assert.strictEqual(lib.studioRemovable(order({ status: 'shipped', paid: 0 })), false, 'gone out still owing stays');
+  const feed = { error: null,
+    orders: [order({ id: 2, status: 'pending', paid: 0 }), order({ id: 3, status: 'pending', paid: 0 }), order({ id: 6, refunded: 40 })],
+    abandoned: [{ id: 9, total: 5, name: 'Lee' }, { id: 10, total: 5, name: 'Ann' }] };
+  const html = lib.studioOrdersSection(feed, { unpaidOnly: true, hidden: new Set(['order:3', 'checkout:10', 'order:6']) });
+  assert.match(html, /Order #2</);
+  assert.doesNotMatch(html, /Order #3</);
+  assert.match(html, /Order #6</, 'a refunded paid order cannot be removed, so a stray hide never hides it');
+  assert.match(html, /<b>#9<\/b>/);
+  assert.doesNotMatch(html, /<b>#10<\/b>/);
+  assert.match(html, /name="kind" value="order"><input type="hidden" name="id" value="2"/);
+  assert.match(html, /name="kind" value="checkout"><input type="hidden" name="id" value="9"/);
+  assert.doesNotMatch(html, /name="id" value="6"/, 'no Remove on paid work');
+});
+
+test('the Remove route checks the feed, not the form', () => {
+  const route = src.slice(src.indexOf("app.post('/admin/studio/hide', requireAdmin"), src.indexOf("app.post('/admin/studio/:id/delivered'"));
+  assert.ok(route.length > 100, 'the route exists and is admin-only');
+  assert.match(route, /if \(feed\.error\) return/, 'refused when the studio cannot be checked');
+  assert.match(route, /studioRemovable\(o\)/);
+  assert.match(route, /ON CONFLICT DO NOTHING/);
+  const STAFF = require('../tools/lib/staff');
+  assert.strictEqual(STAFF.permForRoute('POST', '/admin/studio/hide'), 'leads.dismiss');
+  assert.match(extractFn('ownerNotices'), /!hid\.has\(`checkout:\$\{Number\(a\.id\)\}`\)/, 'a removed checkout does not ring the bell again');
+});
+
+test('Remove is shown only to someone allowed to use it', () => {
+  const feed = { error: null, orders: [order({ id: 2, status: 'pending', paid: 0 })], abandoned: [{ id: 9, total: 5, name: 'Lee' }] };
+  const draw = () => lib.studioOrdersSection(feed, { unpaidOnly: true, hidden: new Set() });
+  try {
+    lib.as({ kind: 'staff', id: 4, perms: { 'quotes.view': 'on' } });
+    assert.doesNotMatch(draw(), /studio\/hide/, 'a helper without leads.dismiss sees no Remove');
+    assert.match(draw(), /Order #2</, 'but still sees the order');
+    lib.as({ kind: 'staff', id: 4, perms: { 'quotes.view': 'on', 'leads.dismiss': 'on' } });
+    assert.match(draw(), /name="id" value="2"/);
+    lib.as(null);
+    assert.match(draw(), /name="id" value="9"/, 'the owner always does');
+  } finally { lib.as(null); }
+});
+
+test('Remove messages name what it was, and the route uses the board feed', () => {
+  assert.match(lib.studioBoardNote({ studio_removed: '9', studio_kind: 'checkout' }), /Left checkout <b>#9<\/b> is off this board/);
+  assert.match(lib.studioBoardNote({ studio_err: 'not-removable', studio_id: '2', studio_kind: 'order' }), /Studio order <b>#2<\/b> is still on the board: it has a payment/);
+  assert.match(lib.studioBoardNote({ studio_err: 'checkout-gone', studio_id: '9', studio_kind: 'checkout' }), /Left checkout <b>#9<\/b> is no longer/);
+  const route = src.slice(src.indexOf("app.post('/admin/studio/hide', requireAdmin"), src.indexOf("app.post('/admin/studio/:id/delivered'"));
+  assert.doesNotMatch(route, /_studioCache\.at = 0/, 'no fresh studio fetch on every Remove');
+});
+
+test('an order missing from the feed is not called paid', () => {
+  assert.match(lib.studioBoardNote({ studio_err: 'order-gone', studio_id: '3', studio_kind: 'order' }), /Studio order <b>#3<\/b> is not in the studio/);
+  const route = src.slice(src.indexOf("app.post('/admin/studio/hide', requireAdmin"), src.indexOf("app.post('/admin/studio/:id/delivered'"));
+  assert.match(route, /known \? 'not-removable' : 'order-gone'/);
 });

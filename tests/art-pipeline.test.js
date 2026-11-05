@@ -33,7 +33,7 @@ test('who makes each move: sales, the designer, the owner', () => {
   assert.strictEqual(STAFF.ROUTES['POST /admin/api/art-signature'], 'art.work');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/art/decide'], 'owner');
   assert.match(src, /'\/admin\/quote\/:code\/art\/request', requireAdmin, artMoveHandler\(\['request', 'answer'\]\)/);
-  assert.match(src, /'\/admin\/quote\/:code\/art\/work', requireAdmin, artMoveHandler\(\['question', 'submit'\]\)/);
+  assert.match(src, /'\/admin\/quote\/:code\/art\/work', requireAdmin, artMoveHandler\(\['question', 'submit', 'review'\]\)/);
   assert.match(src, /'\/admin\/quote\/:code\/art\/decide', requireAdmin, artMoveHandler\(\['approve', 'changes'\]\)/);
   assert.strictEqual(STAFF.PRESETS.training.perms['art.request'], 'on');
   assert.strictEqual(STAFF.PRESETS.design.perms['art.work'], 'on');
@@ -45,7 +45,7 @@ test('every move re-checks the state in SQL, a designer touches only their own, 
   assert.match(fn, /WHERE quote_code = \$1 AND status = ANY\(\$4::text\[\]\)/);
   assert.match(fn, /AND \(\$5::int IS NULL OR assigned_to IS NULL OR assigned_to = \$5\)/);
   assert.match(fn, /jsonb_array_length\(files\) > 0/);
-  assert.match(fn, /WHERE art_requests\.status = 'approved'/, 'a new round only after approval');
+  assert.match(fn, /WHERE art_requests\.status IN \('approved', 'reviewed'\)/, 'a new round only once the art is done');
   assert.match(fn, /SET artwork_at = COALESCE\(artwork_at, NOW\(\)\)/, 'approval records artwork in hand, once');
 });
 

@@ -442,6 +442,27 @@ async function initDB() {
      read-only. Keyed by the cart's `updated` at the moment it was dismissed, so
      a customer who comes back and changes their cart resurfaces — dismissing
      means "done with this version", not "never show this person again". */
+  /* Studio orders and left checkouts the shop removed from the Production
+     board (owner, 2026-11-05: only unpaid ones and left checkouts, each by
+     hand). The studio's own record is untouched, the same split as
+     dismissed_carts below: the studio owns the order, the backend owns "June
+     has dealt with this". */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hidden_studio (
+      kind       TEXT NOT NULL CHECK (kind IN ('order', 'checkout')),
+      ref        INTEGER NOT NULL,
+      hidden_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (kind, ref)
+    )
+  `);
+  /* Shop-wide switches the owner sets on a page, one row per setting. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shop_settings (
+      key         TEXT PRIMARY KEY,
+      value       JSONB NOT NULL,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dismissed_carts (
       email         TEXT PRIMARY KEY,
@@ -23215,6 +23236,25 @@ function studioLane(o, now = Date.now()) {
   return JOB_STAGES.findIndex((x) => x.key === 'out');
 }
 
+/** Can the shop remove this studio order from the board? Only one nothing
+ *  was paid on and that has not gone out: never paid work. */
+function studioRemovable(o) {
+  const st = String(o.status || '').toLowerCase();
+  return !(Number(o.paid) > 0) && !['shipped', 'complete'].includes(st);
+}
+
+/** What the shop removed from the board: a Set of 'order:N' / 'checkout:N'.
+ *  A failed read hides nothing, so a fault never loses an order from view. */
+async function hiddenStudio() {
+  try {
+    const { rows } = await pool.query('SELECT kind, ref FROM hidden_studio');
+    return new Set(rows.map((r) => `${r.kind}:${Number(r.ref)}`));
+  } catch (e) {
+    console.error('hidden studio read failed:', e.message);
+    return new Set();
+  }
+}
+
 /** Under the Production board: a studio order that is in no lane but still
  *  needs someone, so it is never invisible there. Unpaid (a shipped one
  *  still owing included), and paid-then-refunded before it shipped, with its
@@ -23232,15 +23272,24 @@ const STUDIO_BOARD_ERRORS = {
   unreachable: 'was not marked delivered: the studio could not be reached. Try again in a minute.',
   refused: 'was not marked delivered: the studio refused this app’s key. The internal key must be the same on both services.',
   'not-found': 'was not marked delivered: the studio has no such order.',
+  'not-removable': 'is still on the board: it has a payment on it or has already gone out, and paid work cannot be removed.',
+  'order-gone': 'is not in the studio’s list right now (it may have been paid, cancelled or only just placed), so it was not removed. Reload the page and try again.',
+  'checkout-gone': 'is no longer a left checkout in the studio (it may have been paid since), so there was nothing to remove. Reload the page.',
+  'hide-unreachable': 'is still on the board: the studio could not be reached to check it is unpaid. Try again in a minute.',
+  'hide-failed': 'is still on the board: saving the removal failed. Try again.',
   failed: 'was not marked delivered: the studio said no. Open it in the studio to see why.',
 };
 function studioBoardNote(query) {
   const num = (v) => (/^\d{1,9}$/.test(String(v || '')) ? Number(v) : 0);
   const done = num(query.studio_done);
+  const removed = num(query.studio_removed);
   const errId = num(query.studio_id);
   const err = Object.hasOwn(STUDIO_BOARD_ERRORS, String(query.studio_err || '')) ? STUDIO_BOARD_ERRORS[String(query.studio_err)] : '';
+  /* Which one: a studio order, or a checkout left unpaid (studio_kind). */
+  const what = query.studio_kind === 'checkout' ? 'Left checkout' : 'Studio order';
   return (done ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">Studio order <b>#${done}</b> marked delivered.</div>` : '')
-    + (err && errId ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">Studio order <b>#${errId}</b> ${err}</div>` : '');
+    + (removed ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">${what} <b>#${removed}</b> is off this board. Nothing changed in the studio.</div>` : '')
+    + (err && errId ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${what} <b>#${errId}</b> ${err}</div>` : '');
 }
 
 /** A paid studio order as a Production card. Its moves go through the
@@ -23296,10 +23345,19 @@ function studioExemptChip(o) {
   return '';
 }
 
-function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly = false } = {}) {
+function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly = false, hidden = null } = {}) {
+  const gone = (kind, id) => !!(hidden && hidden.has(`${kind}:${Number(id)}`));
+  /* Remove: unpaid orders and left checkouts only, never paid work, and only
+     for someone the route lets in (ROUTES: leads.dismiss), so nobody is shown
+     a button that answers "not allowed". */
+  const canRemove = STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'POST', '/admin/studio/hide');
+  const removeBtn = (kind, id) => !canRemove ? '' : `<form method="POST" action="/admin/studio/hide" style="display:inline;margin-left:8px"
+      onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
+      <input type="hidden" name="kind" value="${kind}"><input type="hidden" name="id" value="${Number(id)}">
+      <button type="submit" class="btn btn-ghost" style="padding:3px 10px;font-size:12px" title="Take it off this board. Nothing changes in the studio.">Remove</button></form>`;
   /* On the Production board paid orders are cards in the lanes, so the list
      under it keeps only what is not work yet: unpaid, and left checkouts. */
-  const orders = unpaidOnly ? feed.orders.filter((o) => studioNeedsList(o)) : feed.orders;
+  const orders = unpaidOnly ? feed.orders.filter((o) => studioNeedsList(o) && !(studioRemovable(o) && gone('order', o.id))) : feed.orders;
   const rows = orders.map((o) => {
     const stage = studioStage(o.status, o.paid);
     const owed = round2(Math.max(0, Number(o.total || 0) - Number(o.paid || 0)));
@@ -23315,7 +23373,8 @@ function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly
         <span class="muted">${escEmail(o.name || 'no name')}${o.email ? ' &middot; ' + escEmail(o.email) : ''}${
           unpaidOnly && (o.phone || (o.ship_to && o.ship_to.phone)) ? ' &middot; ' + escEmail(o.phone || o.ship_to.phone) : ''}</span>
         <span style="margin-left:auto;white-space:nowrap">${money(o.total)}${
-          owed > 0 ? ` <span style="color:#b91c1c">&middot; ${money(owed)} due</span>` : ''}</span>
+          owed > 0 ? ` <span style="color:#b91c1c">&middot; ${money(owed)} due</span>` : ''}${
+          unpaidOnly && studioRemovable(o) ? removeBtn('order', o.id) : ''}</span>
       </div>
       <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span class="chip" style="background:${stage.bg};color:${stage.color}">${stage.label}</span>
@@ -23343,7 +23402,7 @@ function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly
 
   /* Checkouts placed and then left (feed's `abandoned`): who, how to reach
      them, and what they were buying, so the shop can follow up. */
-  const left = unpaidOnly ? (feed.abandoned || []).map((a) => {
+  const left = unpaidOnly ? (feed.abandoned || []).filter((a) => !gone('checkout', a.id)).map((a) => {
     const items = (Array.isArray(a.items) ? a.items : []).slice(0, 4)
       .map((l) => `${Number(l.qty) || 1} &times; ${escEmail(String(l.name || '').slice(0, 80))}`).join(', ');
     const tel = String(a.phone || '').replace(/[^\d+]/g, '');
@@ -23354,7 +23413,7 @@ function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly
         <span class="muted">${escEmail(a.name || 'no name')}${
           a.email ? ` &middot; <a href="mailto:${escEmail(encodeURIComponent(String(a.email)).replace(/%40/g, '@'))}">${escEmail(a.email)}</a>` : ''}${
           tel ? ` &middot; <a href="tel:${escEmail(tel)}">${escEmail(a.phone)}</a>` : ''}</span>
-        <span style="margin-left:auto;white-space:nowrap">${money(a.total)}</span>
+        <span style="margin-left:auto;white-space:nowrap">${money(a.total)}${removeBtn('checkout', a.id)}</span>
       </div>
       <div class="muted" style="margin-top:4px;font-size:12.5px">${a.created ? `${escEmail(dayShort(a.created))} &middot; ` : ''}${items || 'no items listed'}</div>
     </div>`;
@@ -24281,7 +24340,7 @@ async function renderBoard(VIEW, req, res) {
           ${live.length + studioLive === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
       })() : (body ? `${body}${groupScript}` : '<div class="card"><p class="muted">No quotes yet.</p></div>')}
 
-      ${studioOrdersSection(studio, { disputes, unpaidOnly: VIEW === 'work' })}
+      ${studioOrdersSection(studio, { disputes, unpaidOnly: VIEW === 'work', hidden: VIEW === 'work' ? await hiddenStudio() : null })}
       ${VIEW === 'work' ? STAGE_ASK_SCRIPT : ''}
       <script>
         /* Moving a kanban card posts in the background and re-renders just
@@ -25014,7 +25073,13 @@ async function fetchAttachments(files) {
 const ART_ACTIONS = {
   request: 'Sent to the designer', question: 'Asked a question', answer: 'Answered',
   submit: 'Submitted final art', approve: 'Approved the final art', changes: 'Asked for changes',
+  review: 'Reviewed it', reassign: 'Moved to another designer',
 };
+/* Is the request open on this row an automatic review (autoArtSweep)? The
+   LAST request event decides, as ART.isAutoRequest does: the owner sending a
+   job by hand over an automatic one appends a request that is not auto. */
+const ART_AUTO_SQL = (t) => `COALESCE((SELECT e ->> 'auto' FROM jsonb_array_elements(${t}.events) WITH ORDINALITY x(e, i)
+   WHERE e ->> 'action' = 'request' ORDER BY i DESC LIMIT 1), '') = 'true'`;
 
 /** Helpers who can work on artwork, for the "send to" list. */
 async function designersOnRoster() {
@@ -25042,7 +25107,11 @@ async function artMove(code, move, actor, { note = '', assignTo = null } = {}) {
        ON CONFLICT (quote_code) DO UPDATE SET status = 'waiting', requested_by = $2, assigned_to = $3, files = '[]'::jsonb,
          events = art_requests.events || jsonb_build_array(jsonb_set((($4::jsonb)->0), '{set_aside}', art_requests.files)),
          ack_at = NULL, ack_by = NULL, updated_at = NOW()
-       WHERE art_requests.status = 'approved'`, [code, me, assignTo, ev]);
+       WHERE art_requests.status IN ('approved', 'reviewed')
+          /* An automatic review request (autoArtSweep) never blocks the
+             owner sending the job by hand, to anyone, with a note. */
+          OR (art_requests.status = 'waiting' AND jsonb_array_length(art_requests.files) = 0
+              AND ${ART_AUTO_SQL('art_requests')})`, [code, me, assignTo, ev]);
     if (rowCount) notifyDesignersOfArt(code, move, assignTo).catch((e) => console.error(`art alert ${code} failed:`, e.message));
     return rowCount ? { ok: true, msg: 'Sent to the designer. They have been emailed, and it stays at the top of their pages until they press Got it.' }
       : { ok: false, msg: 'The designer already has this job.' };
@@ -25055,10 +25124,14 @@ async function artMove(code, move, actor, { note = '', assignTo = null } = {}) {
       WHERE quote_code = $1 AND status = ANY($4::text[])
         AND ($5::int IS NULL OR assigned_to IS NULL OR assigned_to = $5)
         AND ($6::boolean = FALSE OR jsonb_array_length(files) > 0)
+        /* Reviewed closes only an automatic review: a job sent by hand needs art. */
+        AND ($9::boolean = FALSE OR ${ART_AUTO_SQL('art_requests')})
       RETURNING quote_code, assigned_to`,
-    [code, m.to, ev, m.from.filter(Boolean), mineOnly ? me : null, move === 'submit', JOBNOTES.artAckEffect(move), me]);
+    [code, m.to, ev, m.from.filter(Boolean), mineOnly ? me : null, move === 'submit', JOBNOTES.artAckEffect(move), me, !!m.autoOnly]);
   if (!rows.length) {
-    return { ok: false, msg: move === 'submit' ? 'Upload the final files first.' : 'That step is not open right now. Reload the page.' };
+    return { ok: false, msg: move === 'submit' ? 'Upload the final files first.'
+      : move === 'review' ? 'Only a quote sent to you automatically for review can be marked reviewed. This one needs final art.'
+      : 'That step is not open right now. Reload the page.' };
   }
   if (move === 'approve') {
     await pool.query('UPDATE quotes SET artwork_at = COALESCE(artwork_at, NOW()) WHERE code = $1', [code]);
@@ -25068,7 +25141,8 @@ async function artMove(code, move, actor, { note = '', assignTo = null } = {}) {
   }
   logActivity(actor || OWNER_ACTOR, `art: ${move}`, { type: 'quote', id: code }, {});
   return { ok: true, msg: { question: 'Question sent to sales.', answer: 'Answer sent to the designer.',
-    submit: 'Final art sent to the owner.', approve: 'Final art approved.', changes: 'Sent back to the designer.' }[move] };
+    submit: 'Final art sent to the owner.', approve: 'Final art approved.', changes: 'Sent back to the designer.',
+    review: 'Marked reviewed. It is off your list.' }[move] };
 }
 
 async function jobArtCard(q, query) {
@@ -25095,7 +25169,7 @@ async function jobArtCard(q, query) {
       <label style="margin:0">Designer <select name="assign_to"><option value="">Any designer</option>${designers.map((d) =>
         `<option value="${d.id}">${escEmail(d.name)}</option>`).join('')}</select></label>
       ${noteBox('What the customer wants: design, colours, placement, sizes, deadline. Their files are in the Customer artwork card.')}
-      <button type="submit">${st === 'approved' ? 'Send back to the designer (new round)' : 'Send to the designer'}</button>`);
+      <button type="submit">${ART.DONE_STATES.includes(st) ? 'Send back to the designer (new round)' : 'Send to the designer'}</button>`);
   }
   if (canRequest && ART.canMove('answer', st)) {
     actions += form('request', `<input type="hidden" name="move" value="answer">${noteBox('Your answer for the designer')}
@@ -25143,9 +25217,17 @@ async function jobArtCard(q, query) {
       <b style="color:#92400e">New for you.</b> <span class="muted">Press this once you have seen it.</span>
       <button type="submit" style="margin-left:8px">Got it, I'm on it</button></form>`;
   }
+  /* Reviewed is the designer's own step: the owner closing it would take it
+     off the designer's list before they saw it. */
+  const autoReview = !!a && me != null && ART.isAutoRequest(a.events);
+  if (mine && autoReview && ART.canMove('review', st)) {
+    actions += `<p class="muted" style="margin:10px 0 0">Sent to you automatically to review. Nothing to make unless the owner sends it by hand.
+      Press <b>Reviewed</b> once you have looked it over; ask sales if something is wrong.</p>`;
+  }
   if (mine && (ART.canMove('submit', st) || ART.canMove('question', st))) {
     actions += form('work', `${noteBox('A note for the owner (what is in the files), or your question for sales')}
-      <button type="submit" name="move" value="submit"${files.length ? '' : ' disabled title="Upload the final files first"'}>Submit final art to the owner</button>
+      ${autoReview && ART.canMove('review', st) ? '<button type="submit" name="move" value="review">Reviewed</button>' : ''}
+      <button type="submit" name="move" value="submit"${files.length ? '' : ' disabled title="Upload the final files first"'}${autoReview ? ' class="btn-ghost"' : ''}>Submit final art to the owner</button>
       <button type="submit" name="move" value="question" class="btn-ghost">Ask sales a question</button>`);
   }
   if (owner && ART.canMove('approve', st)) {
@@ -25154,7 +25236,7 @@ async function jobArtCard(q, query) {
       <button type="submit" name="move" value="changes" class="btn-ghost">Send back for changes</button>`);
   }
   const events = (a ? a.events : []).slice().reverse().map((e) => `<div class="row-i"><span class="row-main" style="white-space:normal">
-      <b>${escEmail(ART_ACTIONS[e.action] || e.action)}</b> &middot; ${escEmail(who(e.by))}
+      <b>${escEmail(ART_ACTIONS[e.action] || e.action)}</b> &middot; ${escEmail(e.by == null && (e.auto || e.system) ? 'Automatic' : who(e.by))}
       ${e.note ? `<div class="row-sub" style="white-space:pre-wrap">${escEmail(e.note)}</div>` : ''}</span>
       <span class="row-end muted">${escEmail(whenShort(e.at))}</span></div>`).join('');
   const fileRows = files.map((f, n) => `<div class="row-i"><span class="row-main"><a href="${escEmail(f.url)}" target="_blank" rel="noopener"><b>${
@@ -25200,7 +25282,7 @@ function artMoveHandler(moves) {
   };
 }
 app.post('/admin/quote/:code/art/request', requireAdmin, artMoveHandler(['request', 'answer']));
-app.post('/admin/quote/:code/art/work', requireAdmin, artMoveHandler(['question', 'submit']));
+app.post('/admin/quote/:code/art/work', requireAdmin, artMoveHandler(['question', 'submit', 'review']));
 app.post('/admin/quote/:code/art/decide', requireAdmin, artMoveHandler(['approve', 'changes']));
 
 /* Add or remove a final file while the art is with the designer. */
@@ -25478,6 +25560,126 @@ function pinEmail(to, name, subject, line, href) {
 
 /** Email the designer (or every designer, when it is anyone's) that art has
  *  come to them. */
+/* Every quote to one designer (owner, 2026-11-05: "assign my designer to all
+   the quotes so he can review without me sending"). The owner picks the
+   designer on the Staff page; from then on each open quote with no design
+   request gets one, assigned to them, so it is on their Design jobs list.
+   A sweep rather than a hook in each place a quote is made (the form, the
+   reorder button, a customer's request), so no way in is ever missed. */
+const AUTO_ART_KEY = 'auto_art_designer';
+const AUTO_ART_NOTE = 'Sent automatically: every quote goes to the designer to review.';
+async function autoArtSetting() {
+  const { rows: [r] } = await pool.query('SELECT value FROM shop_settings WHERE key = $1', [AUTO_ART_KEY]);
+  const id = r && r.value ? Number(r.value.staff_id) : 0;
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+/** Open quotes: not cancelled, not delivered, and either accepted or still
+ *  within their price (a quote that ran out months ago is not open work), from
+ *  the last 60 days. Drafts included: the designer reviews before it goes. */
+const AUTO_ART_OPEN_SQL = `q.cancelled_at IS NULL AND q.delivered_at IS NULL AND q.shipped_at IS NULL
+  AND (q.accepted_at IS NOT NULL OR q.valid_until IS NULL OR q.valid_until >= CURRENT_DATE)
+  AND q.created_at > NOW() - interval '60 days'`;
+/* A quote still in hand, for moving its automatic review: not cancelled,
+   delivered or shipped. A review on a finished quote is left where it is. */
+const AUTO_REVIEW_LIVE_SQL = `q.cancelled_at IS NULL AND q.delivered_at IS NULL AND q.shipped_at IS NULL`;
+/** Hand the open automatic reviews with `fromId` (or, when fromId is null,
+ *  with anyone but `toId`) to `toId`, or to any designer when toId is null.
+ *  Only ones not yet worked on: still waiting, no files, the last request
+ *  automatic, on a quote still in hand; and unless `includeSeen` (the designer
+ *  is leaving and can do nothing with them), only ones they have not pressed
+ *  Got it on. Each is pinned again for its new designer. Returns how many. */
+async function moveAutoReviews(fromId, toId, { includeSeen = false } = {}) {
+  /* system: the move was made by the shop's own rules, not by a person, so
+     the history does not read it as the owner's. */
+  const ev = JSON.stringify([{ at: new Date().toISOString(), by: null, system: true, action: 'reassign', note: AUTO_ART_MOVED_NOTE }]);
+  const { rowCount } = await pool.query(
+    `UPDATE art_requests a SET assigned_to = $2, ack_at = NULL, ack_by = NULL, events = a.events || $3::jsonb, updated_at = NOW()
+       FROM quotes q
+      WHERE q.code = a.quote_code AND ${AUTO_REVIEW_LIVE_SQL}
+        AND a.status = 'waiting' AND jsonb_array_length(a.files) = 0 AND ${ART_AUTO_SQL('a')}
+        AND ($4::boolean OR a.ack_at IS NULL)
+        AND ($1::int IS NULL OR a.assigned_to = $1) AND a.assigned_to IS DISTINCT FROM $2::int`,
+    [fromId, toId, ev, includeSeen]);
+  return rowCount;
+}
+/** Where a leaving helper's automatic reviews go: the picked designer when
+ *  that is someone else still doing design work, else any designer (null). */
+function autoReviewTarget(leavingId, picked, designers) {
+  return picked && picked !== leavingId && designers.some((d) => d.id === picked) ? picked : null;
+}
+/** Did this save take design work away from a helper who had it? */
+function lostDesignWork(before, perms) {
+  const lvl = (p) => STAFF.levelOf({ kind: 'staff', perms: p || {} }, 'art.work');
+  return lvl(before && before.perms) === 'on' && lvl(perms) !== 'on';
+}
+/** A helper leaving design work (disabled, archived, the switch turned off):
+ *  their automatic reviews not yet worked on go to the picked designer, or
+ *  to any designer, so none is stranded with nobody able to open it and none
+ *  blocks archiving them. `to` skips the look-up when the caller already
+ *  knows it (archiveSettledHelpers, once per run). Never throws. */
+async function releaseAutoReviews(staffId, { to } = {}) {
+  try {
+    if (to === undefined) {
+      const { rows: [any] } = await pool.query(
+        `SELECT 1 FROM art_requests WHERE assigned_to = $1 AND status = 'waiting' LIMIT 1`, [staffId]);
+      if (!any) return 0;
+      to = autoReviewTarget(staffId, await autoArtSetting(), await designersOnRoster());
+    }
+    return await moveAutoReviews(staffId, to, { includeSeen: true });
+  } catch (e) {
+    console.error(`releasing auto reviews of helper ${staffId} failed:`, e.message);
+    return 0;
+  }
+}
+/** The Staff page note when the helper just taken off design work was the
+ *  designer every quote goes to: the sweep stops sending until another is
+ *  picked, and the owner should hear that now, not find it later. */
+async function autoArtLostNote(staffId) {
+  try { return (await autoArtSetting()) === staffId
+    ? ' They were the designer every quote goes to, so new quotes are not being sent to anyone: pick another designer under "Every quote to a designer".' : ''; }
+  catch { return ''; }
+}
+const AUTO_ART_MOVED_NOTE = 'Moved to another designer: the one it was with changed or left design work.';
+let autoArtAt = 0;
+async function autoArtSweep({ force = false } = {}) {
+  if (!force && Date.now() - autoArtAt < 60 * 1000) return 0;
+  autoArtAt = Date.now();
+  const staffId = await autoArtSetting();
+  if (!staffId) return 0;
+  /* Most minutes nothing is new: say so from one indexed look before reading
+     the team roster. */
+  const { rows: [due] } = await pool.query(
+    `SELECT 1 FROM quotes q WHERE ${AUTO_ART_OPEN_SQL}
+        AND NOT EXISTS (SELECT 1 FROM art_requests a WHERE a.quote_code = q.code) LIMIT 1`);
+  if (!due) return 0;
+  /* A designer since archived or without design work any more gets nothing,
+     rather than requests nobody can open. */
+  const designer = (await designersOnRoster()).find((d) => d.id === staffId);
+  if (!designer) return 0;
+  const ev = JSON.stringify([{ at: new Date().toISOString(), by: null, action: 'request', note: AUTO_ART_NOTE, auto: true }]);
+  const { rows } = await pool.query(
+    `INSERT INTO art_requests (quote_code, status, requested_by, assigned_to, events)
+     SELECT q.code, 'waiting', NULL, $1, $2::jsonb FROM quotes q
+      WHERE ${AUTO_ART_OPEN_SQL}
+        AND NOT EXISTS (SELECT 1 FROM art_requests a WHERE a.quote_code = q.code)
+      ORDER BY q.created_at LIMIT 200
+     ON CONFLICT (quote_code) DO NOTHING
+     RETURNING quote_code`, [staffId, ev]);
+  if (rows.length) {
+    logActivity(OWNER_ACTOR, 'art: auto-request', { type: 'quote', id: rows.map((r) => r.quote_code).join(',').slice(0, 200) }, { count: rows.length });
+    /* One email per sweep, not one per quote: the first run sends every open
+       quote at once. */
+    if (isValidEmail(designer.email)) {
+      const codes = rows.map((r) => r.quote_code);
+      pinEmail(designer.email, designer.name, `${codes.length === 1 ? `New quote to review: ${codes[0]}` : `${codes.length} quotes to review`}`,
+        `${codes.length === 1 ? 'A new quote is' : `${codes.length} quotes are`} on your Design jobs list to review: <b>${
+          codes.slice(0, 20).map(escEmail).join(', ')}</b>${codes.length > 20 ? ' and more' : ''}. Press <b>Got it</b> on each once you have seen it.`,
+        '/admin/design').catch((e) => console.error('auto art email failed:', e.message));
+    }
+  }
+  return rows.length;
+}
+
 async function notifyDesignersOfArt(code, move, assignedTo) {
   const designers = (await designersOnRoster()).filter((d) => assignedTo == null || d.id === assignedTo);
   const what = JOBNOTES.ART_NEWS[move] || 'Design work';
@@ -25873,8 +26075,8 @@ try {
     `SELECT a.quote_code, a.status, a.updated_at, q.name, q.needed_by
        FROM art_requests a JOIN quotes q ON q.code = a.quote_code
       WHERE q.cancelled_at IS NULL AND ($1::int IS NULL OR a.assigned_to IS NULL OR a.assigned_to = $1)
-        AND (a.status <> 'approved' OR a.updated_at > NOW() - interval '14 days')
-      ORDER BY (a.status = 'approved'), q.needed_by NULLS LAST, a.updated_at LIMIT 200`, [me]);
+        AND (a.status <> ALL($2::text[]) OR a.updated_at > NOW() - interval '14 days')
+      ORDER BY (a.status = ANY($2::text[])), q.needed_by NULLS LAST, a.updated_at LIMIT 200`, [me, ART.DONE_STATES]);
   const row = (a) => `<div class="row-i"><span class="row-main"><a href="/admin/design/${escEmail(a.quote_code)}"><b>${escEmail(a.quote_code)}</b></a>
       ${escEmail(firstNameOf(a.name))}
       <div class="row-sub">${escEmail(ART.STATES[a.status] ? ART.STATES[a.status].label : a.status)}${
@@ -30624,6 +30826,41 @@ app.post('/admin/shipping/check', requireAdmin, async (req, res) => {
   return shipBack(res, r.ref, 'err', (body && body.error) || 'The studio could not say.');
 });
 
+/* Remove an unpaid studio order or a left checkout from the board (owner,
+   2026-11-05). Checked against the feed, so a paid order can never be hidden,
+   and refused when the feed is down rather than trusting the form. */
+app.post('/admin/studio/hide', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const kind = b.kind === 'checkout' ? 'checkout' : b.kind === 'order' ? 'order' : '';
+  const id = /^\d{1,9}$/.test(String(b.id || '')) ? Number(b.id) : 0;
+  const home = '/admin/production#studio-unpaid';
+  if (!kind || !(id > 0)) return res.redirect(home);
+  const to = (q) => res.redirect(`/admin/production?${q}&studio_id=${id}&studio_kind=${kind}#studio-unpaid`);
+  /* The feed as the board last read it (up to a minute old), not a fresh
+     fetch: the board re-checks studioRemovable each time it is drawn, so an
+     order paid after it was removed comes straight back. */
+  const feed = await fetchStudioOrders();
+  if (feed.error) return to('studio_err=hide-unreachable');
+  const ok = kind === 'checkout'
+    ? (feed.abandoned || []).some((a) => Number(a.id) === id)
+    : feed.orders.some((o) => Number(o.id) === id && studioRemovable(o));
+  if (!ok) {
+    const known = kind === 'order' && feed.orders.some((o) => Number(o.id) === id);
+    return to(`studio_err=${kind === 'checkout' ? 'checkout-gone' : known ? 'not-removable' : 'order-gone'}`);
+  }
+  try {
+    await pool.query('INSERT INTO hidden_studio (kind, ref) VALUES ($1, $2) ON CONFLICT DO NOTHING', [kind, id]);
+    if (kind === 'checkout') {
+      await pool.query(`UPDATE notifications SET read_at = COALESCE(read_at, NOW())
+                         WHERE recipient = 'owner' AND kind = 'studio_checkout' AND ref = $1`, [String(id)]);
+    }
+  } catch (e) {
+    console.error(`studio hide ${kind} #${id} failed:`, e.message);
+    return to('studio_err=hide-failed');
+  }
+  return res.redirect(`/admin/production?studio_removed=${id}&studio_kind=${kind}#studio-unpaid`);
+});
+
 /* A studio order in their hands: the Production board's last move for it, so
    the shop never has to open the studio admin to finish one. The studio only
    moves a Shipped order forward (jt-ship.php `delivered`). */
@@ -32190,7 +32427,12 @@ async function helperOutstanding(id) {
                   FROM staff_shifts sh WHERE staff_id = $1`, [id]),
     pool.query('SELECT COALESCE(SUM(amount), 0)::float AS a FROM staff_bonuses WHERE staff_id = $1 AND paid_at IS NULL', [id]),
     pool.query('SELECT COUNT(*)::int AS n FROM staff_tasks WHERE assigned_to = $1 AND done_at IS NULL', [id]),
-    pool.query(`SELECT COUNT(*)::int AS n FROM art_requests WHERE assigned_to = $1 AND status <> 'approved'`, [id]),
+    /* An automatic review nobody worked on, on a quote already finished, is
+       not work in hand: it never holds up archiving. */
+    pool.query(`SELECT COUNT(*)::int AS n FROM art_requests a LEFT JOIN quotes q ON q.code = a.quote_code
+                 WHERE a.assigned_to = $1 AND a.status <> ALL($2::text[])
+                   AND NOT (a.status = 'waiting' AND jsonb_array_length(a.files) = 0 AND ${ART_AUTO_SQL('a')}
+                            AND NOT (q.code IS NOT NULL AND ${AUTO_REVIEW_LIVE_SQL}))`, [id, ART.DONE_STATES]),
     (async () => { const { rows: [rates] } = await pool.query('SELECT commission_pct, shop_commission_pct FROM staff WHERE id = $1', [id]);
       return commissionLines(id, rates); })(),
   ]);
@@ -32230,8 +32472,13 @@ async function archiveSettledHelpers() {
                           AND a.subject_type = 'staff' AND a.subject_id = s.id::text
                           AND a.created_at > COALESCE((SELECT MAX(d.created_at) FROM staff_activity d
                             WHERE d.action = 'helper disabled' AND d.subject_type = 'staff' AND d.subject_id = s.id::text), '-infinity'))`);
+  /* Where their automatic reviews go, read once for the whole run. */
+  /* A failed read sends them to any designer rather than stopping the sweep. */
+  const [picked, designers] = rows.length ? await Promise.all([autoArtSetting().catch(() => null),
+    designersOnRoster().catch((e) => { console.error('archive sweep roster read failed:', e.message); return []; })]) : [null, []];
   for (const h of rows) {
     try {
+      await releaseAutoReviews(h.id, { to: autoReviewTarget(h.id, picked, designers) });
       if ((await helperOutstanding(h.id)).length) continue;
       if (await archiveHelper(h.id)) {
         logActivity(null, 'helper archived', { type: 'staff', id: h.id }, { name: h.name, auto: true });
@@ -32350,6 +32597,7 @@ async function renderStaffPage(req, res, extra = '') {
     ${pageHeader('Staff', 'Each helper signs in through Cloudflare with their own email. Switch what they can do at any time; it applies on their next click.')}
     ${tabs}
     ${flash(req.query)}${extra}
+    ${await autoArtCard().catch((e) => { console.error('auto art card failed:', e.message); return ''; })}
     ${cfAccess ? '' : `<div class="warn">Sign-in is switched off until CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and OWNER_EMAILS
       are set on the backend service in Railway.</div>`}
     <details class="fold" id="add"${(req.query || {}).add_track || (req.query || {}).add_name || (req.query || {}).err || !roster.some((s) => s.active) ? ' open' : ''}>
@@ -32379,6 +32627,53 @@ async function renderStaffPage(req, res, extra = '') {
           <a href="/admin/timeclock?staff=${s.id}">Their hours</a> &middot; <a href="/admin/commission?staff=${s.id}">Their pay</a> &middot; <a href="/admin/tasks">Tasks</a></div>` : ''}${card(s)}`).join('')}</div>
     </details>` : ''}${SHIP_ONCE_JS}`, 'staff'));
 }
+
+/** The Staff page's "every quote goes to" picker. Owner only. */
+async function autoArtCard() {
+  if (!isOwner()) return '';
+  const [current, designers] = await Promise.all([autoArtSetting(), designersOnRoster()]);
+  const on = designers.find((d) => d.id === current);
+  return `<div class="card" id="auto-art"><h2 class="card-title">Every quote to a designer</h2>
+    <p class="muted" style="margin:0 0 8px">Each open quote, drafts included, goes on their Design jobs list as soon as it is saved,
+      so they can review it without you sending it.${current && !on ? ' <b style="color:#b45309">The designer picked before is no longer on the team or no longer does design work, so nothing is being sent.</b>' : ''}</p>
+    <form method="POST" action="/admin/settings/auto-art" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select name="staff_id"><option value="">Nobody (send by hand)</option>${designers.map((d) =>
+        `<option value="${Number(d.id)}"${d.id === current ? ' selected' : ''}>${escEmail(d.name)}</option>`).join('')}</select>
+      <button type="submit" class="btn">Save</button></form>
+    ${designers.length ? '' : '<p class="muted" style="margin:8px 0 0">Nobody on the team does design work yet (the "Work on artwork" switch).</p>'}</div>`;
+}
+
+app.post('/admin/settings/auto-art', requireAdmin, async (req, res) => {
+  if (!isOwner()) return res.status(403).send('Owner only.');
+  const raw = String((req.body || {}).staff_id || '');
+  try {
+    if (!raw) {
+      await pool.query('DELETE FROM shop_settings WHERE key = $1', [AUTO_ART_KEY]);
+      return back(res, '/admin/staff#auto-art', 'ok', 'Quotes are no longer sent to a designer automatically.');
+    }
+    const id = /^\d{1,9}$/.test(raw) ? Number(raw) : 0;
+    const designer = (await designersOnRoster()).find((d) => d.id === id);
+    if (!designer) return back(res, '/admin/staff#auto-art', 'err', 'Pick a designer from the list.');
+    await pool.query(
+      `INSERT INTO shop_settings (key, value) VALUES ($1, $2::jsonb)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [AUTO_ART_KEY, JSON.stringify({ staff_id: id })]);
+    /* The reviews already sent to the designer picked before move too. */
+    const moved = await moveAutoReviews(null, id);
+    const sent = await autoArtSweep({ force: true });
+    if (moved && isValidEmail(designer.email)) {
+      pinEmail(designer.email, designer.name, `${moved} quote${moved === 1 ? '' : 's'} to review`,
+        `${moved} quote${moved === 1 ? ' is' : 's are'} on your Design jobs list to review, moved to you from the designer before. Press <b>Got it</b> on each once you have seen it.`,
+        '/admin/design').catch((e) => console.error('auto art move email failed:', e.message));
+    }
+    return back(res, '/admin/staff#auto-art', 'ok',
+      `Every quote now goes to ${designer.name}.${sent ? ` ${sent} open quote${sent === 1 ? '' : 's'} sent to them now.` : ''}${
+        moved ? ` ${moved} waiting with the designer before moved to them.` : ''}`);
+  } catch (e) {
+    console.error('auto art setting failed:', e.message);
+    return back(res, '/admin/staff#auto-art', 'err', 'That was not saved. Try again.');
+  }
+});
 
 app.get('/admin/staff', requireAdmin, async (req, res) => {
   try { await renderStaffPage(req, res); }
@@ -32432,32 +32727,39 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (!id) return res.redirect('/admin/staff');
   try {
-    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, hourly_rate, archived_at FROM staff WHERE id = $1', [id]);
+    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, hourly_rate, archived_at, perms FROM staff WHERE id = $1', [id]);
     if (!s) return back(res, '/admin/staff', 'err', 'No such helper.');
     switch (String(b.action)) {
       case 'preset': {
         const p = STAFF.presetPerms(String(b.preset));
         if (!p) return back(res, '/admin/staff', 'err', 'Unknown preset.');
         await pool.query('UPDATE staff SET perms = $2 WHERE id = $1', [id, JSON.stringify(p)]);
-        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is now ${STAFF.PRESETS[b.preset].label}.`);
+        const lost = lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is now ${STAFF.PRESETS[b.preset].label}.${lost}`);
       }
-      case 'perms':
-        await pool.query('UPDATE staff SET perms = $2 WHERE id = $1', [id, JSON.stringify(STAFF.permsFromForm(b))]);
-        return back(res, '/admin/staff', 'ok', `Saved ${s.name}'s permissions.`);
+      case 'perms': {
+        const perms = STAFF.permsFromForm(b);
+        await pool.query('UPDATE staff SET perms = $2 WHERE id = $1', [id, JSON.stringify(perms)]);
+        const lost = lostDesignWork(s, perms) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
+        return back(res, '/admin/staff', 'ok', `Saved ${s.name}'s permissions.${lost}`);
+      }
       case 'disable':
         /* Every request looks the helper up, so this locks them out on their next click.
            Remove them from the Cloudflare policy too. */
         await pool.query('UPDATE staff SET active = FALSE WHERE id = $1', [id]);
         logActivity(currentActor(), 'helper disabled', { type: 'staff', id }, { name: s.name });
+        /* Their automatic reviews move on first, so they hold up nothing. */
+        await releaseAutoReviews(id);
+        const lostNote = await autoArtLostNote(id);
         {
           /* Off every list straight away when nothing is owed or open; otherwise
              they stay on Staff and Pay until it is settled. */
           const left = await helperOutstanding(id).catch((e) => { console.error('helper outstanding failed:', e.message); return ['an unchecked balance']; });
           if (!left.length && await archiveHelper(id)) {
             logActivity(currentActor(), 'helper archived', { type: 'staff', id }, { name: s.name, onDisable: true });
-            return back(res, '/admin/staff', 'ok', `${s.name} is disabled and archived: off every list, records kept. Also remove ${s.email} from the Cloudflare policy.`);
+            return back(res, '/admin/staff', 'ok', `${s.name} is disabled and archived: off every list, records kept. Also remove ${s.email} from the Cloudflare policy.${lostNote}`);
           }
-          return back(res, '/admin/staff', 'ok', `${s.name} is disabled and off every list except Staff and Pay, because they still have ${left.join('; ')}. They are archived once that is settled. Also remove ${s.email} from the Cloudflare policy.`);
+          return back(res, '/admin/staff', 'ok', `${s.name} is disabled and off every list except Staff and Pay, because they still have ${left.join('; ')}. They are archived once that is settled. Also remove ${s.email} from the Cloudflare policy.${lostNote}`);
         }
       case 'welcome': {
         if (!s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `${s.name} is disabled. Enable them before sending a welcome.`);
@@ -32471,6 +32773,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            hide wages or commission to pay, or work in hand. */
         if (s.archived_at) return back(res, '/admin/staff?archived=1', 'ok', `${s.name} is already archived.`);
         if (s.active) return back(res, `/admin/staff#staff-${id}`, 'err', `Disable ${s.name} before archiving them.`);
+        await releaseAutoReviews(id);
         const left = await helperOutstanding(id);
         if (left.length) return back(res, `/admin/staff#staff-${id}`, 'err', `Not archived: ${s.name} still has ${left.join('; ')}.`);
         const rowCount = await archiveHelper(id);
@@ -39637,7 +39940,8 @@ async function ownerNotices(roster, leads) {
         title: `New studio order #${Number(o.id)} paid ${money(Number(o.paid))}${o.name ? ` (${o.name})` : ''}` });
     }
     await notifyClearResolved('owner', 'studio_order', feed.orders.filter((o) => studioLane(o) === 0).map((o) => String(Number(o.id))));
-    const left = (feed.abandoned || []).filter((a) => Number(a.id) > 0);
+    const hid = await hiddenStudio();
+    const left = (feed.abandoned || []).filter((a) => Number(a.id) > 0 && !hid.has(`checkout:${Number(a.id)}`));
     for (const a of left) {
       if (new Date(a.created).getTime() < studioSince) continue;
       out.push({ recipient: 'owner', kind: 'studio_checkout', ref: String(Number(a.id)), link: '/admin/production#studio-unpaid',
@@ -39787,6 +40091,7 @@ async function notifySweep() {
   notifyLastAt = Date.now();
   try {
     const roster = await staffRoster({ activeOnly: true });
+    await notifyPart('auto art', autoArtSweep());
     const leads = await notifyPart('leads', unansweredLeads());
     const parts = await Promise.all([
       notifyPart('owner', ownerNotices(roster, leads)),

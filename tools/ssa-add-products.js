@@ -79,6 +79,10 @@ const TYPES = {
               back: { height: 320, width: 175, left: 0, top: -5 } },
   kids:     { raws: 'kids_babies',        front: { height: 200, width: 140, left: 0, top: 0 },
               back: { height: 200, width: 140, left: 0, top: 0 } },
+  /* A youth long sleeve: the long-sleeve drawing with the youth print area
+     (canvas.js refuses a long sleeve drawn on the short-sleeve kids art). */
+  kidslong: { raws: 'long_sleeve',        front: { height: 200, width: 140, left: 0, top: 0 },
+              back: { height: 200, width: 140, left: 0, top: 0 } },
   premium:  { raws: 'premium',            front: { height: 260, width: 170, left: 0, top: 0 },
               back: { height: 300, width: 170, left: 0, top: 0 } },
   /* Vests and jackets are decorated left-chest and centre-back, and are almost
@@ -246,6 +250,8 @@ const WANTED = [
 const STREETWEAR = require('./data/ssa-streetwear-2026-10');
 /* Youth and baby, workwear, core tees and fleece, more streetwear (2026-10-19). */
 const EXPANSION = require('./data/ssa-expansion-2026-10');
+/* Long sleeves for the quote form (2026-11-05). */
+const LONGSLEEVE = require('./data/ssa-longsleeve-2026-11');
 
 /* Sublimation needs a poly garment, so it is added only where the fabric
    supports it rather than offered everywhere and refused later. Matched by
@@ -430,7 +436,7 @@ async function run(env) {
   const subId = subMethod ? Number(subMethod.id) : null;
 
   let list;
-  try { list = selectWanted(WANTED, STREETWEAR.concat(EXPANSION), { staged: STAGED, only: ONLY }); }
+  try { list = selectWanted(WANTED, STREETWEAR.concat(EXPANSION, LONGSLEEVE), { staged: STAGED, only: ONLY }); }
   catch (e) { console.error(e.message); process.exit(2); }
   const seenIds = new Set();
   console.log((APPLY ? 'APPLYING' : 'DRY RUN') + ' — ' + list.length + ' styles' +

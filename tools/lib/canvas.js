@@ -30,6 +30,11 @@ const OK_ART = {
 const CREW_RE = /\bcrew(neck)?\b|\bsweatshirt\b/i;
 const HOOD_RE = /\bhood(ed|ie|y)?\b/i;
 const TANK_RE = /\btank\b/i;
+const LONG_SLEEVE_RE = /\blong[\s-]?sleeve\b/i;
+/** A long sleeve in a class whose own drawings have short sleeves (a youth or
+ *  tee-class long sleeve). Polos, woven shirts, zips and jackets drawn on
+ *  their own art are left alone: that art is not short-sleeved. */
+const isShortDrawnLongSleeve = (name, cls) => LONG_SLEEVE_RE.test(String(name || '')) && ['kids', 'tee'].includes(cls);
 /** A crewneck sweatshirt: the hoodie class, without a hood. */
 const isCrew = (name) => classify(name) === 'hoodie' && CREW_RE.test(String(name || '')) && !HOOD_RE.test(String(name || ''));
 
@@ -63,6 +68,13 @@ function canvasVerdict(p) {
   if (TANK_RE.test(p.name) && !/tank/.test(art)) {
     return { verdict: 'bad', cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') + ' — sleeves on a tank' };
   }
+  /* The same trap the other way (2026-11-05): a youth long sleeve is in the
+     kids class, whose drawing has short sleeves (Gildan 5400B). */
+  if (isShortDrawnLongSleeve(p.name, cls) && !/long_sleeve/.test(art)) {
+    return { verdict: 'bad', cls, art: art.replace(/products\//g, '').replace(/\.png/g, '') + ' — short sleeves on a long sleeve' };
+  }
+  /* ...and the long-sleeve drawing is right for one, whatever its class. */
+  if (isShortDrawnLongSleeve(p.name, cls) && /long_sleeve/.test(art)) return { verdict: 'ok', cls };
   if ((OK_ART[cls] || []).some((re) => re.test(art))) {
     /* The family is right. That is not the same as the garment being right:
        one hat.png stands in for every beanie, visor and trucker, and a vest is
@@ -86,4 +98,4 @@ function photoCoverage(attrs, vars) {
   return { colours: opts.length, withPhotos: opts.filter((o) => wired.has(o.value)).length };
 }
 
-module.exports = { OK_ART, canvasVerdict, decodeStages, photoCoverage, isCrew, TANK_RE };
+module.exports = { OK_ART, canvasVerdict, decodeStages, photoCoverage, isCrew, TANK_RE, isShortDrawnLongSleeve };

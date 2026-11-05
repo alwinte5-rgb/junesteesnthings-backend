@@ -179,7 +179,8 @@ test('the 2026-10-19 expansion rows are unique, capped per brand, and each name 
   for (const [style, type, brand, name] of rows) {
     const k = (brand + '|' + style).toUpperCase();
     assert.ok(!seen.has(k) && !street.has(k), 'duplicate ' + k); seen.add(k);
-    assert.strictEqual(T[classify(name)], type, name);
+    /* A youth long sleeve is a kids garment staged on the long-sleeve drawing. */
+    assert.strictEqual(T[classify(name)], type === 'kidslong' ? 'kids' : type, name);
     assert.ok(name.startsWith(brand), name);
     assert.ok(!/\b(tall|pant|short|jogger|legging|sock|apron)\b/i.test(name), 'tops only: ' + name);
   }
