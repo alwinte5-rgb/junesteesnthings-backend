@@ -22,7 +22,8 @@ function lift(name) {
   return src.slice(at, src.indexOf('\n}\n', at) + 2);
 }
 
-const ctx = { process: { env: {} }, Date, Math, Number, String, parseInt };
+/* The risk rules, with deadline alerts switched on (see the test below for off). */
+const ctx = { process: { env: {} }, Date, Math, Number, String, parseInt, DEADLINE_ALERTS: true };
 vm.createContext(ctx);
 vm.runInContext(['addBusinessDays', 'quoteSchedule'].map(lift).join('\n'), ctx);
 const daysAgo = (n) => new Date(Date.now() - n * 86400e3);
@@ -35,6 +36,19 @@ test('a quote nobody has paid on is never behind, however old its date', () => {
   assert.ok(ctx.quoteSchedule({ needed_by: due, paid_amount: 100 }).risks.length > 0, 'paid and late is behind');
   // The dates still show for a quote: only the warnings wait for the deposit.
   assert.ok(ctx.quoteSchedule({ needed_by: due }).ship_by);
+});
+
+test('deadline alerts are off: a paid job past its dates is never behind, and the dates still show (owner, 2026-11-05)', () => {
+  assert.match(src, /\nconst DEADLINE_ALERTS = false;\n/, 'switched off in server.js');
+  const off = { process: { env: {} }, Date, Math, Number, String, parseInt, DEADLINE_ALERTS: false };
+  vm.createContext(off);
+  vm.runInContext(['addBusinessDays', 'quoteSchedule'].map(lift).join('\n'), off);
+  // Paid today with a ready date a week out: start-by is already behind it.
+  const fresh = off.quoteSchedule({ target_date: new Date(Date.now() + 7 * 86400e3), paid_amount: 50, accepted_at: new Date() });
+  assert.strictEqual(fresh.risks.length, 0, 'a job that just arrived is not late');
+  const old = off.quoteSchedule({ needed_by: daysAgo(3), paid_amount: 100 });
+  assert.strictEqual(old.risks.length, 0, 'no late warning while the switch is off');
+  assert.ok(old.ship_by && old.blanks_order_by, 'the dates are kept');
 });
 
 test('the first deposit fills an empty working date, once, and never a date someone gave', () => {

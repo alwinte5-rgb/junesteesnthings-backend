@@ -104,6 +104,7 @@ test('no delivery method means pickup: the job is ready on the needed date', () 
      quote with no method read as shipped and told the owner (and the
      customer) a date two business days early. */
   const { quoteSchedule } = vm.runInThisContext(`(function () {
+    const DEADLINE_ALERTS = false;
     ${extractFn('addBusinessDays')}
     ${extractFn('quoteSchedule')}
     return { quoteSchedule };

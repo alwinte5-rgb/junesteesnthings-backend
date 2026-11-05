@@ -235,6 +235,20 @@ app.use(cors({ origin: SITE_ORIGINS }));
    the redirect after every form must all agree. */
 const FINANCES_PATH = '/admin/finances';
 
+/* Deadline alerts: OFF (owner, 2026-11-05: "remove the deadlines alerts for
+   now. Our tasks change too quickly", and new jobs read "Running late" the
+   day they arrived). While false, no job is "behind" (quoteSchedule returns no
+   risks, so the bell, board, nav badge, dashboard and digest all go quiet
+   together) and tasks and project steps show their due date as plain text,
+   with no overdue or today pill. Dates are still kept and shown.
+
+   Why new jobs read late: the first deposit sets the ready date to deposit
+   day + the quoted 7-10 days (anchorScheduleOnDeposit), while "start by" is
+   counted 9-11 business days back from it, so it was already past. Before
+   turning this back on, give a step that was past on arrival the arrival day
+   + 2 business days instead. */
+const DEADLINE_ALERTS = false;
+
 /* Tax-exemption certificate uploads carry the file itself, base64 inside the
    JSON, up to 8 MB of it (tools/lib/tax-certificates.js). These three paths
    get a larger limit; everything else keeps 1mb. Mounted FIRST: express.json
@@ -8768,7 +8782,7 @@ function quoteSchedule(q) {
      started, so its dates are what it WOULD need, not steps already missed;
      the dates still show, the warnings do not. Cancelled work is not work. */
   const inHand = Number(q.paid_amount || 0) > 0 && !q.cancelled_at;
-  const late = (d, done) => inHand && !done && d < today;
+  const late = (d, done) => DEADLINE_ALERTS && inHand && !done && d < today;
 
   return {
     ship_by: shipBy, qc_by: qcBy, press_by: pressBy,
@@ -27796,7 +27810,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
               t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
               t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : t.assigned_to != null ? ' &middot; <b style="color:#b45309">not started</b>' : ''}</div>
             ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster, { folded: true })}</span>
-            <span class="row-end">${due && due < todayIso ? pill('overdue', 'red') : due === todayIso ? pill('today', 'amber') : ''}
+            <span class="row-end">${!DEADLINE_ALERTS ? '' : due && due < todayIso ? pill('overdue', 'red') : due === todayIso ? pill('today', 'amber') : ''}
               ${taskActionForm(t, '/admin/dashboard#todo', me != null)}</span></div>`;
         }).join('')}</div>` : emptyState('Nothing on the list.')}
         ${tasksDone.length ? `<details style="margin-top:10px"${tasksDone.some((t) => Date.now() - new Date(t.done_at) < 864e5) ? ' open' : ''}>
@@ -29615,12 +29629,13 @@ async function sendDailyDigest() {
     const teamFirst = await teamDigestHtml().catch((e) => { console.error('team digest failed:', e.message); return ''; });
     if (!live.length && !ship && !healthHtml && !teamFirst) return;
 
-    const overdue = live.filter((x) => x.days !== null && x.days < 0);
+    const overdue = DEADLINE_ALERTS ? live.filter((x) => x.days !== null && x.days < 0) : [];
     const soon    = live.filter((x) => x.days !== null && x.days >= 0 && x.days <= 3);
 
     const row = ({ q, cl, sched, days }) => {
       const when = days === null ? 'no deadline set'
-        : days < 0 ? `<b style="color:#b91c1c">${-days}d overdue</b>`
+        : days < 0 ? (DEADLINE_ALERTS ? `<b style="color:#b91c1c">${-days}d overdue</b>`
+          : `date was ${escEmail(dayShort(q.needed_by || q.target_date))}`)
         : days === 0 ? '<b style="color:#b45309">due today</b>'
         : `due in ${days}d`;
       /* The slipped step, named. "Late" on the day is useless; "blanks should
@@ -35955,7 +35970,7 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
     const dueIso = (t) => (t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '');
     const status = (t) => (t.done_at ? pill('completed', 'green') : t.started_at ? pill(`started ${whenShort(t.started_at)}`, 'blue')
       : t.assigned_to != null ? pill('not started', 'amber') : '');
-    const late = (t) => (!t.done_at && dueIso(t) && dueIso(t) < todayIso ? pill('overdue', 'red') : !t.done_at && dueIso(t) === todayIso ? pill('due today', 'amber') : '');
+    const late = (t) => (!DEADLINE_ALERTS ? '' : !t.done_at && dueIso(t) && dueIso(t) < todayIso ? pill('overdue', 'red') : !t.done_at && dueIso(t) === todayIso ? pill('due today', 'amber') : '');
     const tabs = filterChips([
       { label: 'Team now', href: '/admin/tasks', on: view === 'team' },
       { label: 'Backlog', href: '/admin/tasks?view=backlog', on: view === 'backlog' },
@@ -35983,7 +35998,7 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
       };
       const people = roster.filter((r) => !r.archived_at && (r.active || open.some((t) => t.assigned_to === r.id)));
       const card = (name, sub, mine, flowRole) => {
-        const overdue = mine.filter((t) => dueIso(t) && dueIso(t) < todayIso).length;
+        const overdue = DEADLINE_ALERTS ? mine.filter((t) => dueIso(t) && dueIso(t) < todayIso).length : 0;
         const slots = TASK_SLOTS.map((sl) => {
           const list = mine.filter(sl.match);
           /* The routine is made each work day, not drawn from the backlog: no "empty" note for it. */
@@ -36320,7 +36335,7 @@ function projectCard(p, steps, roster, { owner, today }) {
   return `<div class="card pj-card"><div class="pj-step-h"><a href="/admin/projects/${Number(p.id)}"><b style="font-size:16px">${escEmail(p.title)}</b></a>
       <span class="muted">${owner ? `${escEmail(p.assigned_to != null ? nameOf(roster, p.assigned_to) : 'Nobody yet')} &middot; ` : ''}${done} of ${states.length} steps done</span></div>
     <div class="pj-tl">${PROJECTS.timelineSvg(p, steps, { today, compact: true })}</div>
-    <div class="pj-next"><span>${cur ? `<b>Step ${Number(cur.step_no)}:</b> ${escEmail(cur.title)} <span class="muted">&middot; due ${escEmail(PROJECTS.withDay(PROJECTS.ymdOf(cur.due_on)))}</span> ${late ? pill('overdue', 'red') : ''}`
+    <div class="pj-next"><span>${cur ? `<b>Step ${Number(cur.step_no)}:</b> ${escEmail(cur.title)} <span class="muted">&middot; due ${escEmail(PROJECTS.withDay(PROJECTS.ymdOf(cur.due_on)))}</span> ${DEADLINE_ALERTS && late ? pill('overdue', 'red') : ''}`
       : states.length ? pill('all steps completed', 'green') : '<span class="muted">No steps yet.</span>'}</span>
       <a class="btn" href="/admin/projects/${Number(p.id)}${cur ? `#step-${Number(cur.id)}` : ''}">${!owner && cur ? 'Continue' : 'Open'} &rarr;</a></div></div>`;
 }
@@ -36512,7 +36527,7 @@ app.get('/admin/projects/:id', requireAdmin, async (req, res) => {
           <button type="submit" class="btn btn-ghost">Save</button></form></details>` : '';
       return `<div class="card pj-step is-${s.state}" id="step-${Number(s.id)}">
         <div class="pj-step-h"><span><span class="pj-step-n">Step ${Number(s.step_no)} of ${states.length}</span><br><b style="font-size:16px">${escEmail(s.title)}</b> ${status}</span>
-          <span class="muted">${b && b.time ? `${escEmail(b.time)} &middot; ` : ''}${due ? `due ${escEmail(PROJECTS.withDay(due))}` : ''} ${s.state !== 'locked' && !s.done_at && due && due < today ? pill('overdue', 'red') : ''}</span></div>
+          <span class="muted">${b && b.time ? `${escEmail(b.time)} &middot; ` : ''}${due ? `due ${escEmail(PROJECTS.withDay(due))}` : ''} ${DEADLINE_ALERTS && s.state !== 'locked' && !s.done_at && due && due < today ? pill('overdue', 'red') : ''}</span></div>
         ${s.state === 'locked' ? `${s.description ? `<div style="white-space:pre-wrap;margin-top:4px">${escEmail(s.description)}</div>` : ''}${taskBriefHtml(s, actor, { folded: true })}`
           : taskDetailsHtml({ ...s, project_id: null }, actor, roster, { folded: s.state === 'done' })}
         ${action}${edit}</div>`;
@@ -39894,7 +39909,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
             t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}${me == null ? ` by ${escEmail(startedBy(t))}` : ''}` : ''}${
             t.done_at ? ` &middot; completed ${escEmail(whenShort(t.done_at))}` : ''}</div>
           ${taskDetailsHtml(t, actor, roster)}</span>
-          <span class="row-end" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${!t.done_at && t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
+          <span class="row-end" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${DEADLINE_ALERTS && !t.done_at && t.due_on && String(t.due_on instanceof Date ? t.due_on.toISOString() : t.due_on).slice(0, 10) < today ? pill('overdue', 'red') : ''}
             ${taskActionForm(t, '/admin/my-day', me != null)}</span></div>`;
     const leadRow = (l) => `<div class="row-i"><span class="row-main"><a href="/admin/leads#lead-${l.id}"><b>${escEmail(l.name || l.email || 'Lead')}</b></a>
       <div class="row-sub">${escEmail((LEAD_SOURCES[l.source] || [l.source || 'form'])[0])} &middot; waiting ${
