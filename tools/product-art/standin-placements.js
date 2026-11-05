@@ -28,7 +28,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { urlFromStdinJson, mysql, dejson, enjson, sq } = require('../lib/db');
 const { placementSet, boxesFor, toEditZone, aliasStages } = require('../lib/placements');
-const { canvasVerdict, isCrew, TANK_RE } = require('../lib/canvas');
+const { canvasVerdict, isCrew, TANK_RE, isShortDrawnLongSleeve } = require('../lib/canvas');
 const { classify } = require('../lib/garments');
 
 /* The designer's drawing of each garment class (core/raws/products). */
@@ -38,13 +38,14 @@ const DRAWING = { tee: 'basic_tshirt', longslv: 'long_sleeve', tank: 'tank_tops'
 const CROPPED_RE = /\bcrop(ped)?\b/i;
 /* A crewneck has no drawing of its own: the long-sleeve crew, not a hood
    (owner, 2026-10-20, Bayside 4025). A tank of any class — a youth tank is
-   'kids' — is drawn as a tank, not a sleeved tee (Shaka Wear SHKTT). */
+   'kids' — is drawn as a tank, not a sleeved tee (Shaka Wear SHKTT). A youth
+   long sleeve is drawn on the long-sleeve drawing (Gildan 5400B, 2026-11-05). */
 /* A cropped zip hoodie: the zip hoodie drawing with the torso shortened,
    sleeves kept (lumise-designer core/raws/products/cropped_hoodie_*). */
 const ZIP_RE = /\b(full.?zip|zip)\b/i;
 const drawingFor = (cls, name) => (cls === 'tee' && CROPPED_RE.test(name) ? 'cropped_tshirt'
   : cls === 'hoodie' && CROPPED_RE.test(name) && ZIP_RE.test(name) ? 'cropped_hoodie'
-  : isCrew(name) ? 'long_sleeve' : TANK_RE.test(name) ? 'tank_tops' : DRAWING[cls]);
+  : isCrew(name) || isShortDrawnLongSleeve(name, cls) ? 'long_sleeve' : TANK_RE.test(name) ? 'tank_tops' : DRAWING[cls]);
 
 const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');

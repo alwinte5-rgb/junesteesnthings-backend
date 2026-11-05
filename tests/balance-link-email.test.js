@@ -110,7 +110,12 @@ test('the endpoint needs the internal key, and reports a failed send', () => {
    read as paid on this board and could go to press. The feed now carries
    `refunded` alongside `paid` (what was received). */
 
+globalThis.__balanceBoardSTAFF = require('../tools/lib/staff');
 const board = vm.runInThisContext(`(() => {
+  /* Remove is drawn only for someone the route lets in; here, the owner. */
+  const STAFF = globalThis.__balanceBoardSTAFF;
+  const OWNER_ACTOR = { kind: 'owner', id: null, perms: null };
+  const currentActor = () => null;
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const money = (n) => '$' + Number(n || 0).toFixed(2);
   const STUDIO_BASE = 'https://design.jtees.net';

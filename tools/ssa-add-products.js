@@ -79,6 +79,10 @@ const TYPES = {
               back: { height: 320, width: 175, left: 0, top: -5 } },
   kids:     { raws: 'kids_babies',        front: { height: 200, width: 140, left: 0, top: 0 },
               back: { height: 200, width: 140, left: 0, top: 0 } },
+  /* A youth long sleeve: the long-sleeve drawing with the youth print area
+     (canvas.js refuses a long sleeve drawn on the short-sleeve kids art). */
+  kidslong: { raws: 'long_sleeve',        front: { height: 200, width: 140, left: 0, top: 0 },
+              back: { height: 200, width: 140, left: 0, top: 0 } },
   premium:  { raws: 'premium',            front: { height: 260, width: 170, left: 0, top: 0 },
               back: { height: 300, width: 170, left: 0, top: 0 } },
   /* Vests and jackets are decorated left-chest and centre-back, and are almost

@@ -18,5 +18,5 @@ module.exports = [
   ['5586',  'longslv', 'Hanes',          'Hanes 5586 Essential-T Long Sleeve T-Shirt'],
   ['29LSR', 'longslv', 'JERZEES',        'JERZEES 29LSR Dri-Power 50/50 Long Sleeve T-Shirt'],
   ['4104',  'longslv', 'Badger',         'Badger 4104 B-Core Long Sleeve Performance Tee'],
-  ['5400B', 'kids',    'Gildan',         'Gildan 5400B Youth Heavy Cotton Long Sleeve T-Shirt'],
+  ['5400B', 'kidslong', 'Gildan',         'Gildan 5400B Youth Heavy Cotton Long Sleeve T-Shirt'],
 ];
