@@ -42,7 +42,8 @@ test('the page runs: needs you now, money, how we are doing, production, to-do, 
 test('needs you now has a customers group and a "from your team" group', () => {
   assert.match(DASH, /Customers <span class="muted">/);
   assert.match(DASH, /id="team">From your team/);
-  assert.match(DASH, /owner \? many\(`SELECT \* FROM staff_approvals WHERE status = 'pending'/, 'approvals are the owner\'s, as /admin/approvals is');
+  assert.match(DASH, /owner \? many\(`SELECT \*, \(status = 'processing'\) AS interrupted FROM staff_approvals\s+WHERE status = 'pending' OR \(status = 'processing' AND COALESCE\(claimed_at, created_at\) < NOW\(\) - INTERVAL '10 minutes'\)/,
+    'the owner\'s, and the same list as /admin/approvals, interrupted ones included');
   assert.match(DASH, /mail && mail\.unreadThreads/, 'a team conversation with something new is its own row');
 });
 
@@ -61,7 +62,7 @@ test('the to-do list shows five and folds the rest; projects fold too', () => {
 });
 
 test('money and how-we-are-doing are the owner\'s only', () => {
-  assert.match(DASH, /owner \? safe\(moneyThisAndLast\(\), null, 'money'\) : Promise\.resolve\(undefined\)/);
+  assert.match(DASH, /owner \? safe\(moneyThisAndLast\(\), null, 'money in and out'\) : Promise\.resolve\(undefined\)/);
   assert.match(DASH, /owner \? safe\(howWeAreDoing\(\), null, 'how we are doing'\) : Promise\.resolve\(undefined\)/);
   assert.match(DASH, /\$\{money2 === undefined \? '' :/);
   assert.match(DASH, /\$\{doing === undefined \? '' :/);
@@ -73,17 +74,22 @@ test('a failed panel is named in a banner, and never reads "All clear"', () => {
   assert.match(DASH, /failed\.push\(what\);\s*return fallback;/);
   assert.match(DASH, /Couldn&rsquo;t load: \$\{escEmail\(\[\.\.\.new Set\(failed\)\]\.join\(', '\)\)\}\.<\/b>\s*Numbers below may be incomplete/);
   assert.match(DASH, /: customersFailed\.length \? '' : emptyState\('All clear\. No customer is waiting on you\.'\)/);
-  assert.match(DASH, /if \(studioFeed\.error\) failed\.push\('studio orders'\);/, 'a studio feed error shows the same way');
-  assert.match(DASH, /value: failed\.includes\('money'\) \? '—'/, 'a tile that could not load reads a dash, not $0');
+  assert.match(DASH, /if \(studioFeed\.error && studioFeed\.error !== 'JT_INTERNAL_KEY not set'\) failed\.push\('studio orders'\);/,
+    'a studio feed error shows the same way; a copy with no studio key is not an alarm');
+  assert.match(DASH, /value: failed\.includes\('money in'\) \? '—'/, 'a tile that could not load reads a dash, not $0');
+  assert.match(DASH, /'money in'\),/, 'the tile and the Money panel fail under their own names');
   assert.match(DASH, /updated \$\{escEmail\(updatedAt\)\}/, 'the time it was read is shown');
 });
 
 /* ── From your team, decided in place ───────────────────────────────────── */
 
-test('a decision made on the dashboard goes back to the dashboard, and only there or Approvals', () => {
-  assert.match(DASH, /<input type="hidden" name="back" value="dashboard">/);
+test('a request is decided on the dashboard with what it says on screen, then goes back there', () => {
+  assert.match(DASH, /<input type="hidden" name="back" value="\/admin\/dashboard#team">/);
+  assert.match(DASH, /approvalBody\(a, a\.kind === 'lead_email' \? apLeadBy\[a\.subject_id\] : apQuoteBy\[a\.subject_id\]\)/,
+    'the wording of a held message or email is shown before Approve and send');
+  assert.match(DASH, /\$\{a\.interrupted \|\| apFailed \? '' : `<form method="post"/, 'no buttons when it was interrupted, or its details could not be read');
   const r = route("app.post('/admin/approvals/:id', requireAdmin");
-  assert.match(r, /const backTo = String\(\(req\.body \|\| \{\}\)\.back \|\| ''\) === 'dashboard' \? '\/admin\/dashboard#team' : '\/admin\/approvals';/);
+  assert.match(r, /const backTo = safeAdminPath\(\(req\.body \|\| \{\}\)\.back, '\/admin\/approvals'\);/);
   assert.doesNotMatch(r, /back\(res, '\/admin\/approvals'/, 'every answer goes to backTo');
   assert.strictEqual(STAFF.ROUTES['POST /admin/approvals/:id'], 'owner', 'still the owner\'s alone');
 });
@@ -95,6 +101,7 @@ test('Finances and the dashboard read one month query', () => {
   assert.match(route('app.get(FINANCES_PATH, requireAdmin'), /const expMonths = await expenseMonths\(year\);/);
   const both = block('async function moneyThisAndLast(');
   assert.match(both, /financeMonths\(y\), expenseMonths\(y\)/);
+  assert.match(both, /fm\.quotes_collected/, 'quote money from the same reading, not a second query');
 });
 
 function moneyWith(rowsFor) {
@@ -103,10 +110,7 @@ function moneyWith(rowsFor) {
     EXP: require('../tools/lib/expenses'),
     financeMonths: async (y) => rowsFor.finance[y] || [],
     expenseMonths: async (y) => rowsFor.expense[y] || [],
-    pool: { query: async (sql, args) => {
-      if (/AS now, to_char/.test(sql)) return { rows: [rowsFor.months] };
-      return { rows: rowsFor.quotePay[args[0]] || [] };
-    } },
+    pool: { query: async () => ({ rows: [rowsFor.months] }) },
   };
   vm.createContext(sandbox);
   vm.runInContext(`this.f = async ${block('function moneyThisAndLast(')}`, sandbox);
@@ -116,9 +120,9 @@ function moneyWith(rowsFor) {
 test('in, out and kept, this month and last', async () => {
   const f = moneyWith({
     months: { now: '2026-11', last: '2026-10' },
-    finance: { 2026: [{ period: '2026-11', collected: '1500', costs: '400' }, { period: '2026-10', collected: '900', costs: '0' }] },
+    finance: { 2026: [{ period: '2026-11', collected: '1500', quotes_collected: '1200', costs: '400' },
+                      { period: '2026-10', collected: '900', quotes_collected: '900', costs: '0' }] },
     expense: { 2026: [{ period: '2026-11', total: '700', staff: '300' }] },
-    quotePay: { 2026: [{ period: '2026-11', quotes: '1200' }, { period: '2026-10', quotes: '900' }] },
   });
   const { now, last } = await f();
   assert.strictEqual(now.in.total, 1500);
@@ -137,9 +141,9 @@ test('in, out and kept, this month and last', async () => {
 test('January reads December from the year before', async () => {
   const f = moneyWith({
     months: { now: '2027-01', last: '2026-12' },
-    finance: { 2027: [{ period: '2027-01', collected: '100', costs: '0' }], 2026: [{ period: '2026-12', collected: '250', costs: '50' }] },
+    finance: { 2027: [{ period: '2027-01', collected: '100', quotes_collected: '100', costs: '0' }],
+               2026: [{ period: '2026-12', collected: '250', quotes_collected: '250', costs: '50' }] },
     expense: {},
-    quotePay: { 2027: [{ period: '2027-01', quotes: '100' }], 2026: [{ period: '2026-12', quotes: '250' }] },
   });
   const { now, last } = await f();
   assert.strictEqual(now.in.total, 100);
@@ -170,4 +174,20 @@ test('orders, average order, quotes won and leads answered, against the 30 days 
   assert.strictEqual(before.avg, null, 'no orders: no average, not $0');
   assert.strictEqual(before.won, null);
   assert.strictEqual(before.answered, null);
+});
+
+test('the trend figures compare like with like', () => {
+  const f = block('async function howWeAreDoing(');
+  assert.match(f, /q\.accepted_at >= w\.a AND q\.accepted_at < w\.b\s+AND q\.status NOT IN \('held', 'draft'\) AND q\.cancelled_at IS NULL\)::int AS won/,
+    'won is acceptances in the window, not a young cohort judged early');
+  assert.match(f, /s\.created_at < LEAST\(w\.b, NOW\(\) - interval '1 day'\)/, 'a lead counts once it has had its day');
+  assert.match(f, /u\.order_ref IS NOT NULL AND u\.created_at >= w\.a AND u\.created_at < w\.b\) AS studio_value/,
+    'studio money and studio orders read the same rows');
+});
+
+test('the mailbox lists each new conversation once, and every one of them', () => {
+  const m = block('async function mailDashboard(');
+  assert.match(m, /const unreadAll = threads\.filter\(\(t\) => t\.unread\)\.slice\(0, 20\);/);
+  assert.match(m, /const unreadThreads = unreadAll\.map/);
+  assert.match(DASH, /mail\.readRows \?/, 'the Mailbox card lists the rest, not the new ones again');
 });
