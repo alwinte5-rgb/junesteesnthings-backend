@@ -230,7 +230,7 @@ test('a reply nobody has answered says so, with No reply needed; an answer writt
 
 test('the dashboard lists replies waiting and the to-do list, and the routes are mapped', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const d = src.slice(src.indexOf("app.get('/admin/dashboard'"), src.indexOf("app.get('/admin/dashboard'") + 20000);
+  const d = src.slice(src.indexOf("app.get('/admin/dashboard'"), src.indexOf("app.get('/admin/dashboard'") + 40000);
   assert.match(d, /many\(UNANSWERED_REPLIES_SQL/);
   assert.match(d, /is waiting for a reply/);
   assert.match(d, /id="todo"[\s\S]*\$\{addTaskForm\}/);

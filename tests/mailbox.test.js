@@ -170,7 +170,11 @@ test('Done by one person never hides unread messages from the others', () => {
 test('the dashboards count unread in one query and load messages only for the rows shown', () => {
   const dash = fn('async function mailDashboard(');
   assert.match(dash, /SELECT COUNT\(\*\)::int FROM mail_messages m WHERE m\.thread_id = t\.id AND \$\{MAIL_UNSEEN_SQL\}/);
-  assert.match(dash, /mailDetails\(shown\.map/);
+  /* The rows shown, plus the new ones the dashboard lists under From your
+     team (at most 20): bounded, never every thread. */
+  assert.match(dash, /const ids = \[\.\.\.new Set\(\[\.\.\.shown, \.\.\.unreadAll, \.\.\.readFirst\]\.map\(\(t\) => t\.id\)\)\];/);
+  assert.match(dash, /const unreadAll = threads\.filter\(\(t\) => t\.unread\)\.slice\(0, 20\);/);
+  assert.match(dash, /mailDetails\(ids\)/);
   assert.doesNotMatch(dash, /mailDetails\(threads\./);
 });
 

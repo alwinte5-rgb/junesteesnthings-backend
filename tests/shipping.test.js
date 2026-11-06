@@ -433,7 +433,10 @@ test('a quote job shipped with a label bought here links the carrier’s trackin
 test('sales are accepted jobs, in the month accepted, at what the customer pays before tax', () => {
   /* "This is wrong" (the owner, 2026-09-30): $12,183.66 of sales and $10,170
      profit on $3,963.72 collected. Every quote CREATED counted as a sale. */
-  const books = route('app.get(FINANCES_PATH, requireAdmin');
+  /* The month query is shared with the dashboard's Money panel (financeMonths),
+     so the two cannot disagree; the Finances page reads it from there. */
+  assert.match(route('app.get(FINANCES_PATH, requireAdmin'), /const months = await financeMonths\(year\);/);
+  const books = src.slice(src.indexOf('async function financeMonths('), src.indexOf('async function expenseMonths('));
   assert.match(books, /SUM\(\$\{JOB_SALE\}\) AS sales/);
   assert.match(src, /const JOB_SALE = `\(COALESCE\(total,0\) - COALESCE\(tax,0\)\)\s*\* CASE WHEN COALESCE\(total,0\) > 0 THEN GREATEST\(0, 1 - COALESCE\(written_off,0\) \/ total\) ELSE 1 END`/, 'less what was written off (Codex #125)');
   assert.match(books, /WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN \('expired', 'held', 'draft'\)/);
