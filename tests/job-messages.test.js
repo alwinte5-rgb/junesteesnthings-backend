@@ -152,7 +152,7 @@ test('a customer text reply is kept on their latest quote, matched by phone', ()
 
 /* ── The card ───────────────────────────────────────────────────────────── */
 
-function card({ stopped = false, history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {}, unsubscribed = false, messageLevel = 'on' } = {}) {
+function card({ stopped = false, history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {}, unsubscribed = false, messageLevel = 'on', query = {} } = {}) {
   const sandbox = {
     pool: { query: async (sql) => (/quote_payments|stripe_disputes/.test(sql)
       ? { rows: refunded && /quote_payments/.test(sql) ? [{ x: 1 }] : [] } : { rows: history }) },
@@ -165,6 +165,10 @@ function card({ stopped = false, history = [], smsOn = true, consent = true, q =
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
     /* The owner's "they agreed elsewhere" button (2026-10-15). */
     isOwner: () => true, lastSaidNoToTexts: async () => { if (stopped === null) throw new Error('db down'); return stopped; },
+    /* Hand-sent texts are blocked only by a STOP (2026-11-06). */
+    saidStop: async () => { if (stopped === null) throw new Error('db down'); return stopped; },
+    reviewAskText: (n) => `Hi ${String(n || '').split(' ')[0]}, it's June's Tees`,
+    quoteMessages: () => ({ followup: 'FOLLOWUP-MSG', accepted: 'Got it — ACCEPTED-MSG' }),
     /* Files on the job an email may carry (2026-10-06): none here. */
     jobFilesFor: async () => [], MSGFILES: require('../tools/lib/message-files'), inboundReady: false,
     jobPath: (c) => '/admin/production/' + c, TMEDIA: require('../tools/lib/text-media'),
@@ -180,7 +184,7 @@ function card({ stopped = false, history = [], smsOn = true, consent = true, q =
     grab('const ADMIN_ICONS = {', '};'), lift('icon'), lift('escEmail'), lift('pill'), lift('emptyState'),
     lift('reminderDelays'), lift('designVisibleMessage'), lift('jobMessagesCard')].join('\n'), sandbox);
   return sandbox.jobMessagesCard({ code: 'AB12CD', name: 'Ada Brooks', email: 'ada@example.com',
-                                   phone: '(773) 555-0100', ...q }, {}, opts);
+                                   phone: '(773) 555-0100', ...q }, query, opts);
 }
 
 test('reminders still to come are listed with a Skip each, never on the design page, and not after a refund', async () => {
@@ -250,7 +254,10 @@ test('what a customer wrote is escaped', async () => {
 
 test('text says why it cannot be used, rather than failing on send', async () => {
   assert.match(await card({ smsOn: false }), /disabled>\s*Text <span[^>]*>\(texting is not switched on yet\)/);
-  assert.match(await card({ consent: false }), /\(they have not agreed to texts\)/);
+  /* No consent on file no longer blocks a text typed here: only a STOP does
+     (owner, 2026-11-06: "I need to be able to use this like my phone"). */
+  assert.doesNotMatch(await card({ consent: false }), /disabled>\s*Text <span/);
+  assert.match(await card({ stopped: true }), /\(they texted STOP\)/);
   assert.match(await card({ q: { phone: '' } }), /\(no phone number on this quote\)/);
   const noEmail = await card({ q: { email: '' } });
   assert.match(noEmail, /value="email" style="width:auto" disabled/);
@@ -605,19 +612,34 @@ test('"Send all proofs" fills one message with every proof, and the card offers 
   assert.match(msgs, /String\(query\.proof\) === 'all'[\s\S]{0,900}PROOFS\.proofMessage\(\{ first, code, urls: all\.map/);
 });
 
-test('the owner can turn on texts for a customer who agreed elsewhere; never over a STOP', async () => {
+test('the owner can turn on reminder texts for a customer who agreed elsewhere; never over a STOP', async () => {
+  /* A typed text needs no agreement (2026-11-06); the automatic reminders
+     still do, so the form stays, worded for them. */
   const off = await card({ consent: false });
   assert.match(off, /action="\/admin\/quote\/AB12CD\/text-consent"/);
   assert.match(off, /name="confirm" value="1" required/);
-  assert.doesNotMatch(await card({ consent: true }), /text-consent/, 'nothing to turn on');
-  assert.doesNotMatch(await card({ consent: false, stopped: null }), /text-consent"|texted STOP/,
-    'a failed lookup shows neither the form nor a STOP that may not have happened');
+  assert.match(off, /automatic reminders by text/);
+  assert.doesNotMatch(await card({ consent: true }), /text-consent"/, 'nothing to turn on');
+  assert.doesNotMatch(await card({ consent: false, stopped: null }), /texted STOP/,
+    'a failed lookup shows no STOP that may not have happened');
   const stopped = await card({ consent: false, stopped: true });
   assert.doesNotMatch(stopped, /text-consent"/);
   assert.match(stopped, /texted STOP/);
   const STAFF = require('../tools/lib/staff');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/text-consent'], 'owner');
 });
+
+test('the board and reviews list open the box with their message written in, Text picked', async () => {
+  const html = await card({ q: { name: 'Bob Lee' }, query: { say: 'review' } });
+  assert.match(html, />Hi Bob, it&#x27;s June&#x27;s Tees<\/textarea>/);
+  assert.match(html, /value="text" style="width:auto" checked/);
+  const nudge = await card({ query: { say: 'followup' } });
+  assert.match(nudge, /FOLLOWUP-MSG/);
+  assert.match(html, /value="About your order AB12CD" data-subject/, 'a follow-up or review ask is not titled as a proof');
+  assert.doesNotMatch(await card({ query: { say: '<b>x</b>' } }), /<b>x<\/b>/, 'only fixed keys');
+});
+
+
 
 function consentRoute({ owner = true, stopped = false, phone = '(773) 555-0100' } = {}) {
   let handler;
@@ -655,5 +677,18 @@ test('the consent route: owner only, needs the box and a note, order texts only,
     const r = consentRoute(o);
     assert.match(await r.send(body), new RegExp('msg_err=' + err));
     assert.strictEqual(r.writes.length, 0, err + ' saves nothing');
+  }
+});
+
+test('a text sent by hand needs no consent row, only no STOP; automatic ones still need consent', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /\|\| \(\(orderUpdate \|\| staffSent\) && kind === 'transactional' && !\(await saidStop\(to\)\)\);/);
+  const send = src.slice(src.indexOf('async function sendJobMessage('), src.indexOf("app.post('/admin/quote/:code/message'"));
+  assert.match(send, /kind: 'transactional', quote: code, staffSent: true,/);
+  /* The reminder sweeps pass no staffSent: they keep the consent rule. */
+  for (const t of ['quoteFollowup', 'depositReminder', 'balanceReminder', 'pickupReminder']) {
+    const at = src.indexOf(`msg: SMS.${t}(`);
+    assert.ok(at > -1, t);
+    assert.doesNotMatch(src.slice(at - 200, at), /staffSent/, t);
   }
 });

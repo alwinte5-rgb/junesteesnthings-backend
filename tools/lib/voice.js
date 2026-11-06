@@ -64,8 +64,10 @@ const twiml = (inner) => `<?xml version="1.0" encoding="UTF-8"?><Response>${inne
 const say = (text) => `<Say voice="${VOICE}">${xml(text)}</Say>`;
 
 function recordTag(base) {
-  return `<Record maxLength="${VOICEMAIL_SECONDS}" playBeep="true" timeout="5" action="${xml(base + PATHS.voicemail)}" method="POST"` +
-    ` transcribe="true" transcribeCallback="${xml(base + PATHS.transcript)}"/>`;
+  /* No transcription (owner, 2026-11-06: about 5 cents a minute; the owner
+     listens by the link in their text instead). The transcript route stays
+     so a callback already queued for an older voicemail still lands. */
+  return `<Record maxLength="${VOICEMAIL_SECONDS}" playBeep="true" timeout="5" action="${xml(base + PATHS.voicemail)}" method="POST"/>`;
 }
 
 function afterHoursTwiml(base) {
