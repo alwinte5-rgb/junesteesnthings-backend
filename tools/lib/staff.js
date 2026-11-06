@@ -64,7 +64,7 @@ const PERMISSIONS = {
   'jobs.schedule':         { group: 'Production', label: 'Production schedule: every job, its files and messages (no prices or costs)', levels: ['off', 'on'] },
   'proofs.upload':         { group: 'Production', label: 'Upload proofs to jobs', levels: ['off', 'on'] },
   'art.request':           { group: 'Production', label: 'Send jobs to the designer, answer their questions', levels: ['off', 'on'] },
-  'art.work':              { group: 'Production', label: 'Work on artwork: ask sales, upload and submit final art', levels: ['off', 'on'] },
+  'art.work':              { group: 'Production', label: 'Work on artwork: check and fix the art, upload and submit final art', levels: ['off', 'on'] },
   /* Its own toggle because it spends money: each label is charged to the
      owner's Shippo account. In no preset, like Finances: opened on purpose. */
   'shipping.labels':       { group: 'Production', label: 'Buy shipping labels (charged to your Shippo account)', levels: ['off', 'on'] },

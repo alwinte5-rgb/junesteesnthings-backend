@@ -52,7 +52,7 @@ const MULTIPLE_CHOICE = [
     answer: 2, why: 'Catching a mistake before it prints is the job. Changing approved art without asking is never OK, so it goes back for a fresh approval.' },
   { id: 'brief', q: 'Sales sends you a job due tomorrow with no sizes, no placement and no colors. What do you do first?',
     choices: ['Guess and design something', 'Wait until sales notices',
-      'Press "Ask sales a question" straight away with exactly what is missing, and start on what you already know', 'Tell the owner sales made a mistake'],
+      'Message the customer straight away with exactly what is missing, and start on what you already know', 'Tell the owner sales made a mistake'],
     answer: 2, why: 'One clear question, asked at once, saves a day. Starting on the parts you know keeps the deadline.' },
   { id: 'character', q: 'A customer wants a famous cartoon character on 50 birthday-party shirts. What do you do?',
     choices: ['Design it: it is only a party', 'Find the character online and use it',
