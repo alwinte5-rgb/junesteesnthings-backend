@@ -43,6 +43,47 @@ function cutShort(html) {
   return `<p>${text.slice(0, MAX_ITEM_HTML)}</p><p><i>(cut short here)</i></p>`;
 }
 
+/* One event, one entry (dashboard plan Part 5, 2026-11-06). A customer who
+   accepts and pays the deposit in the same visit set off two shop emails, the
+   accept route's "✅ Quote X accepted" and the payment's "💳 Deposit paid —
+   quote X". Both wait for this email, so here they become one entry: the
+   payment's line, said as "accepted and paid", with both bodies under it. */
+const CODE = '([A-Z0-9]{6}|[A-Z0-9]{10})';
+const ACCEPTED_RE = new RegExp(`^✅ Quote ${CODE} accepted\\b`);
+const PAID_RE = new RegExp(`^💳 (?:Deposit paid|Balance paid|Paid in Stripe) — quote ${CODE}\\b`);
+
+/** The held items with each quote's "accepted" folded into its first payment
+ *  of the same batch. Order is kept (the merged entry sits where the payment
+ *  was); every other item is left exactly as it was. */
+function mergeRepeats(items) {
+  const list = Array.isArray(items) ? items : [];
+  const paidAt = new Map();
+  list.forEach((it, i) => {
+    const m = PAID_RE.exec(String((it && it.subject) || ''));
+    if (m && !paidAt.has(m[1])) paidAt.set(m[1], i);
+  });
+  const folded = new Map();
+  list.forEach((it, i) => {
+    const m = ACCEPTED_RE.exec(String((it && it.subject) || ''));
+    if (m && paidAt.has(m[1]) && !folded.has(m[1])) folded.set(m[1], i);
+  });
+  if (!folded.size) return list.slice();
+  const out = [];
+  list.forEach((it, i) => {
+    if ([...folded.values()].includes(i)) return;
+    const m = PAID_RE.exec(String((it && it.subject) || ''));
+    const acc = m && paidAt.get(m[1]) === i && folded.has(m[1]) ? list[folded.get(m[1])] : null;
+    if (!acc) { out.push(it); return; }
+    const amount = String(it.subject).split(`quote ${m[1]}`)[1] || '';
+    out.push(Object.assign({}, it, {
+      subject: `✅💳 Quote ${m[1]} accepted and paid${amount}`,
+      html: `${String(acc.html || '')}<hr style="border:0;border-top:1px dashed #e3e8f2;margin:12px 0">${String(it.html || '')}`,
+      reply_to: it.reply_to || acc.reply_to || null,
+    }));
+  });
+  return out;
+}
+
 /**
  * The day's email from the held items, oldest first.
  * @param items [{ subject, html, reply_to, created_at }]
@@ -50,7 +91,8 @@ function cutShort(html) {
  * @param when  formats a timestamp in shop time
  * @returns { subject, html }
  */
-function build(items, { esc, when }) {
+function build(held, { esc, when }) {
+  const items = mergeRepeats(held);
   const shown = items.slice(0, MAX_ITEMS);
   const more = items.length - shown.length;
   const list = shown.map((it, n) => `
@@ -78,4 +120,4 @@ function build(items, { esc, when }) {
   };
 }
 
-module.exports = { MAX_ITEMS, MAX_ITEM_HTML, on, isShopAddress, dueHour, build };
+module.exports = { MAX_ITEMS, MAX_ITEM_HTML, on, isShopAddress, dueHour, build, mergeRepeats };
