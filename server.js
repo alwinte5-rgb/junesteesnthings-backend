@@ -2277,6 +2277,14 @@ async function initStaffTables() {
      total, after tax and outside the discount — the same as postage on a
      studio order. */
   await pool.query('ALTER TABLE quotes ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(8,2)');
+  /* Postage on a quote that ships (plan Part 3, 2026-11-06): a live rate at
+     cost, priced at Accept from the customer's address, or a figure the shop
+     typed, which wins. Like the delivery fee it is after tax and outside the
+     discount. `shipping_service` is the rate it was priced on ("USPS Ground
+     Advantage"), so the label is bought for what the customer paid for; it is
+     empty when the shop typed the fee. */
+  await pool.query('ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_fee NUMERIC(8,2)');
+  await pool.query('ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_service TEXT');
   await DELIVERY.ensureSchema();
 }
 
@@ -7999,7 +8007,7 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
     const savedShipTo = !o.ship_to && reorderBiz ? await businessShipTo(reorderBiz).catch(() => null) : null;
     const bizCert = !sameBuyer && !quoteTaxable(o) ? await businessCertificate(emails).catch(() => null) : null;
     const draft = {
-      ...o, items, rush_pct: 0, delivery_fee: 0, discount_kind: 'amt', discount_value: 0, email,
+      ...o, items, rush_pct: 0, delivery_fee: 0, shipping_fee: null, shipping_service: null, discount_kind: 'amt', discount_value: 0, email,
       ...(sameBuyer || bizCert ? {} : { taxable: true, tax: 0 }),
     };
     /* REORDER5, as the designer checked it for this customer and sent with
@@ -10542,8 +10550,10 @@ function quoteTotals(q) {
      only). Every figure downstream — deposit, balance, the books — reads
      this total, so it is added here and nowhere else. */
   const delivery = round2(Math.max(0, Number(q.delivery_fee || 0)));
-  const total = round2(net + tax + delivery);
-  return { subtotal, rushPct, rush, gross, discount, net, tax, delivery, total,
+  /* Postage on a quote that ships: the same place, for the same reasons. */
+  const shipping = round2(Math.max(0, Number(q.shipping_fee || 0)));
+  const total = round2(net + tax + delivery + shipping);
+  return { subtotal, rushPct, rush, gross, discount, net, tax, delivery, shipping, total,
            deposit: depositFor(total) };
 }
 
@@ -10630,7 +10640,7 @@ async function declineUnchosenOptions(code) {
 function totalsForItems(q, items) {
   const base = quoteTotals({ ...q, items, tax: 0 });
   const tax = quoteTax(base.net, quoteTaxable(q));
-  const total = round2(base.net + tax + base.delivery);
+  const total = round2(base.net + tax + base.delivery + base.shipping);
   return { ...base, tax, total, deposit: depositFor(total) };
 }
 
@@ -15626,10 +15636,14 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        edits it afterwards: re-saving used to recompute the total from the
        lines alone, which would quietly drop the fee they agreed to. */
     const savingCode = String(req.params.code || '').toUpperCase();
-    const keptDeliveryFee = QUOTE_CODE_RE.test(savingCode)
-      ? round2(Number(((await pool.query('SELECT delivery_fee FROM quotes WHERE code = $1', [savingCode])).rows[0] || {}).delivery_fee || 0))
-      : 0;
-    const total = round2(net + tax + keptDeliveryFee);
+    /* Postage too: re-pricing the lines must not drop the shipping the
+       customer was quoted (or that the shop typed). */
+    const keptFees = QUOTE_CODE_RE.test(savingCode)
+      ? ((await pool.query('SELECT delivery_fee, shipping_fee FROM quotes WHERE code = $1', [savingCode])).rows[0] || {})
+      : {};
+    const keptDeliveryFee = round2(Number(keptFees.delivery_fee || 0));
+    const keptShippingFee = round2(Number(keptFees.shipping_fee || 0));
+    const total = round2(net + tax + keptDeliveryFee + keptShippingFee);
     const deposit = depositFor(total);
 
     /* THE QUOTE EXAM. A practice quote is priced above exactly like a real
@@ -16980,6 +16994,12 @@ app.get('/q/:code', async (req, res) => {
           ${t.tax > 0 || (hasOptions && quoteTaxable(q)) ? `<tr id="qtaxrow"${t.tax > 0 ? '' : ' style="display:none"'}><td colspan="3" class="num muted">Sales tax</td><td class="num" id="qtax">${money(t.tax)}</td></tr>` : ''}
           ${t.delivery > 0 ? `<tr><td colspan="3" class="num muted">Local delivery</td><td class="num">${money(t.delivery)}</td></tr>`
             : delivOffered ? `<tr id="qdelrow" style="display:none"><td colspan="3" class="num muted">Local delivery</td><td class="num" id="qdel"></td></tr>` : ''}
+          ${/* Postage, at cost: priced at Accept from their address, so until
+               then a quote that ships says how it will be priced, never $0. */ ''}
+          ${t.shipping > 0 ? `<tr><td colspan="3" class="num muted">Shipping${q.shipping_service
+              ? ` <span style="font-size:12px">(${escEmail(q.shipping_service)})</span>` : ''}</td><td class="num">${money(t.shipping)}</td></tr>`
+            : !accepted && SHIP.quoteShips(q) ? `<tr><td colspan="3" class="num muted">Shipping</td>
+              <td class="num muted" style="font-size:12.5px">priced from your address when you accept</td></tr>` : ''}
           <tr><td colspan="3" class="num tot">Total</td><td class="num tot" id="qtotal">${money(t.total)}</td></tr>
           <tr id="estrow" style="display:none"><td colspan="3" class="num" style="color:#b45309;font-weight:700;padding-top:10px">
               With your changes <span style="font-weight:400;font-size:12px">(estimate)</span></td>
@@ -17135,17 +17155,28 @@ app.get('/q/:code', async (req, res) => {
             <input type="email" name="email" required autocomplete="email">` : ''}
           ${ask.phone ? `<label>Mobile ${note('so we can reach you about your order')}</label>
             <input type="tel" name="phone" required minlength="10" autocomplete="tel" inputmode="tel">` : ''}
-          ${ask.address ? `<label>Delivery address ${note('this order ships to you')}</label>
-            <input name="ship_street1" required autocomplete="address-line1" placeholder="Street address">
-            <input name="ship_street2" autocomplete="address-line2" placeholder="Apt, suite (optional)" style="margin-top:8px">
+          ${(() => {
+            /* Asked for when missing, and again (filled in) when no shipping
+               price came back for the one on file, so it can be corrected. */
+            const fix = SHIP.quoteShips(q) && String(req.query.e || '') === 'shipping';
+            if (!ask.address && !fix) return '';
+            const a = fix ? (SHIP.cleanShipTo(q.ship_to, q.name) || {}) : {};
+            const v = (k) => (a[k] ? ` value="${escEmail(a[k])}"` : '');
+            return `<label>Delivery address ${note('this order ships to you')}</label>
+            <input name="ship_street1" required autocomplete="address-line1" placeholder="Street address"${v('street1')}>
+            <input name="ship_street2" autocomplete="address-line2" placeholder="Apt, suite (optional)" style="margin-top:8px"${v('street2')}>
             <div class="row" style="margin-top:8px">
-              <div><input name="ship_city" required autocomplete="address-level2" placeholder="City"></div>
+              <div><input name="ship_city" required autocomplete="address-level2" placeholder="City"${v('city')}></div>
               <div style="display:flex;gap:8px"><input name="ship_state" required maxlength="2" pattern="[A-Za-z]{2}"
-                autocomplete="address-level1" placeholder="IL" style="max-width:72px">
-                <input name="ship_zip" required pattern="\\d{5}(-\\d{4})?" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP"></div>
-            </div>` : ''}`;
+                autocomplete="address-level1" placeholder="IL" style="max-width:72px"${v('state')}>
+                <input name="ship_zip" required pattern="\\d{5}(-\\d{4})?" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP"${v('zip')}></div>
+            </div>`;
+          })()}`;
           })()}
-          ${delivOffered ? acceptDeliveryHtml(q, req, t) : ''}
+          ${String(req.query.e || '') === 'shipping' ? `<div class="warn">${SHIP.quoteShips(q)
+            ? `We could not get a shipping price for that address just now, so nothing was accepted yet. Check the street and ZIP code and try again, or text ${SHOP_SIGNER} at ${SHOP_PHONE} to pick it up instead.`
+            : 'We could not get a shipping price for that address just now, so nothing was accepted yet. Check the street and ZIP code and try again, or choose pickup.'}</div>` : ''}
+          ${!SHIP.quoteShips(q) && (delivOffered || String(q.ship_method || '') !== 'local') ? acceptDeliveryHtml(q, req, t, { local: delivOffered }) : ''}
           ${consentCheckboxesHtml()}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
           <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
@@ -17399,6 +17430,7 @@ ${applyOptionChoice.toString()}
           tax: TAX_RATE, taxable: quoteTaxable(q), rushPct: Number(q.rush_pct) || 0,
           discKind: q.discount_kind === 'pct' ? 'pct' : 'amt', discVal: Number(q.discount_value) || 0,
           depPc: DEPOSIT_PC, fullUnder: DEPOSIT_FULL_UNDER, cardFee: CARD_FEE, required: requiredCount,
+          ship: round2(Number(q.shipping_fee) || 0),
         })};
         function r2(v){ return Math.round(Number(v || 0) * 100) / 100; }
         function m(v){ return '$' + r2(v).toFixed(2); }
@@ -17431,7 +17463,8 @@ ${applyOptionChoice.toString()}
           var tax = T.taxable ? r2(net * T.tax) : 0;
           /* Local delivery picked at Accept: after tax, as quoteTotals adds it. */
           var dfee = r2(window.jtDelivFee || 0);
-          var total = r2(net + tax + dfee);
+          /* Postage the shop already set: after tax, as quoteTotals adds it. */
+          var total = r2(net + tax + dfee + T.ship);
           var dep = total <= 0 ? 0 : (total < T.fullUnder ? total : Math.min(total, r2(total * T.depPc)));
           set('qdel', m(dfee)); show('qdelrow', dfee > 0);
           var fee = r2(dep * T.cardFee);
@@ -19473,7 +19506,8 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        is kept; the quote page asks for exactly what is missing (acceptAsks). */
     const { rows: cur } = await pool.query(
       `SELECT name, email, phone, ship_method, ship_to, accepted_at, items, revision,
-              rush_pct, discount_kind, discount_value, taxable, tax, target_date, cancelled_at, status
+              rush_pct, discount_kind, discount_value, taxable, tax, target_date, cancelled_at, status,
+              delivery_fee, shipping_fee
          FROM quotes WHERE code = $1`, [code]);
     /* A quote with OPTIONAL lines: the ones ticked join the order, the rest are
        set aside, and every figure is worked out again from what is left
@@ -19493,9 +19527,20 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
       choice = { items: picked.items, declined: picked.declined, rev,
                  tt: totalsForItems(q0, picked.items) };
     }
+    /* "Ship it to me", chosen on a quote the shop had not set to ship: from
+       here on it is a ground job, and its address is asked for as one. */
+    const deliveryChoice = String(rb.delivery_choice || '');
+    const choseShip = !!q0 && deliveryChoice === 'ship' && !SHIP.quoteShips(q0);
+    /* An address typed on the form is the one they want it sent to, even with
+       one on file: it is how a customer fixes an address no rate came back for. */
+    const typedAddress = String(rb.ship_street1 || '').trim() !== '';
+    let need = null;
     if (cur.length && !cur[0].accepted_at) {
-      const need = SHIP.acceptRequirements(cur[0], rb, { isValidEmail });
-      if (need.problems.length) return res.redirect(`/q/${code}?e=details&need=${need.problems.join(',')}#accept`);
+      const shipQ = choseShip ? { ...cur[0], ship_method: 'ground' } : cur[0];
+      need = SHIP.acceptRequirements(typedAddress && SHIP.quoteShips(shipQ) ? { ...shipQ, ship_to: null } : shipQ, rb, { isValidEmail });
+      if (need.problems.length) {
+        return res.redirect(`/q/${code}?e=details&need=${need.problems.join(',')}${choseShip ? '&dc=ship' : ''}#accept`);
+      }
       await pool.query(
         `UPDATE quotes SET name = $2, email = $3, phone = $4, ship_to = COALESCE($5::jsonb, ship_to)
           WHERE code = $1 AND accepted_at IS NULL`,
@@ -19505,7 +19550,6 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        advisory lock, so two customers cannot both take the last one; the fee
        comes from the zone, never the form. If the accept below then matches
        nothing, the booking is given back. */
-    const deliveryChoice = String(rb.delivery_choice || '');
     let delivery = null;
     if (q0 && !q0.accepted_at && !q0.cancelled_at && !['held', 'draft'].includes(q0.status)
         && deliveryChoice === 'local' && !SHIP.quoteShips(q0)) {
@@ -19523,12 +19567,28 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
       if (!r.ok) return res.redirect(`/q/${code}?dc=local&e=delivery&why=${encodeURIComponent(r.reason)}#accept`);
       delivery = { booking: r.booking, address, fee: Number(r.booking.fee) };
     }
-    /* Every figure with the delivery fee in it, worked out the one way
-       (quoteTotals), from the lines the customer is taking. */
-    const figures = delivery
-      ? quoteTotals({ ...q0, items: choice ? choice.items : q0.items, tax: choice ? choice.tt.tax : q0.tax, delivery_fee: delivery.fee })
+    /* Postage for a job that ships, at cost (owner rule: freight at cost),
+       from a live rate for this address and the parcel the lines make. A fee
+       the shop typed wins and is not looked up again. No rate means NOT
+       accepted, never a silent $0 shipping: the customer is told and can try
+       again, or take pickup. */
+    let shipping = null;
+    if (q0 && !q0.accepted_at && !q0.cancelled_at && !['held', 'draft'].includes(q0.status)
+        && (SHIP.quoteShips(q0) || choseShip) && q0.shipping_fee == null && need) {
+      const to = need.shipTo || SHIP.cleanShipTo(q0.ship_to, need.name);
+      const rate = await quoteShippingRate(code, to, {
+        items: choice ? choice.items : q0.items, phone: need.phone, email: need.email,
+        expedited: String(q0.ship_method || '').toLowerCase() === 'expedited' });
+      if (!rate) return res.redirect(`/q/${code}?e=shipping${choseShip ? '&dc=ship' : ''}#accept`);
+      shipping = rate;
+    }
+    /* Every figure with the delivery fee or the postage in it, worked out the
+       one way (quoteTotals), from the lines the customer is taking. */
+    const figures = delivery || shipping
+      ? quoteTotals({ ...q0, items: choice ? choice.items : q0.items, tax: choice ? choice.tt.tax : q0.tax,
+          delivery_fee: delivery ? delivery.fee : q0.delivery_fee, shipping_fee: shipping ? shipping.fee : q0.shipping_fee })
       : (choice ? choice.tt : null);
-    const shipMethod = delivery ? 'local'
+    const shipMethod = delivery ? 'local' : choseShip ? 'ground'
       : (deliveryChoice === 'pickup' && q0 && !SHIP.quoteShips(q0) ? 'pickup' : null);
 
     const nb = String(rb.needed_by || '').trim() || null;
@@ -19561,20 +19621,26 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
               -- local delivery, or pickup, as chosen on the form
               delivery_fee = COALESCE($13::numeric, delivery_fee),
               ship_to      = COALESCE($14::jsonb, ship_to),
-              ship_method  = COALESCE($15, ship_method)
+              ship_method  = COALESCE($15, ship_method),
+              -- postage, priced from a live rate above
+              shipping_fee     = COALESCE($16::numeric, shipping_fee),
+              shipping_service = COALESCE($17, shipping_service)
         WHERE code=$1 AND accepted_at IS NULL AND requested_items IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
-          AND ($12::int IS NULL OR COALESCE(revision,1) = $12::int) RETURNING *`,
+          AND ($12::int IS NULL OR COALESCE(revision,1) = $12::int)
+          -- a live rate never overwrites a fee the shop typed while it was fetched
+          AND ($16::numeric IS NULL OR shipping_fee IS NULL) RETURNING *`,
       [code, nb, cname, cemail, cphone,
        choice ? JSON.stringify(choice.items) : null,
        choice ? choice.tt.subtotal : null, choice ? choice.tt.tax : null,
        figures ? figures.total : null, figures ? figures.deposit : null,
        choice ? JSON.stringify(choice.declined) : null,
        choice ? choice.rev : null,
-       delivery ? delivery.fee : null, delivery ? JSON.stringify(delivery.address) : null, shipMethod]);
+       delivery ? delivery.fee : null, delivery ? JSON.stringify(delivery.address) : null, shipMethod,
+       shipping ? shipping.fee : null, shipping ? shipping.service : null]);
     /* The options chosen (or a delivery fee) changed the amount: a card page
        opened before accepting is still payable for the old one, so it is
        closed and forgotten; the next Pay makes a fresh one (Codex #127). */
-    if (rows.length && (choice || delivery) && rows[0].stripe_session) {
+    if (rows.length && (choice || delivery || shipping) && rows[0].stripe_session) {
       await expireCheckoutSession(rows[0].stripe_session);
       await pool.query('UPDATE quotes SET stripe_session = NULL WHERE code = $1 AND stripe_session = $2',
         [code, rows[0].stripe_session]).catch(() => {});
@@ -19620,6 +19686,9 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
           <td style="padding:8px 4px;text-align:right">${money(tt.tax)}</td></tr>` : ''}
         ${tt.delivery > 0 ? `<tr><td colspan="2" style="padding:8px 4px;text-align:right;color:#6b7280">Local delivery</td>
           <td style="padding:8px 4px;text-align:right">${money(tt.delivery)}</td></tr>` : ''}
+        ${tt.shipping > 0 ? `<tr><td colspan="2" style="padding:8px 4px;text-align:right;color:#6b7280">Shipping${
+          q.shipping_service ? ` (${escEmail(q.shipping_service)})` : ''}</td>
+          <td style="padding:8px 4px;text-align:right">${money(tt.shipping)}</td></tr>` : ''}
         <tr><td colspan="2" style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">Total</td>
         <td style="padding:8px 4px;text-align:right;font-weight:700;border-top:2px solid #111">${money(tt.total)}</td></tr></table>`;
       const payBlock = `
@@ -19687,7 +19756,8 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        told which. */
     const { rows: why } = await pool.query(
       `SELECT accepted_at IS NOT NULL AS already, requested_items IS NOT NULL AS pending,
-              cancelled_at IS NOT NULL AS cancelled, COALESCE(revision,1) AS revision
+              cancelled_at IS NOT NULL AS cancelled, COALESCE(revision,1) AS revision,
+              shipping_fee IS NOT NULL AS shipfee
          FROM quotes WHERE code=$1`,
       [code]);
     /* A third, for a quote with options: the shop saved a new version between
@@ -19696,7 +19766,9 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
       : why[0].cancelled ? 'cancelled'
       : why[0].pending ? 'pending'
       : why[0].already ? 'already'
-      : (choice && Number(why[0].revision) !== choice.rev) ? 'changed' : 'gone';
+      : (choice && Number(why[0].revision) !== choice.rev) ? 'changed'
+      /* The shop set the postage while the live rate was fetched: theirs wins. */
+      : (shipping && why[0].shipfee) ? 'changed' : 'gone';
     return res.redirect('/q/' + code + '?e=' + reason);
   } catch (err) {
     console.error('accept failed:', err.message);
@@ -24611,6 +24683,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           ${maySent ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/delivered" style="margin:0">
             <button type="submit" class="btn-ghost">I sent it another way</button></form>` : ''}
         </div></div>` : ''}
+      ${showMoney ? shippingFeeCard(q) : ''}
 
       <div class="card" style="margin-top:12px">
         ${(() => {
@@ -30257,6 +30330,16 @@ app.post('/admin/quote/:code/shipping', requireAdmin, async (req, res) => {
       `UPDATE quotes SET ship_method = COALESCE($2, ship_method),
                          tracking    = COALESCE(NULLIF($3,''), tracking)
         WHERE code = $1 RETURNING *`, [code, method, tracking]);
+    /* No longer going by post: the postage comes off, with the total and
+       deposit, while nothing is paid. Once money is in it stays, and the
+       Shipping card on the job page says so, so the shop can refund it. */
+    if (rows[0] && ['pickup', 'local'].includes(method) && rows[0].shipping_fee != null && !(Number(rows[0].paid_amount || 0) > 0)) {
+      const tt = quoteTotals({ ...rows[0], shipping_fee: null });
+      const { rows: cleared } = await pool.query(
+        `UPDATE quotes SET shipping_fee = NULL, shipping_service = NULL, total = $2, deposit = $3
+          WHERE code = $1 AND COALESCE(paid_amount, 0) = 0 RETURNING stripe_session`, [code, tt.total, tt.deposit]);
+      if (cleared.length) await dropQuoteCheckout(code, cleared[0].stripe_session);
+    }
 
     /* A tracking number is worth nothing sitting in a database — send it. But
        only once the order is marked shipped: a label printed a day early is not
@@ -30275,6 +30358,65 @@ app.post('/admin/quote/:code/shipping', requireAdmin, async (req, res) => {
     console.error('shipping update failed:', err.message);
   }
   res.redirect('/admin/quotes');
+});
+
+/** The postage on a job that ships, on its job page: what it was priced at,
+ *  and a box to type over it for anyone who may set prices. Locked once money
+ *  is in, the same as the lines: the customer paid against that total. */
+function shippingFeeCard(q) {
+  if (q.cancelled_at || !(SHIP.quoteShips(q) || q.shipping_fee != null)) return '';
+  const fee = q.shipping_fee == null ? null : round2(Number(q.shipping_fee));
+  const now = fee == null
+    ? (q.accepted_at ? 'No shipping charged.' : 'Not priced yet: the customer is charged a live rate, at cost, when they accept.')
+    : `${money(fee)}${q.shipping_service ? ` &middot; ${escEmail(q.shipping_service)}, the live rate at Accept` : ' &middot; typed by the shop'}`;
+  const locked = Number(q.paid_amount || 0) > 0;
+  const may = actorLevel('quotes.price') === 'on';
+  const stranded = fee != null && !SHIP.quoteShips(q);
+  return `<div class="card" id="shipfee" style="margin-top:12px"><b>Shipping</b> <span class="muted">${now}</span>
+    ${stranded ? `<div class="warn" style="margin-top:8px">This job no longer ships, but ${money(fee)} of postage is still in its total${
+      locked ? '. Money has been paid against it, so refund the postage from the job&rsquo;s payments if it will not ship.' : '. Clear the box below to take it off.'}</div>` : ''}
+    ${locked ? '<div class="muted" style="font-size:12.5px;margin-top:6px">Locked: money has been paid against this total.</div>'
+      : may ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/shipping-fee" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"
+          onsubmit="this.querySelector('button').disabled=true">
+        <label style="margin:0;text-transform:none;font-weight:400">$ <input name="shipping_fee" type="number" step="0.01" min="0.01" max="500"
+          inputmode="decimal" value="${fee == null ? '' : fee.toFixed(2)}" style="width:110px;display:inline-block"></label>
+        <button type="submit" class="btn-ghost">Save shipping</button>
+        <span class="muted" style="font-size:12px">A typed amount wins over the live rate. Leave it empty to price it from their address at Accept.</span>
+      </form>` : ''}</div>`;
+}
+
+/* The shop types the postage (or clears it, so Accept prices it live). Owner
+   and quotes.price only (ROUTES); refused once money is in, because the
+   customer paid against the total it is part of. The stored total and deposit
+   move with it, and a card page made for the old amount is closed. */
+app.post('/admin/quote/:code/shipping-fee', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  const backTo = `/admin/production/${code}#shipfee`;
+  const raw = String((req.body || {}).shipping_fee == null ? '' : req.body.shipping_fee).trim();
+  const fee = raw === '' ? null : round2(Number(raw));
+  if (fee !== null && !(Number.isFinite(fee) && fee > 0 && fee <= 500)) {
+    return back(res, backTo, 'err', 'Type the shipping as dollars, between $0.01 and $500, or leave it empty.');
+  }
+  try {
+    const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+    if (!q) return res.redirect('/admin/quotes');
+    if (q.cancelled_at) return back(res, backTo, 'err', 'This job is cancelled.');
+    if (Number(q.paid_amount || 0) > 0) return back(res, backTo, 'err', 'Money has been paid against this total, so the shipping is locked.');
+    const tt = quoteTotals({ ...q, shipping_fee: fee });
+    const { rows } = await pool.query(
+      `UPDATE quotes SET shipping_fee = $2::numeric, shipping_service = NULL, total = $3, deposit = $4
+        WHERE code = $1 AND cancelled_at IS NULL AND COALESCE(paid_amount, 0) = 0 RETURNING stripe_session`,
+      [code, fee, tt.total, tt.deposit]);
+    if (!rows.length) return back(res, backTo, 'err', 'Money came in just now, so the shipping is locked.');
+    await dropQuoteCheckout(code, rows[0].stripe_session);
+    return back(res, backTo, 'ok', fee === null
+      ? (q.accepted_at ? 'Shipping removed.' : 'Shipping cleared: it is priced from their address when they accept.')
+      : `Shipping set to ${money(fee)}. The total is now ${money(tt.total)}.`);
+  } catch (err) {
+    console.error('shipping fee save failed:', err.message);
+    return back(res, backTo, 'err', 'The shipping could not be saved. Try again.');
+  }
 });
 
 /* ── Shipping ───────────────────────────────────────────────────────────────
@@ -30325,6 +30467,27 @@ async function studioShip(payload, timeoutMs = 30000) {
     return { status: 0, timedOut: slow,
       body: { error: slow ? 'The studio did not answer in time.' : 'The studio could not be reached.' } };
   }
+}
+
+/** The postage a quote is charged at Accept: a live rate for this address and
+ *  the parcel its lines make (SHIP.quoteOunces, the studio's weight rule), at
+ *  cost. { fee, service } or null when there is no usable rate for ANY reason,
+ *  so the caller can refuse to accept rather than charge $0. Never throws. */
+async function quoteShippingRate(code, to, { items, phone = '', email = '', expedited = false } = {}) {
+  if (!to || SHIP.shipToProblems(to).length) return null;
+  /* Lines that weigh nothing (design work mailed as proofs or a sample) are
+     still a mailer in the post: priced as half a pound, not refused. */
+  const oz = SHIP.quoteOunces(items) || 8;
+  const { body } = await studioShip({ action: 'rates', quote: code, oz, box: SHIP.boxFor(oz),
+    to: Object.assign({}, to, { phone: String(phone || ''), email: String(email || '') }) }, 20000);
+  const list = body && body.ok && Array.isArray(body.rates) ? body.rates : [];
+  const pick = SHIP.preferredRate(list, '', { expedited });
+  const fee = pick ? round2(Number(pick.amount)) : 0;
+  if (!(fee > 0) || fee > 500) {
+    console.error(`quote ${code} shipping rate failed:`, (body && body.error) || (pick ? `odd amount ${pick.amount}` : 'no rates'));
+    return null;
+  }
+  return { fee, service: String(pick.name || '').trim().slice(0, 80) || null };
 }
 
 /* What the last button did, for the page it lands back on. Kept here under a
@@ -30487,7 +30650,8 @@ function shipCardHtml(x, rates) {
     : `Ship &mdash; ${String(o.ship_method).toLowerCase() === 'expedited' ? 'expedited' : 'ground'}`;
   const owe = studio ? Number(o.balance || 0) : balanceOf(o, quoteTotals(o).total);
   const label = studio ? o.label : (o.ship_label && o.ship_label.label_url ? o.ship_label : null);
-  const paidService = studio && o.delivery && o.delivery.source === 'rate' ? o.delivery.service : '';
+  const paidService = studio && o.delivery && o.delivery.source === 'rate' ? o.delivery.service
+    : !studio ? String(o.shipping_service || '') : '';
 
   let act = '';
   if (x.o.state === 'held') {
@@ -30525,7 +30689,7 @@ function shipCardHtml(x, rates) {
       the label on goshippo.com, and enter the tracking number below.</div>${shipElsewhereForm(ref)}`;
   } else {
     const mine = rates && rates.ref === ref;
-    const oz = mine && rates.oz ? rates.oz : (studio ? Number(o.est_oz) || null : null);
+    const oz = mine && rates.oz ? rates.oz : (studio ? Number(o.est_oz) || null : SHIP.quoteOunces(o.items) || null);
     const box = mine ? rates.box : SHIP.boxFor(oz || 0);
     act = `${shipWeighForm(ref, oz, box)}${mine ? shipRatesHtml(ref, rates, paidService, !studio && String(o.ship_method).toLowerCase() === 'expedited',
       STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'POST', '/admin/shipping/buy')) : ''}
@@ -43847,13 +44011,17 @@ const DELIVERY_CSS = `
 @media (max-width:640px){.dtable{font-size:12.5px}}
 `;
 
-/** The quote page's choice at Accept: pickup, or local delivery with an
- *  address and a time. The slots come from /q/:code/delivery-options as the
- *  ZIP is typed; the accept route checks the seat again, so nothing here is
- *  trusted. Works without script as far as it can: pickup still submits. */
-function acceptDeliveryHtml(q, req, t) {
+/** The quote page's choice at Accept: pickup, shipping to an address (priced
+ *  at Accept from a live rate, at cost), or local delivery with an address and
+ *  a time when it is offered. The slots come from /q/:code/delivery-options as
+ *  the ZIP is typed; the accept route checks the seat again and prices the
+ *  postage itself, so nothing here is trusted. Works without script as far as
+ *  it can: pickup still submits. */
+function acceptDeliveryHtml(q, req, t, { local: localOffered = true } = {}) {
   const a = SHIP.cleanShipTo(q.ship_to, q.name) || {};
-  const local = String(q.ship_method || '') === 'local' || String(req.query.dc || '') === 'local';
+  const dc = String(req.query.dc || '');
+  const local = localOffered && (String(q.ship_method || '') === 'local' || dc === 'local');
+  const ship = !local && dc === 'ship';
   const v = (k) => escEmail(a[k] || '');
   return `<style>${DELIVERY_CSS}</style>
   <div id="qdeliv" style="margin:14px 0;padding:12px 14px;border:1px solid #e3e8f2;border-radius:10px">
@@ -43861,10 +44029,22 @@ function acceptDeliveryHtml(q, req, t) {
       ? 'Please fill in the full delivery address: street, city, state and ZIP.'
       : DELIV.slotProblem(String(req.query.why || '')))} Nothing was accepted yet.</div>` : ''}
     <div style="font-weight:700;font-size:14px;margin-bottom:4px">How would you like to get it?</div>
-    <label class="dwin"><input type="radio" name="delivery_choice" value="pickup" ${local ? '' : 'checked'}>
+    <label class="dwin"><input type="radio" name="delivery_choice" value="pickup" ${local || ship ? '' : 'checked'}>
       <span>Free pickup at ${escEmail(SMS_PICKUP)}</span></label>
-    <label class="dwin"><input type="radio" name="delivery_choice" value="local" ${local ? 'checked' : ''}>
-      <span>Local delivery &mdash; we bring it to you on a day and time you pick</span></label>
+    <label class="dwin"><input type="radio" name="delivery_choice" value="ship" ${ship ? 'checked' : ''}>
+      <span>Ship it to me &mdash; postage at cost, priced from your address when you accept</span></label>
+    <div id="qdship" style="display:${ship ? 'block' : 'none'};margin-top:8px">
+      <input name="ship_street1" autocomplete="address-line1" placeholder="Street address" value="${v('street1')}">
+      <input name="ship_street2" autocomplete="address-line2" placeholder="Apt, suite (optional)" value="${v('street2')}" style="margin-top:8px">
+      <div class="row" style="margin-top:8px">
+        <div><input name="ship_city" autocomplete="address-level2" placeholder="City" value="${v('city')}"></div>
+        <div style="display:flex;gap:8px"><input name="ship_state" maxlength="2" pattern="[A-Za-z]{2}" autocomplete="address-level1" placeholder="IL" value="${v('state')}" style="max-width:72px">
+          <input name="ship_zip" inputmode="numeric" autocomplete="postal-code" placeholder="ZIP" value="${v('zip')}" pattern="\\d{5}(-\\d{4})?"></div>
+      </div>
+      <p class="muted" style="margin:10px 0 0">You see the shipping price on the next page, before you pay anything.</p>
+    </div>
+    ${localOffered ? `<label class="dwin"><input type="radio" name="delivery_choice" value="local" ${local ? 'checked' : ''}>
+      <span>Local delivery &mdash; we bring it to you on a day and time you pick</span></label>` : ''}
     <div id="qdlocal" style="display:${local ? 'block' : 'none'};margin-top:8px">
       <input name="dl_street1" autocomplete="address-line1" placeholder="Street address" value="${v('street1')}">
       <input name="dl_street2" autocomplete="address-line2" placeholder="Apt, suite (optional)" value="${v('street2')}" style="margin-top:8px">
@@ -43897,7 +44077,11 @@ function acceptDeliveryHtml(q, req, t) {
       put('qtotal',m(tot)); put('qdep',m(dep)); put('qdeplab',dep>=tot?'Due now (paid in full)':'Deposit to start (50%)');
       put('qpayz',m(dep)); put('qpaysave',m(cf)); put('qpayc',m(r2(dep+cf)));
     }
-    function req(){['dl_street1','dl_city','dl_state','dl_zip'].forEach(function(n){var el=document.querySelector('[name='+n+']');if(el)el.required=on();});}
+    var sbox=document.getElementById('qdship');
+    function shipOn(){var r=document.querySelector('input[name=delivery_choice]:checked');return r&&r.value==='ship';}
+    function req(){['dl_street1','dl_city','dl_state','dl_zip'].forEach(function(n){var el=document.querySelector('[name='+n+']');if(el)el.required=on();});
+      ['ship_street1','ship_city','ship_state','ship_zip'].forEach(function(n){var el=document.querySelector('[name='+n+']');if(el)el.required=shipOn();});
+      if(sbox)sbox.style.display=shipOn()?'block':'none';}
     function load(){
       var z=(zip.value||'').replace(/\\D/g,'').slice(0,5);
       if(!on()||z.length!==5||z===last)return; last=z;

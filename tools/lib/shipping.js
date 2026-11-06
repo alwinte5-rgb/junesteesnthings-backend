@@ -296,6 +296,54 @@ function preferredRate(rates, paidService, { expedited = false } = {}) {
   return list[0];
 }
 
+/* ── A quote's parcel, before anything is packed ─────────────────────────────
+   A quote set to ship is priced at Accept, from a live rate, so it needs a
+   weight before the job exists. The studio estimates a cart the same way
+   (its jt_item_weight_oz / jt_cart_weight_oz in jt-shipping.php); this is a
+   copy of that rule, so a quote and a studio order of the same garments are
+   priced on the same parcel. First match wins, in this order. */
+const ITEM_OUNCES = [
+  ['hoodie', 22], ['sweatshirt', 20], ['crewneck', 20], ['quarter zip', 20], ['jacket', 24],
+  ['long sleeve', 8], ['longsleeve', 8], ['long-sleeve', 8],
+  ['polo', 7], ['jersey', 7], ['tank', 4],
+  ['tote', 5], ['bag', 6], ['backpack', 16],
+  ['hat', 4], ['cap', 4], ['beanie', 3], ['trucker', 4],
+  ['tumbler', 14], ['mug', 14], ['bottle', 14], ['koozie', 2], ['can cooler', 2],
+  ['banner', 16], ['sign', 12], ['yard', 12],
+  ['sticker', 1], ['decal', 1],
+  ['pillow', 12], ['blanket', 32], ['towel', 10],
+  ['apron', 8],
+  ['tee', 6], ['t-shirt', 6], ['tshirt', 6], ['shirt', 6],
+];
+
+/** One piece's weight in ounces, from what the line is called. */
+function itemOunces(name) {
+  const n = String(name || '').toLowerCase();
+  /* Whole words (a plural too): "design" is not a sign, and "what" not a hat. */
+  const hit = ITEM_OUNCES.find(([needle]) => new RegExp(`(^|[^a-z])${needle.replace(/[-]/g, '\\-')}s?([^a-z]|$)`).test(n));
+  let oz = hit ? hit[1] : 6;               // a mid-weight tee, the studio's default
+  /* Size class scales the garment, as the studio does: a youth hoodie is
+     still a hoodie, and a toddler tee is not an adult one. */
+  if (/\b(newborn|infant|baby|toddler|onesie|bodysuit)\b/.test(n)) oz = Math.round(oz * 0.55);
+  else if (/\b(youth|kids?|junior)\b/.test(n)) oz = Math.round(oz * 0.70);
+  return Math.max(1, oz);
+}
+
+/** The packed parcel's weight in ounces for a quote's lines: the goods only
+ *  (an optional line not taken, or design work, weighs nothing), plus 3 oz for
+ *  the mailer and slip. Capped at USPS's 70 lb, the most a rate can be for. */
+function quoteOunces(items) {
+  let oz = 0;
+  for (const i of items || []) {
+    if (!i || i.optional || i.untaxed) continue;
+    const qty = Math.max(0, Math.floor(Number(i.qty) || 0));
+    if (!qty) continue;
+    oz += itemOunces(i.description || i.name || '') * qty;
+  }
+  if (!oz) return 0;
+  return Math.min(1120, oz + 3);
+}
+
 /* ── The morning reminder ─────────────────────────────────────────────────── */
 
 /** The lines of the "waiting to ship" email; null when there is nothing. */
@@ -333,6 +381,6 @@ module.exports = {
   quoteShips, quoteShipState, quoteShipQueues, SHIPPING_METHODS,
   cleanShipTo, shipToProblems, shipToLines,
   phoneOk, acceptRequirements, acceptAsks, acceptProblemsSentence,
-  DEFAULT_BOXES, DEFAULT_FILES, boxFor, ouncesFrom, preferredRate,
+  DEFAULT_BOXES, DEFAULT_FILES, boxFor, ouncesFrom, preferredRate, itemOunces, quoteOunces,
   shippingReminder,
 };

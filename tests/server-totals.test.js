@@ -109,8 +109,8 @@ test('what a saved quote stores is worked out from its lines', () => {
   assert.match(SAVE, /const tax = quoteTax\(net, taxable\);/);
   /* A delivery booked at Accept stays on the job through later edits; the fee
      is read from the stored quote, never from the request. */
-  assert.match(SAVE, /SELECT delivery_fee FROM quotes WHERE code = \$1/);
-  assert.match(SAVE, /const total = round2\(net \+ tax \+ keptDeliveryFee\);/);
+  assert.match(SAVE, /SELECT delivery_fee, shipping_fee FROM quotes WHERE code = \$1/);
+  assert.match(SAVE, /const total = round2\(net \+ tax \+ keptDeliveryFee \+ keptShippingFee\);/);
   assert.match(SAVE, /const deposit = depositFor\(total\);/);
 });
 
