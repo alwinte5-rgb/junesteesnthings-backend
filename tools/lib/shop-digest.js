@@ -49,35 +49,52 @@ function cutShort(html) {
    quote X". Both wait for this email, so here they become one entry: the
    payment's line, said as "accepted and paid", with both bodies under it. */
 const CODE = '([A-Z0-9]{6}|[A-Z0-9]{10})';
-const ACCEPTED_RE = new RegExp(`^✅ Quote ${CODE} accepted\\b`);
-const PAID_RE = new RegExp(`^💳 (?:Deposit paid|Balance paid|Paid in Stripe) — quote ${CODE}\\b`);
+/* The server's own subjects (server.js: the accept route, bankStripeSession,
+   landStripePaymentOnQuote). tests/fewer-repeats.test.js renders the real
+   templates through these, so a reworded subject fails a test rather than
+   quietly sending two entries again. */
+const ACCEPTED_RE = new RegExp(`^✅ Quote ${CODE} accepted\\b(.*)$`);
+const PAID_RE = new RegExp(`^💳 (Deposit paid|Balance paid|Paid in Stripe) — quote ${CODE}\\b(.*)$`);
+
+/** What a held subject announces: { kind: 'accepted' | 'paid', code, label, rest } or null. */
+function eventOf(item) {
+  const subject = String((item && item.subject) || '');
+  let m = ACCEPTED_RE.exec(subject);
+  if (m) return { kind: 'accepted', code: m[1], rest: m[2] };
+  m = PAID_RE.exec(subject);
+  return m ? { kind: 'paid', code: m[2], label: m[1], rest: m[3] } : null;
+}
 
 /** The held items with each quote's "accepted" folded into its first payment
  *  of the same batch. Order is kept (the merged entry sits where the payment
- *  was); every other item is left exactly as it was. */
+ *  was); every other item is left exactly as it was. A merged entry keeps
+ *  both bodies apart in `parts`, so each is shown (or cut short) on its own. */
 function mergeRepeats(items) {
   const list = Array.isArray(items) ? items : [];
-  const paidAt = new Map();
-  list.forEach((it, i) => {
-    const m = PAID_RE.exec(String((it && it.subject) || ''));
-    if (m && !paidAt.has(m[1])) paidAt.set(m[1], i);
+  const events = list.map(eventOf);
+  const firstPaid = new Map();
+  events.forEach((e, i) => { if (e && e.kind === 'paid' && !firstPaid.has(e.code)) firstPaid.set(e.code, i); });
+  const acceptOf = new Map();                 // payment index -> accept index
+  events.forEach((e, i) => {
+    if (e && e.kind === 'accepted' && firstPaid.has(e.code) && !acceptOf.has(firstPaid.get(e.code))) {
+      acceptOf.set(firstPaid.get(e.code), i);
+    }
   });
-  const folded = new Map();
-  list.forEach((it, i) => {
-    const m = ACCEPTED_RE.exec(String((it && it.subject) || ''));
-    if (m && paidAt.has(m[1]) && !folded.has(m[1])) folded.set(m[1], i);
-  });
-  if (!folded.size) return list.slice();
+  if (!acceptOf.size) return list.slice();
+  const folded = new Set(acceptOf.values());
   const out = [];
   list.forEach((it, i) => {
-    if ([...folded.values()].includes(i)) return;
-    const m = PAID_RE.exec(String((it && it.subject) || ''));
-    const acc = m && paidAt.get(m[1]) === i && folded.has(m[1]) ? list[folded.get(m[1])] : null;
-    if (!acc) { out.push(it); return; }
-    const amount = String(it.subject).split(`quote ${m[1]}`)[1] || '';
+    if (folded.has(i)) return;
+    if (!acceptOf.has(i)) { out.push(it); return; }
+    const acc = list[acceptOf.get(i)];
+    const a = events[acceptOf.get(i)], p = events[i];
+    /* Who and how much from the accept, and what was paid from the payment:
+       "accepted — Ada $200.00 · Deposit paid, $103.00", never "paid" alone,
+       which reads as paid in full. */
     out.push(Object.assign({}, it, {
-      subject: `✅💳 Quote ${m[1]} accepted and paid${amount}`,
-      html: `${String(acc.html || '')}<hr style="border:0;border-top:1px dashed #e3e8f2;margin:12px 0">${String(it.html || '')}`,
+      subject: `✅💳 Quote ${p.code} accepted${a.rest} · ${p.label}${p.rest}`,
+      html: undefined,
+      parts: [String(acc.html || ''), String(it.html || '')],
       reply_to: it.reply_to || acc.reply_to || null,
     }));
   });
@@ -99,16 +116,20 @@ function build(held, { esc, when }) {
     <li style="margin:2px 0"><a href="#item-${n}" style="color:#1848B8">${esc(it.subject || '(no subject)')}</a>
       <span style="color:#6b7280;font-size:12px">${esc(when(it.created_at))}</span></li>`).join('');
   const bodies = shown.map((it, n) => {
-    const body = String(it.html || '');
+    const show = (b) => (b.length > MAX_ITEM_HTML ? cutShort(b) : b);
+    const body = Array.isArray(it.parts)
+      ? it.parts.map((b) => show(String(b || ''))).join('<hr style="border:0;border-top:1px dashed #e3e8f2;margin:12px 0">')
+      : show(String(it.html || ''));
     return `
     <div id="item-${n}" style="border-top:1px solid #e3e8f2;margin-top:18px;padding-top:12px">
       <div style="font-weight:700;color:#0B1F4B">${esc(it.subject || '(no subject)')}</div>
       <div style="color:#6b7280;font-size:12px;margin-bottom:8px">${esc(when(it.created_at))}${
         it.reply_to ? ` &middot; reply to <a href="mailto:${esc(it.reply_to)}">${esc(it.reply_to)}</a>` : ''}</div>
-      ${body.length > MAX_ITEM_HTML ? cutShort(body) : body}
+      ${body}
     </div>`;
   }).join('');
   return {
+    count: items.length,
     subject: `June's Tees daily summary: ${items.length} update${items.length === 1 ? '' : 's'}`,
     html: `<div style="font-family:system-ui,sans-serif;max-width:640px;color:#111827">
       <h2 style="color:#1848B8;margin:0 0 6px">Everything from the last day, in one email</h2>
@@ -120,4 +141,4 @@ function build(held, { esc, when }) {
   };
 }
 
-module.exports = { MAX_ITEMS, MAX_ITEM_HTML, on, isShopAddress, dueHour, build, mergeRepeats };
+module.exports = { MAX_ITEMS, MAX_ITEM_HTML, on, isShopAddress, dueHour, build, mergeRepeats, eventOf };
