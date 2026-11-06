@@ -252,6 +252,7 @@ const ROUTES = {
   'POST /admin/quote/:code/stage': 'production.stage',
   'POST /admin/quote/:code/target': 'production.stage',
   'POST /admin/quote/:code/shipping': 'production.stage',
+  'POST /admin/quote/:code/shipping-fee': 'quotes.price',
   'GET /admin/shipping': 'production.stage',
   'POST /admin/shipping/shipped': 'production.stage',
   'POST /admin/studio/:id/delivered': 'production.stage',

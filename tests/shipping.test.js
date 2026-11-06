@@ -207,10 +207,10 @@ test('the customer is told what to add, in words', () => {
 
 test('the accept route checks before it accepts, and the page asks for exactly what is missing', () => {
   const accept = route("app.post('/q/:code/accept', orderRateLimit");
-  const check = accept.indexOf('SHIP.acceptRequirements(cur[0], rb, { isValidEmail })');
+  const check = accept.indexOf('need = SHIP.acceptRequirements(');
   const update = accept.indexOf("UPDATE quotes SET accepted_at=NOW()");
   assert.ok(check > 0 && update > check, 'the requirements come before the acceptance');
-  assert.match(accept, /if \(need\.problems\.length\) return res\.redirect\(`\/q\/\$\{code\}\?e=details&need=\$\{need\.problems\.join\(','\)\}#accept`\);/);
+  assert.match(accept, /if \(need\.problems\.length\) \{\s*return res\.redirect\(`\/q\/\$\{code\}\?e=details&need=\$\{need\.problems\.join\(','\)\}\$\{choseShip \? '&dc=ship' : ''\}#accept`\);/);
   assert.match(accept, /WHERE code = \$1 AND accepted_at IS NULL`,/, 'details are only filled in before acceptance');
 
   const page = route("app.get('/q/:code', async");

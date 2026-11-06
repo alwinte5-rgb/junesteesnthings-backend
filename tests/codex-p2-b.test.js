@@ -36,5 +36,5 @@ test('#125 a quote label adds its postage to the job cost once', () => {
   assert.match(after('async function keepQuoteLabel(', 1200), /THEN COALESCE\(cost_shipping, 0\) \+ \$4::numeric ELSE cost_shipping END/);
 });
 test('#127 options chosen at accept close the card page opened before', () => {
-  assert.match(after("app.post('/q/:code/accept'", 9000), /if \(rows\.length && \(choice \|\| delivery\) && rows\[0\]\.stripe_session\) \{\s*await expireCheckoutSession/);
+  assert.match(after("app.post('/q/:code/accept'", 13000), /if \(rows\.length && \(choice \|\| delivery \|\| shipping\) && rows\[0\]\.stripe_session\) \{\s*await expireCheckoutSession/);
 });

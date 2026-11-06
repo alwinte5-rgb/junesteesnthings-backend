@@ -66,5 +66,5 @@ test('a quote with options recomputes through its own script, which reads the fe
   p.run({ available: true, fee: 25, zone: { name: 'North' }, days: [] });
   assert.strictEqual(p.ctx.window.jtDelivFee, 25);
   assert.ok(p.ctx.updated >= 1);
-  assert.match(src, /var total = r2\(net \+ tax \+ dfee\);/, 'the options script adds it after tax');
+  assert.match(src, /var total = r2\(net \+ tax \+ dfee \+ T\.ship\);/, 'the options script adds it after tax');
 });
