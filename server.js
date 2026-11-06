@@ -20150,6 +20150,106 @@ app.post('/admin/quote/:code/correct-payment', requireAdmin, async (req, res) =>
  * Everything is derived from the payment ledger, so it reconciles with the bank
  * rather than with what was invoiced.
  */
+/* ── The books, by month ────────────────────────────────────────────────────
+   One reading of the year, month by month, for the Finances page and the
+   dashboard's Money panel, so the two can never disagree about a month. */
+/** Every month of `year` with money or a job in it: collected, tax, fees,
+ *  jobs, sales, job costs (see the Finances page for what each one means). */
+async function financeMonths(year) {
+  const JOB_COST = 'cost_blanks + cost_supplies + cost_outsourced + cost_shipping';
+  /* A job's sale is its price before tax LESS what was written off: settled
+     money that will never arrive is not a sale (Codex #125). Written-off is
+     gross, so its pre-tax share comes off. */
+  const JOB_SALE = `(COALESCE(total,0) - COALESCE(tax,0))
+    * CASE WHEN COALESCE(total,0) > 0 THEN GREATEST(0, 1 - COALESCE(written_off,0) / total) ELSE 1 END`;
+  const { rows } = await pool.query(
+    `WITH pay AS (
+       SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
+              SUM(amount) AS collected, SUM(tax_portion) AS tax, SUM(fee) AS fees
+         FROM quote_payments
+        WHERE EXTRACT(YEAR FROM created_at) = $1
+        GROUP BY 1),
+     other AS (
+       SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
+              SUM(amount) AS collected, SUM(COALESCE(tax_portion,0)) AS tax, SUM(COALESCE(fee,0)) AS fees,
+              SUM(amount - COALESCE(tax_portion,0)) AS sales,
+              COUNT(*) FILTER (WHERE tax_portion IS NULL AND amount <> 0) AS tax_unknown
+         FROM unlinked_payments
+        WHERE EXTRACT(YEAR FROM created_at) = $1
+        GROUP BY 1),
+     job AS (
+       SELECT to_char(date_trunc('month', accepted_at), 'YYYY-MM') AS period,
+              COUNT(*) AS jobs,
+              SUM(${JOB_SALE}) AS sales,
+              SUM(${JOB_COST}) AS costs,
+              COUNT(*) FILTER (WHERE (${JOB_COST}) > 0) AS costed,
+              COALESCE(SUM(${JOB_SALE}) FILTER (WHERE (${JOB_COST}) > 0), 0) AS costed_sales
+         FROM quotes
+        WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN ('expired', 'held', 'draft')
+          AND EXTRACT(YEAR FROM accepted_at) = $1
+        GROUP BY 1),
+     periods AS (SELECT period FROM pay UNION SELECT period FROM other UNION SELECT period FROM job)
+     SELECT p.period,
+            COALESCE(pay.collected,0) + COALESCE(other.collected,0) AS collected,
+            COALESCE(pay.tax,0) + COALESCE(other.tax,0) AS tax,
+            COALESCE(pay.fees,0) + COALESCE(other.fees,0) AS fees,
+            COALESCE(job.jobs,0) AS jobs,
+            COALESCE(job.sales,0) + COALESCE(other.sales,0) AS sales,
+            COALESCE(other.sales,0) AS other_sales,
+            COALESCE(other.tax_unknown,0) AS tax_unknown,
+            COALESCE(job.costs,0) AS costs,
+            COALESCE(job.costed,0) AS costed,
+            COALESCE(job.costed_sales,0) AS costed_sales
+       FROM periods p
+       LEFT JOIN pay ON pay.period = p.period
+       LEFT JOIN other ON other.period = p.period
+       LEFT JOIN job ON job.period = p.period
+      ORDER BY 1`, [year]);
+  return rows;
+}
+
+/** Overheads by month of `year`: the total, and the part of it that is staff
+ *  pay (paying a helper books 'Contract labor', on the Pay page). */
+async function expenseMonths(year) {
+  const { rows } = await pool.query(
+    `SELECT to_char(date_trunc('month', spent_on), 'YYYY-MM') AS period,
+            COALESCE(SUM(amount),0) AS total,
+            COALESCE(SUM(amount) FILTER (WHERE category = 'Contract labor'),0) AS staff
+       FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
+      GROUP BY 1`, [year]);
+  return rows;
+}
+
+/** This month and last for the dashboard, from the same reading as Finances.
+ *  { now, last }, each { ym, label, in: { quotes, other, total }, out: { costs,
+ *  staff, overheads, total }, kept }. Money IN is what was collected (quote
+ *  payments, and studio and other payments no quote claimed); OUT is the job
+ *  costs of the month's jobs, staff pay, and every other overhead. */
+async function moneyThisAndLast() {
+  const { rows: [{ now: ymNow, last: ymLast }] } = await pool.query(
+    `SELECT to_char(CURRENT_DATE, 'YYYY-MM') AS now, to_char(CURRENT_DATE - interval '1 month', 'YYYY-MM') AS last`);
+  const years = [...new Set([ymNow, ymLast].map((ym) => Number(ym.slice(0, 4))))];
+  const read = await Promise.all(years.map(async (y) => {
+    const [m, e, q] = await Promise.all([financeMonths(y), expenseMonths(y), pool.query(
+      `SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period, COALESCE(SUM(amount),0) AS quotes
+         FROM quote_payments WHERE EXTRACT(YEAR FROM created_at) = $1 GROUP BY 1`, [y]).then((r) => r.rows)]);
+    return { m, e, q };
+  }));
+  const m = read.flatMap((r) => r.m), e = read.flatMap((r) => r.e), q = read.flatMap((r) => r.q);
+  const month = (ym) => {
+    const fm = m.find((r) => r.period === ym) || {};
+    const ex = e.find((r) => r.period === ym) || {};
+    const qp = q.find((r) => r.period === ym) || {};
+    const total = round2(Number(fm.collected || 0));
+    const quotes = round2(Number(qp.quotes || 0));
+    const staff = round2(Number(ex.staff || 0));
+    const out = { costs: round2(Number(fm.costs || 0)), staff, overheads: round2(Number(ex.total || 0) - staff) };
+    out.total = round2(out.costs + out.staff + out.overheads);
+    return { ym, label: EXP.monthLabel(ym), in: { quotes, other: round2(total - quotes), total }, out, kept: round2(total - out.total) };
+  };
+  return { now: month(ymNow), last: month(ymLast) };
+}
+
 app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
   /* A helper with finances.view reads the page; only the owner changes it.
      The forms are left out for them, and their routes are owner-only anyway. */
@@ -20189,55 +20289,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
        - The MARGIN is worked out from the jobs that have costs entered, and
          only those: it was the costs of 3 jobs set against the sales of 29,
          which is how it read 99%. */
-    const JOB_COST = 'cost_blanks + cost_supplies + cost_outsourced + cost_shipping';
-    /* A job's sale is its price before tax LESS what was written off: settled
-       money that will never arrive is not a sale (Codex #125). Written-off is
-       gross, so its pre-tax share comes off. */
-    const JOB_SALE = `(COALESCE(total,0) - COALESCE(tax,0))
-      * CASE WHEN COALESCE(total,0) > 0 THEN GREATEST(0, 1 - COALESCE(written_off,0) / total) ELSE 1 END`;
-    const { rows: months } = await pool.query(
-      `WITH pay AS (
-         SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
-                SUM(amount) AS collected, SUM(tax_portion) AS tax, SUM(fee) AS fees
-           FROM quote_payments
-          WHERE EXTRACT(YEAR FROM created_at) = $1
-          GROUP BY 1),
-       other AS (
-         SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS period,
-                SUM(amount) AS collected, SUM(COALESCE(tax_portion,0)) AS tax, SUM(COALESCE(fee,0)) AS fees,
-                SUM(amount - COALESCE(tax_portion,0)) AS sales,
-                COUNT(*) FILTER (WHERE tax_portion IS NULL AND amount <> 0) AS tax_unknown
-           FROM unlinked_payments
-          WHERE EXTRACT(YEAR FROM created_at) = $1
-          GROUP BY 1),
-       job AS (
-         SELECT to_char(date_trunc('month', accepted_at), 'YYYY-MM') AS period,
-                COUNT(*) AS jobs,
-                SUM(${JOB_SALE}) AS sales,
-                SUM(${JOB_COST}) AS costs,
-                COUNT(*) FILTER (WHERE (${JOB_COST}) > 0) AS costed,
-                COALESCE(SUM(${JOB_SALE}) FILTER (WHERE (${JOB_COST}) > 0), 0) AS costed_sales
-           FROM quotes
-          WHERE accepted_at IS NOT NULL AND cancelled_at IS NULL AND status NOT IN ('expired', 'held', 'draft')
-            AND EXTRACT(YEAR FROM accepted_at) = $1
-          GROUP BY 1),
-       periods AS (SELECT period FROM pay UNION SELECT period FROM other UNION SELECT period FROM job)
-       SELECT p.period,
-              COALESCE(pay.collected,0) + COALESCE(other.collected,0) AS collected,
-              COALESCE(pay.tax,0) + COALESCE(other.tax,0) AS tax,
-              COALESCE(pay.fees,0) + COALESCE(other.fees,0) AS fees,
-              COALESCE(job.jobs,0) AS jobs,
-              COALESCE(job.sales,0) + COALESCE(other.sales,0) AS sales,
-              COALESCE(other.sales,0) AS other_sales,
-              COALESCE(other.tax_unknown,0) AS tax_unknown,
-              COALESCE(job.costs,0) AS costs,
-              COALESCE(job.costed,0) AS costed,
-              COALESCE(job.costed_sales,0) AS costed_sales
-         FROM periods p
-         LEFT JOIN pay ON pay.period = p.period
-         LEFT JOIN other ON other.period = p.period
-         LEFT JOIN job ON job.period = p.period
-        ORDER BY 1`, [year]);
+    const months = await financeMonths(year);
 
     const T = months.reduce((a, m) => ({
       collected: a.collected + Number(m.collected), tax: a.tax + Number(m.tax),
@@ -20294,11 +20346,7 @@ app.get(FINANCES_PATH, requireAdmin, async (req, res) => {
         ORDER BY q.created_at DESC LIMIT 50`).catch(() => ({ rows: [] }));
 
     /* Overheads by month, and the recent list for the register below. */
-    const { rows: expMonths } = await pool.query(
-      `SELECT to_char(date_trunc('month', spent_on), 'YYYY-MM') AS period,
-              COALESCE(SUM(amount),0) AS total
-         FROM expenses WHERE EXTRACT(YEAR FROM spent_on) = $1
-        GROUP BY 1`, [year]);
+    const expMonths = await expenseMonths(year);
     const expByPeriod = Object.fromEntries(expMonths.map(r => [r.period, Number(r.total)]));
     const { rows: expByCat } = await pool.query(
       `SELECT category, COALESCE(SUM(amount),0) AS total
@@ -28011,9 +28059,55 @@ async function brokenLinksCheck() {
 /* What needs June today, and how the business is doing, on one screen. Every
    figure comes from the same place its own page reads it, and each panel fails
    on its own: a broken query shows a dash, never a blank dashboard. */
+/** What a helper is asking the owner to approve, in plain words. */
+const APPROVAL_KIND_WORDS = { quote: 'send a quote', message: 'send a message to a customer',
+  lead_email: 'email a lead', kb: 'add to the playbook' };
+
+/** The last 30 days against the 30 before, for the dashboard (plan Part 4):
+ *  orders (quotes accepted and studio orders paid), the average order, quotes
+ *  won of those sent, and leads answered within a day. Each figure is null
+ *  when there is nothing to divide by, never a made-up 0%. */
+async function howWeAreDoing() {
+  const { rows } = await pool.query(
+    `WITH w(name, a, b) AS (VALUES ('now', NOW() - interval '30 days', NOW()),
+                                   ('before', NOW() - interval '60 days', NOW() - interval '30 days'))
+     SELECT w.name,
+       (SELECT COUNT(*) FROM quotes q WHERE q.accepted_at >= w.a AND q.accepted_at < w.b AND q.cancelled_at IS NULL
+           AND q.status NOT IN ('held', 'draft'))::int AS quote_orders,
+       (SELECT COALESCE(SUM(q.total), 0) FROM quotes q WHERE q.accepted_at >= w.a AND q.accepted_at < w.b AND q.cancelled_at IS NULL
+           AND q.status NOT IN ('held', 'draft')) AS quote_value,
+       (SELECT COUNT(DISTINCT u.order_ref) FROM unlinked_payments u WHERE u.channel = 'studio' AND u.amount > 0
+           AND u.order_ref IS NOT NULL AND u.created_at >= w.a AND u.created_at < w.b)::int AS studio_orders,
+       (SELECT COALESCE(SUM(u.amount), 0) FROM unlinked_payments u WHERE u.channel = 'studio' AND u.amount > 0
+           AND u.created_at >= w.a AND u.created_at < w.b) AS studio_value,
+       (SELECT COUNT(*) FROM quotes q WHERE q.created_at >= w.a AND q.created_at < w.b
+           AND q.status NOT IN ('held', 'draft'))::int AS sent,
+       (SELECT COUNT(*) FROM quotes q WHERE q.created_at >= w.a AND q.created_at < w.b
+           AND q.status NOT IN ('held', 'draft') AND q.accepted_at IS NOT NULL AND q.cancelled_at IS NULL)::int AS won,
+       (SELECT COUNT(*) FROM submissions s WHERE s.created_at >= w.a AND s.created_at < w.b
+           AND COALESCE(s.source, '') <> 'chat')::int AS leads,
+       (SELECT COUNT(*) FROM submissions s WHERE s.created_at >= w.a AND s.created_at < w.b
+           AND COALESCE(s.source, '') <> 'chat' AND s.first_response_at <= s.created_at + interval '1 day')::int AS answered
+       FROM w`);
+  const fig = (r) => {
+    const orders = Number(r.quote_orders) + Number(r.studio_orders);
+    const value = Number(r.quote_value) + Number(r.studio_value);
+    return { orders, avg: orders ? round2(value / orders) : null,
+             won: Number(r.sent) ? Number(r.won) / Number(r.sent) : null,
+             answered: Number(r.leads) ? Number(r.answered) / Number(r.leads) : null };
+  };
+  const by = Object.fromEntries(rows.map((r) => [r.name, fig(r)]));
+  return { now: by.now, before: by.before };
+}
+
 app.get('/admin/dashboard', requireAdmin, async (req, res) => {
+  /* Every panel fails on its own, and says so: a failure is added to
+     `failed`, the page opens with a banner naming them, and the panel reads
+     "Couldn't load" rather than "All clear" or $0 (plan Part 4). */
+  const failed = [];
   const safe = (p, fallback, what) => p.catch((e) => {
     console.error(`dashboard: ${what} failed:`, e.message);
+    failed.push(what);
     return fallback;
   });
   const one = (sql, what, args) => safe(pool.query(sql, args).then((r) => r.rows[0] || {}), {}, what);
@@ -28087,12 +28181,29 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
              ORDER BY done_at DESC LIMIT 50`, 'tasks done', [me]),
       safe(staffRoster(), [], 'roster'),
     ]);
+  const owner = isOwner();
+  /* The rest of what the page needs, read side by side. */
+  const [studioFeed, hidden, approvals, money2, doing] = await Promise.all([
+    safe(fetchStudioOrders(), { orders: [], abandoned: [], error: null }, 'studio orders'),
+    safe(hiddenStudio(), new Set(), 'studio hidden'),
+    owner ? many(`SELECT * FROM staff_approvals WHERE status = 'pending' ORDER BY created_at LIMIT 20`, 'team approvals') : Promise.resolve([]),
+    owner ? safe(moneyThisAndLast(), null, 'money') : Promise.resolve(undefined),
+    owner ? safe(howWeAreDoing(), null, 'how we are doing') : Promise.resolve(undefined),
+  ]);
+  if (studioFeed.error) failed.push('studio orders');
   const projectsBoard = await safe(projectCards(me, roster), { html: '', open: 0 }, 'projects');
 
   const waiting = leads.filter((l) => l.lead_status === 'new');
   const lastLead = leads[0];
   const late = jobs.map((q) => ({ q, s: quoteSchedule(q) })).filter((x) => x.s && x.s.risks.length);
   const ship = await shipP;
+
+  /* Paid and not started: the customer has paid and is waiting for work to
+     begin. Quote jobs in To start with money in, and paid studio orders in
+     the same lane (studioLane), as the Production board shows them. */
+  const toStart = jobs.filter((q) => jobStageIndex(q) === 0 && Number(q.paid_amount || 0) > 0);
+  const studioToStart = (studioFeed.orders || []).filter((o) => studioLane(o) === 0 && !hidden.has(`order:${Number(o.id)}`));
+  const leftCheckouts = (studioFeed.abandoned || []).filter((a) => Number(a.id) > 0 && !hidden.has(`checkout:${Number(a.id)}`));
 
   /* The one next thing, loudest first. */
   const attention = [
@@ -28114,6 +28225,14 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
     ...(ship && ship.count ? [{ tone: ship.oldest >= 7 ? 'red' : 'amber', icon: 'truck',
       title: `${ship.count} paid order${ship.count === 1 ? '' : 's'} waiting to go out`,
       sub: escEmail(ship.subject.replace(/^\S+\s+/, '')), href: '/admin/shipping' }] : []),
+    ...(toStart.length + studioToStart.length ? [{ tone: 'amber', icon: 'dollar',
+      title: `${toStart.length + studioToStart.length} paid order${toStart.length + studioToStart.length === 1 ? '' : 's'} not started yet`,
+      sub: [toStart.length ? `${toStart.length} quote job${toStart.length === 1 ? '' : 's'}` : '',
+            studioToStart.length ? `${studioToStart.length} studio order${studioToStart.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' &middot; ')
+        + ' &middot; in To start on the board', href: '/admin/production' }] : []),
+    ...(leftCheckouts.length ? [{ tone: 'blue', icon: 'card',
+      title: `${leftCheckouts.length} studio checkout${leftCheckouts.length === 1 ? '' : 's'} left unpaid`,
+      sub: 'they started paying and stopped: worth a message, or remove it from the board', href: '/admin/production#studio-unpaid' }] : []),
     ...(waiting.length ? [{ tone: 'amber', icon: 'inbox',
       title: `${waiting.length} enquir${waiting.length === 1 ? 'y' : 'ies'} waiting for a reply`,
       sub: `oldest ${escEmail(ageInWords(waiting[waiting.length - 1].created_at))}`, href: '/admin/leads' }] : []),
@@ -28158,14 +28277,87 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
 
   res.set('Cache-Control', 'no-store');
   const addTaskForm = await taskAddForm({ back: '/admin/dashboard#todo', roster, owner: isOwner() })
-    .catch((e) => { console.error('dashboard: task form failed:', e.message); return ''; });
+    .catch((e) => { console.error('dashboard: task form failed:', e.message); failed.push('task form'); return ''; });
   const notesPin = await jobNotesPinCard(currentActor() || OWNER_ACTOR, '/admin/dashboard')
-    .catch((e) => { console.error('dashboard: job notes failed:', e.message); return ''; });
+    .catch((e) => { console.error('dashboard: job notes failed:', e.message); failed.push('job notes'); return ''; });
   const mail = await mailDashboard(currentActor() || OWNER_ACTOR)
-    .catch((e) => { console.error('dashboard mailbox failed:', e.message); return null; });
+    .catch((e) => { console.error('dashboard mailbox failed:', e.message); failed.push('mailbox'); return null; });
+
+  /* What could not be read, by the names a person knows them by. */
+  const CUSTOMER_PARTS = ['customer replies', 'disputes', 'jobs', 'shipping', 'leads', 'change requests', 'delivered owing',
+    'stripe payments', 'certificates', 'reviews', 'texts', 'tax', 'studio orders', 'studio hidden'];
+  const customersFailed = failed.filter((f) => CUSTOMER_PARTS.includes(f));
+  const teamFailed = failed.filter((f) => ['team approvals', 'mailbox', 'roster'].includes(f));
+  const couldNot = (list) => `<div class="warn" style="margin:0">Couldn&rsquo;t load ${escEmail(list.join(', '))}, so this may not be everything.</div>`;
+  const updatedAt = new Date().toLocaleTimeString('en-US', { timeZone: SHOP_TZ, hour: 'numeric', minute: '2-digit' });
+
+  /* From your team: each request its own row, decided right here. */
+  const teamRows = [
+    ...approvals.map((a) => `<div class="row-i" style="flex-wrap:wrap">
+      <span class="ico ico-blue">${icon('check')}</span>
+      <span class="row-main" style="white-space:normal"><b>${escEmail(nameOf(roster, a.requested_by))} asks: ${escEmail(APPROVAL_KIND_WORDS[a.kind] || a.kind)}${
+        a.subject_id ? ` &middot; ${escEmail(a.subject_id)}` : ''}</b>
+        <div class="row-sub">${escEmail(whenShort(a.created_at))}${(a.reasons || []).length ? ` &middot; ${escEmail(String(a.reasons[0]).slice(0, 120))}` : ''}
+          &middot; <a href="/admin/approvals">see it in full</a></div>
+        <form method="post" action="/admin/approvals/${Number(a.id)}" class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"
+              onsubmit="Array.prototype.forEach.call(this.querySelectorAll('button'),function(b){b.disabled=true})">
+          <input type="hidden" name="back" value="dashboard">
+          <input type="hidden" name="seen" value="${escEmail((a.payload && a.payload.edited_at) || '')}">
+          <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 180px">
+          <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
+          <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
+        </form></span></div>`),
+    ...((mail && mail.unreadThreads) || []).map((t) => `<a class="row-i" href="/admin/mailbox/${Number(t.id)}">
+      <span class="ico ico-amber">${icon('mail')}</span>
+      <span class="row-main"><b>${escEmail(t.subject)}</b>
+        <div class="row-sub">Mailbox &middot; ${escEmail(t.with || 'the team')} &middot; ${escEmail(whenShort(t.last_message_at))}</div></span>
+      <span class="row-end">${pill(`${Number(t.unread)} new`, 'red')}</span></a>`),
+  ];
+
+  /* Money in and out, this month and last, from the same reading as Finances. */
+  const moneyCol = (m) => `<div style="flex:1 1 240px;min-width:0">
+    <div style="font-weight:700;margin-bottom:6px">${escEmail(m.label)}</div>
+    <table class="dtable" style="width:100%;font-size:13.5px"><tbody>
+      <tr><td>In &middot; quotes</td><td class="num">${money(m.in.quotes)}</td></tr>
+      <tr><td>In &middot; studio &amp; other</td><td class="num">${money(m.in.other)}</td></tr>
+      <tr><td><b>Money in</b></td><td class="num"><b>${money(m.in.total)}</b></td></tr>
+      <tr><td>Out &middot; job costs</td><td class="num">${money(m.out.costs)}</td></tr>
+      <tr><td>Out &middot; staff pay</td><td class="num">${money(m.out.staff)}</td></tr>
+      <tr><td>Out &middot; other costs</td><td class="num">${money(m.out.overheads)}</td></tr>
+      <tr><td><b>Money out</b></td><td class="num"><b>${money(m.out.total)}</b></td></tr>
+      <tr><td><b>Kept</b></td><td class="num" style="color:${m.kept < 0 ? '#b91c1c' : '#166534'}"><b>${m.kept < 0 ? '&minus;' : ''}${money(Math.abs(m.kept))}</b></td></tr>
+    </tbody></table></div>`;
+
+  /* How the last 30 days went against the 30 before. */
+  const trend = (now, before, fmt, better = 'up') => {
+    if (now == null) return '<span class="muted">&mdash;</span>';
+    const arrow = before == null || now === before ? '' : (now > before) === (better === 'up')
+      ? ' <span style="color:#166534">&#9650;</span>' : ' <span style="color:#b45309">&#9660;</span>';
+    return `<b>${fmt(now)}</b>${arrow}<div class="row-sub">before: ${before == null ? '&mdash;' : fmt(before)}</div>`;
+  };
+  const pct = (v) => `${Math.round(v * 100)}%`;
+
+  /* The Production board in numbers, studio orders in their lanes too. */
+  const laneCounts = JOB_STAGES.slice(0, -1).map((st, i) => ({ label: st.label,
+    n: jobs.filter((q) => jobStageIndex(q) === i).length
+      + (studioFeed.orders || []).filter((o) => studioLane(o) === i && !hidden.has(`order:${Number(o.id)}`)).length }));
+
+  const TASKS_SHOWN = 5;
+  const taskRow = (t) => {
+    const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
+    return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
+      <div class="row-sub">${due ? `due ${escEmail(fmtDate(t.due_on))}` : 'no date'}${
+        t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
+        t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : t.assigned_to != null ? ' &middot; <b style="color:#b45309">not started</b>' : ''}</div>
+      ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster, { folded: true })}</span>
+      <span class="row-end">${taskActionForm(t, '/admin/dashboard#todo', me != null)}</span></div>`;
+  };
+
   res.send(adminPage('Dashboard', `
-    ${pageHeader(hello + ', ' + SHOP_SIGNER, escEmail(today),
+    ${pageHeader(hello + ', ' + SHOP_SIGNER, `${escEmail(today)} &middot; <span class="muted">updated ${escEmail(updatedAt)}</span>`,
       '<a class="btn" href="/admin/quote/new">New quote</a><a class="btn btn-ghost" href="/admin/production">Production</a>')}
+    ${failed.length ? `<div class="warn"><b>Couldn&rsquo;t load: ${escEmail([...new Set(failed)].join(', '))}.</b>
+      Numbers below may be incomplete. Refresh to try again.</div>` : ''}
     ${flash(req.query)}
     ${notesPin ? PIN_CSS + notesPin : ''}
     <form method="get" action="/admin/find" class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px">
@@ -28173,48 +28365,68 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       <input id="findq" name="q" maxlength="120" placeholder="Quote code, name, phone or email" style="flex:1 1 220px;min-width:0" required>
       <button type="submit">Open</button>
     </form>
+
+    <div class="card" id="needs">
+      <h2 class="card-title">Needs you now <span class="muted">${attention.length + teamRows.length || ''}</span></h2>
+      <h3 class="dgroup" style="margin:6px 0">Customers <span class="muted">${attention.length || ''}</span></h3>
+      ${customersFailed.length ? couldNot(customersFailed) : ''}
+      ${attention.length ? `<div class="rows">${attention.slice(0, 12).map(row).join('')}</div>${attention.length > 12
+        ? `<details style="margin-top:6px"><summary class="muted">${attention.length - 12} more</summary><div class="rows">${attention.slice(12).map(row).join('')}</div></details>` : ''}`
+        : customersFailed.length ? '' : emptyState('All clear. No customer is waiting on you.')}
+      <h3 class="dgroup" style="margin:14px 0 6px" id="team">From your team <span class="muted">${teamRows.length || ''}</span></h3>
+      ${teamFailed.length ? couldNot(teamFailed) : ''}
+      ${teamRows.length ? `<div class="rows">${teamRows.join('')}</div>`
+        : teamFailed.length ? '' : emptyState(owner ? 'Nothing from the team is waiting on you.' : 'No new messages from the team.')}
+    </div>
+
     ${statTiles([
       { label: 'Money in this month', tone: 'green', href: FINANCES_PATH,
-        value: money(Number(takings.quotes_month || 0) + Number(takings.other_month || 0)),
-        sub: Number(takings.other_month || 0)
+        value: failed.includes('money') ? '—' : money(Number(takings.quotes_month || 0) + Number(takings.other_month || 0)),
+        sub: failed.includes('money') ? 'couldn&rsquo;t load' : Number(takings.other_month || 0)
           ? `quotes ${money(takings.quotes_month)} &middot; studio &amp; other ${money(takings.other_month)}`
           : `last month ${money(takings.last_month)}` },
-      { label: 'Owed to you', value: money(owed.owed), tone: 'amber', href: '/admin/orders',
-        sub: `on ${owed.jobs || 0} job${owed.jobs === 1 ? '' : 's'} in hand` +
+      { label: 'Owed to you', value: failed.includes('owed') ? '—' : money(owed.owed), tone: 'amber', href: '/admin/orders',
+        sub: failed.includes('owed') ? 'couldn&rsquo;t load' : `on ${owed.jobs || 0} job${owed.jobs === 1 ? '' : 's'} in hand` +
              (owed.delivered ? ` and ${owed.delivered} delivered` : '') },
-      { label: 'Quotes out', value: String(out.n || 0), tone: 'blue', href: '/admin/quotes',
-        sub: `${money(out.value)} waiting on a yes` },
-      { label: 'New leads', value: String(waiting.length), href: '/admin/leads',
+      { label: 'Quotes out', value: failed.includes('quotes out') ? '—' : String(out.n || 0), tone: 'blue', href: '/admin/quotes',
+        sub: failed.includes('quotes out') ? 'couldn&rsquo;t load' : `${money(out.value)} waiting on a yes` },
+      { label: 'New leads', value: failed.includes('leads') ? '—' : String(waiting.length), href: '/admin/leads',
         tone: waiting.length ? 'amber' : 'green',
-        sub: lastLead ? `last one ${escEmail(ageInWords(lastLead.created_at))} (${escEmail(lastSrc)})` : 'none yet' },
-      { label: 'In production', value: String(jobs.length), href: '/admin/production',
-        tone: late.length ? 'red' : 'navy', sub: late.length ? `${late.length} behind schedule` : 'all on schedule' },
+        sub: failed.includes('leads') ? 'couldn&rsquo;t load' : lastLead ? `last one ${escEmail(ageInWords(lastLead.created_at))} (${escEmail(lastSrc)})` : 'none yet' },
       { label: 'Tax to set aside', value: tax ? money(tax.setAside) : '—', tone: 'gold', href: FINANCES_PATH,
-        sub: tax && tax.undeterminedPayments ? `${tax.undeterminedPayments} still to work out` : 'sales tax held for the state' },
+        sub: !tax ? 'couldn&rsquo;t load' : tax.undeterminedPayments ? `${tax.undeterminedPayments} still to work out` : 'sales tax held for the state' },
     ])}
+
+    ${money2 === undefined ? '' : `<div class="card" id="money">
+      <h2 class="card-title">Money <a href="${FINANCES_PATH}">finances &rarr;</a></h2>
+      ${money2 ? `<div style="display:flex;gap:24px;flex-wrap:wrap">${moneyCol(money2.now)}${moneyCol(money2.last)}</div>
+        <p class="muted" style="font-size:12px;margin:8px 0 0">In is money collected. Out is the costs entered on the month&rsquo;s jobs, staff pay and every other cost on Finances. Kept is in less out.</p>`
+        : couldNot(['money'])}</div>`}
+
+    ${doing === undefined ? '' : `<div class="card" id="doing">
+      <h2 class="card-title">How we&rsquo;re doing <span class="muted">last 30 days, against the 30 before</span></h2>
+      ${doing ? `<div class="rows">
+        <div class="row-i"><span class="row-main"><b>Orders</b><div class="row-sub">quotes accepted and studio orders paid</div></span><span class="row-end">${trend(doing.now.orders, doing.before.orders, String)}</span></div>
+        <div class="row-i"><span class="row-main"><b>Average order</b></span><span class="row-end">${trend(doing.now.avg, doing.before.avg, money)}</span></div>
+        <div class="row-i"><span class="row-main"><b>Quotes won</b><div class="row-sub">accepted, of the quotes sent</div></span><span class="row-end">${trend(doing.now.won, doing.before.won, pct)}</span></div>
+        <div class="row-i"><span class="row-main"><b>Leads answered within a day</b></span><span class="row-end">${trend(doing.now.answered, doing.before.answered, pct)}</span></div>
+      </div>` : couldNot(['how we are doing'])}</div>`}
+
+    <div class="card" id="production">
+      <h2 class="card-title">Production <a href="/admin/production">the board &rarr;</a></h2>
+      ${failed.includes('jobs') ? couldNot(['jobs']) : `<div style="display:flex;gap:10px;flex-wrap:wrap">${laneCounts.map((l) => `
+        <a href="/admin/production" class="row-i" style="flex:1 1 140px;flex-direction:column;align-items:flex-start;text-decoration:none">
+          <span class="muted" style="font-size:12.5px">${escEmail(l.label)}</span><b style="font-size:22px">${l.n}</b></a>`).join('')}</div>
+        ${studioFeed.error ? '<p class="muted" style="font-size:12px;margin:6px 0 0">Studio orders could not be loaded, so they may be missing here.</p>' : ''}`}
+    </div>
+
     <div class="panels-2">
-      <div class="card">
-        <h2 class="card-title">Needs attention <span class="muted">${attention.length || ''}</span></h2>
-        ${attention.length ? `<div class="rows">${attention.slice(0, 12).map(row).join('')}</div>`
-          : emptyState('All clear. Nothing is late, waiting or disputed.')}
-      </div>
-      ${projectsBoard.open ? `<div class="card" id="projects">${PROJECT_CSS}
-        <h2 class="card-title">Projects <span class="muted">${projectsBoard.open}</span> <a href="/admin/projects">all projects &rarr;</a></h2>
-        ${projectsBoard.html}</div>` : ''}
       <div class="card" id="todo">
-        <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span>${me == null ? ' <a href="/admin/tasks">all tasks &rarr;</a>' : ''}</h2>
-        ${tasks.length ? `<div class="rows">${tasks.map((t) => {
-          const due = t.due_on ? new Date(t.due_on).toISOString().slice(0, 10) : '';
-          const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
-          return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b>
-            <div class="row-sub">${due ? `due ${escEmail(fmtDate(t.due_on))}` : 'no date'}${
-              t.assigned_to != null ? ` &middot; ${escEmail(nameOf(roster, t.assigned_to))}` : ' &middot; anyone'}${
-              t.started_at ? ` &middot; started ${escEmail(whenShort(t.started_at))}` : t.assigned_to != null ? ' &middot; <b style="color:#b45309">not started</b>' : ''}</div>
-            ${taskDetailsHtml(t, currentActor() || OWNER_ACTOR, roster, { folded: true })}</span>
-            <span class="row-end">${!DEADLINE_ALERTS ? '' : due && due < todayIso ? pill('overdue', 'red') : due === todayIso ? pill('today', 'amber') : ''}
-              ${taskActionForm(t, '/admin/dashboard#todo', me != null)}</span></div>`;
-        }).join('')}</div>` : emptyState('Nothing on the list.')}
-        ${tasksDone.length ? `<details style="margin-top:10px"${tasksDone.some((t) => Date.now() - new Date(t.done_at) < 864e5) ? ' open' : ''}>
+        <h2 class="card-title">To-do <span class="muted">${tasks.length || ''}</span> <a href="/admin/tasks">all tasks &rarr;</a></h2>
+        ${failed.includes('tasks') ? couldNot(['tasks']) : tasks.length ? `<div class="rows">${tasks.slice(0, TASKS_SHOWN).map(taskRow).join('')}</div>${tasks.length > TASKS_SHOWN
+          ? `<details style="margin-top:8px"><summary><b>${tasks.length - TASKS_SHOWN} more</b></summary><div class="rows">${tasks.slice(TASKS_SHOWN).map(taskRow).join('')}</div></details>` : ''}`
+          : emptyState('Nothing on the list.')}
+        ${tasksDone.length ? `<details style="margin-top:10px">
           <summary><b>Completed in the last 7 days (${tasksDone.length})</b></summary><div class="rows">${tasksDone.map((t) => `
           <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>${escEmail(t.title)}</b> ${pill('completed', 'green')}
             <div class="row-sub">${t.done_by == null && me == null ? 'You' : escEmail(nameOf(roster, t.done_by))} &middot; ${escEmail(whenShort(t.done_at))}${
@@ -28223,6 +28435,9 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
         <details style="margin-top:10px"><summary><b>Add a task</b> <span class="muted">with the details, files and an order</span></summary>
           ${addTaskForm}</details>
       </div>${TASK_CSS}${TASK_UPLOAD_JS}
+      ${projectsBoard.open ? `<div class="card" id="projects">${PROJECT_CSS}
+        <details><summary class="card-title" style="cursor:pointer">Projects <span class="muted">${projectsBoard.open}</span> <a href="/admin/projects">all projects &rarr;</a></summary>
+        ${projectsBoard.html}</details></div>` : ''}
       ${mail ? `<div class="card" id="mailbox">
         <h2 class="card-title">Mailbox <span class="muted">${mail.unread ? `${mail.unread} with something new` : mail.open ? `${mail.open} open` : ''}</span> <a href="/admin/mailbox">all conversations &rarr;</a></h2>
         ${mail.rows ? `<div class="rows">${mail.rows}</div>` : emptyState('No open conversations. Mark one Done and it leaves here.', '<a class="btn btn-ghost" href="/admin/mailbox/new">New conversation</a>')}
@@ -28238,7 +28453,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
               escEmail(ageInWords(l.created_at))} &middot; ${l.lead_status === 'quoted' ? 'quoted'
               : l.lead_status === 'dismissed' ? 'let go' : l.lead_status === 'contacted' ? 'contacted'
               : '<b style="color:#b45309">waiting</b>'}</div></span></a>`;
-        }).join('')}</div>` : emptyState('No enquiries yet.')}
+        }).join('')}</div>` : failed.includes('leads') ? couldNot(['leads']) : emptyState('No enquiries yet.')}
       </div>
       <div class="card">
         <h2 class="card-title">Recent payments <a href="${FINANCES_PATH}">finances &rarr;</a></h2>
@@ -28253,7 +28468,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
               <div class="row-sub">${escEmail(p.name || 'no name')} &middot; ${what}</div></span>
             <span class="row-end muted">${escEmail(dayShort(p.created_at))}</span>`;
           return href ? `<a class="row-i" href="${href}">${inner}</a>` : `<div class="row-i">${inner}</div>`;
-        }).join('')}</div>` : emptyState('No payments yet.')}
+        }).join('')}</div>` : failed.includes('recent payments') ? couldNot(['recent payments']) : emptyState('No payments yet.')}
       </div>
       ${traffic === undefined ? '' : googleAnalyticsCard(traffic)}
       ${ads === undefined ? '' : googleAdsCard(ads)}
@@ -33367,16 +33582,19 @@ app.post('/admin/approvals/:id/edit', requireAdmin, async (req, res) => {
 });
 
 app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
+  /* Decided on the dashboard's "From your team": back there. Only these two
+     places, never a path from the form. */
+  const backTo = String((req.body || {}).back || '') === 'dashboard' ? '/admin/dashboard#team' : '/admin/approvals';
   const id = intIn(req.params.id);
   const decision = req.body && req.body.decision === 'approve' ? 'approve' : 'reject';
   const note = text(req.body && req.body.note, 500) || null;
-  if (!id) return res.redirect('/admin/approvals');
+  if (!id) return res.redirect(backTo);
   /* Claimed before anything is sent, so a double press cannot send twice. */
   const { rows: [a] } = await pool.query(
     `UPDATE staff_approvals SET status = 'processing', claimed_at = NOW()
       WHERE id = $1 AND (status = 'pending' OR (status = 'processing' AND COALESCE(claimed_at, created_at) < NOW() - INTERVAL '10 minutes'))
       RETURNING *`, [id]);
-  if (!a) return back(res, '/admin/approvals', 'err', 'That one was already decided.');
+  if (!a) return back(res, backTo, 'err', 'That one was already decided.');
   const finish = (status) => pool.query(
     `UPDATE staff_approvals SET status = $2, decided_at = NOW(), decision_note = $3 WHERE id = $1`, [id, status, note]);
   const unclaim = () => pool.query(`UPDATE staff_approvals SET status = 'pending' WHERE id = $1`, [id]).catch(() => {});
@@ -33385,19 +33603,19 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
   if (decision === 'approve' && ['message', 'lead_email'].includes(a.kind)
       && String((req.body && req.body.seen) || '') !== String((a.payload || {}).edited_at || '')) {
     await unclaim();
-    return back(res, '/admin/approvals', 'err', 'That message was edited after you opened this page. Read the new wording, then approve again.');
+    return back(res, backTo, 'err', 'That message was edited after you opened this page. Read the new wording, then approve again.');
   }
   try {
     if (decision === 'reject') {
       await finish('rejected');
-      return back(res, '/admin/approvals', 'ok', 'Sent back with your note.');
+      return back(res, backTo, 'ok', 'Sent back with your note.');
     }
     if (a.kind === 'quote') {
       const q = await releaseHeldQuote(a.subject_id, a.requested_by);
       await finish(q ? 'approved' : 'withdrawn');
       const mailFail = q && q.emailResult && !q.emailResult.ok
         ? ` The email to the customer did NOT go (${q.emailResult.error}): send it from the quote page.` : '';
-      return back(res, '/admin/approvals', q ? (mailFail ? 'err' : 'ok') : 'err', q
+      return back(res, backTo, q ? (mailFail ? 'err' : 'ok') : 'err', q
         ? `Quote ${a.subject_id} is live. The helper sees it on My Day with the message to send.${mailFail}`
         : `Quote ${a.subject_id} was no longer waiting.`);
     }
@@ -33408,37 +33626,37 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
         sendJobMessage({ code: a.subject_id, channel: p.channel === 'text' ? 'text' : 'email',
                          subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, MESSAGE_MAX),
                          attachments: typeof p.attachments === 'string' ? p.attachments : '[]' }));
-      if (out !== 'sent') { await unclaim(); return back(res, '/admin/approvals', 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
+      if (out !== 'sent') { await unclaim(); return back(res, backTo, 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
       await markProofsSent(a.subject_id, p.text);
       await finish('approved');
-      return back(res, '/admin/approvals', 'ok', 'Sent.');
+      return back(res, backTo, 'ok', 'Sent.');
     }
     if (a.kind === 'lead_email') {
       /* Sent as the owner's decision, credited to the helper who wrote it. */
       const p = a.payload || {};
       const m = LEADMAIL.cleanEmail({ subject: p.subject, body: p.text });
-      if (m.error) { await finish('withdrawn'); return back(res, '/admin/approvals', 'err', `Not sent: ${m.error}`); }
+      if (m.error) { await finish('withdrawn'); return back(res, backTo, 'err', `Not sent: ${m.error}`); }
       let out;
       try { out = await sendLeadEmail(intIn(a.subject_id), m, a.requested_by); } catch (e) {
-        if (/no such lead|no email address/.test(e.message)) { await finish('withdrawn'); return back(res, '/admin/approvals', 'err', 'Not sent: that lead is gone or has no email address.'); }
+        if (/no such lead|no email address/.test(e.message)) { await finish('withdrawn'); return back(res, backTo, 'err', 'Not sent: that lead is gone or has no email address.'); }
         throw e;
       }
       await finish('approved');
-      return back(res, '/admin/approvals', out.marked ? 'ok' : 'err', out.already ? 'That email had already been sent.'
+      return back(res, backTo, out.marked ? 'ok' : 'err', out.already ? 'That email had already been sent.'
         : out.marked ? `Sent to ${out.to}.` : `Sent to ${out.to}, but the lead could not be marked Contacted. Mark it by hand.`);
     }
     if (a.kind === 'kb') {
       const saved = await saveKbArticle(a.payload || {}, a.requested_by);
       await finish(saved ? 'approved' : 'withdrawn');
-      return back(res, '/admin/approvals', 'ok', 'Published to the playbook.');
+      return back(res, backTo, 'ok', 'Published to the playbook.');
     }
     await finish('withdrawn');
-    return back(res, '/admin/approvals', 'err', 'Unknown request type.');
+    return back(res, backTo, 'err', 'Unknown request type.');
   } catch (err) {
     await unclaim();
     console.error('approval failed:', err.message);
     reportError('staff-approval', err, `approval ${id}`).catch(() => {});
-    return back(res, '/admin/approvals', 'err', 'That did not go through. Try again.');
+    return back(res, backTo, 'err', 'That did not go through. Try again.');
   }
 });
 
@@ -39483,7 +39701,11 @@ async function mailDashboard(actor, limit = 8) {
       <div class="row-sub">with ${escEmail(MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') || 'nobody else')}${
         t.quote_code ? ` &middot; order ${escEmail(t.quote_code)}` : ''} &middot; ${escEmail(whenShort(t.last_message_at))}</div></span>
       <span class="row-end">${t.status === 'done' ? pill('Done', 'neutral') : ''}${t.unread ? pill(`${t.unread} new`, 'red') : mailStatePills(roster, reader, parts.get(t.id), msgs.get(t.id), seen)}</span></a>`).join('');
-  return { rows, unread: threads.filter((t) => t.unread).length, open: threads.filter((t) => t.status === 'open').length };
+  /* Each conversation with something new, for the dashboard's "From your
+     team": who it is with, so it reads as a request, not a bell dot. */
+  const unreadThreads = shown.filter((t) => t.unread).map((t) => ({ id: t.id, subject: t.subject, unread: t.unread,
+    last_message_at: t.last_message_at, with: MB.others(reader, parts.get(t.id)).map((k) => mailNameOf(roster, k)).join(', ') }));
+  return { rows, unreadThreads, unread: threads.filter((t) => t.unread).length, open: threads.filter((t) => t.status === 'open').length };
 }
 
 app.get('/admin/mailbox', requireAdmin, async (req, res) => {
