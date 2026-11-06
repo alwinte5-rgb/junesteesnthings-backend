@@ -141,7 +141,8 @@ test('a certificate a helper attaches waits for the owner and leaves the tax on'
   assert.match(staffPart, /keepCertificate\(v\.cert, \{ source: 'shop', email: q\.email \|\| null, approve: false \}\)/);
   assert.doesNotMatch(staffPart, /attachCertificate|UPDATE quotes/, 'the quote is not touched');
   assert.match(staffPart, /notifyCertificate\(q, cert\)/);
-  assert.match(src, /async function keepCertificate\(cert, \{ source, email = null, approve = source === 'shop' \}\)/);
+  assert.match(src, /async function keepCertificate\(cert, \{ source, email = null, approve = source === 'shop',\s+accept = CUSTOMER_CERT_SOURCES\.includes\(source\) \}\)/);
+  assert.match(src, /const CUSTOMER_CERT_SOURCES = \['quote_page', 'studio'\];/, 'a helper (source shop) is never auto-accepted');
 });
 
 /* ── Money ──────────────────────────────────────────────────────────────── */
