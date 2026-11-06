@@ -212,7 +212,8 @@ function loadSender(consentRows) {
     smsConsentFor: async () => (consentRows.length ? consentRows[consentRows.length - 1] : { transactional: false, marketing: false }),
     smsConfigured: () => true, attributedStaffId: () => null, recordSmsConsent: async () => {},
     twilioSend: async (to, body) => { twilio.push({ to, body }); return { sid: 'SM1' }; },
-    pool: { query: async (sql) => ({ rows: /SELECT source FROM sms_consents/.test(sql) ? consentRows.slice(-1)
+    pool: { query: async (sql) => ({ rows: /SELECT source, transactional FROM sms_consents/.test(sql) ? consentRows.slice().reverse()
+                                         : /SELECT source FROM sms_consents/.test(sql) ? consentRows.slice(-1)
                                          : /FROM sms_consents/.test(sql) ? consentRows
                                          : /INSERT INTO sms_messages/.test(sql) ? [{ id: 1 }] : [] }) },
     console: { log() {}, error() {} },
@@ -238,6 +239,12 @@ test('an order update goes to the phone they gave, unless that number texted STO
   const restarted = [{ transactional: false, marketing: false, source: 'sms-reply:stop' },
                      { transactional: true, marketing: false, source: 'sms-reply:start' }];
   assert.equal(await loadSender(restarted).f({ ...update, orderUpdate: true }), 'sent', 'START after STOP texts again');
+  /* Review, 2026-11-06: a marketing-only tick after a STOP is not a START. */
+  const promoAfterStop = [{ transactional: false, marketing: false, source: 'sms-reply:stop' },
+                          { transactional: false, marketing: true, source: 'popup' }];
+  assert.equal(await loadSender(promoAfterStop).f({ ...update, orderUpdate: true }), 'no-consent');
+  assert.equal(await loadSender(promoAfterStop).f({ ...update, staffSent: true }), 'no-consent');
+  assert.equal(await loadSender([]).f({ ...update, staffSent: true }), 'sent', 'a hand-sent text needs no yes on file');
   assert.equal(await loadSender([]).f({ ...update, kind: 'marketing', orderUpdate: true }), 'no-consent',
     'marketing always needs its own yes');
 });

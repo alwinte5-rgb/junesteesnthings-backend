@@ -4739,9 +4739,16 @@ function inTextingHours(now = new Date()) {
    the shop number (owner, 2026-11-06: "I need to be able to use this like my
    phone", "I want every text message routed through twilio"). */
 async function saidStop(phone) {
-  const { rows: [r] } = await pool.query(
-    `SELECT source FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [phone]);
-  return !!r && ['sms-reply:stop', 'twilio:21610'].includes(r.source);
+  /* A STOP holds until a later yes to order texts (START, a ticked order box,
+     the owner's word). A later marketing-only tick is not that yes: it used to
+     be, when only the newest row was read (review, 2026-11-06). */
+  const { rows } = await pool.query(
+    `SELECT source, transactional FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC LIMIT 50`, [phone]);
+  for (const r of rows) {
+    if (['sms-reply:stop', 'twilio:21610'].includes(r.source)) return true;
+    if (r.transactional) return false;
+  }
+  return false;
 }
 
 async function neverAsked(phone, kind) {
@@ -23776,9 +23783,8 @@ async function renderBoard(VIEW, req, res) {
             <div style="font-weight:700;color:#8a5a00;font-size:13px">📱 Needs a text</div>
             <div class="muted" style="font-size:12.5px;margin-top:2px">${escEmail(textReason)}</div>
             <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-              <form method="POST" action="/admin/quote/${escEmail(q.code)}/message" style="margin:0" onsubmit="this.querySelector('button').disabled=true">
-                <input type="hidden" name="channel" value="text"><input type="hidden" name="body" value="${escEmail(textMsg)}">
-                <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Text ${escEmail(String(q.name || '').split(' ')[0] || 'them')} from the shop</button></form>
+              <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+                 href="/admin/production/${escEmail(q.code)}?say=${q.accepted_at ? 'accepted' : 'followup'}#messages">Text ${escEmail(String(q.name || '').split(' ')[0] || 'them')} from the shop</a>
               <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
                  onclick="cpq(this)" data-msg="${escEmail(textMsg)}">Copy message</button>
             </div>
@@ -26535,7 +26541,16 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
       `SELECT url FROM (SELECT url, created_at, id FROM job_proofs WHERE quote_code = $1 ORDER BY created_at DESC, id DESC LIMIT $2) p
         ORDER BY created_at, id`, [code, PROOFS.MAX_MMS]).catch(() => ({ rows: [] }));
     if (all.length) prefill = PROOFS.proofMessage({ first, code, urls: all.map((r) => r.url) });
+  } else if (!design && ['followup', 'accepted', 'review'].includes(String(query.say))) {
+    /* The board's "Needs a text" and the reviews list's Text (2026-11-06):
+       the message they showed, written in here to check and send from the
+       shop number. Only fixed wordings by key, never text from the address. */
+    const say = String(query.say);
+    prefill = say === 'review' ? reviewAskText(q.name)
+      : say === 'accepted' ? quoteMessages(q).accepted.replace(/^Got it[^—]*—\s*/, '')
+      : quoteMessages(q).followup;
   }
+  const textFirst = !!query.say && !!prefill;
   const sent = ['email', 'text'].includes(String(query.sent)) ? String(query.sent) : '';
   const failed = MESSAGE_ERRORS[String(query.msg_err || '')];
   /* Their latest message is still waiting if nothing was written to them
@@ -26633,10 +26648,24 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
       ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
-      ${String(query.consent) === 'saved' ? `<div class="ok">Saved: ${escEmail(first || 'they')} agreed to order texts. Text is on below.</div>` : ''}
+      ${String(query.consent) === 'saved' ? `<div class="ok">Saved: ${escEmail(first || 'they')} agreed to order texts. The automatic reminders will go by text too.</div>` : ''}
       ${textWhyNot === 'they texted STOP'
         ? `<p class="muted" style="font-size:12.5px;margin:0 0 10px">${escEmail(first || 'They')} texted STOP to the shop number, so texts stay off until they text START to ${escEmail(SHOP_PHONE)}.</p>`
-        : ''}
+        /* A text typed here needs no agreement on file, but the automatic
+           reminders still do: the owner's word turns those on too. */
+        : !textWhyNot && !remindersByText && isOwner() ? `<details style="margin:0 0 12px"><summary style="font-size:13px">They agreed to texts: send the automatic reminders by text too</summary>
+        <form method="POST" action="/admin/quote/${code}/text-consent" style="margin-top:8px;padding:10px 12px;border:1px solid #e3e8f2;border-radius:10px;background:#fafcff">
+          <p class="muted" style="font-size:12.5px;margin:0 0 8px">Texts you type here already go from the shop number. The automatic reminders (follow-up, deposit, balance, pickup)
+            go by text only to someone who agreed. If they agreed somewhere this system cannot see, like your old phone number, save it here.
+            It is saved as your word, with today's date and your note, and turns on order texts only, never promotions.
+            They can still text STOP at any time.</p>
+          <input name="note" maxlength="200" required placeholder="How they agreed, e.g. we have been texting on my old number since Sept"
+                 style="padding:9px;font-size:14px;margin-bottom:8px">
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:400;text-transform:none;letter-spacing:0;margin:0 0 8px">
+            <input type="checkbox" name="confirm" value="1" required style="width:auto;margin-top:2px">
+            <span>${escEmail(first || 'This customer')} agreed to get texts about this order from June's Tees.</span></label>
+          <button type="submit" class="btn" style="padding:8px 16px;font-size:14px">Turn on reminder texts</button>
+        </form></details>` : ''}
       ${waitingReply ? `<div class="warn" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <span>${escEmail(first || 'They')} wrote ${escEmail(when(waitingReply.created_at))} and has not had an answer yet.</span>
         <form method="POST" action="/admin/quote/${code}/replies-handled" style="margin:0">
@@ -26661,7 +26690,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
       <form method="POST" action="/admin/quote/${code}/message" data-msgform data-proofurls="${escEmail(JSON.stringify(proofUrls))}" style="margin:0 0 12px">
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
           ${radio('email', 'Email', emailWhyNot, true)}
-          ${radio('text', 'Text', textWhyNot, !!emailWhyNot)}
+          ${radio('text', 'Text', textWhyNot, !!emailWhyNot || textFirst)}
         </div>
         <input name="subject" maxlength="150" value="${prefill ? `Your proof${String(query.proof) === 'all' ? 's' : ''} for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
                style="margin-bottom:8px;padding:10px;font-size:14px">
@@ -28591,6 +28620,16 @@ app.get('/admin/orders', requireAdmin, async (req, res) => {
    The link is public, not a secret, so the shop's own link is the default. */
 const GOOGLE_REVIEW_URL = process.env.JT_GOOGLE_REVIEW_URL || 'https://g.page/r/CWKc1jS7iFKHEBM/review';
 
+/* ONE wording for the review ask, wherever it is shown (the reviews list and
+   the job's message box). A shop that asks the same question two ways
+   depending on the list is a shop whose voice drifts. */
+function reviewAskText(n) {
+  const first = String(n || '').trim().split(/\s+/)[0];
+  return `Hi${first ? ' ' + first : ''}, it's June's Tees — thanks again for your order! `
+    + `If you were happy with it, would you mind leaving a quick Google review? `
+    + `It genuinely helps a small shop like ours. ${GOOGLE_REVIEW_URL}`.trim();
+}
+
 function reviewToken() { return crypto.randomBytes(9).toString('base64url'); }
 
 const STAR = (n) => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
@@ -29193,22 +29232,15 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
         ORDER BY (q.paid_amount >= q.total - 0.005) DESC,
                  q.paid_at DESC NULLS LAST, q.id DESC LIMIT 300`);
 
-    /* ONE wording for the review ask, wherever it is shown. A shop that asks
-       the same question two ways depending on the list is a shop whose voice
-       drifts. */
-    const askFor = (n) => {
-      const first = String(n || '').trim().split(/\s+/)[0];
-      return `Hi${first ? ' ' + first : ''}, it's June's Tees — thanks again for your order! `
-        + `If you were happy with it, would you mind leaving a quick Google review? `
-        + `It genuinely helps a small shop like ours. ${GOOGLE_REVIEW_URL}`.trim();
-    };
+    const askFor = reviewAskText;
     /* A customer with only a phone is asked by text from the shop number
-       (owner, 2026-11-06: every text goes through Twilio), through the job's
-       message route, so it is logged on the job like any other text. */
+       (owner, 2026-11-06: every text goes through Twilio): Text opens the
+       job's message box with the ask written in, to check and send there.
+       That page says why a text cannot go, and who may send one. */
     const askRow = (q) => {
       const tel = String(q.phone || '').replace(/[^0-9+]/g, '');
       const text = !q.email && tel
-        ? `<button type="submit" class="kbtn kbtn-sm" form="ask-text-${escEmail(q.code)}">Text</button>` : '';
+        ? `<a class="kbtn kbtn-sm" href="/admin/production/${escEmail(q.code)}?say=review#messages">Text</a>` : '';
       return `
         <label class="row-i ask-row${q.email ? '' : ' is-off'}">
           <input type="checkbox" name="code" value="${escEmail(q.code)}"${q.email ? '' : ' disabled'}>
@@ -29233,8 +29265,8 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
         <div class="fold-body">
           ${outcome}
           <p class="muted" style="margin:0 0 10px">Tick the ones to ask by email and queue them. The ask goes out on the
-            next hourly sweep; nothing sends from this page. A customer with only a phone gets a Text button that sends
-            it from the shop number.</p>
+            next hourly sweep; nothing sends from this page. A customer with only a phone gets a Text button: it opens
+            their job with the message written in, sent from the shop number.</p>
           <div class="ask-msg">
             <textarea id="ask-text" readonly rows="3" onclick="this.select()">${escEmail(askFor(''))}</textarea>
             <button type="button" class="btn-ghost" data-copy-from="ask-text">Copy</button>
@@ -29245,10 +29277,7 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
             ${anyEmail ? '<label class="ask-all"><input type="checkbox" data-ask-all> Everyone with an email</label>' : ''}
             <div class="rows">${never.map(askRow).join('')}</div>
             ${anyEmail ? '<button type="submit" data-ask-go>Queue selected</button>' : ''}
-          </form>${never.filter((q) => !q.email && String(q.phone || '').replace(/[^0-9+]/g, '')).map((q) => `
-          <form id="ask-text-${escEmail(q.code)}" method="POST" action="/admin/quote/${escEmail(q.code)}/message" hidden
-                onsubmit="var b=document.querySelector('[form=ask-text-${escEmail(q.code)}]');if(b)b.disabled=true">
-            <input type="hidden" name="channel" value="text"><input type="hidden" name="body" value="${escEmail(askFor(q.name))}"></form>`).join('')}` : emptyState('Everyone who has paid has been asked. A job shows here once it is paid, shipped or delivered, with no ask on file.')}
+          </form>` : emptyState('Everyone who has paid has been asked. A job shows here once it is paid, shipped or delivered, with no ask on file.')}
         </div>
       </details>`;
 

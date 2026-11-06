@@ -77,7 +77,7 @@ test('the send buttons show only to someone allowed to press them', () => {
   assert.doesNotMatch(ready.slice(0, copy), /\$\{q\.email \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/email"/);
   /* Every text goes from the shop number (owner, 2026-11-06): no sms: link
      opening the phone's Messages anywhere on the quote pages. */
-  assert.doesNotMatch(src, /quoteSmsHref|Text it from my phone|opens Messages|Open in Messages/);
+  assert.doesNotMatch(src, /quoteSmsHref|href="sms:|`sms:\$\{/);
   assert.match(ready, /\$\{maySent \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/delivered"/, 'no "I sent it another way" they are refused on');
   assert.match(src, /const mayBoth = !!q\.email && mayEmail && textWay === 'shop' && may\('\/admin\/quote\/:code\/send'\);/);
 });

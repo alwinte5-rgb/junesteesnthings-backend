@@ -20,11 +20,10 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
 /* Lift the wording itself so the test reads what actually ships. */
 function askFor(name, reviewUrl) {
-  const m = src.match(/const askFor = \(n\) => \{[\s\S]*?\n    \};/);
-  assert.ok(m, 'askFor not found in server.js');
+  const m = src.match(/function reviewAskText\(n\) \{[\s\S]*?\n\}/);
+  assert.ok(m, 'reviewAskText not found in server.js');
   return vm.runInThisContext(
-    '(function(GOOGLE_REVIEW_URL){' + m[0].replace('const askFor', 'var askFor') +
-    '\nreturn askFor;})')(reviewUrl)(name);
+    '(function(GOOGLE_REVIEW_URL){' + m[0] + '\nreturn reviewAskText;})')(reviewUrl)(name);
 }
 
 test('the message is addressed, signed and carries the review link', () => {
@@ -53,6 +52,7 @@ test('there is exactly ONE wording, not one per list', () => {
      between the list a customer happens to land in. */
   assert.equal(/smsFor/.test(src), false, 'smsFor is back — there are two wordings again');
   assert.equal((src.match(/const askFor = /g) || []).length, 1);
+  assert.equal((src.match(/function reviewAskText\(/g) || []).length, 1);
 });
 
 /* Since 2026-09-28 the two lists are one, and the message is shown once: a
@@ -68,9 +68,9 @@ test('every customer on the list can be sent the message', () => {
   assert.match(page, /<textarea id="ask-text"[^>]*>\$\{escEmail\(askFor\(''\)\)\}<\/textarea>/,
     'the shared message box is gone');
   assert.match(page, /data-copy-from="ask-text"/, 'nothing copies the shared message');
-  assert.match(page, /action="\/admin\/quote\/\$\{escEmail\(q\.code\)\}\/message"/,
+  assert.match(page, /href="\/admin\/production\/\$\{escEmail\(q\.code\)\}\?say=review#messages">Text<\/a>/,
     'a customer with only a phone has no message to send');
-  assert.match(page, /name="channel" value="text"><input type="hidden" name="body" value="\$\{escEmail\(askFor\(q\.name\)\)\}"/);
+  assert.match(page, /const askFor = reviewAskText;/);
   assert.doesNotMatch(page, /sms:/, 'no link to the phone\'s own Messages');
 });
 
