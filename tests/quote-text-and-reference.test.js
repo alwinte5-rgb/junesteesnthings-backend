@@ -75,7 +75,9 @@ test('the send buttons show only to someone allowed to press them', () => {
   const copy = ready.indexOf('Copy message');
   assert.ok(copy > -1, 'the send card ends before the message card');
   assert.doesNotMatch(ready.slice(0, copy), /\$\{q\.email \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/email"/);
-  assert.match(src, /const smsHref = maySent \? quoteSmsHref\(q, req\.get\('user-agent'\)\) : '';/, 'no Messages link that marks it sent for someone who may not');
+  /* Every text goes from the shop number (owner, 2026-11-06): no sms: link
+     opening the phone's Messages anywhere on the quote pages. */
+  assert.doesNotMatch(src, /quoteSmsHref|Text it from my phone|opens Messages|Open in Messages/);
   assert.match(ready, /\$\{maySent \? `<form method="POST" action="\/admin\/quote\/\$\{code\}\/delivered"/, 'no "I sent it another way" they are refused on');
   assert.match(src, /const mayBoth = !!q\.email && mayEmail && textWay === 'shop' && may\('\/admin\/quote\/:code\/send'\);/);
 });
@@ -92,7 +94,11 @@ test('the quote text is plain, branded, linked and carries the opt-out', () => {
 });
 
 test('no text button for a quote the route would refuse', () => {
-  assert.match(fnSrc('quoteTextWay'), /if \(!phone \|\| quoteSendRefusal\(q\)\) return '';/);
+  assert.match(fnSrc('quoteTextWay'), /if \(!phone \|\| quoteSendRefusal\(q\) \|\| !smsConfigured\(\)\) return '';/);
+  /* Only a STOP blocks it, never a missing consent row (2026-11-06). */
+  assert.match(fnSrc('quoteTextWay'), /return \(await saidStop\(phone\)\) \? '' : 'shop';/);
+  assert.doesNotMatch(fnSrc('quoteTextWay'), /smsConsentFor|'phone'/);
+  assert.match(fnSrc('textQuote'), /staffSent: true/);
   assert.match(fnSrc('quoteTextControl'), /onsubmit="this\.querySelector\('button'\)\.disabled=true"/);
   assert.match(fnSrc('textQuote'), /ref: `quote-text:\$\{q\.code\}:r\$\{q\.revision \|\| 1\}:/);
 });

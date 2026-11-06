@@ -61,14 +61,17 @@ const page = src.slice(src.indexOf("app.get('/admin/reviews'"), src.indexOf("app
 
 test('every customer on the list can be sent the message', () => {
   /* One box, with a Copy button, for the asks June sends herself. A customer
-     with only a phone cannot be queued, so their row carries the message
-     addressed to them, in a Text link that opens her messages app with it
-     written in. Without either, a row is a tick box with nothing to send. */
+     with only a phone cannot be queued, so their row carries a Text button
+     that sends the message addressed to them from the shop number (owner,
+     2026-11-06: every text through Twilio). Without either, a row is a tick
+     box with nothing to send. */
   assert.match(page, /<textarea id="ask-text"[^>]*>\$\{escEmail\(askFor\(''\)\)\}<\/textarea>/,
     'the shared message box is gone');
   assert.match(page, /data-copy-from="ask-text"/, 'nothing copies the shared message');
-  assert.match(page, /sms:\$\{tel\}\?&body=\$\{encodeURIComponent\(askFor\(q\.name\)\)\}/,
+  assert.match(page, /action="\/admin\/quote\/\$\{escEmail\(q\.code\)\}\/message"/,
     'a customer with only a phone has no message to send');
+  assert.match(page, /name="channel" value="text"><input type="hidden" name="body" value="\$\{escEmail\(askFor\(q\.name\)\)\}"/);
+  assert.doesNotMatch(page, /sms:/, 'no link to the phone\'s own Messages');
 });
 
 test('the copy box cannot be edited into something that was never sent', () => {

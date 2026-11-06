@@ -267,8 +267,8 @@ test('a callback asks the owner to press 1 before the customer is dialled', () =
   }
 });
 
-test('voicemail is transcribed, and only a finished transcript is sent on', () => {
-  assert.match(V.voicemailTwiml(base), /transcribe="true" transcribeCallback="https:\/\/www\.jtees\.net\/webhooks\/twilio\/voice\/transcript"/);
+test('voicemail is not transcribed; a late transcript callback is still only sent on when finished', () => {
+  assert.doesNotMatch(V.voicemailTwiml(base), /transcri/);
   assert.equal(V.transcriptText({ from, text: '  Hi, I need 40 shirts\n by Friday ', status: 'completed' }),
     'Voicemail from (312) 555-0199 said: "Hi, I need 40 shirts by Friday"');
   assert.equal(V.transcriptText({ from, text: 'x', status: 'failed' }), null);

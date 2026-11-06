@@ -4734,7 +4734,10 @@ function inTextingHours(now = new Date()) {
    giving me their phone numbers is consent". Until then these needed a ticked
    box, which most customers never saw, so they got the email only. Only a
    STOP (a reply, or Twilio's 21610) stops them: an unticked box on a form is
-   not the customer saying no to hearing about their own order. */
+   not the customer saying no to hearing about their own order.
+   staffSent: the same rule for a text the owner or a helper sends by hand from
+   the shop number (owner, 2026-11-06: "I need to be able to use this like my
+   phone", "I want every text message routed through twilio"). */
 async function saidStop(phone) {
   const { rows: [r] } = await pool.query(
     `SELECT source FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [phone]);
@@ -4747,14 +4750,14 @@ async function neverAsked(phone, kind) {
   return !rows.length;
 }
 
-async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false, orderUpdate = false, media = [] }) {
+async function sendCustomerSms({ phone, kind, ref, msg, quote = null, replyToContact = false, orderUpdate = false, staffSent = false, media = [] }) {
   const to = normalizeUsPhone(phone);
   if (!to) return 'no-phone';
   try {
     const c = await smsConsentFor(to);
     const allowed = (kind === 'marketing' ? c.marketing : c.transactional)
       || (replyToContact && await neverAsked(to, kind))
-      || (orderUpdate && kind === 'transactional' && !(await saidStop(to)));
+      || ((orderUpdate || staffSent) && kind === 'transactional' && !(await saidStop(to)));
     if (!allowed) return 'no-consent';
     if (!smsConfigured()) {
       console.log(`sendCustomerSms: skipped ${msg.template} for ${ref} — Twilio not configured`);
@@ -12596,7 +12599,7 @@ function productGroupOf(name) {
       (${fmtDate(reorderOf.created_at)}), copied across. Lines priced from the price list use today's prices, so check sizes, quantities and the total, then save.</div>` : ''}
     <div class="sub">${isEdit
       ? 'Their link stays the same — it updates the moment you save.'
-      : 'Fills in the message for you — you still send it from your phone.'}</div>
+      : 'Save it, then text or email it from the shop on the next page.'}</div>
     ${refCard}
     ${(() => {
       /* What the customer asked for, if anything — the note they typed and the
@@ -15973,9 +15976,8 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     /* Messages and "I sent it another way" mark it sent (/delivered): only for
        someone who may, as on the job page. */
     const maySent = STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/delivered');
-    const smsHref = maySent ? quoteSmsHref(q, req.get('user-agent')) : '';
-    /* From the shop's number when they agreed to texts (2026-10-19); the
-       Messages link stays for everyone else. */
+    /* Texts go from the shop's number only (owner, 2026-11-06: "I want every
+       text message routed through twilio"): no Messages link on this page. */
     const mayText = STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/text');
     const textByShop = mayText && (await quoteTextWay(q).catch(() => '')) === 'shop';
     const textForm = (cls) => textByShop ? `<form method="POST" action="/admin/quote/${code}/text" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
@@ -16017,19 +16019,16 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
           ${mayEmail ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
             <button type="submit"${mayBoth ? ' class="btn-ghost"' : ''} style="width:100%">Email it to ${escEmail(q.email)}</button></form>` : ''}
           ${textForm(' class="btn-ghost"')}
-          ${smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center;margin-bottom:8px" href="${escEmail(smsHref)}"
-            onclick="markSent()">${textByShop ? 'Text it from my phone instead' : 'Text it (opens Messages)'}</a>` : ''}
           ${maySent ? `<form method="POST" action="/admin/quote/${code}/delivered" style="margin:0 0 8px">
             <button type="submit" class="btn-ghost" style="width:100%">I sent it another way</button></form>` : ''}
           <a class="btn btn-ghost" style="display:block;text-align:center" href="/admin/production/${code}">Not yet</a>
-        </div>` : (mayEmail || textByShop || smsHref) ? `<div class="card">${bothForm(`Email and text ${existingQuote ? 'the updated quote' : 'it'}`)}${mayEmail ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
+        </div>` : (mayEmail || textByShop) ? `<div class="card">${bothForm(`Email and text ${existingQuote ? 'the updated quote' : 'it'}`)}${mayEmail ? `<form method="POST" action="/admin/quote/${code}/email" style="margin:0 0 8px" onsubmit="this.querySelector('button').disabled=true">
           <button type="submit" class="btn btn-ghost" style="width:100%">Email ${existingQuote ? 'the updated quote' : 'it'} to ${escEmail(q.email)}</button>
-        </form>` : ''}${textForm(' class="btn-ghost"')}${!textByShop && smsHref ? `<a class="btn btn-ghost" style="display:block;text-align:center" href="${escEmail(smsHref)}">Text ${existingQuote ? 'the updated quote' : 'it'} (opens Messages)</a>` : ''}</div>` : ''}
+        </form>` : ''}${textForm(' class="btn-ghost"')}</div>` : ''}
       <div class="card" data-after-design${askDesign.length ? ' style="display:none"' : ''}>
         <div class="msg" id="m">${escEmail(msgs.initial)}</div>
         <div class="row">
           <button type="button" onclick="cp()">Copy message</button>
-          ${smsHref ? `<a class="btn btn-ghost" href="${escEmail(smsHref)}" onclick="markSent()">Open in Messages</a>` : ''}
         </div>
         <p class="muted" style="margin-top:10px">They see: <a href="/q/${code}?staff=1" target="_blank" rel="noopener">${quoteLink(code)}</a></p>
         ${TAXCERT.quoteNeedsCertificate(q) && !q.tax_certificate_id ? `
@@ -21676,29 +21675,20 @@ function quoteTextMsg(q) {
 }
 
 /* How the quote can go by text, for the buttons: 'shop' (sent from the shop's
-   number by the server), 'phone' (opens Messages on this device; the server
-   cannot send it), or '' when there is no usable number. */
+   number by the server) or '' when it cannot be texted: no usable number,
+   texting off, or they texted STOP. Every text goes from the shop number
+   (owner, 2026-11-06), so there is no "from your phone" way any more. */
 async function quoteTextWay(q) {
   const phone = normalizeUsPhone(q.phone);
   /* The route refuses a held, draft, cancelled or paid quote: no button for it. */
-  if (!phone || quoteSendRefusal(q)) return '';
-  if (!smsConfigured()) return 'phone';
-  const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
-  return c.transactional ? 'shop' : 'phone';
-}
-
-/* sms: link that opens Messages with the quote's message in it. iPhones and
-   Macs want '&' before body, everything else '?'. */
-function quoteSmsHref(q, ua) {
-  const digits = String(q.phone || '').replace(/[^0-9+]/g, '');
-  if (!digits) return '';
-  return `sms:${digits}${/iPhone|iPad|Mac/.test(ua || '') ? '&' : '?'}body=${encodeURIComponent(quoteMessages(q).initial)}`;
+  if (!phone || quoteSendRefusal(q) || !smsConfigured()) return '';
+  return (await saidStop(phone)) ? '' : 'shop';
 }
 
 /* The text control beside an email one on the job page: a button that sends
-   from the shop's number, or a Messages link that marks the quote sent as it
-   opens. `look` is 'link' (the header line) or 'button' (the not-sent card). */
-function quoteTextControl(q, way, smsHref, look) {
+   from the shop's number, or nothing when it cannot be texted. `look` is
+   'link' (the header line) or 'button' (the not-sent card). */
+function quoteTextControl(q, way, look) {
   const code = escEmail(q.code);
   const asLink = look === 'link';
   if (way === 'shop') {
@@ -21706,10 +21696,7 @@ function quoteTextControl(q, way, smsHref, look) {
       <button type="submit"${asLink ? ' style="background:none;border:0;padding:0;color:#1848B8;font:inherit;cursor:pointer;text-decoration:underline"' : ''}>${
         asLink ? 'text the quote to them' : 'Text it to ' + escEmail(q.phone)}</button></form>`;
   }
-  if (way !== 'phone' || !smsHref) return '';
-  return `<a href="${escEmail(smsHref)}"${asLink ? ' style="color:#1848B8"' : ' class="btn"'}
-    onclick="try{fetch('/admin/quote/${code}/delivered',{method:'POST',keepalive:true,credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})}catch(e){}">${
-      asLink ? 'text the quote from your phone' : 'Text it from your phone'}</a>`;
+  return '';
 }
 
 /* Texts the quote from the shop's number and, when it went, marks it with the
@@ -21719,7 +21706,7 @@ async function textQuote(q) {
   /* The button disables itself on the tap; behind that, one text per
      revision a minute (the dedupe key), so an edited quote can go again
      straight away. */
-  const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: q.code,
+  const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: q.code, staffSent: true,
     ref: `quote-text:${q.code}:r${q.revision || 1}:${Math.floor(Date.now() / 60000)}`, msg: quoteTextMsg(q) });
   if (status === 'sent') {
     /* The text went: a failed write here must not tell staff it did not, or
@@ -21736,8 +21723,8 @@ async function textQuote(q) {
 /* Why a quote text did not go, by textQuote's status. */
 const QUOTE_TEXT_NOT_SENT = {
   'no-phone': 'There is no usable phone number on this quote, so it was not texted.',
-  'no-consent': 'They have not agreed to texts, so it was not sent from the shop number. Use "text it from your phone" instead.',
-  unconfigured: 'Texting is not switched on, so it was not sent. Use "text it from your phone" instead.',
+  'no-consent': 'That number texted STOP, so it cannot be texted.',
+  unconfigured: 'Texting is not switched on, so it was not sent.',
   duplicate: 'That text went out a moment ago, so it was not sent twice.',
 };
 
@@ -21759,7 +21746,7 @@ app.post('/admin/quote/:code/send', requireAdmin, async (req, res) => {
        never sends half and reports an error. */
     if (!q.email || !isValidEmail(String(q.email).trim())) return err('There is no valid email address on this quote, so nothing was sent. Text it instead.');
     if ((await quoteTextWay(q).catch(() => '')) !== 'shop') {
-      return err('This quote cannot be texted from the shop number (no usable phone, or they have not agreed to texts), so nothing was sent. Email it instead.');
+      return err('This quote cannot be texted from the shop number (no usable phone, or they texted STOP), so nothing was sent. Email it instead.');
     }
     const r = await emailQuote(q);
     const status = await textQuote(q);
@@ -23789,8 +23776,9 @@ async function renderBoard(VIEW, req, res) {
             <div style="font-weight:700;color:#8a5a00;font-size:13px">📱 Needs a text</div>
             <div class="muted" style="font-size:12.5px;margin-top:2px">${escEmail(textReason)}</div>
             <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-              <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-                 href="sms:${escEmail(String(q.phone).replace(/[^0-9+]/g, ''))}${/iPhone|iPad|Mac/.test(req.get('user-agent') || '') ? '&' : '?'}body=${encodeURIComponent(textMsg)}">Text ${escEmail(String(q.name || '').split(' ')[0] || 'them')}</a>
+              <form method="POST" action="/admin/quote/${escEmail(q.code)}/message" style="margin:0" onsubmit="this.querySelector('button').disabled=true">
+                <input type="hidden" name="channel" value="text"><input type="hidden" name="body" value="${escEmail(textMsg)}">
+                <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Text ${escEmail(String(q.name || '').split(' ')[0] || 'them')} from the shop</button></form>
               <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
                  onclick="cpq(this)" data-msg="${escEmail(textMsg)}">Copy message</button>
             </div>
@@ -24639,8 +24627,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
           mayTarget = may('/admin/quote/:code/target'), mayEmail = may('/admin/quote/:code/email'),
           maySent = may('/admin/quote/:code/delivered'), mayText = may('/admin/quote/:code/text');
     const textWay = mayText ? await quoteTextWay(q).catch(() => '') : '';
-    const textSms = maySent ? quoteSmsHref(q, req.get('user-agent')) : '';
-    const textLink = quoteTextControl(q, textWay, textSms, 'link'), textButton = quoteTextControl(q, textWay, textSms, 'button');
+    const textLink = quoteTextControl(q, textWay, 'link'), textButton = quoteTextControl(q, textWay, 'button');
     /* Email and text it in one tap (2026-10-24), when both can go from the shop. */
     const mayBoth = !!q.email && mayEmail && textWay === 'shop' && may('/admin/quote/:code/send');
     const stepRows = cl.steps.map((st) => {
@@ -25139,7 +25126,7 @@ const MESSAGE_ERRORS = {
   'no-email': 'There is no email address on this quote.',
   'no-phone': 'There is no phone number on this quote.',
   'texting-off': 'Texting is not switched on yet, so nothing was sent. Send it by email instead.',
-  'no-consent': 'They have not agreed to texts, so nothing was sent. Send it by email instead.',
+  'no-consent': 'That number texted STOP, so nothing was sent. Only they can turn texts back on, by texting START to the shop number. Send it by email instead.',
   failed: 'It did not send, and the error has been reported. Try again, or reach them another way.',
   duplicate: 'That message went out a moment ago, so it was not sent twice.',
   held: 'This quote is still waiting for approval, so the customer cannot open it yet. Nothing was sent. Once it is approved, message them.',
@@ -26508,18 +26495,15 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
   const phone = normalizeUsPhone(q.phone);
   let textWhyNot = !phone ? 'no phone number on this quote'
     : !smsConfigured() ? 'texting is not switched on yet' : '';
-  /* Their last answer was no (STOP, or a carrier block): the owner's button
-     never turns that back on; only they can, by texting START. */
-  let textOptedOut = false;
-  if (!textWhyNot) {
-    const c = await smsConsentFor(phone).catch(() => ({ transactional: false }));
-    if (!c.transactional) {
-      textWhyNot = 'they have not agreed to texts';
-      /* Unknown on a failed lookup: neither the form nor a STOP it may not
-         have been, which would send the owner the wrong way. */
-      textOptedOut = await lastSaidNoToTexts(phone).catch(() => null);
-    }
-  }
+  /* Texts typed here go from the shop number to anyone who has not texted
+     STOP (staffSent in sendCustomerSms; owner, 2026-11-06). Only they can
+     turn a STOP back off, by texting START. A failed lookup leaves the box
+     on: the send itself checks again and says why if it is refused. */
+  if (!textWhyNot && await saidStop(phone).catch(() => false)) textWhyNot = 'they texted STOP';
+  /* The automatic reminders still need agreement on file (their sends pass no
+     staffSent), so "coming up" promises a text only when one will go. */
+  const remindersByText = !textWhyNot
+    && (await smsConsentFor(phone).catch(() => ({ transactional: false }))).transactional;
   const emailWhyNot = q.email ? '' : 'no email address on this quote';
   const jobFiles = await jobFilesFor(q).catch(() => []);
   /* This job's proof links, for the page's text counter: they go as pictures,
@@ -26606,7 +26590,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
     /* Their own figures: the sweeps read balanceOf(q) on the stored total,
        the opt-out list for the follow-up and balance emails, and only text
        where textWhyNot is blank. */
-    const opts = { balanceDue: balanceOf(q), days: reminderDelays(), textOk: !textWhyNot,
+    const opts = { balanceDue: balanceOf(q), days: reminderDelays(), textOk: remindersByText,
                    unsubscribed: q.email ? await isUnsubscribed(q.email).catch(() => false) : false };
     let upcoming = FOLLOWUPS.upcomingReminders(q, opts);
     /* Refunds and disputes only stop the money ones: look only when one is listed. */
@@ -26650,20 +26634,9 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
       ${String(query.consent) === 'saved' ? `<div class="ok">Saved: ${escEmail(first || 'they')} agreed to order texts. Text is on below.</div>` : ''}
-      ${textWhyNot === 'they have not agreed to texts' && isOwner() && textOptedOut !== null ? (textOptedOut
+      ${textWhyNot === 'they texted STOP'
         ? `<p class="muted" style="font-size:12.5px;margin:0 0 10px">${escEmail(first || 'They')} texted STOP to the shop number, so texts stay off until they text START to ${escEmail(SHOP_PHONE)}.</p>`
-        : `<details style="margin:0 0 12px"><summary style="font-size:13px">They agreed to texts on my other number</summary>
-        <form method="POST" action="/admin/quote/${code}/text-consent" style="margin-top:8px;padding:10px 12px;border:1px solid #e3e8f2;border-radius:10px;background:#fafcff">
-          <p class="muted" style="font-size:12.5px;margin:0 0 8px">For a customer who agreed to order texts somewhere this system cannot see, like your old phone number.
-            It is saved as your word, with today's date and your note, and turns on order texts only, never promotions.
-            They can still text STOP at any time.</p>
-          <input name="note" maxlength="200" required placeholder="How they agreed, e.g. we have been texting on my old number since Sept"
-                 style="padding:9px;font-size:14px;margin-bottom:8px">
-          <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:400;text-transform:none;letter-spacing:0;margin:0 0 8px">
-            <input type="checkbox" name="confirm" value="1" required style="width:auto;margin-top:2px">
-            <span>${escEmail(first || 'This customer')} agreed to get texts about this order from June's Tees.</span></label>
-          <button type="submit" class="btn" style="padding:8px 16px;font-size:14px">Turn on texts</button>
-        </form></details>`) : ''}
+        : ''}
       ${waitingReply ? `<div class="warn" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <span>${escEmail(first || 'They')} wrote ${escEmail(when(waitingReply.created_at))} and has not had an answer yet.</span>
         <form method="POST" action="/admin/quote/${code}/replies-handled" style="margin:0">
@@ -27048,7 +27021,7 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
     /* This job's proof links go as pictures, out of the words (2026-10-15). */
     const { text: words, media } = await proofsForText(code, text);
     recentJobMessages.set(key, now);
-    const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code,
+    const status = await sendCustomerSms({ phone: q.phone, kind: 'transactional', quote: code, staffSent: true,
       ref: 'manual:' + key.slice(0, 32), media,
       /* Every text carries a link to the website (2026-10-05): their order
          page, unless the message already has a link in it. */
@@ -29229,12 +29202,13 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
         + `If you were happy with it, would you mind leaving a quick Google review? `
         + `It genuinely helps a small shop like ours. ${GOOGLE_REVIEW_URL}`.trim();
     };
-    /* A customer with only a phone is asked by a text June sends herself: the
-       button opens her messages app with it already written. */
+    /* A customer with only a phone is asked by text from the shop number
+       (owner, 2026-11-06: every text goes through Twilio), through the job's
+       message route, so it is logged on the job like any other text. */
     const askRow = (q) => {
       const tel = String(q.phone || '').replace(/[^0-9+]/g, '');
       const text = !q.email && tel
-        ? `<a class="kbtn kbtn-sm" href="${escEmail(`sms:${tel}?&body=${encodeURIComponent(askFor(q.name))}`)}">Text</a>` : '';
+        ? `<button type="submit" class="kbtn kbtn-sm" form="ask-text-${escEmail(q.code)}">Text</button>` : '';
       return `
         <label class="row-i ask-row${q.email ? '' : ' is-off'}">
           <input type="checkbox" name="code" value="${escEmail(q.code)}"${q.email ? '' : ' disabled'}>
@@ -29259,8 +29233,8 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
         <div class="fold-body">
           ${outcome}
           <p class="muted" style="margin:0 0 10px">Tick the ones to ask by email and queue them. The ask goes out on the
-            next hourly sweep; nothing sends from this page. A customer with only a phone gets a Text button with the
-            message written in. Copy it from here to send one yourself.</p>
+            next hourly sweep; nothing sends from this page. A customer with only a phone gets a Text button that sends
+            it from the shop number.</p>
           <div class="ask-msg">
             <textarea id="ask-text" readonly rows="3" onclick="this.select()">${escEmail(askFor(''))}</textarea>
             <button type="button" class="btn-ghost" data-copy-from="ask-text">Copy</button>
@@ -29271,7 +29245,10 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
             ${anyEmail ? '<label class="ask-all"><input type="checkbox" data-ask-all> Everyone with an email</label>' : ''}
             <div class="rows">${never.map(askRow).join('')}</div>
             ${anyEmail ? '<button type="submit" data-ask-go>Queue selected</button>' : ''}
-          </form>` : emptyState('Everyone who has paid has been asked. A job shows here once it is paid, shipped or delivered, with no ask on file.')}
+          </form>${never.filter((q) => !q.email && String(q.phone || '').replace(/[^0-9+]/g, '')).map((q) => `
+          <form id="ask-text-${escEmail(q.code)}" method="POST" action="/admin/quote/${escEmail(q.code)}/message" hidden
+                onsubmit="var b=document.querySelector('[form=ask-text-${escEmail(q.code)}]');if(b)b.disabled=true">
+            <input type="hidden" name="channel" value="text"><input type="hidden" name="body" value="${escEmail(askFor(q.name))}"></form>`).join('')}` : emptyState('Everyone who has paid has been asked. A job shows here once it is paid, shipped or delivered, with no ask on file.')}
         </div>
       </details>`;
 
