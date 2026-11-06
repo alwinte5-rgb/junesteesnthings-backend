@@ -33420,7 +33420,7 @@ async function sendShopDigest() {
   if (done) return '';
   const { rows: inboxes } = await pool.query(`SELECT DISTINCT to_addr FROM shop_digest_items WHERE sent_at IS NULL`);
   const when = (d) => new Date(d).toLocaleString('en-US', { timeZone: SHOP_TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' });
-  let sent = 0;
+  let sent = 0, held = 0;
   for (const { to_addr: to } of inboxes) {
     const { rows: items } = await pool.query(
       `UPDATE shop_digest_items SET sent_at = NOW() WHERE to_addr = $1 AND sent_at IS NULL
@@ -33430,13 +33430,14 @@ async function sendShopDigest() {
     const mail = SHOPDIGEST.build(items, { esc: escEmail, when });
     try {
       await sendEmail({ to, urgent: true, promo: false, subject: mail.subject, html: mail.html });
-      sent += items.length;
+      sent += mail.count;   // entries in the email, as its subject counts them
+      held += items.length;
     } catch (e) {
       await pool.query('UPDATE shop_digest_items SET sent_at = NULL WHERE id = ANY($1)', [items.map((i) => i.id)]);
       throw e;   // the sweep reports it; the items go next hour
     }
   }
-  await logActivity(OWNER_ACTOR, 'daily summary sent', { type: 'digest', id: day }, { items: sent });
+  await logActivity(OWNER_ACTOR, 'daily summary sent', { type: 'digest', id: day }, { items: sent, held });
   /* Kept a month for looking back, then cleared. */
   await pool.query(`DELETE FROM shop_digest_items WHERE sent_at < NOW() - INTERVAL '30 days'`).catch(() => {});
   return sent ? `${sent} item(s) sent` : 'nothing held';
