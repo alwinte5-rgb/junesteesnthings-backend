@@ -635,6 +635,7 @@ test('the board and reviews list open the box with their message written in, Tex
   assert.match(html, /value="text" style="width:auto" checked/);
   const nudge = await card({ query: { say: 'followup' } });
   assert.match(nudge, /FOLLOWUP-MSG/);
+  assert.match(html, /value="About your order AB12CD" data-subject/, 'a follow-up or review ask is not titled as a proof');
   assert.doesNotMatch(await card({ query: { say: '<b>x</b>' } }), /<b>x<\/b>/, 'only fixed keys');
 });
 

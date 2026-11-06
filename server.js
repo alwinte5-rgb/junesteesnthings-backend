@@ -4743,7 +4743,7 @@ async function saidStop(phone) {
      the owner's word). A later marketing-only tick is not that yes: it used to
      be, when only the newest row was read (review, 2026-11-06). */
   const { rows } = await pool.query(
-    `SELECT source, transactional FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC LIMIT 50`, [phone]);
+    `SELECT source, transactional FROM sms_consents WHERE phone = $1 ORDER BY created_at DESC, id DESC`, [phone]);
   for (const r of rows) {
     if (['sms-reply:stop', 'twilio:21610'].includes(r.source)) return true;
     if (r.transactional) return false;
@@ -26547,8 +26547,8 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
        shop number. Only fixed wordings by key, never text from the address. */
     const say = String(query.say);
     prefill = say === 'review' ? reviewAskText(q.name)
-      : say === 'accepted' ? quoteMessages(q).accepted.replace(/^Got it[^—]*—\s*/, '')
-      : quoteMessages(q).followup;
+      : say === 'accepted' ? String(quoteMessages(q).accepted || '').replace(/^Got it[^—]*—\s*/, '')
+      : String(quoteMessages(q).followup || '');
   }
   const textFirst = !!query.say && !!prefill;
   const sent = ['email', 'text'].includes(String(query.sent)) ? String(query.sent) : '';
@@ -26692,7 +26692,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
           ${radio('email', 'Email', emailWhyNot, true)}
           ${radio('text', 'Text', textWhyNot, !!emailWhyNot || textFirst)}
         </div>
-        <input name="subject" maxlength="150" value="${prefill ? `Your proof${String(query.proof) === 'all' ? 's' : ''} for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
+        <input name="subject" maxlength="150" value="${prefill && !textFirst ? `Your proof${String(query.proof) === 'all' ? 's' : ''} for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
                style="margin-bottom:8px;padding:10px;font-size:14px">
         <textarea name="body" rows="6" maxlength="${MESSAGE_MAX}" placeholder="Write to ${escEmail(first || 'them')}…"
                   style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
