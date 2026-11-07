@@ -16627,7 +16627,7 @@ app.get('/q/:code', async (req, res) => {
               onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Checking…'">
           <label for="promo-in" style="flex-basis:100%;font-weight:700">Have a code?</label>
           <input id="promo-in" name="promo" maxlength="32" autocomplete="off" autocapitalize="characters"
-                 placeholder="MAIL15" style="flex:1;min-width:140px;text-transform:uppercase">
+                 placeholder="Enter your code" style="flex:1;min-width:140px;text-transform:uppercase">
           <button type="submit" class="btn" style="width:auto;padding:10px 18px">Apply</button>
         </form>`}
         ${promoNote}
