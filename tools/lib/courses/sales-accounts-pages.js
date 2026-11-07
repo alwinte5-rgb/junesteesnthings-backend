@@ -57,8 +57,8 @@ module.exports = {
       q('A new contact replies. You…', ['Welcome them and update the lead', 'Ignore them', 'Write to the old contact'], 0, 'Volunteers change.'),
     ] },
     { from: 'Tax paperwork', checks: [
-      q('An expired certificate means…', ['Ask for the new one before quoting', 'Untick tax', 'Nothing'], 0, 'June approves exemptions.'),
-      q('Who takes tax off?', ['June, after the certificate', 'You', 'The customer'], 0, 'Never you.'),
+      q('An expired certificate means…', ['Ask for the new one before quoting', 'Untick tax', 'Nothing'], 0, 'Tax comes off only with a certificate in date.'),
+      q('Who takes tax off?', ['The certificate the customer uploads (June checks it)', 'You', 'Nobody ever'], 0, 'Never you.'),
     ] },
     { from: 'Make ordering again effortless', checks: [
       q('The first option is…', ['The same as last time', 'A new design', 'A discount'], 0, 'Only sizes to confirm.'),

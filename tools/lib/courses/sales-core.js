@@ -189,11 +189,11 @@ You sign in with your own email, through Cloudflare. Never share your sign-in, a
 
 **My Day: start here every shift**
 
-My Day is your to-do list, built for you. Work it top to bottom:
+My Day is your to-do list, built for you. Work it top to bottom; the counts at the top jump to each section:
 
-- Leads waiting for a reply, oldest first
-- Follow-ups due today (the dates you set on leads)
-- Your tasks, your training, and June's latest note
+- People waiting on you: leads waiting for a reply, oldest first, and follow-ups due today (the dates you set on leads)
+- Your tasks and projects, your training, and June's latest note
+- The jobs you are part of
 
 If you only remember one screen, remember this one. An empty My Day means you have time to find new customers (module 8).
 
@@ -225,6 +225,16 @@ Ready-made replies and how-tos. Type a question in plain words ("deposit", "rush
 **Team chat**
 
 Channels (# Everyone, # Sales) are for things the team needs to know; June sees them all. **Direct with June** is just the two of you: questions about a customer, your pay or anything private. Ask whenever you are unsure: it is faster than guessing, and asking is never wrong.
+
+**Clock, tasks and the bell**
+
+- **Clock in** on the Timeclock when you start and out when you stop, breaks included. Your pay comes from these hours. Your first clock-in each day posts your open tasks to June's Mailbox, so she sees your plan
+- **Tasks** sit on My Day by how long they take: Now, This week, Big project, plus Every day. Press **Start** when you take one on and **Mark completed** when it is done, saying what you did; some ask for proof. The next one arrives by itself. Stuck? Use the task's **Stuck?** link
+- **Projects** are big work, such as a season's campaign, split into steps of about two hours. Do the pink step; the next opens once it is completed
+- **The bell** at the top counts what is new for you. Turn on sound and pop-ups from the bar on My Day so a new lead, task or message reaches you even in another tab
+- **Mailbox** keeps a conversation about one job or one task with it. Every task has **Message about this task**
+- **My stats** shows your week: hours, tasks done on time, and the people you found, contacted and heard back from
+- The **back-office tour** on My Day walks you through these screens in about ten minutes. Do it on your first day
 
 **Training and My earnings**
 
@@ -367,8 +377,9 @@ Giant printed heads of players, graduates or family members, for games, parties 
 
 **Turnaround**
 
-- Most orders are ready in [standard turnaround, owner to fill in] business days after the customer approves the proof and pays the deposit
-- The clock starts at proof approval and deposit, not at the first message. Late artwork or a late approval moves the date
+- Small orders are ready in 5–7 business days and larger ones in 7–14, plus shipping time if we ship it
+- The clock starts when they pay the deposit, or when they approve the proof if we are designing it for them, not at the first message. Late artwork or a late approval moves the date
+- A Design Studio order (they designed it themselves on jtees.net) has no proof: it prints exactly as they made it
 
 **Rush**
 
@@ -419,8 +430,8 @@ Customers can also design and pay online at jtees.net. Those show on **Orders**.
           choices: ['+10%', '+30%', '+50%', '+80%'],
           answer: 2, article: A.products, why: 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%, on DTF only, and only after June confirms.' },
         { id: 'clock', q: 'When does the turnaround clock start?',
-          choices: ['When the customer first writes', 'When you send the quote', 'When the customer approves the proof and pays the deposit', 'When the blanks arrive'],
-          answer: 2, article: A.products, why: 'Turnaround counts from proof approval and deposit, so late artwork moves the date.' },
+          choices: ['When the customer first writes', 'When you send the quote', 'When they pay the deposit, or approve the proof if we design it', 'When the blanks arrive'],
+          answer: 2, article: A.products, why: 'Turnaround counts from the deposit, or the proof approval when we design it, so late artwork moves the date.' },
         { id: 'sign', q: 'A church wants a 6-foot banner. How do you price it?',
           choices: ['Guess from a similar job', 'Enter the size and material on the quote form; the system prices signs', 'Ask the customer what they want to pay', 'Signs are not something we make'],
           answer: 1, article: A.products, why: 'Signs and banners are sized and priced by the system from the size and material.' },
@@ -471,6 +482,10 @@ Never send a random price to "how much for shirts?". The price depends on all fi
 - Ask for the missing details, numbered, so they are easy to answer
 - Offer to help ("If you're not sure on garments, tell me your budget and I'll suggest two")
 - Keep it short and warm. Check the spelling of their name and their group
+
+**Write a reply with Claude**
+
+Open the lead's full message first: it shows everything they wrote. Then, in the email box on the lead, **Write a reply with Claude** answers what they asked, with our list prices, and replaces the message for you to edit. To change it, type what to change ("women's cotton tees only, shorter") and press **Rewrite**. Anything Claude cannot know comes back marked "June to fill in", and the email will not send until you replace it with the real answer (ask June if you do not know). Always read it before you send: it is your message, not Claude's. Once a lead is contacted it moves to its own section, and the same button becomes **Suggest a follow-up with Claude**.
 
 **Phone and chat**
 
@@ -588,11 +603,19 @@ When a customer wants to compare (tee or hoodie?) or might add extras (a back pr
 
 **Tax**
 
-Illinois sales tax is added automatically. It comes off only when the customer is tax-exempt with an approved certificate: an exemption letter (E-number) for schools, churches and charities, or a CRT-61 for resellers. The customer uploads it on their quote page; you pre-screen it on **Certificates** and June approves it. If tax is off, the form asks **Why no tax?**, and the reason is shown to the customer.
+Illinois sales tax is added automatically. It comes off only when the customer is tax-exempt with an approved certificate: an exemption letter (E-number) for schools, churches and charities, or a CRT-61 for resellers. The customer uploads it on their quote page and it is accepted straight away, so tax comes off. June checks it later on **Certificates**; if she refuses it, the tax is added back. One you attach for them waits for June to approve. If tax is off, the form asks **Why no tax?**, and the reason is shown to the customer.
+
+**Shipping**
+
+If the order ships, the quote prices postage at cost from a live rate when the customer accepts, from their address. If June types a shipping figure, hers is used instead. Pickup is free; local delivery has its own fee.
+
+**Services**
+
+Design fees, folding and the **garment sourcing fee** sit under their own heading on the form. The sourcing fee ($25) is paid before we research garments or make a spec sheet, and it comes off their order if they order within 30 days. Design-only work is not taxed.
 
 **Discounts**
 
-The Discount box is June's. Do not use it without her say-so.
+The Discount box is June's. Do not use it without her say-so. A Business Partner's code applies itself on their quotes.
 
 **Deposits**
 
@@ -605,7 +628,7 @@ The quote shows the **Deposit to start**: 50% of the total, or the full amount f
 
 **After it is sent**
 
-The customer's link always shows the latest version, so a fix is just an edit and a save. You cannot change a customer's name, email or phone on a sent quote: ask June.`,
+Once you may send quotes yourself, **Email and text it** sends the link both ways in one tap (it refuses if either cannot go, so nothing half-sends). The customer's link always shows the latest version, so a fix is just an edit and a save. An expired quote can be **Reinstated** from the board or the job page: same prices, 14 more days. You cannot change a customer's name, email or phone on a sent quote: ask June.`,
     }, {
       id: 's5-practice', article: A.practice, existing: true, minutes: 20,
       goals: ['Build a full screen print quote in the real form', 'Save it as a draft so nothing is sent'],
@@ -637,8 +660,8 @@ The customer's link always shows the latest version, so a fix is just an edit an
           choices: ['Send the quote anyway', 'Save as draft: private, nothing is sent', 'Write it on paper', 'Delete it and start again later'],
           answer: 1, article: A.quotes, why: 'A draft is private and the customer link does not open.' },
         { id: 'tax', q: 'A PTO asks you to remove sales tax. What do you need?',
-          choices: ['Nothing, schools never pay tax', 'Their Illinois exemption letter (E-number), approved before tax comes off', 'A promise by email', 'June\'s permission only'],
-          answer: 1, article: A.quotes, why: 'Tax comes off only with an approved certificate: an E-number letter, or a CRT-61 for resellers.' },
+          choices: ['Nothing, schools never pay tax', 'Their Illinois exemption letter (E-number), uploaded on their quote page', 'A promise by email', 'June\'s permission only'],
+          answer: 1, article: A.quotes, why: 'Tax comes off only with a certificate on file: an E-number letter, or a CRT-61 for resellers. A customer upload is accepted straight away; June can refuse it later.' },
         { id: 'deposit', q: 'A quote total is $80. What is the deposit?',
           choices: ['$40', '$80, the full amount: orders under $100 are paid in full', '$0', '$20'],
           answer: 1, article: A.quotes, why: '50% deposit, or the full amount under $100.' },

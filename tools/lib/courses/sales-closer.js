@@ -62,7 +62,7 @@ Your targets: [owner to fill in: Sales Closer targets for reply time, conversion
 **What stays June's**
 
 - Any discount beyond your 5% on 48 pieces or more (see Objections), and every price match, free item or custom price
-- Taking tax off (a customer uploads their certificate and June approves it)
+- Taking tax off yourself (a customer uploads their certificate on their quote page; it is accepted straight away and June checks it)
 - A delivery date you have not checked on the production board
 - Logos the customer does not own, refunds and reprints
 
@@ -88,8 +88,8 @@ You never leave a customer waiting while you ask: reply now, give a time, ask Ju
           choices: ['My stats', 'The Playbook', 'Resources', 'Nowhere'],
           answer: 0, article: A.job, why: 'My stats shows your own numbers.' },
         { id: 'tax', q: 'A school asks you to take the tax off. You…',
-          choices: ['Untick tax', 'Ask them to upload their exemption certificate; June approves it', 'Give a discount instead', 'Refuse'],
-          answer: 1, article: A.job, why: 'Taking tax off is June\'s, after the certificate.' },
+          choices: ['Untick tax', 'Ask them to upload their exemption certificate on their quote page', 'Give a discount instead', 'Refuse'],
+          answer: 1, article: A.job, why: 'Tax comes off with the certificate they upload; June checks it and can refuse it.' },
         { id: 'price', q: 'A customer asks for a custom price on a big order. You…',
           choices: ['Type it in', 'Reply now, give a time, ask June', 'Say no', 'Ignore it'],
           answer: 1, article: A.job, why: 'Custom prices are June\'s; never leave them waiting.' },
@@ -263,7 +263,7 @@ Before you build the quote, read the order back in one message: "So that's about
 - Tick each print place and its method; enter ink colours for screen printing
 - Leave the price boxes empty. Prices are June's: if something needs a special price, save it as a draft and leave June a note on the job
 - Put in the needed-by date. The form adds rush if the date needs it and every item is DTF (nothing else can be rushed), and says why
-- Tax is added automatically. A tax-exempt customer uploads their certificate on their quote page, and June approves it
+- Tax is added automatically. A tax-exempt customer uploads their certificate on their quote page; it is accepted straight away and tax comes off. June checks it later and, if she refuses it, the tax is added back
 
 **Notes the customer reads**
 
@@ -272,8 +272,8 @@ The notes box appears on their quote. Use it for one or two short lines in their
 **Drafts and timing**
 
 - Waiting on one detail? **Save as draft**: private, nothing sent
-- A quote is good for 14 days. If they come back later, re-check it before they accept
-- Send the quote when you said you would. Then tell them it is on its way and what to do: "Tick any extras you'd like and press Accept"
+- A quote is good for 14 days. If they come back later, re-check it before they accept. An expired one can be **Reinstated** from the board or the job page: same prices, 14 more days
+- Send the quote when you said you would: **Email and text it** sends the link both ways in one tap. Then tell them it is on its way and what to do: "Tick any extras you'd like and press Accept"
 
 **Check before you send**
 
@@ -618,7 +618,7 @@ const FINAL = {
       { id: 'f29', q: 'A customer approves the proof by phone. You…', choices: ['Print', 'Ask for it in writing and log it', 'Mark approved', 'Wait'], answer: 1, article: A.yes, why: 'In writing.' },
       { id: 'f30', q: 'Awaiting deposit for a day. You…', choices: ['Cancel', 'One friendly message with the link, logged', 'Discount', 'Call hourly'], answer: 1, article: A.yes, why: 'The human touch.' },
       { id: 'f31', q: 'A customer asks to pay you personally on Cash App. You…', choices: ['Accept', 'Explain they pay the shop only: the quote link, or cash or Zelle you record', 'Ask June later', 'Ignore'], answer: 1, article: A.yes, why: 'The shop only.' },
-      { id: 'f32', q: 'A school wants no tax. You…', choices: ['Untick tax', 'Ask them to upload their certificate on the quote page for June to approve', 'Discount the tax amount', 'Refuse'], answer: 1, article: A.job, why: 'June approves exemptions.' },
+      { id: 'f32', q: 'A school wants no tax. You…', choices: ['Untick tax', 'Ask them to upload their certificate on the quote page', 'Discount the tax amount', 'Refuse'], answer: 1, article: A.job, why: 'Their upload takes the tax off; June checks it.' },
       { id: 'f33', q: 'Who decides a refund?', choices: ['June', 'You', 'The designer', 'The customer'], answer: 0, article: A.job, why: 'Refunds are June\'s.' },
       { id: 'f34', q: 'Your conversion is 15% and the shop\'s is 30%. Look first at…', choices: ['Discovery and quote fit', 'The weather', 'Tax', 'The logo'], answer: 0, article: A.pipeline, why: 'Wrong quotes do not close.' },
       { id: 'f35', q: 'A sent quote has no follow-up date. Risk?', choices: ['None', 'You will forget it', 'It expires instantly', 'It raises the price'], answer: 1, article: A.pipeline, why: 'Every quote needs a date.' },

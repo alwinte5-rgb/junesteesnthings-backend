@@ -451,13 +451,14 @@ When the month closes, the tax collected that month is not income. It should be 
 **How the system handles it**
 
 - **Quotes:** the shop attaches the certificate, or the customer uploads it. Payment waits until one is on file
-- **Design studio orders:** a customer can upload a certificate at checkout. Tax comes off, and the order waits until June approves the certificate. If she refuses it, the tax is added back and collected with the balance
+- **A certificate the customer uploads** (on a quote page, or at checkout on a design studio order) is accepted as it lands: tax comes off and the order is free to print. June marks it checked, or refuses it, later on **Certificates**. If she refuses it, the tax is added back and collected with the balance
+- **One the shop attaches** waits for June to approve it
 
 **Your monthly check**
 
 For every untaxed sale in the month:
 
-1. Is there a certificate on file for that sale, approved, with the holder's name matching the customer?
+1. Is there a certificate on file for that sale, not refused, with the holder's name matching the customer? One still marked unchecked is worth telling June about
 2. Is it the right kind (an E number for an organisation, a resale certificate for a reseller)?
 3. Anything on the "Untaxed sales with no exemption number" card needs a certificate, or June's answer on why no tax was charged
 
