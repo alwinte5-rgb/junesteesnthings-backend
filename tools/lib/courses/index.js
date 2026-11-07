@@ -50,6 +50,19 @@ for (const c of ALL) {
    2026-10-11: rush is embroidery only (Codex #195); handoffs to sales go to
    # Everyone, the channel content and ads helpers can see (Codex #224). */
 const REWORDED = [
+  /* 2026-11-06: software course brought up to date (COS insights, content packs, client logins, Pro white label; finder running list, overdue tasks, clock-in note). */
+  ["It also has analytics, with Facebook and Instagram insights, and an inbox where they answer and like comments and messages. On Pro and Agency, **content packs** take a spreadsheet of posts and a zip of photos and schedule them as written, or let the AI rewrite them, so an agency can move a client's ready content in at once.",
+   "It also has analytics and an inbox for comments and messages."],
+  ["- 5 seats: logins for their team, with roles (owner, admin, editor, client), so they can invite a client to review and approve their own brand's posts. A client login sees only the review controls",
+   "- 5 seats: logins for their team, with roles (owner, admin, editor, client), so they can invite a client to review their own brand"],
+  ["The cheaper plans (Starter $19, Pro $49) exist, but they are for single businesses who come from ads. Pro has white label too, but only one login and 6 outside connections: anyone with a team, or clients who approve their own posts, needs Agency.",
+   "The cheaper plans (Starter $19, Pro $49) exist, but they are for single businesses who come from ads."],
+  ["Its **Find leads with AI** button searches the web for people who post for several brands; check each result before you add it. Each search adds to one running list, and a result leaves the list once you contact it, so nothing found is lost between shifts. A lead counts once a contact is logged.",
+   "Its **Find leads with AI** button searches the web for people who post for several brands; check each result before you add it. A lead counts once a contact is logged."],
+  ["- End by setting a next step and date on every lead you touched\n- An overdue next step comes back to you as a task on **Tasks** the next day, so a forgotten follow-up shows up on its own",
+   "- End by setting a next step and date on every lead you touched"],
+  ["Clock in and out on the Timeclock so every hour counts. Your first clock-in each day posts your open tasks to June's Mailbox, so she sees your plan without asking.",
+   "Clock in and out on the Timeclock so every hour counts."],
   /* 2026-11-06: the designer asks the customer on the Messages card, not sales (owner). */
   ["message the customer on the job's **Messages** card. Their reply comes back to the same job.",
    "press **Ask sales a question** on the Artwork card. The question shows on the salesperson's My Day, and their answer comes back to the job."],
