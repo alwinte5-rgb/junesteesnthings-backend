@@ -140,7 +140,7 @@ module.exports = {
       q('The free plan needs…', ['No card', 'A card'], 0, 'Good for small businesses.'),
     ] },
     { from: 'What needs June first', checks: [
-      q('A free trial is…', ['June\'s decision', 'Yours'], 0, 'We do not give free trials: the AI costs us from day one.'),
+      q('Someone asks for a free trial. You…', ['Point them to the free plan', 'Give them a free month'], 0, 'No free trials: the free plan (Facebook, Instagram and Threads) is the way to try it.'),
       q('While June decides you tell the prospect…', ['"I\'ll check with June and come back today"', 'Nothing'], 0, 'Honest and quick.'),
     ] },
     { from: 'Saying no to a discount', checks: [

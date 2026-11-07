@@ -248,13 +248,13 @@ You start at **Training**. At this level June sees your quotes and customer mess
 
 While you are in training, each screen shows a short tip at the top: what the page is for and the one mistake to avoid. Read each one, then hide it.
 
-**Your password manager**
+**Shared logins**
 
-Some shop tools (social accounts, Canva, supplier sites) have shared logins. They are never sent in chat or email. June invites you to the team password manager, and the Resources page lists each tool and where its login is. [owner to fill in: which password manager, and which tools sales uses]`,
+Some shop tools (social accounts, Canva, supplier sites) have shared logins. They are never sent in chat, email or texts. June shares each one you need on the **Resources** page, under **Logins June shared with you**: press **Show once**, save it, and check it works. It is erased the moment it shows, so if you lose it, ask June to share it again. The Playbook's "Logins June shares with you" has the steps. The Resources page also lists the tools we use.`,
     }],
     practice: [
       { key: 'signoff:vault', type: 'signoff', minutes: 0, needs: 'resources',
-        title: 'Set up your password manager', hint: 'Accept June\'s invite, then open one shared login from the Resources page. June signs this off.' },
+        title: 'Opens a shared login the right way', hint: 'June shares one harmless login on Resources; you press Show once, save it, and sign in once to check it. June signs this off.' },
     ],
     quiz: {
       key: 'sales-s2', title: 'Module 2 quiz: where do you find it?', minutes: 10,
@@ -287,8 +287,8 @@ Some shop tools (social accounts, Canva, supplier sites) have shared logins. The
           choices: ['Quotes', 'Leads', 'Production', 'My Day'],
           answer: 2, article: A.tour, why: 'Production is the work board.' },
         { id: 'logins', q: 'You need the login for the shop\'s Instagram. Where do you get it?',
-          choices: ['Ask June to text it to you', 'The team password manager (the Resources page says where)', 'A teammate\'s notes', 'Reset the password yourself'],
-          answer: 1, article: A.tour, why: 'Shared logins live only in the password manager, never in chat, email or texts.' },
+          choices: ['Ask June to text it to you', 'June shares it on Resources, and you press Show once', 'A teammate\'s notes', 'Reset the password yourself'],
+          answer: 1, article: A.tour, why: 'Shared logins come only through Resources, shown once, never in chat, email or texts.' },
       ],
     },
     buffer: 5,
@@ -1160,7 +1160,7 @@ const FINAL = {
       { id: 'f33', q: 'A customer wants a Disney character on 50 shirts. You…',
         choices: ['Quote it', 'Bring it to June and suggest an original design on the theme', 'Use DTF so it is allowed', 'Change the colours'], answer: 1, article: A.never, why: 'Characters the customer does not own go to June.' },
       { id: 'f34', q: 'A teammate asks for the Canva login by text. You…',
-        choices: ['Text it', 'Point them to the password manager (Resources says where)', 'Email it', 'Post it in Team chat'], answer: 1, article: A.tour, why: 'Shared logins live only in the password manager.' },
+        choices: ['Text it', 'Tell them to ask June to share it on Resources', 'Email it', 'Post it in Team chat'], answer: 1, article: A.tour, why: 'June shares each login on Resources, once per person.' },
       { id: 'f35', q: 'You record $200 cash from a customer. On the quote it shows…',
         choices: ['Paid', 'Not confirmed until June confirms it arrived', 'Refunded', 'Nothing'], answer: 1, article: A.money, why: 'Recorded cash or Zelle waits for June\'s confirmation.' },
       { id: 'f36', q: 'Which goes in your end-of-day note?',

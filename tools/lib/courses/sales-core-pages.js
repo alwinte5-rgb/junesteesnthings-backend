@@ -46,7 +46,7 @@ module.exports = {
     ] },
     { from: 'Your level, and why some things wait', checks: [
       q('Your quote says "waiting for approval". What does it mean?', ['Something broke', 'June checks it before the customer sees it', 'The customer declined'], 1, 'While you are in training, June checks quotes and messages first.'),
-      q('Where do shared logins live?', ['In Team chat', 'In the team password manager', 'In a text from June'], 1, 'Never in chat, email or texts.'),
+      q('How does June give you a shared login?', ['In Team chat', 'On Resources, shown once', 'In a text'], 1, 'Never in chat, email or texts.'),
     ] },
   ],
   's3-methods': [

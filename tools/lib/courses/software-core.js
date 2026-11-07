@@ -539,11 +539,11 @@ Argue, put down a competitor, invent a feature, or offer a discount that is not 
 
 **What you may offer**
 
-- **The free plan:** for anyone, no card needed. Good for small businesses you send to the website
+- **The free plan:** for anyone, no card needed. Good for small businesses you send to the website, and for anyone who asks for a free trial
 - **Half price for the first month of a paid plan:** 50% off month one ($64.50 instead of $129 on Agency), then the full price from month two unless they cancel. They pay with their own card from day one. Tell June in your channel the same day they sign up, so she adds the discount to their account (your agent link will add it for you once it is built)
 - **The yearly plan:** two months free, already in the price ($1,290 a year for Agency)
 
-There is no free trial of a paid plan. The AI costs us money from day one, so a new customer pays something from their first month.
+There is no free trial of a paid plan. The AI costs us money from day one, so a new customer pays something from their first month. Someone who wants to try COS first uses the free plan: Facebook, Instagram and Threads only, up to 10 posts a month, captions written for them, no AI graphics or video. It costs us almost nothing to run, and they can move up to a paid plan at half price for the first month.
 
 **What needs June first**
 
