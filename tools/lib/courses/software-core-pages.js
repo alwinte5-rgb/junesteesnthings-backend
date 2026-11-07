@@ -56,7 +56,7 @@ module.exports = {
       q('Every open lead has…', ['A next step and a date', 'A discount'], 0, 'No lead without a next step.'),
     ] },
     { from: 'Statuses, in order', checks: [
-      q('They paid. The status is…', ['Won', 'Trial'], 0, 'Note the plan and monthly or yearly.'),
+      q('Month two is paid. The status is…', ['Won', 'First month'], 0, 'Note the plan and monthly or yearly.'),
       q('A lead goes quiet after your last follow-up. Status?', ['Lost, with why', 'Won'], 0, 'Write the reason.'),
     ] },
     { from: 'Your daily routine', checks: [
@@ -67,7 +67,7 @@ module.exports = {
   'w4-first': [
     { from: null, checks: [
       q('A first message should include prices?', ['No', 'Yes'], 0, 'No feature list, no prices, no attachments.'),
-      q('It ends with…', ['One easy question', 'Three questions'], 0, 'A 15-minute look, or the free trial.'),
+      q('It ends with…', ['One easy question', 'Three questions'], 0, 'A 15-minute look, or starting at half price.'),
     ] },
     { from: 'An example', checks: [
       q('The example opens with…', ['Her post about Mondays', 'Our company history'], 0, 'Their detail first.'),
@@ -113,7 +113,7 @@ module.exports = {
     ] },
     { from: 'The order', checks: [
       q('How long is the showing part?', ['About 8 minutes', 'An hour'], 0, '5, 8, 2.'),
-      q('You end with…', ['"Would you like to try it with two clients for 14 days?"', '"Let me know"'], 0, 'Ask directly.'),
+      q('You end with…', ['"Would you like to start with two clients? Your first month is half price."', '"Let me know"'], 0, 'Ask directly.'),
     ] },
     { from: 'What not to do', checks: [
       q('The price is said…', ['Plainly when it matters', 'Never'], 0, '$129 a month, or $1,290 a year.'),
@@ -127,7 +127,7 @@ module.exports = {
     ] },
     { from: '"We already use Later / Hootsuite / Buffer"', checks: [
       q('You talk about their current tool…', ['Without knocking it', 'By calling it bad'], 0, 'Ask what they like and don\'t.'),
-      q('A good next step here is…', ['A side-by-side trial with two clients', 'Cancelling their tool today'], 0, 'Low risk.'),
+      q('A good next step here is…', ['Starting two clients side by side', 'Cancelling their tool today'], 0, 'Low risk.'),
     ] },
     { from: '"Let me think about it"', checks: [
       q('You reply…', ['"What would you want to be sure of?"', '"Fine, bye"'], 0, 'Then answer it or agree a date.'),
@@ -136,15 +136,15 @@ module.exports = {
   ],
   'w6-offers': [
     { from: null, checks: [
-      q('How many offers may you make without asking?', ['Three', 'Any'], 0, 'Free plan, 14-day trial, yearly.'),
+      q('How many offers may you make without asking?', ['Three', 'Any'], 0, 'Free plan, half-price first month, yearly.'),
       q('The free plan needs…', ['No card', 'A card'], 0, 'Good for small businesses.'),
     ] },
     { from: 'What needs June first', checks: [
-      q('A 30-day trial is…', ['June\'s decision', 'Yours'], 0, 'Longer than 14 days needs June.'),
+      q('A free trial is…', ['June\'s decision', 'Yours'], 0, 'We do not give free trials: the AI costs us from day one.'),
       q('While June decides you tell the prospect…', ['"I\'ll check with June and come back today"', 'Nothing'], 0, 'Honest and quick.'),
     ] },
     { from: 'Saying no to a discount', checks: [
-      q('Instead of a discount you offer…', ['The 14-day trial and the yearly saving', 'A bigger discount'], 0, 'Keeps the sale moving.'),
+      q('Instead of a discount you offer…', ['The half-price first month and the yearly saving', 'A bigger discount'], 0, 'Keeps the sale moving.'),
       q('A customer won by discount is…', ['More likely to cancel', 'More loyal'], 0, 'Value at full price keeps them.'),
     ] },
   ],
@@ -154,12 +154,12 @@ module.exports = {
       q('Their passwords are…', ['Never yours to take', 'Fine to write down'], 0, 'They connect accounts themselves.'),
     ] },
     { from: 'Check-ins', checks: [
-      q('Day 12 is for…', ['Asking for the decision', 'Saying goodbye'], 0, 'Monthly or yearly.'),
+      q('Day 21 is for…', ['Asking for the decision', 'Saying goodbye'], 0, 'Monthly or yearly, before month two.'),
       q('Check-ins are logged…', ['On the board', 'Nowhere'], 0, 'Every contact.'),
     ] },
     { from: 'If they are not using it', checks: [
-      q('A quiet trial gets…', ['An honest question and a setup call offer', 'Pressure'], 0, 'Find what got in the way.'),
-      q('Extending a trial is…', ['June\'s decision', 'Yours'], 0, 'Never promise it.'),
+      q('A quiet first month gets…', ['An honest question and a setup call offer', 'Pressure'], 0, 'Find what got in the way.'),
+      q('A second half-price month is…', ['June\'s decision', 'Yours'], 0, 'Never promise it.'),
     ] },
   ],
   'w7-handoff': [
@@ -201,7 +201,7 @@ module.exports = {
     ] },
     { from: 'Reading your numbers', checks: [
       q('Few replies means…', ['Change the first message or the prospects', 'Give discounts'], 0, 'The start of the funnel.'),
-      q('Demos but no trials means…', ['Discovery missed their real problem', 'They loved it'], 0, 'Ask better questions.'),
+      q('Demos but no sign-ups means…', ['Discovery missed their real problem', 'They loved it'], 0, 'Ask better questions.'),
     ] },
   ],
 };

@@ -3,7 +3,7 @@
 /* The Software sales course: the eight hours the software sales agent walks
    before selling on their own (owner, 2026-10-16). They sell the TOP plans of
    the owner's own apps (COS Creator Studio Agency first) to agencies and teams,
-   through personal outreach, short demos, free trials and follow-up. The low
+   through personal outreach, short demos, a half-price first month and follow-up. The low
    end of the market is won with ads, not agents.
 
    What the course teaches comes from what is already decided or built: the
@@ -12,8 +12,8 @@
    them (cos-plus-saas app/tier_limits.py: Agency $129 a month or $1,290 a
    year, 5 seats with client roles, white label, 12 non-Meta connections, AI
    visuals and video); the agent's pay (10% of a new customer's payments for
-   their first 6 months); and the approved offers (free plan, 14-day free
-   trial, yearly plan). Anything only the owner knows is written
+   their first 6 months); and the approved offers (free plan, half-price
+   first month, yearly plan; no free trials: owner, 2026-11-06). Anything only the owner knows is written
    "[owner to fill in: ...]", which the Training page's "Playbook gaps" card
    asks her for. */
 
@@ -42,7 +42,7 @@ const GLOSSARY = {
   'white label': 'The agency\'s own name and logo shown inside COS to their team and clients, instead of ours.',
   'non-meta': 'Platforms other than Facebook, Instagram and Threads: TikTok, YouTube, LinkedIn, Pinterest, X and Google Business Profile.',
   'discovery': 'The questions you ask before showing anything, to learn what the prospect actually needs.',
-  'trial': 'A free 14-day period on a paid plan. The customer starts paying after it unless they cancel.',
+  'first month': 'A new customer\'s first month on a paid plan, at half price. From month two they pay the full price unless they cancel. There is no free trial.',
   'churn': 'Customers cancelling. A customer who cancels in month two earns little; one who stays earns every month.',
   'prospect': 'A person or business you think could buy, who has not bought yet.',
 };
@@ -195,7 +195,7 @@ That detail is what makes your first message personal. Without it, do not send o
 
 **How many**
 
-Quality first. A good day is 15 to 25 researched prospects contacted, not 200 copied messages. The numbers that matter are replies, demos and trials.`,
+Quality first. A good day is 15 to 25 researched prospects contacted, not 200 copied messages. The numbers that matter are replies, demos and first months started.`,
     }, {
       id: 'w3-tracker', article: A.tracker, minutes: 20, tags: 'software sales, leads board, tracker, status, next step, follow-up date',
       goals: ['Log every prospect and every contact', 'Keep a next step and date on every open lead', 'Read your own numbers from the board'],
@@ -206,7 +206,7 @@ Quality first. A good day is 15 to 25 researched prospects contacted, not 200 co
 
 - Company, contact name, where you found them and your one detail
 - Product and plan you are aiming for (usually COS Agency)
-- Status: new, contacted, replied, demo booked, trial, won or lost
+- Status: new, contacted, replied, demo booked, first month, won or lost
 - Next step and its date. Every open lead has one
 - Notes from every message and call, with the date
 
@@ -218,7 +218,7 @@ All of this lives on **Software leads** in the back office (in the menu under Sa
 - **Contacted:** first message sent
 - **Replied:** they answered, yes or no
 - **Demo booked:** a time is agreed and on your calendar
-- **Trial:** they started the 14-day free trial
+- **First month:** they signed up and are on their half-price first month
 - **Won:** they paid. Note the plan and monthly or yearly
 - **Lost:** they said no, or went quiet after your last follow-up. Write why
 
@@ -231,7 +231,7 @@ All of this lives on **Software leads** in the back office (in the menu under Sa
 
 **Your numbers**
 
-Each Friday, count from the board: messages sent, replies, demos, trials started, customers won. Those numbers go in your weekly report (module 8) and show what to change.`,
+Each Friday, count from the board: messages sent, replies, demos, first months started, customers won. Those numbers go in your weekly report (module 8) and show what to change.`,
     }],
     practice: [
       { key: 'signoff:software-list', type: 'signoff', minutes: 5,
@@ -261,9 +261,9 @@ Each Friday, count from the board: messages sent, replies, demos, trials started
         { id: 'next', q: 'Every open lead must have…',
           choices: ['A discount', 'A next step and a date', 'A phone call every day', 'Nothing'],
           answer: 1, article: A.tracker, why: 'Next step and date on every open lead.' },
-        { id: 'trial', q: 'A prospect starts the free trial. Their status becomes…',
-          choices: ['Won', 'Trial', 'Lost', 'New'],
-          answer: 1, article: A.tracker, why: 'Won only once they pay.' },
+        { id: 'trial', q: 'A prospect signs up for their half-price first month. Their status becomes…',
+          choices: ['Won', 'First month', 'Lost', 'New'],
+          answer: 1, article: A.tracker, why: 'Won once month two is paid.' },
         { id: 'start', q: 'Your day starts with…',
           choices: ['New research', 'Leads whose next-step date is today or earlier', 'Social media', 'The report'],
           answer: 1, article: A.tracker, why: 'Follow-ups first, then new outreach.' },
@@ -290,7 +290,7 @@ Each Friday, count from the board: messages sent, replies, demos, trials started
 1. Their detail: one real thing about them, so they know it is not a copy
 2. Their problem, in their words: time, workload, too many logins
 3. One line on what COS does about it
-4. One easy question: a 15-minute look, or the free trial
+4. One easy question: a 15-minute look, or starting with two clients at half price for the first month
 
 Under 80 words. No feature list, no prices, no attachments.
 
@@ -322,7 +322,7 @@ Where they are most active: LinkedIn message if they post there, email from thei
 **The schedule**
 
 - **Day 3:** a short nudge with something new: a one-line idea for their kind of client, or a short video of COS doing that
-- **Day 7:** a different angle: the trial, or what another agency type does with it
+- **Day 7:** a different angle: the half-price first month, or what another agency type does with it
 - **Day 14:** the last one, closing the loop kindly
 - Then mark the lead lost with a note, and a reminder to check back in 3 months if they seemed a good fit
 
@@ -330,7 +330,7 @@ Where they are most active: LinkedIn message if they post there, email from thei
 
 "Just checking in" gives them nothing. Instead:
 
-"Hi Dana, one more thought: for your restaurant clients, COS can turn a menu photo into a week of posts, captions included. Happy to show you in 15 minutes, or you can try it free for 14 days."
+"Hi Dana, one more thought: for your restaurant clients, COS can turn a menu photo into a week of posts, captions included. Happy to show you in 15 minutes, and your first month is half price if you want to start with two clients."
 
 **The last message**
 
@@ -440,7 +440,7 @@ If they post for one brand, need a feature we do not have, or really need an ad 
    - A month of posts planned for one brand in a few clicks, captions written
    - Graphics or a short video made for a post
    - A client invited on a seat to approve, and the agency's own logo (white label)
-3. **Next step (2 min):** ask directly: "Would you like to try it with two of your clients for 14 days?"
+3. **Next step (2 min):** ask directly: "Would you like to start with two of your clients? Your first month is half price."
 
 **What not to do**
 
@@ -486,7 +486,7 @@ Update the board the same day: what they need, what you showed, objections, next
           answer: 1, article: A.demo, why: 'Focused on their problem.' },
         { id: 'end', q: 'Every demo ends with…',
           choices: ['A clear next step, asked directly', '"Let me know"', 'Silence', 'A discount'],
-          answer: 0, article: A.demo, why: 'For example the 14-day trial with two clients.' },
+          answer: 0, article: A.demo, why: 'For example starting with two clients at half price for the first month.' },
         { id: 'after', q: 'After a demo you update the board…',
           choices: ['The same day', 'Next month', 'Never', 'Only if they buy'],
           answer: 0, article: A.demo, why: 'Needs, objections, next step and date, the same day.' },
@@ -510,7 +510,7 @@ Update the board the same day: what they need, what you showed, objections, next
 1. **Agree where it's fair:** "That's fair, switching is real work."
 2. **Ask what's behind it:** "Is it the time to move, or the cost?"
 3. **Answer with their own words and a fact:** "You said captions take your Mondays. That's what COS does."
-4. **Lower the risk with a next step:** "Try it with two clients for 14 days."
+4. **Lower the risk with a next step:** "Start with two clients. Your first month is half price."
 
 **"We already use Later / Hootsuite / Buffer"**
 
@@ -532,21 +532,24 @@ Check what it is compared with. For an agency billing clients for social media, 
 
 Argue, put down a competitor, invent a feature, or offer a discount that is not approved (next lesson).`,
     }, {
-      id: 'w6-offers', article: A.offers, minutes: 20, tags: 'software sales, offers, free plan, trial, yearly, discount, approval, june',
+      id: 'w6-offers', article: A.offers, minutes: 20, tags: 'software sales, offers, free plan, first month, half price, yearly, discount, approval, june',
       goals: ['Know the three approved offers', 'Know what needs June first', 'Say no to a discount without losing the sale'],
       body:
-`Our prices leave a thin margin, so offers are tightly controlled. You may use three without asking. Everything else is June's decision, before you mention it.
+`Our prices leave a thin margin, and every customer's AI use costs us money from their first day, so offers are tightly controlled. You may use three without asking. Everything else is June's decision, before you mention it.
 
 **What you may offer**
 
 - **The free plan:** for anyone, no card needed. Good for small businesses you send to the website
-- **A 14-day free trial of a paid plan:** the customer starts paying after 14 days unless they cancel. Check with June that trials are switched on for that app before you offer one
+- **Half price for the first month of a paid plan:** 50% off month one ($64.50 instead of $129 on Agency), then the full price from month two unless they cancel. They pay with their own card from day one. Tell June in your channel the same day they sign up, so she adds the discount to their account (your agent link will add it for you once it is built)
 - **The yearly plan:** two months free, already in the price ($1,290 a year for Agency)
+
+There is no free trial of a paid plan. The AI costs us money from day one, so a new customer pays something from their first month.
 
 **What needs June first**
 
-- Any discount or coupon, of any size
-- A longer trial than 14 days
+- Any other discount or coupon, of any size
+- A second discounted month, or more than 50% off the first
+- A free trial of any length
 - Custom plans, extra seats or features outside a plan
 - Promises about new features or dates
 - Anything involving refunds, contracts or invoices instead of card payment
@@ -555,7 +558,7 @@ Ask June in your team channel with the company, what they asked for and what you
 
 **Saying no to a discount**
 
-"I can't change the price, but I can make it easy to be sure first: try it free for 14 days with two clients. And yearly saves you two months."
+"I can't change the price, but I can make it easy to start: your first month is half price, so begin with two clients and see the time it saves. And yearly saves you two months."
 
 That keeps the sale moving without giving away margin.
 
@@ -571,7 +574,7 @@ Your commission is 10% of what the customer pays. A discount cuts it, and a cust
           choices: ['Argue', 'Agree where it\'s fair', 'Discount', 'Hang up'],
           answer: 1, article: A.objections, why: 'Agree, ask, answer, lower the risk.' },
         { id: 'rival', q: 'A prospect uses Later. You…',
-          choices: ['Say Later is bad', 'Ask what they like and suggest a side-by-side trial', 'Give up', 'Offer 50% off'],
+          choices: ['Say Later is bad', 'Ask what they like and suggest starting two clients side by side', 'Give up', 'Offer 50% off'],
           answer: 1, article: A.objections, why: 'Never knock a competitor; lower the risk.' },
         { id: 'price', q: '"$129 is too much" from an agency with 10 clients. A good answer is…',
           choices: ['One extra client usually pays for it, and yearly gives two months free', 'Fine, $60 then', 'Goodbye', 'It is actually free'],
@@ -583,10 +586,10 @@ Your commission is 10% of what the customer pays. A discount cuts it, and a cust
           choices: ['Starting with their two busiest clients', 'Moving all 20 clients today', 'Giving up', 'A refund'],
           answer: 0, article: A.objections, why: 'Small first steps beat a big switch.' },
         { id: 'free', q: 'Which offer may you make without asking?',
-          choices: ['20% off', 'A 14-day free trial', 'A free year', 'A custom plan'],
-          answer: 1, article: A.offers, why: 'Free plan, 14-day trial, yearly plan.' },
+          choices: ['20% off', 'Half price for the first month', 'A 14-day free trial', 'A custom plan'],
+          answer: 1, article: A.offers, why: 'Free plan, half-price first month, yearly plan. There are no free trials.' },
         { id: 'discount', q: 'A prospect asks for 10% off. You…',
-          choices: ['Agree', 'Say you will check with June, and offer the trial meanwhile', 'Offer 20%', 'Refuse rudely'],
+          choices: ['Agree', 'Say you will check with June, and mention the half-price first month meanwhile', 'Offer 20%', 'Refuse rudely'],
           answer: 1, article: A.offers, why: 'Every discount is June\'s decision.' },
         { id: 'feature', q: 'They will sign if a feature arrives next month. You…',
           choices: ['Promise it', 'Ask June before promising anything', 'Say it exists', 'Ignore it'],
@@ -604,19 +607,20 @@ Your commission is 10% of what the customer pays. A discount cuts it, and a cust
 
   /* ── 7 ── */
   {
-    key: 'w7', icon: '🚀', title: 'Trials, setup help and handing over',
-    goal: 'Turn a free trial into a paying customer, and hand a new customer over cleanly.',
+    key: 'w7', icon: '🚀', title: 'The first month, setup help and handing over',
+    goal: 'Turn a half-price first month into a paying customer, and hand a new customer over cleanly.',
     lessons: [{
-      id: 'w7-trial', article: A.trial, minutes: 20, tags: 'software sales, trial, onboarding, check-ins, conversion, paying customer',
-      goals: ['Set a trial up to succeed in the first two days', 'Check in on days 2, 7 and 12', 'Ask for the decision before the trial ends'],
+      id: 'w7-trial', article: A.trial, minutes: 20, tags: 'software sales, first month, half price, discount, onboarding, check-ins, conversion, paying customer',
+      goals: ['Set a first month up to succeed in the first two days', 'Check in on days 2, 7 and 21', 'Ask for the decision before month two'],
       body:
-`A trial is won or lost in the first two days. If they connect their clients and see a week of posts planned, they stay. If they sign up and forget, they leave.
+`A new customer's half-price first month is won or lost in the first two days. If they connect their clients and see a week of posts planned, they stay. If they sign up and forget, they cancel before month two.
 
 **Day 0: start it with them**
 
 Book the start as a short call where you can. Together:
 
 - They sign up while they are already on the board as your lead (and from your agent link, once June gives you one), so the customer is credited to you
+- They pick the plan and enter their own card. Tell June in your channel the same day, so she adds the 50% first-month discount to their account
 - They create two client brands and connect those clients' accounts themselves. You never take their passwords
 - They plan one week of posts for one client, and see the captions and graphics
 
@@ -624,22 +628,22 @@ Book the start as a short call where you can. Together:
 
 - **Day 2:** "How did the first week of posts look? Anything confusing?" Fix the blocker or bring it to June
 - **Day 7:** share one idea for their kind of client, and ask how much time it saved
-- **Day 12:** ask for the decision: "Your trial ends on Friday. Do you want to keep going on monthly, or yearly with two months free?"
+- **Day 21:** before month two starts at the full price, ask: "Your first month ends next week. Do you want to keep going monthly, or switch to yearly with two months free?"
 
 Log each check-in on the board.
 
 **If they are not using it**
 
-Ask what got in the way, honestly. Offer a 15-minute setup call. If it is truly not a fit, let the trial end without pressure and mark the lead lost with the reason.
+Ask what got in the way, honestly. Offer a 15-minute setup call. If it is truly not a fit, tell them how to cancel before month two, without pressure, and mark the lead lost with the reason.
 
-**When they pay**
+**When month two is paid**
 
 Mark the lead won, with the plan and monthly or yearly. Thank them, and tell them who to ask for help from now on (next lesson).
 
 **What you never do**
 
 - Sign up on their behalf or enter their card
-- Promise the trial can be extended without June
+- Promise a bigger discount, or a second half-price month, without June
 - Keep messaging after they decide not to continue`,
     }, {
       id: 'w7-handoff', article: A.handoff, minutes: 20, tags: 'software sales, setup, paid setup, support, handoff, customer care',
@@ -649,7 +653,7 @@ Mark the lead won, with the plan and monthly or yearly. Thank them, and tell the
 
 **Free help**
 
-- The trial start call and the check-ins
+- The first-month start call and the check-ins
 - Showing them on a screen share how to connect accounts, add a brand or plan a month
 - Links to the help pages
 
@@ -673,12 +677,12 @@ Send June what customers ask for and what confused them, in your weekly report. 
     }],
     practice: [
       { key: 'signoff:software-trial', type: 'signoff', minutes: 5,
-        title: 'Starts a trial the right way', hint: 'Walk June through a trial start: the lead on the board as yours before signing up, two brands added and connected by the customer, a week planned, check-ins set on days 2, 7 and 12.' },
+        title: 'Starts a first month the right way', hint: 'Walk June through a first-month start: the lead on the board as yours before signing up, June told the same day for the discount, two brands added and connected by the customer, a week planned, check-ins set on days 2, 7 and 21.' },
     ],
     quiz: {
-      key: 'software-7', title: 'Module 7 quiz: trials, setup help and handing over', minutes: 8,
+      key: 'software-7', title: 'Module 7 quiz: the first month, setup help and handing over', minutes: 8,
       questions: [
-        { id: 'won', q: 'A trial is usually won or lost…',
+        { id: 'won', q: 'A first month is usually won or lost…',
           choices: ['In the first two days', 'On the last day', 'After a year', 'Never'],
           answer: 0, article: A.trial, why: 'Connected clients and a planned week make them stay.' },
         { id: 'link', q: 'Why must they be on the board as your lead before they sign up?',
@@ -687,12 +691,12 @@ Send June what customers ask for and what confused them, in your weekly report. 
         { id: 'passwords', q: 'Who connects the client accounts?',
           choices: ['You, with their passwords', 'The customer, themselves', 'June', 'Nobody'],
           answer: 1, article: A.trial, why: 'You never take a customer\'s passwords.' },
-        { id: 'days', q: 'When do you check in during a trial?',
-          choices: ['Days 2, 7 and 12', 'Every hour', 'Only on day 14', 'Never'],
+        { id: 'days', q: 'When do you check in during the first month?',
+          choices: ['Days 2, 7 and 21', 'Every hour', 'Only on day 30', 'Never'],
           answer: 0, article: A.trial, why: 'Early help, a mid-point idea, then the decision.' },
-        { id: 'ask', q: 'On day 12 you…',
-          choices: ['Ask for the decision: monthly or yearly', 'Say nothing', 'Extend the trial', 'Cancel it'],
-          answer: 0, article: A.trial, why: 'Ask before the trial ends.' },
+        { id: 'ask', q: 'On day 21 you…',
+          choices: ['Ask for the decision: monthly or yearly', 'Say nothing', 'Offer another half-price month', 'Cancel it'],
+          answer: 0, article: A.trial, why: 'Ask before month two starts at the full price.' },
         { id: 'card', q: 'A customer asks you to enter their card for them. You…',
           choices: ['Do it', 'Decline: they enter it themselves', 'Write it down', 'Ask June for it'],
           answer: 1, article: A.trial, why: 'Never handle a customer\'s card.' },
@@ -767,7 +771,7 @@ My earnings shows your hours and your wage. Your software commission is not on i
 
 Every Friday, in your channel, five lines June can read in a minute:
 
-1. Messages sent, replies, demos, trials started, customers won (plan, monthly or yearly)
+1. Messages sent, replies, demos, first months started, customers won (plan, monthly or yearly)
 2. What worked: the message or kind of agency that replied most
 3. What didn't, and what you will change next week
 4. What customers asked for or found confusing
@@ -775,14 +779,14 @@ Every Friday, in your channel, five lines June can read in a minute:
 
 **An example**
 
-"Week 3: 85 messages, 11 replies, 4 demos, 2 trials, 1 won (Agency, yearly). Freelancers on LinkedIn replied twice as often as agencies by email. Next week: more freelancers, shorter first line. Two agencies asked for Canva import. Need: a yes or no on a 30-day trial for a 20-client agency."
+"Week 3: 85 messages, 11 replies, 4 demos, 2 first months, 1 won (Agency, yearly). Freelancers on LinkedIn replied twice as often as agencies by email. Next week: more freelancers, shorter first line. Two agencies asked for Canva import. Need: a yes or no on a second half-price month for a 20-client agency."
 
 **Reading your numbers**
 
 - Few replies: the first message or the prospects need changing
-- Replies but few demos: the ask is too big. Offer the trial instead
-- Demos but no trials: discovery missed their real problem
-- Trials but no sales: the first two days need more help`,
+- Replies but few demos: the ask is too big. Offer a short video of COS doing their kind of work instead
+- Demos but no sign-ups: discovery missed their real problem
+- First months but no sales: the first two days need more help`,
     }],
     practice: [
       { key: 'signoff:software-report', type: 'signoff', minutes: 5,
@@ -816,11 +820,11 @@ Every Friday, in your channel, five lines June can read in a minute:
           choices: ['Every Friday, in your channel', 'Once a month', 'When asked', 'Never'],
           answer: 0, article: A.report, why: 'Five lines every Friday.' },
         { id: 'replies', q: 'You get replies but few demos. The likely fix is…',
-          choices: ['Offer the trial instead of a call', 'Send more messages', 'Give discounts', 'Stop working'],
+          choices: ['Offer a short video instead of a call', 'Send more messages', 'Give discounts', 'Stop working'],
           answer: 0, article: A.report, why: 'The ask is too big.' },
-        { id: 'trials', q: 'You get trials but few sales. Look at…',
-          choices: ['The first two days of the trial', 'Your first message', 'Your hours', 'The weather'],
-          answer: 0, article: A.report, why: 'Trials are won in the first two days.' },
+        { id: 'trials', q: 'Customers start their first month but few stay. Look at…',
+          choices: ['Their first two days', 'Your first message', 'Your hours', 'The weather'],
+          answer: 0, article: A.report, why: 'A first month is won in the first two days.' },
       ],
     },
     buffer: 5,
@@ -836,7 +840,7 @@ const FINAL = {
   },
   signoffs: [
     { key: 'signoff:handoff', type: 'signoff', minutes: 0,
-      title: 'Knows what is June\'s to decide', hint: 'Discounts, longer trials, custom plans, feature promises, setup prices and refunds. June signs this off after seeing you do it.' },
+      title: 'Knows what is June\'s to decide', hint: 'Discounts beyond the half-price first month, free trials, custom plans, feature promises, setup prices and refunds. June signs this off after seeing you do it.' },
     { key: 'signoff:ready', type: 'signoff', minutes: 0,
       title: 'Ready to sell on your own', hint: 'The last step. June decides when you contact prospects and run demos without her checking first, and your commission starts.' },
   ],

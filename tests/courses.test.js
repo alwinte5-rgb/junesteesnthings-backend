@@ -446,7 +446,9 @@ test('the Software sales course is the software track\'s path, and a hired softw
   const all = arts.map((a) => a.body).join('\n');
   assert.match(all, /\$129 a month, or \$1,290 a year/);
   assert.match(all, /10% of every payment a customer you signed up makes in their first 6 months/);
-  assert.match(all, /\*\*The free plan:\*\*[\s\S]*14-day free trial[\s\S]*\*\*The yearly plan:\*\*/);
+  /* Owner, 2026-11-06: no free trials (the AI costs from day one); half price for the first month instead. */
+  assert.match(all, /\*\*The free plan:\*\*[\s\S]*\*\*Half price for the first month of a paid plan:\*\*[\s\S]*\*\*The yearly plan:\*\*/);
+  assert.match(all, /There is no free trial of a paid plan/);
   assert.strictEqual(TRAINING.visibleSteps(undefined, 'software').find((s) => s.key === 'lesson:w5-demo').title, 'The 15-minute demo');
   const list = src.slice(src.indexOf('const TRAINING_PATHS = ['), src.indexOf('];', src.indexOf('const TRAINING_PATHS = [')));
   assert.ok(trainingPaths().some((x) => x.key === 'software' && x.track === 'software' && x.role === null), 'the software path is listed');

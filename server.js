@@ -36333,7 +36333,7 @@ app.get('/admin/software-leads', requireAdmin, async (req, res) => {
         <button type="submit" class="btn">Add to the board</button></form></details>`;
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Software leads', `
-      ${pageHeader('Software leads', `Found ${t.found} &middot; contacted ${t.counted} &middot; replied ${t.replied} &middot; demos ${t.demo} &middot; trials ${t.trial} &middot; won ${t.won}. A lead counts once a contact is logged on it.`,
+      ${pageHeader('Software leads', `Found ${t.found} &middot; contacted ${t.counted} &middot; replied ${t.replied} &middot; demos ${t.demo} &middot; first months ${t.trial} &middot; won ${t.won}. A lead counts once a contact is logged on it.`,
         `<a class="btn" href="${SOFT_PATH}/find">Find leads with AI</a>`)}
       ${flash(req.query)}${reps}${chips}${add}
       ${view === 'open' && due.length ? `<h3 style="margin:16px 0 6px">Next step due (${due.length})</h3>${due.map(card).join('')}` : ''}
