@@ -7778,10 +7778,13 @@ async function businessCertificate(emails) {
   const list = partnerEmails(emails);
   if (!list.length) return null;
   const { rows } = await pool.query(
-    `SELECT id, kind, number, holder, expires_on FROM tax_certificates
-      WHERE lower(email) = ANY($1::text[]) AND status = 'approved'
-        AND (expires_on IS NULL OR expires_on >= CURRENT_DATE)
-      ORDER BY reviewed_at DESC NULLS LAST, id DESC LIMIT 1`, [list]);
+    `SELECT c.id, c.kind, c.number, c.holder, c.expires_on FROM tax_certificates c
+      WHERE lower(c.email) = ANY($1::text[]) AND c.status = 'approved'
+        AND (c.expires_on IS NULL OR c.expires_on >= CURRENT_DATE)
+        /* one accepted as it landed counts only once it was used on a sale,
+           so an abandoned studio checkout's upload never carries over */
+        AND (c.reviewed_at IS NOT NULL OR ${CERT_IN_USE_SQL})
+      ORDER BY COALESCE(c.reviewed_at, c.created_at) DESC, c.id DESC LIMIT 1`, [list]);
   return rows[0] || null;
 }
 
@@ -31608,21 +31611,33 @@ async function certificateFor(q) {
  *  often it is sent — as one that was approved stays approved, which is how a
  *  returning buyer's certificate carries over. One the SHOP attaches is
  *  approved as it lands, since the person who decides has already looked at
- *  it. */
-async function keepCertificate(cert, { source, email = null, approve = source === 'shop' }) {
+ *  it.
+ *
+ *  One a CUSTOMER uploads (quote page or studio checkout) is accepted as it
+ *  lands, with no one's approval (owner, 2026-11-06): `accept` makes a new or
+ *  still-waiting one approved, but never overturns a refusal and never a
+ *  helper's, which waits for the owner. reviewed_at stays empty until the
+ *  owner marks it checked or refuses it on Certificates. `inserted` says the
+ *  row is new. */
+const CUSTOMER_CERT_SOURCES = ['quote_page', 'studio'];
+async function keepCertificate(cert, { source, email = null, approve = source === 'shop',
+                                       accept = CUSTOMER_CERT_SOURCES.includes(source) }) {
   const { rows: [row] } = await pool.query(
     `INSERT INTO tax_certificates (kind, number, holder, email, expires_on, file, file_type, file_name,
                                    file_sha256, source, status, reviewed_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-             CASE WHEN $11::boolean THEN 'approved' ELSE 'pending' END,
+             CASE WHEN $11::boolean OR $12::boolean THEN 'approved' ELSE 'pending' END,
              CASE WHEN $11::boolean THEN NOW() END)
      ON CONFLICT (file_sha256, number) DO UPDATE
-        SET status      = CASE WHEN $11::boolean THEN 'approved' ELSE tax_certificates.status END,
+        SET status      = CASE WHEN $11::boolean THEN 'approved'
+                               WHEN $12::boolean AND tax_certificates.status = 'pending'
+                                    AND tax_certificates.source <> 'shop' THEN 'approved'
+                               ELSE tax_certificates.status END,
             review_note = CASE WHEN $11::boolean THEN NULL ELSE tax_certificates.review_note END,
             reviewed_at = CASE WHEN $11::boolean THEN NOW() ELSE tax_certificates.reviewed_at END
-     RETURNING ${CERT_COLUMNS}`,
+     RETURNING ${CERT_COLUMNS}, (xmax = 0) AS inserted`,
     [cert.kind, cert.number, cert.holder, email, cert.expires_on, cert.file, cert.file_type,
-     cert.file_name, cert.file_sha256, source, !!approve]);
+     cert.file_name, cert.file_sha256, source, !!approve, !!accept && !approve]);
   return row;
 }
 
@@ -31639,21 +31654,38 @@ async function attachCertificate(q, cert, opts) {
   return row;
 }
 
-/** Tell the shop a certificate is waiting to be checked. */
-function notifyCertificate(q, cert) {
+/** One certificate email to the shop: a heading, what came in, and `close`
+ *  (HTML, already escaped) saying what to do. */
+function certificateEmail({ subject, heading, lead, cert, close, replyTo }) {
   sendEmail({
     to: NOTIFY_EMAIL,
-    replyTo: q.email || undefined,
-    subject: `Tax certificate for quote ${q.code} — please check it`,
+    replyTo: replyTo || undefined,
+    subject,
     html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
-      <h2 style="color:#1848B8;margin:0 0 10px">A tax-exemption certificate came in</h2>
-      <p><b>${escEmail(q.name || q.code)}</b> uploaded one for quote ${escEmail(q.code)}:
-        ${escEmail(TAXCERT.certificateLabel(cert))}${cert.expires_on
+      <h2 style="color:#1848B8;margin:0 0 10px">${escEmail(heading)}</h2>
+      <p>${lead} ${escEmail(TAXCERT.certificateLabel(cert))}${cert.expires_on
           ? `, expires ${escEmail(TAXCERT.isoDay(cert.expires_on))}` : ''}.</p>
-      <p>They can pay now. Check it matches the name on the quote and has not expired:
-        <a href="${PUBLIC_BASE_URL}/admin/certificates">open Certificates</a>. Refusing it locks payment again
-        and shows them your reason.</p></div>`,
+      <p>${close}</p></div>`,
   }).catch((e) => console.error('certificate alert failed:', e.message));
+}
+
+/** Tell the shop a certificate came in: one a helper attached waits to be
+ *  checked; one the customer uploaded was accepted as it landed, and this is
+ *  only so the owner knows. */
+function notifyCertificate(q, cert) {
+  const lead = `<b>${escEmail(q.name || q.code)}</b> uploaded one for quote ${escEmail(q.code)}:`;
+  const link = `<a href="${PUBLIC_BASE_URL}/admin/certificates">Certificates</a>`;
+  if (cert.status === 'approved') {
+    return certificateEmail({ subject: `Tax certificate accepted for quote ${q.code}`, replyTo: q.email,
+      heading: 'A tax-exemption certificate came in', lead, cert,
+      close: `It was accepted automatically, so they can pay without tax. Nothing to do. If it is wrong,
+        refuse it on ${link}: before they pay, that locks payment and shows them your reason; once they
+        have paid, the tax was not charged and you would need to ask them for it.` });
+  }
+  certificateEmail({ subject: `Tax certificate for quote ${q.code} — please check it`, replyTo: q.email,
+    heading: 'A tax-exemption certificate came in', lead, cert,
+    close: `They can pay now. Check it matches the name on the quote and has not expired:
+      open ${link}. Refusing it locks payment again and shows them your reason.` });
 }
 
 /* The upload form, the same on the customer's page and the job page. The file
@@ -31736,7 +31768,11 @@ app.post('/q/:code/certificate', orderRateLimit, async (req, res) => {
         cert.review_note ? ': ' + cert.review_note : ''}. Please upload a different one.` });
     }
     // Once per certificate on this quote: sending the same file again is not news.
-    if (cert.status === 'pending' && String(q.tax_certificate_id) !== String(cert.id)) notifyCertificate(q, cert);
+    // Once per certificate on this quote, and only when it is news: waiting
+    // (as before), or accepted just now. A returning buyer's certificate the
+    // owner already approved is not.
+    if (String(q.tax_certificate_id) !== String(cert.id)
+        && (cert.status === 'pending' || (cert.inserted && !cert.reviewed_at))) notifyCertificate(q, cert);
     console.log(`quote ${code}: tax certificate #${cert.id} on file (${cert.status})`);
     res.json({ ok: true, status: cert.status });
   } catch (err) {
@@ -31875,8 +31911,10 @@ app.post('/admin/quote/:code/certificate', requireAdmin, async (req, res) => {
 
 /* ── The design studio's exempt orders ───────────────────────────────────────
    design.jtees.net takes the tax off an order as soon as an exempt buyer's
-   certificate is on file, and holds the order until the shop approves it here
-   (owner, 2026-09-28: "Remove tax, you approve"). The file and the decision
+   certificate is on file. It used to hold the order until the shop approved
+   it (owner, 2026-09-28); since 2026-11-06 a customer's certificate is
+   accepted as it lands, so the order is free at once, and a refusal later
+   only stops the certificate being used again. The file and the decision
    live in this database, beside the quotes' certificates, on one review page.
 
      1. The studio's checkout sends the certificate (POST /api/tax-certificates)
@@ -31978,7 +32016,7 @@ app.post('/api/tax-certificates/:id/orders', requireInternalKey, async (req, res
       [orderRef, id, Number.isFinite(waived) && waived >= 0 ? round2(waived) : null, name, email]);
     if (made.length) {
       console.log(`studio order #${orderRef}: tax certificate #${id} (${cert.status})`);
-      if (cert.status === 'pending') {
+      if (cert.status === 'pending' || (cert.status === 'approved' && !cert.reviewed_at)) {
         notifyStudioCertificate(cert, { orderRef, name, email, waived: Number.isFinite(waived) ? waived : null });
       }
     }
@@ -31992,21 +32030,22 @@ app.post('/api/tax-certificates/:id/orders', requireInternalKey, async (req, res
 
 /** Tell the shop a paid studio order is waiting on its certificate. */
 function notifyStudioCertificate(cert, { orderRef, name, email, waived }) {
-  sendEmail({
-    to: NOTIFY_EMAIL,
-    replyTo: email || undefined,
-    subject: `Tax certificate for studio order #${orderRef} — please check it`,
-    html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
-      <h2 style="color:#1848B8;margin:0 0 10px">A tax-exempt studio order is waiting on you</h2>
-      <p><b>${escEmail(name || email || 'A customer')}</b> paid for design studio order
-        <b>#${escEmail(orderRef)}</b> without sales tax${waived > 0 ? ` (${money(waived)} taken off)` : ''},
-        on this certificate: ${escEmail(TAXCERT.certificateLabel(cert))}${cert.expires_on
-          ? `, expires ${escEmail(TAXCERT.isoDay(cert.expires_on))}` : ''}.</p>
-      <p><b>Don't print it yet.</b> Check the certificate matches the customer and has not expired:
-        <a href="${PUBLIC_BASE_URL}/admin/certificates">open Certificates</a>. Approving releases the order.
-        Refusing puts the tax back on it, and you collect that with <b>Collect balance</b> on the order
-        in the studio.</p></div>`,
-  }).catch((e) => console.error('studio certificate alert failed:', e.message));
+  const lead = `<b>${escEmail(name || email || 'A customer')}</b> paid for design studio order
+    <b>#${escEmail(orderRef)}</b> without sales tax${waived > 0 ? ` (${money(waived)} taken off)` : ''},
+    on this certificate:`;
+  const link = `<a href="${PUBLIC_BASE_URL}/admin/certificates">Certificates</a>`;
+  if (cert.status === 'approved') {
+    // Accepted as it landed (a customer's upload): the order is already free to print.
+    return certificateEmail({ subject: `Tax-exempt studio order #${orderRef}`, replyTo: email,
+      heading: 'A tax-exempt studio order came in', lead, cert,
+      close: `The certificate was accepted automatically, so the order can be printed. Nothing to do.
+        It is on ${link} if you want to look.` });
+  }
+  certificateEmail({ subject: `Tax certificate for studio order #${orderRef} — please check it`, replyTo: email,
+    heading: 'A tax-exempt studio order is waiting on you', lead, cert,
+    close: `<b>Don't print it yet.</b> Check the certificate matches the customer and has not expired:
+      open ${link}. Approving releases the order. Refusing puts the tax back on it, and you collect that
+      with <b>Collect balance</b> on the order in the studio.` });
 }
 
 /* Tell the studio a certificate it holds orders on has been decided. Only a
@@ -32086,14 +32125,16 @@ function certificatePill(cert, today = TAXCERT.shopToday()) {
   return cert.status === 'approved' ? pill('Approved', 'green') : pill('Waiting for you', 'amber');
 }
 
-/** Approve and refuse, for a certificate still waiting. */
+/** Approve and refuse, for a certificate still waiting. One already approved
+ *  (a customer's upload is approved as it lands) can still be refused, and
+ *  marked checked while no one has looked at it. */
 function certificateReviewForms(cert, back) {
-  if (!cert || cert.status !== 'pending') return '';
+  if (!cert || !['pending', 'approved'].includes(cert.status)) return '';
   return `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:flex-start">
-      <form method="POST" action="/admin/certificates/${cert.id}/review" style="margin:0">
+      ${cert.status === 'pending' || !cert.reviewed_at ? `<form method="POST" action="/admin/certificates/${cert.id}/review" style="margin:0">
         <input type="hidden" name="decision" value="approve"><input type="hidden" name="back" value="${escEmail(back)}">
-        <button class="btn" style="padding:7px 16px;font-size:13px">Approve</button></form>
+        <button class="btn" style="padding:7px 16px;font-size:13px">${cert.status === 'pending' ? 'Approve' : 'Mark checked'}</button></form>` : ''}
       <form method="POST" action="/admin/certificates/${cert.id}/review" style="margin:0;display:flex;gap:6px;flex:1 1 260px">
         <input type="hidden" name="decision" value="reject"><input type="hidden" name="back" value="${escEmail(back)}">
         <input name="note" required maxlength="300" placeholder="Why — the customer sees this"
@@ -32146,6 +32187,9 @@ app.get('/admin/certificates', requireAdmin, async (req, res) => {
         ${orders.length && c.status === 'pending' ? `<div class="muted" style="margin-top:6px;font-size:12.5px">
           The studio order is paid without tax and held until you decide. Approving releases it; refusing
           puts the tax back on it, and you collect that with Collect balance on the order.</div>` : ''}
+        ${c.status === 'approved' && !c.reviewed_at ? `<div class="muted" style="margin-top:6px;font-size:12.5px">
+          Accepted automatically when the customer uploaded it; no one has checked it yet.${orders.length
+            ? ' The studio order was released at once; refusing now does not put the tax back on it.' : ''}</div>` : ''}
         ${certificateReviewForms(c, '/admin/certificates')}
       </div>`;
     };
@@ -32156,7 +32200,7 @@ app.get('/admin/certificates', requireAdmin, async (req, res) => {
       ${filterChips(SHOW.map((s) => ({ href: `/admin/certificates?status=${s}`, on: s === show, count: count(s),
         label: { pending: 'Waiting', approved: 'Approved', rejected: 'Refused', all: 'All' }[s] })))}
       ${list.length ? list.map(card).join('') : emptyState(show === 'pending'
-        ? 'Nothing waiting. A certificate a customer uploads lands here, and you are emailed.'
+        ? 'Nothing waiting. A customer\'s certificate is accepted as it lands and listed under Approved; one a helper attaches waits here.'
         : rows.length ? 'None in this list.'
         : 'No certificates yet. They arrive from a customer\'s quote page, with a tax-exempt studio order, or you attach one on the job page.')}`,
       'certificates'));

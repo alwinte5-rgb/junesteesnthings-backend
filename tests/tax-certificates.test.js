@@ -192,7 +192,7 @@ test('the shop attaches one only to an untaxed quote, and it counts as approved'
   assert.match(r, /if \(q\.taxable !== false\)/);
   assert.match(r, /source: 'shop'/);
   const keep = route('async function keepCertificate(');
-  assert.match(keep, /CASE WHEN \$11::boolean THEN 'approved' ELSE 'pending' END/);
+  assert.match(keep, /CASE WHEN \$11::boolean OR \$12::boolean THEN 'approved' ELSE 'pending' END/);
   assert.match(keep, /ON CONFLICT \(file_sha256, number\) DO UPDATE/, 'the same certificate twice is one row');
   assert.match(keep, /ELSE tax_certificates\.status END/, 'anyone but the shop leaves a decision as it was');
   const attach = src.slice(src.indexOf('async function attachCertificate('));
@@ -275,11 +275,11 @@ test('only the studio can send, read or claim a certificate, and it never lands 
   assert.match(why, /why === 'expired'/);
 });
 
-test('a paid studio order is recorded once, and the shop told once, only while it waits', () => {
+test('a paid studio order is recorded once, and the shop told once, unless the certificate was refused', () => {
   const r = route("app.post('/api/tax-certificates/:id/orders', requireInternalKey");
   assert.match(r, /\/\^\[0-9\]\{1,12\}\$\/\.test\(orderRef\)/, 'an order number, nothing else');
   assert.match(r, /ON CONFLICT \(order_ref\) DO NOTHING\s*\n\s*RETURNING order_ref/);
-  assert.match(r, /if \(made\.length\) \{[\s\S]*if \(cert\.status === 'pending'\) \{\s*\n\s*notifyStudioCertificate/);
+  assert.match(r, /if \(made\.length\) \{[\s\S]*if \(cert\.status === 'pending' \|\| \(cert\.status === 'approved' && !cert\.reviewed_at\)\) \{\s*\n\s*notifyStudioCertificate/);
   assert.match(r, /res\.json\(\{ ok: true, certificate: TAXCERT\.certificateSummary\(cert\) \}\)/,
     'answers with the decision as it stands, so one already made reaches the order at once');
   assert.match(src, /CREATE TABLE IF NOT EXISTS studio_exemptions \(\s*\n\s*order_ref\s+TEXT PRIMARY KEY/,
@@ -353,4 +353,36 @@ test('the board holds an exempt studio order only once it is a sale', () => {
     'once the tax is paid, nothing is due');
   assert.match(chip({ tax_exempt: 'approved', paid: 120 }), /Tax-exempt/);
   assert.strictEqual(chip({ tax_exempt: '', paid: 120 }), '', 'an ordinary order');
+});
+
+test("a customer's certificate is accepted as it lands, but a refusal stands (owner, 2026-11-06)", () => {
+  const keep = route('async function keepCertificate(');
+  assert.match(keep, /accept = CUSTOMER_CERT_SOURCES\.includes\(source\)/);
+  assert.match(src, /const CUSTOMER_CERT_SOURCES = \['quote_page', 'studio'\];/);
+  assert.match(keep, /WHEN \$12::boolean AND tax_certificates\.status = 'pending'\s+AND tax_certificates\.source <> 'shop' THEN 'approved'/,
+    'only a waiting customer one is accepted; a refused one stays refused, a helper\'s waits for the owner');
+  assert.match(keep, /RETURNING \$\{CERT_COLUMNS\}, \(xmax = 0\) AS inserted/);
+  assert.match(keep, /CASE WHEN \$11::boolean THEN NOW\(\) END/, 'no review time: no one has looked');
+  assert.match(keep, /!!accept && !approve\]/);
+  const up = route("app.post('/q/:code/certificate'");
+  assert.match(up, /source: 'quote_page'/);
+  assert.match(up, /String\(q\.tax_certificate_id\) !== String\(cert\.id\)\s+&& \(cert\.status === 'pending' \|\| \(cert\.inserted && !cert\.reviewed_at\)\)\) notifyCertificate/,
+    'the owner hears about a new one once; never about their own approved one again');
+  const biz = route('async function businessCertificate(');
+  assert.match(biz, /AND \(c\.reviewed_at IS NOT NULL OR \$\{CERT_IN_USE_SQL\}\)/,
+    'an abandoned checkout\'s upload never becomes the business\'s certificate');
+  assert.match(biz, /ORDER BY COALESCE\(c\.reviewed_at, c\.created_at\) DESC/, 'the newest certificate wins');
+  const note = route('function notifyCertificate(');
+  assert.match(note, /cert\.status === 'approved'/);
+  assert.match(note, /accepted automatically/);
+  const studio = route('function notifyStudioCertificate(');
+  assert.match(studio, /accepted automatically, so the order can be printed/);
+});
+
+test('an approved certificate can still be refused, or marked checked while unchecked', () => {
+  const f = route('function certificateReviewForms(');
+  assert.match(f, /\['pending', 'approved'\]\.includes\(cert\.status\)/);
+  assert.match(f, /cert\.status === 'pending' \|\| !cert\.reviewed_at \? `<form[^`]*value="approve"/);
+  assert.match(f, /'Approve' : 'Mark checked'/);
+  assert.match(f, /value="reject"/);
 });
