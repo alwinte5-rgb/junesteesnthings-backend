@@ -54,7 +54,7 @@ const GLOSSARY = {
   'tax-exempt': 'A customer who does not pay Illinois sales tax, because of an exemption letter (E-number) or a resale certificate (CRT-61).',
   'E-number': 'The number on an Illinois tax-exemption letter. Schools, churches and charities usually have one.',
   'CRT-61': 'The Illinois resale certificate, for customers buying to resell.',
-  'rush': 'Faster turnaround for a fee, on DTF only: next day +80%, 2 days +50%, 3 days +30%, 4 days +10%. Only after checking with June.',
+  'rush': 'Faster turnaround for a fee, on DTF only: same day +70%, next day +50%, 2 days +35%, 3 days +20%, 4 days +10%. Never more than 70%. Only after checking with June.',
   'turnaround': 'How many business days an order takes after the proof is approved and the deposit is paid.',
   'proof': 'The picture of the design on the garment that the customer approves in writing before anything is printed.',
   'lead': 'Anyone who has asked about an order, on any channel. Every lead lives on the Leads page.',
@@ -387,9 +387,10 @@ Only **DTF** can be rushed. Screen printing, embroidery and cutouts cannot be ru
 
 On DTF, for a fee, depending on what is already in the queue:
 
-- Next business day: +80%
-- 2 business days: +50%
-- 3 business days: +30%
+- Same day: +70% (the most rush ever costs)
+- Next business day: +50%
+- 2 business days: +35%
+- 3 business days: +20%
 - 4 business days: +10%
 
 The quote form sets the rush from the **Needed by** date you enter, and only when every item is DTF, so get the real date from the customer. Never promise a rush date before June confirms it can be done.
@@ -427,8 +428,8 @@ Customers can also design and pay online at jtees.net. Those show on **Orders**.
           choices: ['"No problem"', 'Embroidered text needs to be at least 0.25 inch tall, so suggest a shorter slogan or a bigger place', 'Switch to DTF without asking', 'Shrink it to fit'],
           answer: 1, article: A.methods, why: 'Small text fills in and cannot be read. Never promise small text on caps.' },
         { id: 'rush', q: 'A DTF order needs a 2-business-day rush. What does it add to the price?',
-          choices: ['+10%', '+30%', '+50%', '+80%'],
-          answer: 2, article: A.products, why: 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%, on DTF only, and only after June confirms.' },
+          choices: ['+10%', '+20%', '+35%', '+70%'],
+          answer: 2, article: A.products, why: 'Same day +70%, next day +50%, 2 days +35%, 3 days +20%, 4 days +10%, on DTF only, and only after June confirms.' },
         { id: 'clock', q: 'When does the turnaround clock start?',
           choices: ['When the customer first writes', 'When you send the quote', 'When they pay the deposit, or approve the proof if we design it', 'When the blanks arrive'],
           answer: 2, article: A.products, why: 'Turnaround counts from the deposit, or the proof approval when we design it, so late artwork moves the date.' },
@@ -1105,7 +1106,7 @@ const FINAL = {
       { id: 'f6', q: 'She asks if the digitizing fee is charged again when she reorders next year. Answer?',
         choices: ['Yes, every time', 'No, it is one-time: reorders reuse the stitch file', 'Only for caps', 'It depends on the season'], answer: 1, article: A.methods, why: 'Digitizing is a one-time fee per design.' },
       { id: 'f7', q: 'A customer needs screen-printed shirts in 3 business days. What do you say?',
-        choices: ['"Let me ask June and confirm today by [time]", with no price or promise', '+30%, guaranteed', '+80%, guaranteed', '+10%, no need to check'], answer: 0, article: A.products, why: 'Screen printing is made by our partner in 7 to 10 business days and cannot be rushed; only June can say yes to a date like that.' },
+        choices: ['"Let me ask June and confirm today by [time]", with no price or promise', '+30%, guaranteed', '+70%, guaranteed', '+10%, no need to check'], answer: 0, article: A.products, why: 'Screen printing is made by our partner in 7 to 10 business days and cannot be rushed; only June can say yes to a date like that.' },
       { id: 'f8', q: 'A message says "price for hoodies?" and nothing else. You…',
         choices: ['Send the cheapest hoodie price', 'Thank them and ask the five details in one message', 'Ignore it until they send more', 'Send a catalogue'], answer: 1, article: A.leads, why: 'Ask for all five in one message (/quote).' },
       { id: 'f9', q: 'You replied to a chat but did not log it. On the board, the lead shows as…',

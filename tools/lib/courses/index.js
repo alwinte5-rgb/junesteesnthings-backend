@@ -50,6 +50,9 @@ for (const c of ALL) {
    2026-10-11: rush is embroidery only (Codex #195); handoffs to sales go to
    # Everyone, the channel content and ads helpers can see (Codex #224). */
 const REWORDED = [
+  /* 2026-11-06: rush capped at 70% for same day: 70 / 50 / 35 / 20 / 10 (owner). */
+  ["- Same day: +70% (the most rush ever costs)\n- Next business day: +50%\n- 2 business days: +35%\n- 3 business days: +20%\n- 4 business days: +10%",
+   "- Next business day: +80%\n- 2 business days: +50%\n- 3 business days: +30%\n- 4 business days: +10%"],
   /* 2026-11-06: every course brought up to date: Team basics and the Sales tour teach the clock, tasks, projects, bell, Mailbox and tour; chat alerts are capped at two a day; turnaround 5–7 / 7–14 from the deposit (or proof when we design); Claude replies on leads; quote shipping, services, Email and text it, reinstating; customer certificates accepted on upload (#519); the finder's running list and 2 searches a day; Meta Conversions API. */
   ["While the back office is open, a new message rings the bell at the top, with a sound and a pop-up if you turn them on from the bar on My Day. If a message has been unread for 10 minutes, the person also gets an email about it, at most two a day. You can switch your own alert emails off on the Team chat page, but then check Team chat at the start of every hour you work.",
    "If a message has been unread for 10 minutes, the person gets one email about it. You can switch your own alert emails off on the Team chat page, but then check Team chat at the start of every hour you work."],
