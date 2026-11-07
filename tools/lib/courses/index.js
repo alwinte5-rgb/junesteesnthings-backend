@@ -50,6 +50,9 @@ for (const c of ALL) {
    2026-10-11: rush is embroidery only (Codex #195); handoffs to sales go to
    # Everyone, the channel content and ads helpers can see (Codex #224). */
 const REWORDED = [
+  /* 2026-11-06: the designer asks the customer on the Messages card, not sales (owner). */
+  ["message the customer on the job's **Messages** card. Their reply comes back to the same job.",
+   "press **Ask sales a question** on the Artwork card. The question shows on the salesperson's My Day, and their answer comes back to the job."],
   /* 2026-10-22 (plan PR 4): the software leads board replaces the Google Sheet. */
   ["All of this lives on **Software leads** in the back office (in the menu under Sales). Add each prospect there with the link where you found them and your one detail, and log every message and call on the lead. Its **Find leads with AI** button searches the web for people who post for several brands; check each result before you add it. A lead counts once a contact is logged.",
    "Until the software leads board is in the staff workspace, June gives you a shared Google Sheet with these same columns. Use only that sheet."],

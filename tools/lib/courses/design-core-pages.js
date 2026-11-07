@@ -14,7 +14,7 @@ module.exports = {
       q('Where do new design jobs also show up?', ['Artwork to do on My Day', 'The Quotes board', 'Your email'], 0, 'Oldest first, on My Day.'),
     ] },
     { from: 'When something is missing', checks: [
-      q('The logo is a blurry screenshot. First step?', ['Guess', 'Ask sales a question on the Artwork card', 'Start the proof'], 1, 'Never guess; a wrong proof costs a day.'),
+      q('The logo is a blurry screenshot. First step?', ['Guess', 'Message the customer on the Messages card', 'Start the proof'], 1, 'Never guess; a wrong proof costs a day.'),
       q('When do you submit final art?', ['Before the proof', 'After the customer approves the proof in writing', 'Whenever'], 1, 'Written approval first, then final art to June.'),
     ] },
     { from: 'Chasing the customer', checks: [

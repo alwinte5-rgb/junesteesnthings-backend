@@ -33,7 +33,7 @@ test('who makes each move: sales, the designer, the owner', () => {
   assert.strictEqual(STAFF.ROUTES['POST /admin/api/art-signature'], 'art.work');
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/art/decide'], 'owner');
   assert.match(src, /'\/admin\/quote\/:code\/art\/request', requireAdmin, artMoveHandler\(\['request', 'answer'\]\)/);
-  assert.match(src, /'\/admin\/quote\/:code\/art\/work', requireAdmin, artMoveHandler\(\['question', 'submit', 'review'\]\)/);
+  assert.match(src, /'\/admin\/quote\/:code\/art\/work', requireAdmin, artMoveHandler\(\['submit'\]\)/, 'the designer finishes a job only by submitting final art');
   assert.match(src, /'\/admin\/quote\/:code\/art\/decide', requireAdmin, artMoveHandler\(\['approve', 'changes'\]\)/);
   assert.strictEqual(STAFF.PRESETS.training.perms['art.request'], 'on');
   assert.strictEqual(STAFF.PRESETS.design.perms['art.work'], 'on');

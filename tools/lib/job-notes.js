@@ -16,7 +16,7 @@ const BODY_MAX = 10000;
 /* Art moves that hand work to the designer: each one needs a fresh "Got it".
    The designer's own moves count as having seen it. */
 const ART_TO_DESIGNER = ['request', 'answer', 'changes'];
-const ART_BY_DESIGNER = ['question', 'submit', 'review'];
+const ART_BY_DESIGNER = ['question', 'submit'];
 const ART_NEWS = {
   request: 'New design job',
   answer: 'Sales answered your question',

@@ -58,8 +58,8 @@ const MODULES = [
     key: 'd2', icon: '🧭', title: 'How a design job moves',
     goal: 'Know where your work comes from, what you hand back, and how a job reaches the printer.',
     lessons: [{
-      id: 'd2-flow', article: A.flow, minutes: 25, tags: 'design board, artwork, ask sales, final art, approve, changes, chasing, design fees, my day',
-      goals: ['Find your jobs and everything you need on them', 'Ask sales a question instead of guessing', 'Submit final art June can approve first time'],
+      id: 'd2-flow', article: A.flow, minutes: 25, tags: 'design board, artwork, message the customer, final art, approve, changes, chasing, design fees, my day',
+      goals: ['Find your jobs and everything you need on them', 'Message the customer instead of guessing', 'Submit final art June can approve first time'],
       tryIt: [{ label: 'Your design board', href: '/admin/design' }, { label: 'My Day', href: '/admin/my-day' }],
       body:
 `Every design job follows the same path: sales takes the order, you make the art and the proof, the customer approves it in writing, June approves the final files, and it goes to print. You see only what you need for the art: no prices and no customer contact details.
@@ -79,7 +79,7 @@ Customers show by first name only. Messages you send go through the system; thei
 
 **When something is missing**
 
-Read the sales note and the customer's files before you start. If anything is unclear or missing (a blurry logo, no colors, a size that will not fit), press **Ask sales a question** on the Artwork card. The question shows on the salesperson's My Day, and their answer comes back to the job.
+Read the sales note and the customer's files before you start. If anything is unclear or missing (a blurry logo, no colors, a size that will not fit), message the customer on the job's **Messages** card. Their reply comes back to the same job.
 
 Never guess. A guess becomes a proof, and a wrong proof costs a day.
 
@@ -116,11 +116,11 @@ Some work is charged: ${DESIGN_FEES}. Sales adds the fee to the quote. If a job 
           choices: ['Final art, then proof, then customer approval', 'Proof, written customer approval, then final art to June', 'Print, then proof', 'June approves, then the customer sees a proof'],
           answer: 1, article: A.flow, why: 'The customer approves the proof in writing; then June approves the final files.' },
         { id: 'missing', q: 'The sales note says "use their logo" but no file is attached. You…',
-          choices: ['Find their logo on Google', 'Press Ask sales a question on the Artwork card', 'Design a new logo', 'Wait a week'],
-          answer: 1, article: A.flow, why: 'Ask sales instead of guessing.' },
+          choices: ['Find their logo on Google', 'Message the customer on the job\'s Messages card', 'Design a new logo', 'Wait a week'],
+          answer: 1, article: A.flow, why: 'Ask the customer instead of guessing.' },
         { id: 'contact', q: 'Why can you not see the customer\'s email or phone?',
           choices: ['A bug', 'Designers see only what they need; messages go through the system', 'You must ask the customer', 'Only on weekends'],
-          answer: 1, article: A.flow, why: 'Messages go through the job page; replies come to June.' },
+          answer: 1, article: A.flow, why: 'Messages go through the job page; replies come back to the job.' },
         { id: 'submit', q: 'You press Submit final art with no files. What happens?',
           choices: ['June gets an empty job', 'It is refused: upload the files first', 'It prints', 'The customer is emailed'],
           answer: 1, article: A.flow, why: 'Submit is refused until the final files are attached.' },

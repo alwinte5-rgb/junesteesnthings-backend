@@ -1,8 +1,8 @@
 'use strict';
 
-/* The artwork pipeline: sales hands a job to the designer, the designer
- * reviews it (and can ask sales a question), uploads the final print files and
- * submits them, and the owner approves them or sends them back.
+/* The artwork pipeline: a paid order reaches the designer, who checks the
+ * customer's artwork, fixes it if it needs it, uploads the print-ready files
+ * and submits them; the owner approves them or sends them back.
  *
  *   (none) ──request──▶ waiting ──submit──▶ submitted ──approve──▶ approved
  *                        │   ▲                 │                      │
@@ -10,9 +10,13 @@
  *                        ▼   │                 ▼                      ▼ (a new round)
  *                     needs_info          changes ──submit──▶ submitted
  *
- *   An automatic review request (every quote to one designer, autoArtSweep in
- *   server.js) can also be closed with `review`: waiting ──review──▶ reviewed.
- *   Nothing to make, the designer has seen it. A request sent by hand cannot.
+ *   Every accepted and paid order goes to one designer on its own (autoArtSweep
+ *   in server.js). There is no way to close a job without final files (owner,
+ *   2026-11-06): the old `review` move is gone, and `reviewed` is kept only so
+ *   jobs closed that way before still read as finished. The designer talks to
+ *   the customer directly on the job's Messages card; `question` (ask sales)
+ *   is no longer offered to them, and kept so an open question can still be
+ *   answered.
  *
  * One row per job (art_requests.quote_code is unique). Every move is checked
  * here and again in the UPDATE's WHERE, so two people clicking at once cannot
@@ -29,7 +33,7 @@ const STATES = {
   submitted:  { label: 'Final art waiting for the owner', tone: 'blue' },
   changes:    { label: 'Owner asked for changes', tone: 'amber' },
   approved:   { label: 'Final art approved', tone: 'green' },
-  reviewed:   { label: 'Reviewed by the designer', tone: 'green' },
+  reviewed:   { label: 'Reviewed by the designer (old step)', tone: 'green' },
 };
 /* States where the art is finished: off the to-do lists, and nothing owed. */
 const DONE_STATES = ['approved', 'reviewed'];
@@ -43,7 +47,6 @@ const MOVES = {
   submit:   { from: ['waiting', 'changes'], to: 'submitted', who: 'art.work' },
   approve:  { from: ['submitted'], to: 'approved', who: 'owner' },
   changes:  { from: ['submitted'], to: 'changes', who: 'owner' },
-  review:   { from: ['waiting'], to: 'reviewed', who: 'art.work', autoOnly: true },
 };
 const FILE_STATES = ['waiting', 'changes', 'needs_info'];
 
@@ -71,6 +74,25 @@ function isAutoRequest(events) {
   return false;
 }
 
+/** Was the open automatic request released to the designer on payment (its
+ *  last request marked paid)? One made before the accepted-and-paid rule is
+ *  not, until autoArtSweep releases it. Mirrors ART_HELD_SQL in server.js. */
+function isPaidRequest(events) {
+  const list = Array.isArray(events) ? events : [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i] && list[i].action === 'request') return list[i].paid === true;
+  }
+  return false;
+}
+
+/** Is this job held from the designer: an automatic request made before the
+ *  accepted-and-paid rule, never worked on (still waiting, no files) and not
+ *  yet released on payment? The JS twin of ART_HELD_SQL in server.js. */
+function isHeld(a) {
+  return !!a && a.status === 'waiting' && !(Array.isArray(a.files) && a.files.length)
+    && isAutoRequest(a.events) && !isPaidRequest(a.events);
+}
+
 /** May files be added in this state? */
 function canAddFile(state) { return FILE_STATES.includes(state); }
 
@@ -95,4 +117,4 @@ function cleanNote(note) {
 }
 
 module.exports = { STATES, DONE_STATES, MOVES, FILE_STATES, NOTE_MAX, MAX_FILES, FOLDER, ACCEPT, MAX_FILE_BYTES,
-  canMove, canAddFile, isAutoRequest, artUrlOk, cleanName, cleanNote };
+  canMove, canAddFile, isAutoRequest, isPaidRequest, isHeld, artUrlOk, cleanName, cleanNote };
