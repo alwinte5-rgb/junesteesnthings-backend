@@ -8328,6 +8328,26 @@ function reviewStrip() {
 const REVIEW_CSS = require('node:fs').readFileSync(
   require('node:path').join(__dirname, 'public', 'assets', 'css', 'review-strip.css'), 'utf8');
 
+// Longest a customer's stacked change notes may grow (newest kept whole).
+const CHANGE_REQUEST_MAX = 6000;
+/* A fingerprint of the change request a page showed, so a save clears only
+   what the shop actually saw: a note the customer adds while the edit page is
+   open stays on the job. */
+/* The sizes a customer already asked for on one line, or null. The size boxes
+   start from these, so a second request carries the first one forward instead
+   of quietly undoing it (2026-11-07). */
+const pendingLine = (q, ix) => {
+  const r = Array.isArray(q && q.requested_items) ? q.requested_items : null;
+  const items = Array.isArray(q && q.items) ? q.items : [];
+  return r && r.length === items.length && r[ix] ? r[ix] : null;
+};
+const pendingSize = (line, sz) => {
+  const e = line && Array.isArray(line.sizes) ? line.sizes.find((x) => x && x.size === sz) : null;
+  return e ? (parseInt(e.n, 10) || 0) : null;
+};
+const changeRequestSeen = (q) => require('crypto').createHash('sha256')
+  .update(String((q && q.change_request) || '') + '\u0000' + JSON.stringify((q && q.requested_items) || null))
+  .digest('hex');
 const QUOTE_CODE_RE = /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/;   // legacy 6, new 10 — see newQuoteCode
 /* The longest message any box takes: team chat, job messages, notes, feedback
    and customer email (owner, 2026-10-14: "add a larger character limit").
@@ -12643,7 +12663,7 @@ function productGroupOf(name) {
         </div>`).join('');
       return `<div class="card" style="border-left:4px solid #b45309;background:#fffbf2">
         <b style="color:#b45309">They asked for a change</b>
-        ${existing.change_request ? `<div class="muted" style="margin-top:6px">"${escEmail(existing.change_request)}"</div>` : ''}
+        ${existing.change_request ? `<div class="muted" style="margin-top:6px;white-space:pre-wrap">"${escEmail(existing.change_request)}"</div>` : ''}
         ${rows}
         ${edits.length ? `
         <p class="muted" style="margin:10px 0 8px;font-size:13px">Nothing is re-priced yet — a new
@@ -12653,6 +12673,7 @@ function productGroupOf(name) {
       </div>`;
     })()}
     <form method="POST" action="${isEdit ? '/admin/api/quotes/' + existing.code : '/admin/api/quotes'}" id="qf">
+      ${isEdit ? `<input type="hidden" name="cr_seen" value="${changeRequestSeen(existing)}">` : ''}
       ${String(req.query.up || '') === '1' ? `<div class="card"><div class="ok">Upsell saved. The change is in this
         quote's history on the job page${isDraft ? ' — the quote is a draft until you finish it' : ''}.</div></div>` : ''}
       ${isDraft ? `<div class="card" style="background:#f8fafc;border-color:#cbd5e1"><b>Draft.</b>
@@ -15783,13 +15804,26 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          has updates itself — no need to re-send unless June wants to. Clearing
          change_request marks the request as handled. */
       await snapshotQuote(editing, upsellsApplied.length ? 'upsell: ' + upsellsApplied[upsellsApplied.length - 1] : 'edit', clientIp(req));
+      /* Saving marks the customer's request handled, but only the request this
+         page showed. Notes now stack, so one added while the form was open
+         would otherwise be cleared without anyone reading it. A save from a
+         form without the field (an older tab) clears as before. */
+      const seen = String(one(b.cr_seen) || '');
+      let keepRequest = false;
+      if (/^[0-9a-f]{64}$/.test(seen)) {
+        const { rows: cur } = await pool.query('SELECT change_request, requested_items FROM quotes WHERE code=$1', [editing]);
+        keepRequest = !!cur.length && changeRequestSeen(cur[0]) !== seen
+          && !!(cur[0].change_request || cur[0].requested_items);
+      }
       ({ rows } = await pool.query(
         `UPDATE quotes SET name=$2, phone=$3, email=$4, items=$5, subtotal=$6, tax=$7,
                 total=$8, deposit=$9, notes=$10, valid_until=$11, needed_by=$12,
                 discount_kind=$13, discount_value=$14, discount_note=$15, rush_pct=$16,
                 taxable=$17, tax_exempt_ref=$18, tax_exempt_reason=$19,
-                change_request=NULL, requested_items=NULL, revision=COALESCE(revision,1)+1,
-                status = CASE WHEN $20 THEN 'held' WHEN $22 THEN 'draft' WHEN accepted_at IS NULL THEN 'sent' ELSE status END,
+                change_request = CASE WHEN $23 THEN change_request END,
+                requested_items = CASE WHEN $23 THEN requested_items END,
+                revision=COALESCE(revision,1)+1,
+                status = CASE WHEN $20 THEN 'held' WHEN $22 THEN 'draft' WHEN $23 THEN 'changes' WHEN accepted_at IS NULL THEN 'sent' ELSE status END,
                 held_at = CASE WHEN $20 THEN COALESCE(held_at, NOW()) ELSE NULL END,
                 sent_by = CASE WHEN status IN ('held', 'draft') AND NOT $20 AND NOT $22 THEN $21 ELSE sent_by END,
                 -- released or sent on this save: the customer's clock starts now (see releaseHeldQuote)
@@ -15798,7 +15832,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         [editing, name, phone, email, JSON.stringify(items), subtotal, tax, total, deposit,
          String(b.notes || '').trim().slice(0, 2000), validUntil, neededBy,
          discountKind, discountValue, discountNote || null, rushPct, taxable, exemptRef, exemptReason,
-         keepHeld, staffId, draft]));
+         keepHeld, staffId, draft, keepRequest]));
       if (!rows.length) {
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
@@ -16823,7 +16857,8 @@ app.get('/q/:code', async (req, res) => {
 
     const sizeInputs = (i, ix) => orderedSizeKeys(i, catalog)
       .map((sz) => {
-        const n = parseInt((i.size_mix || {})[sz], 10) || 0;
+        const asked = pendingSize(pendingLine(q, ix), sz);
+        const n = asked !== null ? asked : (parseInt((i.size_mix || {})[sz], 10) || 0);
         const up = upchargeFor(i, sz);
         /* The extended-size surcharge is shown ON the box the customer types
            into. Printed once at the bottom of the quote it reads as a mystery
@@ -16921,7 +16956,7 @@ app.get('/q/:code', async (req, res) => {
                <div class="muted" style="font-size:11px;margin-top:4px">now ${i.qty}</div>`
             : `<input form="changeform" type="number" min="0" max="${QSIGNS.MAX_QTY}" step="1"
                       class="cq" data-line="${ix}"
-                      name="qty_${ix}" value="${parseInt(i.qty, 10) || 0}"
+                      name="qty_${ix}" value="${pendingLine(q, ix) ? (parseInt(pendingLine(q, ix).qty, 10) || 0) : (parseInt(i.qty, 10) || 0)}"
                       style="width:64px;padding:5px;font-size:14px;text-align:right">`}</td>
         <td class="num"><span data-each="${ix}">${cut
           ? `<span style="color:#9aa3b2;text-decoration:line-through">${(fig.folded > 0 ? moneyEach : money)(i.qty > 0 ? goodsList / i.qty : 0)}</span><br>${eachText(fig, i)}`
@@ -17237,7 +17272,7 @@ app.get('/q/:code', async (req, res) => {
 
       ${q.change_request && !paid ? `
       <div class="card"><div class="ok">Change requested — ${SHOP_SIGNER} is updating this quote.
-        <div class="muted" style="margin-top:6px">"${escEmail(q.change_request)}"</div></div></div>` : ''}
+        <div class="muted" style="margin-top:6px;white-space:pre-wrap">"${escEmail(q.change_request)}"</div></div></div>` : ''}
 
       ${(paid && balanceDue <= 0) ? '' : reviewStrip()}
 
@@ -19861,7 +19896,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
      * The two rules must match. They are both "not paid, not cancelled". */
     const items = Array.isArray(q.items) ? q.items : [];
     const editable = !q.cancelled_at;
-    let requested = null;
+    let requested = null, withdrawn = false;
     /* The same list the customer's page rendered from, derived the same way, so
        the names posted and the names read are the same set by construction. */
     let catalog = { products: [], methods: [] };
@@ -19881,12 +19916,16 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
            what shuffled the sizes on the customer's page. An array keeps the
            order it was written in. */
         const keys = orderedSizeKeys(it, catalog);
+        /* A box left out or blank keeps what was already asked for, else the
+           quote's own number: the page fills the boxes the same way. */
+        const asked = pendingLine(q, ix);
         if (keys.length) {
           const sizes = []; let total = 0;
           for (const sz of keys) {
             const raw = one(b['sz_' + ix + '_' + sz]);
+            const prev = pendingSize(asked, sz);
             const n = raw === undefined || String(raw).trim() === ''
-              ? (parseInt((it.size_mix || {})[sz], 10) || 0)
+              ? (prev !== null ? prev : (parseInt((it.size_mix || {})[sz], 10) || 0))
               : Math.max(0, Math.min(10000, parseInt(raw, 10) || 0));
             sizes.push({ size: sz, n }); total += n;
           }
@@ -19896,7 +19935,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
         /* A single-quantity line (signs, SinaLite runs) goes to the sized-item
            ceiling; per-size garment boxes above keep 10,000 each (Codex on #293). */
         const n = raw === undefined || String(raw).trim() === ''
-          ? (parseInt(it.qty, 10) || 0)
+          ? (asked ? (parseInt(asked.qty, 10) || 0) : (parseInt(it.qty, 10) || 0))
           : Math.max(0, Math.min(QSIGNS.MAX_QTY, parseInt(raw, 10) || 0));
         return { qty: n, sizes: null };
       });
@@ -19905,16 +19944,50 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
          value back verbatim, and saving that would light up the shop's board
          with a change request that asks for nothing. */
       if (describeRequestedEdits(items, draft).length) requested = draft;
+      /* The boxes started from the sizes already asked for, so setting them
+         back to the quote's own numbers takes that request back. */
+      else if (q.requested_items) withdrawn = true;
     }
 
     /* Nothing typed and nothing moved is not a request. Sending it would train
        the shop to ignore the alert. */
-    if (!msg && !requested) return res.redirect('/q/' + code);
+    if (!msg && !requested && !withdrawn) return res.redirect('/q/' + code);
 
+    /* A second request ADDS to the first; it never replaces it (owner,
+       2026-11-07). A customer sent a size breakdown, then a shirt note
+       four minutes later, and the second note wiped the first off
+       the quote. Worse, a note with no size edits set requested_items to NULL,
+       which is the money guard: Accept and Pay reopened at the old total.
+         - every note is stamped with its time and goes under the earlier ones;
+         - a note with no size edits keeps the sizes already asked for (the
+           boxes start from them, so `requested` carries them forward);
+         - a size edit with no note keeps the notes already sent;
+         - boxes set back to the quote's own numbers take the sizes back.
+       Saving the quote clears what the shop saw. Over the cap, the first note
+       (usually the brief) and the newest are kept and the middle is cut. */
+    let stamp = '';
+    try {
+      stamp = new Date().toLocaleString('en-US', { timeZone: SHOP_TZ,
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } catch {
+      // A mistyped zone must not lose the customer's note.
+      stamp = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    }
     const { rows } = await pool.query(
-      `UPDATE quotes SET change_request=$2, requested_items=$3, status='changes'
+      `UPDATE quotes SET
+          change_request = CASE
+            WHEN $2::text IS NULL THEN change_request
+            WHEN NULLIF(btrim(change_request), '') IS NULL THEN $4::text || $2::text
+            WHEN length(change_request) + length($4::text || $2::text) + 2 <= ${CHANGE_REQUEST_MAX}
+              THEN change_request || E'\n\n' || $4::text || $2::text
+            ELSE LEFT(change_request, GREATEST(0, (${CHANGE_REQUEST_MAX} - length($4::text || $2::text) - 5) / 2))
+              || E'\n…\n' || RIGHT(change_request, GREATEST(0, (${CHANGE_REQUEST_MAX} - length($4::text || $2::text) - 5) / 2))
+              || E'\n\n' || $4::text || $2::text
+          END,
+          requested_items = CASE WHEN $5::boolean THEN NULL ELSE COALESCE($3::jsonb, requested_items) END,
+          status = 'changes'
         WHERE code=$1 RETURNING *`,
-      [code, msg || null, requested ? JSON.stringify(requested) : null]);
+      [code, msg || null, requested ? JSON.stringify(requested) : null, `${stamp}:\n`, withdrawn]);
     if (!rows.length) return res.redirect('/q/' + code);
 
     const saved = rows[0];
@@ -19926,7 +19999,8 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
         ${requestedEditLines(edits).map((l) => `<li>${escEmail(l)}</li>`).join('')}
       </ul>
       <p style="color:#b45309;font-size:13px;margin-top:10px">Nothing is re-priced yet — a new
-        quantity can fall in a different band. Open the quote, apply the changes and save.</p>` : '';
+        quantity can fall in a different band. Open the quote, apply the changes and save.</p>` : withdrawn
+      ? `<p style="color:#374151;margin:14px 0 4px"><b>They took back their size change.</b> The quote's own sizes stand.</p>` : '';
 
     sendEmail({
       to: SHOP_EMAIL, urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
@@ -23785,7 +23859,7 @@ async function renderBoard(VIEW, req, res) {
         ${wantsChange ? `
           <div style="margin-top:10px;background:#eef4ff;border:1px solid #c3d4f8;border-radius:10px;padding:10px 12px">
             <div style="font-weight:700;color:#1848B8;font-size:13px">✏️ Change requested</div>
-            <div class="muted" style="font-size:12.5px;margin-top:3px">"${escEmail(q.change_request)}"</div>
+            <div class="muted" style="font-size:12.5px;margin-top:3px;white-space:pre-wrap">"${escEmail(q.change_request)}"</div>
             <a class="btn" style="padding:8px 18px;font-size:13px;margin-top:8px;display:inline-block"
                href="/admin/quote/${q.code}/edit">Edit the quote →</a>
           </div>` : ''}
@@ -24719,7 +24793,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
         <div style="margin-top:8px">${reinstateForm(q, 'job')}</div></div>` : ''}
       ${q.change_request && !q.cancelled_at ? `
       <div class="card" style="border-color:#c7d7fb;background:#f7faff"><b>They asked for a change</b>
-        <div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;${escEmail(String(q.change_request).slice(0, 2000))}&rdquo;</div>
+        <div style="margin:6px 0 10px;white-space:pre-wrap">&ldquo;${escEmail(String(q.change_request).slice(0, CHANGE_REQUEST_MAX))}&rdquo;</div>
         <a class="btn" href="/admin/quote/${escEmail(q.code)}/edit">Edit the quote &rarr;</a></div>` : ''}
       ${!q.sent_to_customer_at && (mayEmail || maySent || textButton) && !['held', 'draft'].includes(q.status) && !q.cancelled_at && !q.accepted_at ? `
       <div class="card" style="border-color:#f5d48a;background:#fffbeb"><b>Not sent to the customer yet.</b>
@@ -27381,7 +27455,7 @@ async function claudeJobContext(code, ask, fullView) {
       total: it && Number(it.total) ? money(it.total) : '', optional: !!(it && it.optional) })),
     money: { total: money(t.total), paid: money(Number(q.paid_amount) || 0), balance: money(due),
              deposit: Number(q.deposit) > 0 && !(Number(q.paid_amount) > 0) ? money(q.deposit) : '' },
-    change_request: q.change_request ? String(q.change_request).slice(0, 1500) : '',
+    change_request: q.change_request ? String(q.change_request).slice(-3000) : '',   // the newest notes
     notes: q.notes ? String(q.notes).slice(0, 1500) : '',
   };
   /* The files on the job, and a look at the customer's pictures, so Claude
@@ -28316,7 +28390,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       sub: `oldest ${escEmail(ageInWords(waiting[waiting.length - 1].created_at))}`, href: '/admin/leads' }] : []),
     ...changes.map((c) => ({ tone: 'blue', icon: 'edit',
       title: `${escEmail(c.name || c.code)} asked for a change`,
-      sub: `&ldquo;${escEmail(String(c.change_request).slice(0, 90))}&rdquo;`, href: `/admin/production/${escEmail(c.code)}` })),
+      sub: `&ldquo;${escEmail(String(c.change_request).length > 90 ? '…' + String(c.change_request).slice(-89) : String(c.change_request))}&rdquo;`, href: `/admin/production/${escEmail(c.code)}` })),
     /* Delivered, and the books still say they owe. Either money to collect or
        a payment taken at pickup that was never recorded — both are fixed on
        the job's card: Record a payment, or Settle. */

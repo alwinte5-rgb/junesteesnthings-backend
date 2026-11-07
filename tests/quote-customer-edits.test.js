@@ -155,8 +155,42 @@ test('the customer edit never writes to items', () => {
      handler ever writes the first, a public form can move money. */
   assert.doesNotMatch(handler.slice(0, handler.indexOf('res.redirect')), /SET[\s\S]*?\bitems=/,
     'the changes endpoint must never UPDATE items');
-  assert.match(handler, /SET change_request=\$2, requested_items=\$3/,
+  assert.match(handler, /requested_items = CASE WHEN \$5::boolean THEN NULL ELSE COALESCE\(\$3::jsonb, requested_items\) END/,
     'the request lands in requested_items');
+});
+
+test('a second request adds to the first, never replaces it (owner, 2026-11-07)', () => {
+  /* A customer sent a size breakdown, then a note about the shirt four minutes
+     later, and the second wiped the first off the quote. A note with no size
+     edits also nulled requested_items, the money guard, so Accept and Pay
+     reopened at the old total. */
+  const sql = handler.slice(handler.indexOf('UPDATE quotes SET'), handler.indexOf('RETURNING *'));
+  assert.match(sql, /WHEN \$2::text IS NULL THEN change_request/, 'sizes alone keep the notes already sent');
+  assert.match(sql, /\|\| \$4::text \|\| \$2::text/, 'a new note goes under the old ones, after a time stamp');
+  assert.match(sql, /COALESCE\(\$3::jsonb, requested_items\)/, 'a note alone keeps the sizes already asked for');
+  assert.doesNotMatch(sql, /change_request=\$2/, 'never overwrite the earlier note');
+});
+
+test('the size boxes start from the sizes already asked for', () => {
+  /* They started from the quote's own sizes, so a second size edit on another
+     line silently put the first one back. */
+  const page = src.slice(src.indexOf("app.get('/q/:code'"));
+  assert.match(page, /const asked = pendingSize\(pendingLine\(q, ix\), sz\)/, 'the page fills each box from the pending request');
+  assert.match(handler, /const prev = pendingSize\(asked, sz\)/, 'and the handler falls back to it the same way');
+  assert.match(handler, /else if \(q\.requested_items\) withdrawn = true/, 'setting the boxes back takes the request back');
+  assert.match(handler, /if \(!msg && !requested && !withdrawn\) return res\.redirect/);
+  assert.match(handler, /CASE WHEN \$5::boolean THEN NULL ELSE COALESCE\(\$3::jsonb, requested_items\) END/);
+});
+
+test('a mistyped shop time zone cannot lose a change request', () => {
+  const at = handler.indexOf('let stamp');
+  assert.ok(at > 0 && handler.slice(at, at + 400).includes('try {'), 'the time stamp is guarded');
+});
+
+test('saving the quote clears only the request the shop saw', () => {
+  assert.match(src, /name="cr_seen" value="\$\{changeRequestSeen\(existing\)\}"/, 'the edit form posts what it showed');
+  assert.match(src, /change_request = CASE WHEN \$23 THEN change_request END/, 'a newer note survives the save');
+  assert.match(src, /WHEN \$23 THEN 'changes'/, 'and the job stays marked as changed');
 });
 
 test('a paid quote cannot be edited', () => {
@@ -191,14 +225,15 @@ test('the accepted-quote change request is no longer silently dropped', () => {
 });
 
 test('an empty submission is not a request', () => {
-  assert.match(handler, /if \(!msg && !requested\) return res\.redirect/,
+  assert.match(handler, /if \(!msg && !requested && !withdrawn\) return res\.redirect/,
     'nothing typed and nothing moved must not alert the shop');
 });
 
 /* ── Approval ────────────────────────────────────────────────────────────── */
 
 test('saving the quote clears the request', () => {
-  assert.match(src, /change_request=NULL, requested_items=NULL/,
+  /* NULL unless a newer request arrived while the form was open ($23). */
+  assert.match(src, /change_request = CASE WHEN \$23 THEN change_request END,\s*requested_items = CASE WHEN \$23 THEN requested_items END/,
     'a handled request must not survive the save, or the shop sees it forever');
 });
 
