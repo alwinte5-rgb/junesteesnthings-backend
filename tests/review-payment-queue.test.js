@@ -66,25 +66,29 @@ const RESCHED = extractFn('async function rescheduleReviewRequest(');
 
 /* ── the two delays ──────────────────────────────────────────────────────── */
 
-test('a deposit waits, paid in full does not', () => {
-  /* This used to assert one payment delay, long, because "paid" meant a
-     deposit and the work did not exist yet. It is two numbers now, and the
-     distinction is the whole point: a balance is collected when the work is
-     handed over, so PAID IN FULL means finished and the ask goes out while the
-     box is still open. A DEPOSIT still waits — asking someone to review a job
-     that has not been made is how a shop earns two stars about nothing. */
-  assert.match(src, /JT_REVIEW_AFTER_PAYMENT_DAYS \|\| '0'/,
-    'paid in full is the finished moment; it should not wait');
-  assert.match(src, /JT_REVIEW_AFTER_DEPOSIT_DAYS \|\| '14'/,
-    'a deposit is not a finished job and must keep the long delay');
+test('payment is only the fallback; the ask follows shipping, pickup or delivery', () => {
+  /* "Paid in full means finished" was wrong (owner, 2026-11-06): studio orders
+     and quotes paid up front are paid before anything is made, so those
+     customers were asked how it turned out within the hour. Payment now queues
+     a 21-day fallback, and shipping, pickup or delivery moves it to 3 days. */
+  assert.match(src, /JT_REVIEW_FALLBACK_DAYS \|\| '21'/,
+    'payment is only the fallback: paid in full is not finished (owner, 2026-11-06)');
+  assert.doesNotMatch(src, /JT_REVIEW_AFTER_PAYMENT_DAYS \|\| '0'/, 'never ask the hour a job is paid');
   assert.match(src, /JT_REVIEW_DELAY_DAYS \|\| '3'/,
     'delivery is the accurate moment; asking 3 days later is the point of tracking it');
 });
 
-test('the deposit case is actually wired, not just defined', () => {
-  /* A constant nobody calls is the shape this repo keeps getting caught by. */
-  assert.match(src, /stillDue > 0 \? REVIEW_DAYS_AFTER_DEPOSIT\(\) : REVIEW_DAYS_AFTER_PAYMENT\(\)/,
-    'the payment path must choose between them on the balance still owed');
+test('a quote payment asks at the fallback, or 3 days once already handed over', () => {
+  const n = src.split('days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),').length - 1;
+  assert.strictEqual(n, 2, 'both quote payment paths');
+});
+
+test('an ask already due for an unfinished quote waits for the fallback', () => {
+  const fn = src.slice(src.indexOf('async function sendDueReviewRequests'), src.indexOf('async function sendDueReviewRequests') + 1600);
+  assert.match(fn, /q\.shipped_at IS NULL AND q\.delivered_at IS NULL AND q\.cancelled_at IS NULL/);
+  assert.match(fn, /COALESCE\(q\.accepted_at, q\.created_at\) \+ make_interval\(days => \$1::int\) > NOW\(\)/,
+    'a job older than the fallback (a backfill) is not held');
+  assert.ok(fn.indexOf('UPDATE reviews r SET requested_at') < fn.indexOf('SELECT * FROM reviews'), 'held before the due list is read');
 });
 
 test('one follow-up, never a second', () => {
@@ -97,7 +101,7 @@ test('one follow-up, never a second', () => {
 });
 
 test('all delays are overridable and never negative', () => {
-  for (const fn of ['REVIEW_DAYS_AFTER_PAYMENT', 'REVIEW_DAYS_AFTER_DEPOSIT', 'REVIEW_DAYS_AFTER_DELIVERY']) {
+  for (const fn of ['REVIEW_DAYS_AFTER_PAYMENT', 'REVIEW_DAYS_AFTER_DELIVERY']) {
     const line = src.slice(src.indexOf(`const ${fn}`), src.indexOf(`const ${fn}`) + 220);
     assert.match(line, /Math\.max\(0,/, `${fn} must floor at zero — a negative interval queues in the past`);
     assert.match(line, /parseInt\(/, `${fn} must parse the env var, not use the string`);

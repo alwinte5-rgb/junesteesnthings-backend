@@ -18179,7 +18179,8 @@ async function bankStripeSession(session) {
        the ask read as personal rather than automated. */
     product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
     quote_code: code,
-    days: stillDue > 0 ? REVIEW_DAYS_AFTER_DEPOSIT() : REVIEW_DAYS_AFTER_PAYMENT(),
+    // Already handed over (paid at pickup): the usual 3 days, not the fallback.
+    days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),
   }).catch(() => {});
 
   return { ok: true, duplicate: false, paid: res.paid };
@@ -18986,7 +18987,8 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
     name: q.name, email: to, phone: q.phone,
     product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
     quote_code: code,
-    days: stillDue > 0 ? REVIEW_DAYS_AFTER_DEPOSIT() : REVIEW_DAYS_AFTER_PAYMENT(),
+    // Already handed over (paid at pickup): the usual 3 days, not the fallback.
+    days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),
   }).catch(() => {});
 
   console.log(`Stripe payment outside checkout (${via}) on quote ${code}: ${money(net)}` +
@@ -28992,17 +28994,14 @@ app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => 
    was an order status nobody ever set. So delivery does not CREATE the ask, it
    RESCHEDULES the one payment already queued, to a few days after the customer
    actually had the thing in their hands. */
-/* Zero on a job PAID IN FULL: the balance is collected when the work is handed
-   over, so paid in full means finished, and the ask goes out while the customer
-   still has the box open.
- *
-   A DEPOSIT is the opposite — the work does not exist yet — so that still
-   waits. Asking someone to review a job that has not been made is how a shop
-   collects a two-star review about nothing. */
+/* Payment is only the FALLBACK now (owner, 2026-11-06): 21 days, paid in full
+   or not. "Paid in full means finished" was wrong: studio orders and quotes
+   paid up front are paid before anything is made, so those customers were
+   asked how it turned out within the hour. The real ask is 3 days after the
+   job is shipped, picked up or delivered (REVIEW_DAYS_AFTER_DELIVERY, which
+   moves this one); 21 days covers a job nobody marks. */
 const REVIEW_DAYS_AFTER_PAYMENT  = () =>
-  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_PAYMENT_DAYS || '0', 10));
-const REVIEW_DAYS_AFTER_DEPOSIT  = () =>
-  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_DEPOSIT_DAYS || '14', 10));
+  Math.max(0, parseInt(process.env.JT_REVIEW_FALLBACK_DAYS || '21', 10));
 
 /* Days between the first ask and the single follow-up. One only: a review is a
    favour, and a second chase is a nuisance. */
@@ -32405,6 +32404,18 @@ async function refundedInFull({ quote_code, order_ref }) {
 async function sendDueReviewRequests() {
   let due = 0, sent = 0, failed = 0, skipped = 0, refunded = 0;
   try {
+    /* An ask queued before the 2026-11-06 change, for a quote job not yet
+       shipped, picked up or delivered, waits for the fallback date instead of
+       going now. Shipping it moves the ask to 3 days later, as usual. A job
+       older than the fallback (a backfill, say) is not held. */
+    await pool.query(
+      `UPDATE reviews r SET requested_at = COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int)
+         FROM quotes q
+        WHERE q.code = r.quote_code AND r.sent_at IS NULL AND r.submitted_at IS NULL
+          AND r.requested_at IS NOT NULL AND r.requested_at <= NOW()
+          AND q.shipped_at IS NULL AND q.delivered_at IS NULL AND q.cancelled_at IS NULL
+          AND COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int) > NOW()`,
+      [REVIEW_DAYS_AFTER_PAYMENT()]);
     const { rows } = await pool.query(
       `SELECT * FROM reviews
         WHERE sent_at IS NULL AND submitted_at IS NULL

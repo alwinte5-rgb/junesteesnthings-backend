@@ -85,7 +85,7 @@ const ROWS = [
 function desk(fn) {
   const updates = [], sent = [];
   const sandbox = {
-    REVIEW_BATCH: 50, REVIEW_FOLLOWUP_DAYS: () => 5,
+    REVIEW_BATCH: 50, REVIEW_FOLLOWUP_DAYS: () => 5, REVIEW_DAYS_AFTER_PAYMENT: () => 21,
     console: { error() {}, log() {} },
     isUnsubscribed: async (email) => email === 'gone@example.com',
     refundedInFull: async (r) => r.quote_code === 'Q2',
@@ -97,6 +97,8 @@ function desk(fn) {
     },
     pool: {
       query: async (sql, args = []) => {
+        // The hold on unfinished quote jobs runs first and changes nothing here.
+        if (/^UPDATE reviews r SET requested_at/.test(sql)) return { rows: [], rowCount: 0 };
         if (/^\s*SELECT \* FROM reviews/.test(sql)) return { rows: ROWS.map((r) => ({ ...r })) };
         if (/^UPDATE reviews/.test(sql)) { updates.push({ sql, args }); return { rows: [] }; }
         throw new Error('unexpected query: ' + sql.slice(0, 80));
