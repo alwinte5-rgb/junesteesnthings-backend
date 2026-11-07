@@ -63,7 +63,7 @@ const MODULES = [
 
 **COS Creator Studio**
 
-COS plans and posts social media for a business. It writes captions in the brand's voice, makes graphics and short AI videos, and publishes to Facebook, Instagram, Threads, TikTok, YouTube, LinkedIn, Pinterest, X and Google Business Profile on a schedule. It also has analytics and an inbox for comments and messages.
+COS plans and posts social media for a business. It writes captions in the brand's voice, makes graphics and short AI videos, and publishes to Facebook, Instagram, Threads, TikTok, YouTube, LinkedIn, Pinterest, X and Google Business Profile on a schedule. It also has analytics, with Facebook and Instagram insights, and an inbox where they answer and like comments and messages. On Pro and Agency, **content packs** take a spreadsheet of posts and a zip of photos and schedule them as written, or let the AI rewrite them, so an agency can move a client's ready content in at once.
 
 In two sentences: "COS plans a month of posts for each brand in one sitting and publishes them for you. It writes the captions and makes the graphics and videos, so posting stops being the thing that slips."
 
@@ -72,12 +72,12 @@ In two sentences: "COS plans a month of posts for each brand in one sitting and 
 Agency is $129 a month, or $1,290 a year (two months free). It is made for people posting for several brands:
 
 - Unlimited posts, and up to 150 content plans a month across every client brand
-- 5 seats: logins for their team, with roles (owner, admin, editor, client), so they can invite a client to review their own brand
+- 5 seats: logins for their team, with roles (owner, admin, editor, client), so they can invite a client to review and approve their own brand's posts. A client login sees only the review controls
 - White label: their own name and logo inside the app, so their clients see the agency, not us
 - Up to 12 connections to platforms other than Facebook, Instagram and Threads (those three are unlimited)
 - 100 AI graphics and 60 AI videos (up to 2 minutes) a month, plus X posting included
 
-The cheaper plans (Starter $19, Pro $49) exist, but they are for single businesses who come from ads. If a prospect only runs one small brand, send them to the website and spend your time on the next agency.
+The cheaper plans (Starter $19, Pro $49) exist, but they are for single businesses who come from ads. Pro has white label too, but only one login and 6 outside connections: anyone with a team, or clients who approve their own posts, needs Agency. If a prospect only runs one small brand, send them to the website and spend your time on the next agency.
 
 **CartBook and the business dashboard**
 
@@ -210,7 +210,7 @@ Quality first. A good day is 15 to 25 researched prospects contacted, not 200 co
 - Next step and its date. Every open lead has one
 - Notes from every message and call, with the date
 
-All of this lives on **Software leads** in the back office (in the menu under Sales). Add each prospect there with the link where you found them and your one detail, and log every message and call on the lead. Its **Find leads with AI** button searches the web for people who post for several brands; check each result before you add it. A lead counts once a contact is logged.
+All of this lives on **Software leads** in the back office (in the menu under Sales). Add each prospect there with the link where you found them and your one detail, and log every message and call on the lead. Its **Find leads with AI** button searches the web for people who post for several brands; check each result before you add it. Each search adds to one running list, and a result leaves the list once you contact it, so nothing found is lost between shifts. A lead counts once a contact is logged.
 
 **Statuses, in order**
 
@@ -227,6 +227,7 @@ All of this lives on **Software leads** in the back office (in the menu under Sa
 - Start with every lead whose next-step date is today or earlier
 - Then new research and first messages
 - End by setting a next step and date on every lead you touched
+- An overdue next step comes back to you as a task on **Tasks** the next day, so a forgotten follow-up shows up on its own
 
 **Your numbers**
 
@@ -724,7 +725,7 @@ Send June what customers ask for and what confused them, in your weekly report. 
 
 **Your wage**
 
-The hourly wage and hours in your offer, paid weekly by Wise. Clock in and out on the Timeclock so every hour counts.
+The hourly wage and hours in your offer, paid weekly by Wise. Clock in and out on the Timeclock so every hour counts. Your first clock-in each day posts your open tasks to June's Mailbox, so she sees your plan without asking.
 
 **Your commission**
 

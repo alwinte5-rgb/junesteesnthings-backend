@@ -316,10 +316,10 @@ const STARTERS = {
   software: [
     daily('sales', 'Daily prospects: research 5, contact 3',
       'Research 5 agencies or teams that post on social media for several brands, and send a personal first message to the 3 best about COS Creator Studio.',
-      '1. Look for small marketing agencies, freelancers who manage several clients, and franchise or multi-location businesses.\n2. Check each one posts for several brands (their client list or portfolio).\n3. Log each prospect in the shared prospects sheet June gives you, with the link where you found them.\n4. Write the 3 best a personal message: one line about their work, one line on what COS saves them (planning and scheduling every client in one place), and an easy next step (a 15-minute demo).\n5. Log every message.',
+      '1. Look for small marketing agencies, freelancers who manage several clients, and franchise or multi-location businesses.\n2. Check each one posts for several brands (their client list or portfolio).\n3. Log each prospect on Software leads, with the link where you found them.\n4. Write the 3 best a personal message: one line about their work, one line on what COS saves them (planning and scheduling every client in one place), and an easy next step (a 15-minute demo).\n5. Log every message.',
       {
         why: 'Agencies are the best fit for the Agency plan: one customer brings many brands and pays the most.',
-        gives: ['The shared prospects sheet', 'Your COS Creator Studio demo login'],
+        gives: ['The Software leads board', 'Your COS Creator Studio demo login'],
         done: ['5 researched prospects logged with links', '3 personal first messages sent and logged'],
         proof: 'Your note names the 3 you contacted.',
         proof_required: false,
@@ -342,10 +342,10 @@ const STARTERS = {
       }),
     t('long', 'sales', 'Agency pipeline: 40 researched prospects',
       'Build and work a list of 40 agencies that fit COS Creator Studio\'s Agency plan. Report the tally each Friday: contacted, replied, demo, trial, won.',
-      '1. Research 40 agencies or multi-brand teams, logged in the prospects sheet with links and the person to contact.\n2. Contact all 40 over the weeks, with at most two follow-ups each, a week apart.\n3. Turn replies into demos; after a demo, help them start a trial.\n4. Every Friday in Team chat: contacted, replied, demo, trial, won.',
+      '1. Research 40 agencies or multi-brand teams, logged on Software leads with links and the person to contact.\n2. Contact all 40 over the weeks, with at most two follow-ups each, a week apart.\n3. Turn replies into demos; after a demo, help them start a trial.\n4. Every Friday in Team chat: contacted, replied, demo, trial, won.',
       {
         why: 'A steady list worked every week is what turns into paying agencies; one-off messages do not.',
-        gives: ['The prospects sheet', 'Answers on pricing or trial questions you cannot answer'],
+        gives: ['The Software leads board', 'Answers on pricing or trial questions you cannot answer'],
         done: ['40 prospects logged with links and contacts', 'All contacted, at most 2 follow-ups each', 'Four Friday tallies in Team chat'],
         proof: 'The Friday tallies in Team chat.',
         proof_required: false,
