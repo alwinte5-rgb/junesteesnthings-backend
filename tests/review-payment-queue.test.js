@@ -24,6 +24,7 @@
  */
 
 const { test } = require('node:test');
+const vm = require('node:vm');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -79,16 +80,39 @@ test('payment is only the fallback; the ask follows shipping, pickup or delivery
 });
 
 test('a quote payment asks at the fallback, or 3 days once already handed over', () => {
-  const n = src.split('days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),').length - 1;
-  assert.strictEqual(n, 2, 'both quote payment paths');
+  const helper = src.slice(src.indexOf('const reviewDaysForQuote'), src.indexOf('const reviewDaysForQuote') + 200);
+  assert.match(helper, /shipped_at/);
+  assert.match(helper, /delivered_at/);
+  const sandbox = { REVIEW_DAYS_AFTER_DELIVERY: () => 3, REVIEW_DAYS_AFTER_PAYMENT: () => 21 };
+  vm.createContext(sandbox);
+  vm.runInContext(helper.slice(0, helper.indexOf(';') + 1).replace('const ', 'this.'), sandbox);
+  assert.strictEqual(sandbox.reviewDaysForQuote({}), 21, 'not handed over yet: the fallback');
+  assert.strictEqual(sandbox.reviewDaysForQuote({ shipped_at: new Date() }), 3);
+  assert.strictEqual(sandbox.reviewDaysForQuote({ delivered_at: new Date() }), 3);
+  assert.strictEqual(src.split('days: reviewDaysForQuote(q),').length - 1, 2, 'both quote payment paths use it');
 });
 
-test('an ask already due for an unfinished quote waits for the fallback', () => {
-  const fn = src.slice(src.indexOf('async function sendDueReviewRequests'), src.indexOf('async function sendDueReviewRequests') + 1600);
-  assert.match(fn, /q\.shipped_at IS NULL AND q\.delivered_at IS NULL AND q\.cancelled_at IS NULL/);
-  assert.match(fn, /COALESCE\(q\.accepted_at, q\.created_at\) \+ make_interval\(days => \$1::int\) > NOW\(\)/,
-    'a job older than the fallback (a backfill) is not held');
-  assert.ok(fn.indexOf('UPDATE reviews r SET requested_at') < fn.indexOf('SELECT * FROM reviews'), 'held before the due list is read');
+const SWEEP = src.slice(src.indexOf('async function sendDueReviewRequests'),
+                        src.indexOf('SELECT * FROM reviews', src.indexOf('async function sendDueReviewRequests')));
+
+test('an ask already due for an unfinished quote waits, only if queued before the change', () => {
+  assert.match(SWEEP, /q\.shipped_at IS NULL AND q\.delivered_at IS NULL/);
+  assert.match(SWEEP, /r\.created_at < \$2::timestamptz/, 'a backfill queued since is left alone');
+  assert.match(SWEEP, /make_interval\(days => \$1::int\) > NOW\(\)/, 'a job older than the fallback is not held');
+  assert.match(src, /const REVIEW_HOLD_BEFORE = '2026-11-07T12:00:00Z'/);
+});
+
+test('a cancelled job is not asked, and gets no reminder', () => {
+  assert.match(SWEEP, /q\.cancelled_at IS NOT NULL/);
+  assert.match(SWEEP, /followup_sent_at=NOW\(\), ask_outcome='cancelled'/);
+  assert.match(src, /cancelled: 'not sent: cancelled'/, 'the Reviews page names why');
+});
+
+test('no second ask once the first went out or was ruled out', () => {
+  const done = src.slice(src.indexOf('const DONE_REVIEW_WHERE'), src.indexOf('/** Queue an ask'));
+  assert.match(done, /sent_at IS NOT NULL OR submitted_at IS NOT NULL/);
+  assert.match(QUEUE, /NOT EXISTS \(SELECT 1 FROM reviews WHERE \$\{DONE_REVIEW_WHERE\}\)/,
+    'a balance paid after the ask went must not start a second ask and follow-up');
 });
 
 test('one follow-up, never a second', () => {

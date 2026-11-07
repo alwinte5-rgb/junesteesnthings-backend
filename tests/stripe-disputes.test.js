@@ -442,15 +442,15 @@ test('the deposit, balance and reorder emails skip a disputed quote, open or dec
 function reviewDesk(disputed) {
   const updates = [], sentTo = [];
   const sandbox = {
-    REVIEW_BATCH: 25, REVIEW_DAYS_AFTER_PAYMENT: () => 21,
+    REVIEW_BATCH: 25, REVIEW_DAYS_AFTER_PAYMENT: () => 21, REVIEW_HOLD_BEFORE: '2026-11-07T12:00:00Z',
     console: { log() {}, error() {} },
     isUnsubscribed: async () => false,
     refundedInFull: async () => false,
     requestReview: async (r) => { sentTo.push(r.email); },
     pool: {
       query(sql, args = []) {
-        // The hold on unfinished quote jobs runs first and changes nothing here.
-        if (/^UPDATE reviews r SET requested_at/.test(sql)) return Promise.resolve({ rows: [], rowCount: 0 });
+        // The cancelled and pre-change hold steps run first and change nothing here.
+        if (/^UPDATE reviews r SET /.test(sql)) return Promise.resolve({ rows: [], rowCount: 0 });
         if (/SELECT \* FROM reviews/.test(sql)) {
           return Promise.resolve({ rows: [
             { id: 1, email: 'disputed@example.com', quote_code: 'Q_D' },

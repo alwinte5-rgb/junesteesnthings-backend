@@ -177,7 +177,8 @@ function desk({ quotes = [], quotePayments = [], unlinked = [], disputes = [], s
     SHOP_EMAIL: 'shop@example.com', SHOP_NAME: "June's Tees & Things", SHOP_SIGNER: 'June',
     SHOP_PHONE: '(773) 849-1854', BALANCE_WHEN: 'on pickup', PUBLIC_BASE_URL: 'https://www.jtees.net',
     FINANCES_PATH: '/admin/finances',
-    REVIEW_DAYS_AFTER_DEPOSIT: () => 21, REVIEW_DAYS_AFTER_PAYMENT: () => 7,
+    REVIEW_DAYS_AFTER_PAYMENT: () => 21, REVIEW_DAYS_AFTER_DELIVERY: () => 3,
+    reviewDaysForQuote: (q) => (q.shipped_at || q.delivered_at) ? 3 : 21,
     quoteLink: (code) => 'https://www.jtees.net/q/' + code,
     /* What each quote asks for: its stored total, and half of it as the deposit. */
     quoteTotals: (q) => ({ total: Number(q.total), deposit: round2(Number(q.total) / 2) }),
