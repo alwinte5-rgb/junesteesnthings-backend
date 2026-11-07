@@ -16,7 +16,7 @@ const { safeUrl, domainKey } = require('./lead-finder');
 const PRODUCTS = { cos: 'COS (Content OS)', cartbook: 'CartBook' };
 /* In order, as the lesson teaches them. */
 const STATUSES = {
-  new: 'New', contacted: 'Contacted', replied: 'Replied', demo: 'Demo booked', trial: 'Trial', won: 'Won', lost: 'Lost',
+  new: 'New', contacted: 'Contacted', replied: 'Replied', demo: 'Demo booked', trial: 'First month', won: 'Won', lost: 'Lost',
 };
 const OPEN = ['new', 'contacted', 'replied', 'demo', 'trial'];
 /* What a logged entry was. Every kind but a note is a contact. */

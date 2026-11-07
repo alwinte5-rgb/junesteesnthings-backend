@@ -469,7 +469,7 @@ We're a small US business that builds its own software: COS Creator Studio (plan
 What you'll do
 1. Find good-fit agencies and teams (LinkedIn, Clutch and agency directories, Facebook groups, creator communities)
 2. Start real conversations with short, personal messages: no spam, no bought lists
-3. Run short demos and set up 14-day free trials that show each agency how much time it saves across their clients
+3. Run short demos and start new customers on a half-price first month that shows each agency how much time it saves across their clients
 4. Follow up on a schedule and log every lead, reply and next step in our tracker
 5. Share what customers ask for and what's working, so we can improve the apps
 
@@ -498,7 +498,7 @@ ${PAY_TERMS}
 ${TIME_OFF}
 
 Training
-You start by learning the apps, the customers they're for, and our approved offers and free trials. The owner reviews your first messages and demos before you go solo.
+You start by learning the apps, the customers they're for, and our approved offers. The owner reviews your first messages and demos before you go solo.
 
 Career path
 As the apps grow, strong performers get more hours, raises and more responsibility.
