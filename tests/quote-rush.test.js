@@ -37,6 +37,7 @@ function lift(name) {
   throw new Error('unbalanced braces reading ' + name);
 }
 
+const RUSH_MAX = src.match(/const RUSH_MAX_PCT = \d+;/)[0];
 const DEFAULT_TABLE = src.match(/const RUSH_TIERS_DEFAULT = \[[\s\S]*?\];/)[0];
 const PARSER = src.match(/const RUSH_TIERS = \(\(\) => \{[\s\S]*?\}\)\(\);/)[0];
 
@@ -45,6 +46,7 @@ function build(env) {
   return vm.runInThisContext(`(() => {
     const process = { env: ${JSON.stringify(env || {})} };
     const console = { error: () => {} };
+    ${RUSH_MAX}
     ${DEFAULT_TABLE}
     ${PARSER}
     ${lift('businessDaysUntil')}
@@ -58,11 +60,12 @@ const TUE = new Date('2026-09-01T12:00:00');
 
 /* ── the ladder the shop asked for ───────────────────────────────────────── */
 
-test('the ladder is 80 / 50 / 30 / 10 by business days out', () => {
+test('the ladder is 70 / 50 / 35 / 20 / 10 by business days out (owner, 2026-11-06)', () => {
   const { rushPctFor } = build();
-  assert.strictEqual(rushPctFor('2026-09-02', TUE), 80, 'next business day');
-  assert.strictEqual(rushPctFor('2026-09-03', TUE), 50, 'two days');
-  assert.strictEqual(rushPctFor('2026-09-04', TUE), 30, 'three days');
+  assert.strictEqual(rushPctFor('2026-09-01', TUE), 70, 'same day');
+  assert.strictEqual(rushPctFor('2026-09-02', TUE), 50, 'next business day');
+  assert.strictEqual(rushPctFor('2026-09-03', TUE), 35, 'two days');
+  assert.strictEqual(rushPctFor('2026-09-04', TUE), 20, 'three days');
   assert.strictEqual(rushPctFor('2026-09-07', TUE), 10, 'four days, across the weekend');
   assert.strictEqual(rushPctFor('2026-09-08', TUE), 0, 'five days is normal turnaround');
 });
@@ -80,8 +83,8 @@ test('a date already past is the most urgent case, not the least', () => {
   /* It must not wrap around to no rush — someone asking for yesterday is the
      one job that certainly cannot be done at the normal rate. */
   const { rushPctFor } = build();
-  assert.strictEqual(rushPctFor('2026-08-25', TUE), 80);
-  assert.strictEqual(rushPctFor('2026-09-01', TUE), 80, 'today counts as today');
+  assert.strictEqual(rushPctFor('2026-08-25', TUE), 70);
+  assert.strictEqual(rushPctFor('2026-09-01', TUE), 70, 'today counts as today');
 });
 
 test('no date means no rush', () => {
@@ -94,8 +97,8 @@ test('no date means no rush', () => {
 /* ── add, remove, adjust ─────────────────────────────────────────────────── */
 
 test('the ladder can be adjusted without a deploy', () => {
-  const { rushPctFor } = build({ JT_RUSH_TIERS: '[{"days":1,"pct":95},{"days":3,"pct":25}]' });
-  assert.strictEqual(rushPctFor('2026-09-02', TUE), 95, 'adjusted');
+  const { rushPctFor } = build({ JT_RUSH_TIERS: '[{"days":1,"pct":60},{"days":3,"pct":25}]' });
+  assert.strictEqual(rushPctFor('2026-09-02', TUE), 60, 'adjusted');
   assert.strictEqual(rushPctFor('2026-09-03', TUE), 25, 'two days now falls in the 3-day rung');
   assert.strictEqual(rushPctFor('2026-09-07', TUE), 0, 'the 4-day rung was removed');
 });
@@ -120,15 +123,21 @@ test('a broken ladder falls back to the table, never to charging nothing', () =>
      not read as "no rush". */
   for (const bad of ['{', 'null', '"80"', '{"days":1}', '[{"days":"x","pct":"y"}]']) {
     const { rushPctFor } = build({ JT_RUSH_TIERS: bad });
-    assert.strictEqual(rushPctFor('2026-09-02', TUE), 80,
+    assert.strictEqual(rushPctFor('2026-09-02', TUE), 50,
       `JT_RUSH_TIERS=${bad} should fall back to the default ladder`);
   }
 });
 
+test('no rung can go above the 70% cap, even from JT_RUSH_TIERS', () => {
+  const { rushPctFor } = build({ JT_RUSH_TIERS: '[{"days":0,"pct":95},{"days":2,"pct":40}]' });
+  assert.strictEqual(rushPctFor('2026-09-01', TUE), 70, 'capped');
+  assert.strictEqual(rushPctFor('2026-09-03', TUE), 40, 'under the cap is kept');
+});
+
 test('rungs are sorted, so the order they are written in does not matter', () => {
   const { rushPctFor } = build({
-    JT_RUSH_TIERS: '[{"days":4,"pct":10},{"days":1,"pct":80},{"days":2,"pct":50}]' });
-  assert.strictEqual(rushPctFor('2026-09-02', TUE), 80, 'the most urgent rung still wins');
+    JT_RUSH_TIERS: '[{"days":4,"pct":10},{"days":1,"pct":60},{"days":2,"pct":50}]' });
+  assert.strictEqual(rushPctFor('2026-09-02', TUE), 60, 'the most urgent rung still wins');
 });
 
 /* ── how it lands on the money ───────────────────────────────────────────── */

@@ -9719,16 +9719,21 @@ const ORDER_SHARED_CODES = ADDONS.filter((a) => a.orderShared).map((a) => a.code
  * date falls at or under wins.
  *
  * ADJUSTING IT: set JT_RUSH_TIERS to a JSON array to add, remove or change
- * bands without a deploy, e.g. [{"days":1,"pct":80},{"days":3,"pct":25}].
+ * bands without a deploy, e.g. [{"days":0,"pct":70},{"days":3,"pct":25}].
+ * No band, and no rush typed on a quote, goes above RUSH_MAX_PCT.
  * An empty array turns rush off entirely. Bad JSON falls back to the table
  * below rather than to no rush, because silently not charging is the failure
  * that costs money. Whatever the table says, the person quoting can still
  * override the percentage or clear it on any individual quote.
  */
+/* Owner, 2026-11-06: rush tops out at 70%, for same day; each day of lead
+   time steps it down. `days: 0` is today, or a date already past. */
+const RUSH_MAX_PCT = 70;
 const RUSH_TIERS_DEFAULT = [
-  { days: 1, pct: 80 },   // next business day
-  { days: 2, pct: 50 },
-  { days: 3, pct: 30 },
+  { days: 0, pct: 70 },   // same day
+  { days: 1, pct: 50 },   // next business day
+  { days: 2, pct: 35 },
+  { days: 3, pct: 20 },
   { days: 4, pct: 10 },
 ];
 
@@ -9739,8 +9744,8 @@ const RUSH_TIERS = (() => {
     const t = JSON.parse(raw);
     if (!Array.isArray(t)) throw new Error('not an array');
     const clean = t
-      .map((x) => ({ days: parseInt(x && x.days, 10), pct: Number(x && x.pct) }))
-      .filter((x) => Number.isFinite(x.days) && x.days > 0
+      .map((x) => ({ days: parseInt(x && x.days, 10), pct: Math.min(Number(x && x.pct), RUSH_MAX_PCT) }))
+      .filter((x) => Number.isFinite(x.days) && x.days >= 0
                   && Number.isFinite(x.pct) && x.pct >= 0);
     /* An empty array is a real answer — "we do not sell rush" — but a table
        that parsed to nothing because every row was malformed is not. */
@@ -12703,7 +12708,7 @@ function productGroupOf(name) {
           <tr id="rushrow" style="display:none"><td class="muted">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span>Rush</span>
-              <input name="rush_pct" id="rushpct" type="number" step="0.01" min="0" max="100"
+              <input name="rush_pct" id="rushpct" type="number" step="0.01" min="0" max="${RUSH_MAX_PCT}"
                      inputmode="decimal" value="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}"${
                      canPrice ? '' : ' readonly title="Set from the needed-by date. Only the owner can change it."'}
                      style="width:80px;padding:5px 6px;font-size:13px" placeholder="0">
@@ -15520,10 +15525,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     /* Rush, as agreed on this quote. The tier table only SUGGESTS a figure —
        what is stored is what the person quoting accepted, so clearing the box
        removes the fee and typing over it keeps that number even if the tiers
-       change later. Clamped to 0-100 so a stray value cannot invert a job. */
+       change later. Clamped to 0 to RUSH_MAX_PCT (70%, owner 2026-11-06), so a
+       stray value cannot invert a job and no rush goes above the cap. */
     let rushPct = Number(one(b.rush_pct));
     if (!Number.isFinite(rushPct) || rushPct < 0) rushPct = 0;
-    rushPct = Math.min(rushPct, 100);
+    rushPct = Math.min(rushPct, RUSH_MAX_PCT);
     /* Only DTF can be rushed (tools/lib/rush.js). The owner may still type a
        rush on anything; a helper's is 0 unless every required line is DTF. */
     const methodTitle = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
