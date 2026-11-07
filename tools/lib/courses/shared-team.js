@@ -35,7 +35,7 @@ Team chat has two kinds of conversation:
 - **Channels**, like # Everyone and the one for your part of the team. Use them for things more than one person needs: "the banner files for the 5K are in the job", "the site is slow, I am checking". June sees every channel
 - **Direct with June**: just the two of you. Use it for questions about your pay or your hours, anything about a customer you are worried about, and anything you would not say in front of everyone
 
-If a message has been unread for 10 minutes, the person gets one email about it. You can switch your own alert emails off on the Team chat page, but then check Team chat at the start of every hour you work.
+While the back office is open, a new message rings the bell at the top, with a sound and a pop-up if you turn them on from the bar on My Day. If a message has been unread for 10 minutes, the person also gets an email about it, at most two a day. You can switch your own alert emails off on the Team chat page, but then check Team chat at the start of every hour you work.
 
 **Status with a time in it**
 
@@ -56,9 +56,18 @@ Before you ask, look where the answer lives:
 
 If you had to ask and the answer is not in the Playbook, say so. June may add it, so the next person does not have to ask.
 
+**Your shift in the back office**
+
+- **Clock in** on the Timeclock when you start and out when you stop, breaks included. Your pay comes from these hours, and your first clock-in each day posts your open tasks to June's Mailbox, so she sees your plan
+- **Tasks** sit on My Day by how long they take: Now, This week, Big project, plus Every day. Press **Start** when you take one on and **Mark completed** when it is done, saying what you did; some ask for proof (files or a link). The next one arrives by itself. Stuck on one? Its **Stuck?** link tells June
+- **Projects** are big work split into steps of about two hours on a timeline. Do the pink step; the next opens once it is completed
+- **Mailbox** keeps a conversation about one job or one task with it, so nothing is lost in chat. Every task has **Message about this task**
+- **My stats** shows what your week adds up to: hours, and tasks done on time
+- The **back-office tour** on My Day walks you through each of these screens in about ten minutes. Do it on your first day
+
 **Start and end of your day**
 
-- **Start:** open My Day and Team chat. Read anything new before you start your own work
+- **Start:** clock in, then open My Day and Team chat. Read anything new before you start your own work
 - **End:** post your end-of-day note in Team chat, in your channel where June sees it: what you finished, what is waiting and on whom, and what you will do first next time. Someone else may need to pick it up before you are back`,
     pages: [
       { from: null, checks: [
@@ -71,6 +80,11 @@ If you had to ask and the answer is not in the Playbook, say so. June may add it
       ] },
       { from: 'One place for each answer', checks: [
         q('A note about one order belongs…', ['Only in Team chat', 'On the job page', 'In your own notebook'], 1, 'The job page is where the next person will look.'),
+        q('Where are the tools we use and where each login is?', ['Resources', 'Team chat', 'Your own notes'], 0, 'Resources lists the tools and logins.'),
+      ] },
+      { from: 'Your shift in the back office', checks: [
+        q('Your first clock-in of the day also…', ['Does nothing else', 'Posts your open tasks to June\'s Mailbox', 'Sends a customer email'], 1, 'June sees your plan without asking.'),
+        q('A conversation about one task belongs…', ['In # Everyone', 'In the Mailbox, from Message about this task', 'In your own email'], 1, 'The Mailbox keeps it with the task.'),
         q('What do you write at the end of your day?', ['Nothing', 'What you finished, what is waiting and on whom, and what is first next time', 'Your hours only'], 1, 'Someone may need to pick it up before you are back.'),
       ] },
     ],

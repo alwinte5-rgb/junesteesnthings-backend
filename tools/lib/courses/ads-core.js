@@ -177,7 +177,7 @@ Short and plain. "Custom apparel spent $35 on people looking for wholesale blank
 
 **What we count**
 
-- **Quote requests:** someone sends the quote form on jtees.net. The site tells Google ("generate_lead") and Meta ("Lead") when the form is sent
+- **Quote requests:** someone sends the quote form on jtees.net. The site tells Google ("generate_lead") and Meta ("Lead") when the form is sent. Meta also hears it from our server (the Conversions API), matched to the browser's event so each quote request counts once
 - **Online orders:** a paid order from the design studio
 
 Nothing else is a conversion: not page views, not time on site, not clicks on the phone number on their own.

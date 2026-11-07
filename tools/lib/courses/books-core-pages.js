@@ -113,7 +113,7 @@ module.exports = {
     ] },
     { from: 'How the system handles it', checks: [
       q('On a quote, payment waits until…', ['A certificate is on file', 'June calls'], 0, 'Shop attaches or customer uploads.'),
-      q('A studio certificate June refuses means…', ['Tax is added back and collected with the balance', 'The order is free'], 0, 'Refused tax is collected.'),
+      q('A customer\'s certificate June refuses later means…', ['Tax is added back and collected with the balance', 'The order is free'], 0, 'Refused tax is collected.'),
     ] },
     { from: 'Your monthly check', checks: [
       q('The certificate holder\'s name should…', ['Match the customer', 'Be anything'], 0, 'Check name and kind.'),

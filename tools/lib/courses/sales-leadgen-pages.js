@@ -57,6 +57,10 @@ module.exports = {
       q('The phone box on a found prospect is…', ['Left blank', 'Filled from their page', 'Required'], 0, 'We never call or text a number found online.'),
       q('When do you register them?', ['Before you send anything', 'After they reply', 'After the quote'], 0, 'Register first; the first registration wins.'),
     ] },
+    { from: 'The AI finder', checks: [
+      q('A finder result counts for you once…', ['It is on the list', 'You contacted them and it is logged on the lead', 'You added it'], 1, 'A list of names you never wrote to counts for nothing.'),
+      q('Before you search again, you…', ['Work the running list: the shop gets 2 searches a day', 'Search as often as you like', 'Delete the list'], 0, 'Every search adds to one list; contacted results leave it.'),
+    ] },
   ],
   'lg4-decider': [
     { from: null, checks: [

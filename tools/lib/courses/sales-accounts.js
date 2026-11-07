@@ -321,7 +321,7 @@ Volunteers change every year. If your note bounces or a new name replies, welcom
 
 **Tax paperwork**
 
-Schools, churches and charities are often tax-exempt. Each year, check their certificate is on file and in date. If it has expired, ask for the new one before you quote. The customer uploads it on their quote page and June approves it. You never take tax off yourself.
+Schools, churches and charities are often tax-exempt. Each year, check their certificate is on file and in date. If it has expired, ask for the new one before you quote. The customer uploads it on their quote page; it is accepted straight away and June checks it later. You never take tax off yourself.
 
 **Make ordering again effortless**
 
@@ -568,7 +568,7 @@ const FINAL = {
       { id: 'f3', q: 'An order is done. You set…', choices: ['A follow-up date for their next need', 'Nothing', 'A discount', 'A newsletter sign-up'], answer: 0, article: A.calendar, why: 'My Day brings them back.' },
       { id: 'f4', q: 'Before writing, you check their history on…', choices: ['Customers', 'Resources', 'Training', 'Playbook'], answer: 0, article: A.history, why: 'Every order is there.' },
       { id: 'f5', q: 'The PTO chair who ordered last year has moved on. You…', choices: ['Find the new contact and welcome them', 'Write to the old one', 'Give up', 'Text the school'], answer: 0, article: A.yearly, why: 'Volunteers change.' },
-      { id: 'f6', q: 'A church\'s certificate expired. You…', choices: ['Ask for the new one before quoting; June approves it', 'Untick tax', 'Charge tax silently', 'Ignore it'], answer: 0, article: A.yearly, why: 'Never take tax off yourself.' },
+      { id: 'f6', q: 'A church\'s certificate expired. You…', choices: ['Ask for the new one before quoting; they upload it on their quote', 'Untick tax', 'Charge tax silently', 'Ignore it'], answer: 0, article: A.yearly, why: 'Never take tax off yourself.' },
       { id: 'f7', q: 'They ran short of XL last year. You…', choices: ['Suggest a few extra XL', 'Say nothing', 'Remove XL', 'Charge more'], answer: 0, article: A.history, why: 'Help them avoid it.' },
       { id: 'f8', q: 'Last year\'s proof came late. You…', choices: ['Fix it and say so', 'Hope they forgot', 'Blame someone', 'Discount'], answer: 0, article: A.history, why: 'Show you learned.' },
       { id: 'f9', q: 'The three parts of a reorder note:', choices: ['What we made, their season, one easy step', 'Price, discount, deadline', 'Logo, tax, address', 'None'], answer: 0, article: A.reorder, why: 'Specific, timely, easy.' },

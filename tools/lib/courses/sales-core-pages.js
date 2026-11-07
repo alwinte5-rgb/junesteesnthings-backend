@@ -40,6 +40,10 @@ module.exports = {
       q('A customer asks about deposits. Quickest ready reply?', ['Google it', 'Search the Playbook (or its shortcut)', 'An old email'], 1, 'Copy the Playbook reply, then make it personal.'),
       q('Where do you ask June something private?', ['Direct with June, in Team chat', 'The # Sales channel', 'A customer email'], 0, 'Channels are for the team; Direct is just you and June.'),
     ] },
+    { from: 'Clock, tasks and the bell', checks: [
+      q('You finished a task. What do you press?', ['Nothing, it closes itself', 'Mark completed, saying what you did', 'Start again'], 1, 'Mark completed with a note; some tasks ask for proof.'),
+      q('Your pay comes from…', ['The hours you clock in and out', 'Your tasks', 'Your chat messages'], 0, 'Clock in when you start and out when you stop, breaks included.'),
+    ] },
     { from: 'Your level, and why some things wait', checks: [
       q('Your quote says "waiting for approval". What does it mean?', ['Something broke', 'June checks it before the customer sees it', 'The customer declined'], 1, 'While you are in training, June checks quotes and messages first.'),
       q('Where do shared logins live?', ['In Team chat', 'In the team password manager', 'In a text from June'], 1, 'Never in chat, email or texts.'),
@@ -65,7 +69,8 @@ module.exports = {
       q('A coach wants giant photo heads of the players. What is that?', ['A banner', 'Big Head Cutouts', 'A yard sign'], 1, 'Singles or packs; a pack is often cheaper per head.'),
     ] },
     { from: 'Turnaround', checks: [
-      q('When does the turnaround clock start?', ['At the first message', 'When the proof is approved and the deposit paid', 'When you send the quote'], 1, 'Late artwork or approval moves the date.'),
+      q('When does the turnaround clock start?', ['At the first message', 'At the deposit, or the proof approval if we design it', 'When you send the quote'], 1, 'Late artwork or approval moves the date.'),
+      q('How long does a small order take?', ['2 to 3 business days', '5 to 7 business days', '20 business days'], 1, 'Small orders 5–7 business days, larger ones 7–14.'),
       q('Rush on DTF for next business day adds…', ['+10%', '+30%', '+80%'], 2, 'Next day +80%, 2 days +50%, 3 days +30%, 4 days +10%. Only DTF can be rushed.'),
     ] },
     { from: 'Getting the order to the customer', checks: [
@@ -98,7 +103,7 @@ module.exports = {
     ] },
     { from: 'Dates and notes', checks: [
       q('Why does the real "Needed by" date matter?', ['It does not', 'The form sets the rush from it', 'It sets the deposit'], 1, 'Rush is worked out from the Needed by date.'),
-      q('A school asks for no tax. What do you need?', ['Nothing', 'Their Illinois exemption letter (E-number), approved first', 'The principal\'s signature'], 1, 'Tax comes off only with an approved certificate.'),
+      q('A school asks for no tax. What do you need?', ['Nothing', 'Their Illinois exemption letter (E-number), uploaded on their quote', 'The principal\'s signature'], 1, 'Tax comes off only with an approved certificate.'),
     ] },
     { from: 'Deposits', checks: [
       q('A $600 quote is accepted. The deposit to start is…', ['$600', '$300', '$0'], 1, '50%, or the full amount under $100.'),

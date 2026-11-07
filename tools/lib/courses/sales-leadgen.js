@@ -261,6 +261,7 @@ Register before you send anything. If the shop already knows them, they are not 
 - Open the source link and check the place is real and alive, as above. AI can be wrong
 - Press **Add to my leads** on the good ones. A website is enough to register a finder lead; add the email when you find it, and June confirms leads with no email
 - Places the shop already has are marked, and cannot be added
+- Every search adds to one running list, and a result leaves it once it is contacted, so nothing found is lost between shifts. Work the list before you search again: the whole shop gets 2 searches a day
 - A found lead counts for you only once you contact them and it is logged on the lead: an email sent from Leads, or a DM note saying what happened. A list of names you never wrote to counts for nothing`,
     }],
     practice: [
