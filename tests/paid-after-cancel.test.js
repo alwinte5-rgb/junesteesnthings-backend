@@ -94,7 +94,7 @@ function desk(quote) {
     CARD_FEE: 0.04,
     SHOP_EMAIL: 'shop@example.com', SHOP_NAME: "June's Tees & Things", SHOP_SIGNER: 'June',
     SHOP_PHONE: '(773) 849-1854', BALANCE_WHEN: 'on pickup',
-    REVIEW_DAYS_AFTER_DEPOSIT: () => 21, REVIEW_DAYS_AFTER_PAYMENT: () => 7,
+    REVIEW_DAYS_AFTER_PAYMENT: () => 21, REVIEW_DAYS_AFTER_DELIVERY: () => 3,
     quoteLink: (code) => 'https://www.jtees.net/q/' + code,
     /* The real one appends to the ledger, is idempotent on the session, and
        rolls the ledger up onto the quote. */

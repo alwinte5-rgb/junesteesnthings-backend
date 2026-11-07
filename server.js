@@ -18179,7 +18179,8 @@ async function bankStripeSession(session) {
        the ask read as personal rather than automated. */
     product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
     quote_code: code,
-    days: stillDue > 0 ? REVIEW_DAYS_AFTER_DEPOSIT() : REVIEW_DAYS_AFTER_PAYMENT(),
+    // Already handed over (paid at pickup): the usual days after delivery.
+    days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),
   }).catch(() => {});
 
   return { ok: true, duplicate: false, paid: res.paid };
@@ -18986,7 +18987,8 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
     name: q.name, email: to, phone: q.phone,
     product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
     quote_code: code,
-    days: stillDue > 0 ? REVIEW_DAYS_AFTER_DEPOSIT() : REVIEW_DAYS_AFTER_PAYMENT(),
+    // Already handed over (paid at pickup): the usual days after delivery.
+    days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),
   }).catch(() => {});
 
   console.log(`Stripe payment outside checkout (${via}) on quote ${code}: ${money(net)}` +
@@ -28992,17 +28994,14 @@ app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => 
    was an order status nobody ever set. So delivery does not CREATE the ask, it
    RESCHEDULES the one payment already queued, to a few days after the customer
    actually had the thing in their hands. */
-/* Zero on a job PAID IN FULL: the balance is collected when the work is handed
-   over, so paid in full means finished, and the ask goes out while the customer
-   still has the box open.
- *
-   A DEPOSIT is the opposite — the work does not exist yet — so that still
-   waits. Asking someone to review a job that has not been made is how a shop
-   collects a two-star review about nothing. */
+/* Payment is only the FALLBACK now (owner, 2026-11-06): 21 days, paid in full
+   or not. "Paid in full means finished" was wrong: studio orders and quotes
+   paid up front are paid before anything is made, so those customers were
+   asked how it turned out within the hour. The real ask is 3 days after the
+   job is shipped, picked up or delivered (REVIEW_DAYS_AFTER_DELIVERY, which
+   moves this one); 21 days covers a job nobody marks. */
 const REVIEW_DAYS_AFTER_PAYMENT  = () =>
-  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_PAYMENT_DAYS || '0', 10));
-const REVIEW_DAYS_AFTER_DEPOSIT  = () =>
-  Math.max(0, parseInt(process.env.JT_REVIEW_AFTER_DEPOSIT_DAYS || '14', 10));
+  Math.max(0, parseInt(process.env.JT_REVIEW_FALLBACK_DAYS || '21', 10));
 
 /* Days between the first ask and the single follow-up. One only: a review is a
    favour, and a second chase is a nuisance. */
@@ -29030,6 +29029,15 @@ const PENDING_REVIEW_WHERE = `
     OR ($2::text IS NOT NULL AND quote_code = $2))
   AND sent_at IS NULL AND submitted_at IS NULL`;
 
+/* An ask on this job already left the queue: sent, or ruled out (unsubscribed,
+   refunded, disputed, cancelled). A balance paid after the ask went, or a
+   shipment recorded after it, must not start a second ask and a second
+   follow-up. A returning customer is a new quote or order, so is still asked. */
+const DONE_REVIEW_WHERE = `
+  (($1::text IS NOT NULL AND order_ref  = $1)
+    OR ($2::text IS NOT NULL AND quote_code = $2))
+  AND (sent_at IS NOT NULL OR submitted_at IS NOT NULL)`;
+
 /** Queue an ask, unless one is already waiting for this order or quote.
  *  Never throws — a review is never worth failing a payment over. */
 async function queueReviewRequest({ name, email, phone, product, order_ref, quote_code, days }) {
@@ -29052,7 +29060,8 @@ async function queueReviewRequest({ name, email, phone, product, order_ref, quot
     const { rowCount } = await pool.query(
       `INSERT INTO reviews (token,name,email,phone,product,order_ref,quote_code,requested_at)
        SELECT $3,$4,$5,$6,$7,$1,$2, NOW() + ($8 || ' days')::interval
-        WHERE NOT EXISTS (SELECT 1 FROM reviews WHERE ${PENDING_REVIEW_WHERE})`,
+        WHERE NOT EXISTS (SELECT 1 FROM reviews WHERE ${PENDING_REVIEW_WHERE})
+          AND NOT EXISTS (SELECT 1 FROM reviews WHERE ${DONE_REVIEW_WHERE})`,
       [order_ref || null, quote_code || null, reviewToken(), name || '',
        String(email), phone || '', product || '', String(Math.max(0, Number(days) || 0))]);
     if (rowCount) {
@@ -29359,7 +29368,8 @@ app.get('/admin/reviews', requireAdmin, async (req, res) => {
     const fmtWhen = (d) => !d ? '—' : new Date(d).toLocaleString('en-US', {
       timeZone: SHOP_TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
     const OUTCOME = { unsubscribed: 'not sent: unsubscribed', refunded: 'not sent: refunded',
-                      disputed: 'not sent: disputed', failed: 'failed to send' };
+                      disputed: 'not sent: disputed', cancelled: 'not sent: cancelled',
+                      failed: 'failed to send' };
     /* A send that did not happen names why, with the date it was decided. */
     const outcomeCell = (outcome, at) => OUTCOME[outcome]
       ? pill(OUTCOME[outcome], outcome === 'failed' ? 'red' : 'neutral') + `<div class="muted">${escEmail(fmtWhen(at))}</div>`
@@ -32402,6 +32412,43 @@ async function refundedInFull({ quote_code, order_ref }) {
   return !!rows[0]?.refunded && Number(rows[0].net) < 0.01;
 }
 
+/* When the review-timing change shipped. Asks queued before it used the old
+   delays (0 days paid in full, 14 on a deposit); see holdReviewAsks. */
+const REVIEW_HOLD_BEFORE = '2026-11-07T12:00:00Z';
+
+/* Runs just before the hourly send, as its own function so the send step's
+   rules stay where they were. If it fails the send does not run: an ask held
+   for a reason must not go out because the hold broke. */
+async function holdReviewAsks() {
+  /* A job cancelled before it was made is not asked how it turned out. Ruled
+     out the way a refund is, follow-up included, so neither comes round. */
+  await pool.query(
+    `UPDATE reviews r SET sent_at=NOW(), followup_sent_at=NOW(), ask_outcome='cancelled', followup_outcome='cancelled'
+       FROM quotes q
+      WHERE q.code = r.quote_code AND q.cancelled_at IS NOT NULL
+        AND r.sent_at IS NULL AND r.submitted_at IS NULL
+        AND r.requested_at IS NOT NULL AND r.requested_at <= NOW()`);
+  /* Only asks queued BEFORE the 2026-11-06 change (REVIEW_HOLD_BEFORE): one
+     for a quote job not yet shipped, picked up or delivered waits for the
+     fallback date instead of going now. Shipping it moves the ask to 3 days
+     later, as usual. A job older than the fallback is not held. Asks queued
+     since, including a backfill sent on purpose, are left alone. */
+  await pool.query(
+    `UPDATE reviews r SET requested_at = COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int)
+       FROM quotes q
+      WHERE q.code = r.quote_code AND r.sent_at IS NULL AND r.submitted_at IS NULL
+        AND r.created_at < $2::timestamptz
+        AND r.requested_at IS NOT NULL AND r.requested_at <= NOW()
+        AND q.shipped_at IS NULL AND q.delivered_at IS NULL
+        AND COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int) > NOW()`,
+    [REVIEW_DAYS_AFTER_PAYMENT(), REVIEW_HOLD_BEFORE]);
+}
+
+async function reviewAsksStep() {
+  await holdReviewAsks();
+  return sendDueReviewRequests();
+}
+
 async function sendDueReviewRequests() {
   let due = 0, sent = 0, failed = 0, skipped = 0, refunded = 0;
   try {
@@ -32653,7 +32700,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('stripe refunds', reconcileRecentRefunds);
     await step('stripe disputes', reconcileRecentDisputes);
     await step('stripe payouts', reconcileFailedPayouts);
-    await step('review asks', sendDueReviewRequests);
+    await step('review asks', reviewAsksStep);
     await step('review follow-ups', sendReviewFollowUps);
     /* Reminders text as well as email, so they wait for daytime (9am-6pm
        Chicago); the hourly sweep picks them up at 9. */
