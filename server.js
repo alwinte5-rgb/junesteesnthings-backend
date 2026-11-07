@@ -18179,7 +18179,8 @@ async function bankStripeSession(session) {
        the ask read as personal rather than automated. */
     product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
     quote_code: code,
-    days: reviewDaysForQuote(q),
+    // Already handed over (paid at pickup): the usual days after delivery.
+    days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),
   }).catch(() => {});
 
   return { ok: true, duplicate: false, paid: res.paid };
@@ -18986,7 +18987,8 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
     name: q.name, email: to, phone: q.phone,
     product: (Array.isArray(q.items) && q.items[0] && q.items[0].description) || '',
     quote_code: code,
-    days: reviewDaysForQuote(q),
+    // Already handed over (paid at pickup): the usual days after delivery.
+    days: (q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT(),
   }).catch(() => {});
 
   console.log(`Stripe payment outside checkout (${via}) on quote ${code}: ${money(net)}` +
@@ -29001,12 +29003,6 @@ app.post('/review/:token', orderRateLimit, verifyTurnstile, async (req, res) => 
 const REVIEW_DAYS_AFTER_PAYMENT  = () =>
   Math.max(0, parseInt(process.env.JT_REVIEW_FALLBACK_DAYS || '21', 10));
 
-/** The delay for an ask queued when a quote is paid. Already handed over (paid
- *  at pickup, say): the usual days after delivery. Otherwise the fallback,
- *  which shipping, pickup or delivery later moves. */
-const reviewDaysForQuote = (q) =>
-  (q && (q.shipped_at || q.delivered_at)) ? REVIEW_DAYS_AFTER_DELIVERY() : REVIEW_DAYS_AFTER_PAYMENT();
-
 /* Days between the first ask and the single follow-up. One only: a review is a
    favour, and a second chase is a nuisance. */
 const REVIEW_FOLLOWUP_DAYS = () =>
@@ -32417,34 +32413,45 @@ async function refundedInFull({ quote_code, order_ref }) {
 }
 
 /* When the review-timing change shipped. Asks queued before it used the old
-   delays (0 days paid in full, 14 on a deposit); see sendDueReviewRequests. */
+   delays (0 days paid in full, 14 on a deposit); see holdReviewAsks. */
 const REVIEW_HOLD_BEFORE = '2026-11-07T12:00:00Z';
+
+/* Runs just before the hourly send, as its own function so the send step's
+   rules stay where they were. If it fails the send does not run: an ask held
+   for a reason must not go out because the hold broke. */
+async function holdReviewAsks() {
+  /* A job cancelled before it was made is not asked how it turned out. Ruled
+     out the way a refund is, follow-up included, so neither comes round. */
+  await pool.query(
+    `UPDATE reviews r SET sent_at=NOW(), followup_sent_at=NOW(), ask_outcome='cancelled', followup_outcome='cancelled'
+       FROM quotes q
+      WHERE q.code = r.quote_code AND q.cancelled_at IS NOT NULL
+        AND r.sent_at IS NULL AND r.submitted_at IS NULL
+        AND r.requested_at IS NOT NULL AND r.requested_at <= NOW()`);
+  /* Only asks queued BEFORE the 2026-11-06 change (REVIEW_HOLD_BEFORE): one
+     for a quote job not yet shipped, picked up or delivered waits for the
+     fallback date instead of going now. Shipping it moves the ask to 3 days
+     later, as usual. A job older than the fallback is not held. Asks queued
+     since, including a backfill sent on purpose, are left alone. */
+  await pool.query(
+    `UPDATE reviews r SET requested_at = COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int)
+       FROM quotes q
+      WHERE q.code = r.quote_code AND r.sent_at IS NULL AND r.submitted_at IS NULL
+        AND r.created_at < $2::timestamptz
+        AND r.requested_at IS NOT NULL AND r.requested_at <= NOW()
+        AND q.shipped_at IS NULL AND q.delivered_at IS NULL
+        AND COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int) > NOW()`,
+    [REVIEW_DAYS_AFTER_PAYMENT(), REVIEW_HOLD_BEFORE]);
+}
+
+async function reviewAsksStep() {
+  await holdReviewAsks();
+  return sendDueReviewRequests();
+}
 
 async function sendDueReviewRequests() {
   let due = 0, sent = 0, failed = 0, skipped = 0, refunded = 0;
   try {
-    /* A job cancelled before it was made is not asked how it turned out. Ruled
-       out the way a refund is, follow-up included, so neither comes round. */
-    await pool.query(
-      `UPDATE reviews r SET sent_at=NOW(), followup_sent_at=NOW(), ask_outcome='cancelled', followup_outcome='cancelled'
-         FROM quotes q
-        WHERE q.code = r.quote_code AND q.cancelled_at IS NOT NULL
-          AND r.sent_at IS NULL AND r.submitted_at IS NULL
-          AND r.requested_at IS NOT NULL AND r.requested_at <= NOW()`);
-    /* Only asks queued BEFORE the 2026-11-06 change (REVIEW_HOLD_BEFORE): one
-       for a quote job not yet shipped, picked up or delivered waits for the
-       fallback date instead of going now. Shipping it moves the ask to 3 days
-       later, as usual. A job older than the fallback is not held. Asks queued
-       since, including a backfill sent on purpose, are left alone. */
-    await pool.query(
-      `UPDATE reviews r SET requested_at = COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int)
-         FROM quotes q
-        WHERE q.code = r.quote_code AND r.sent_at IS NULL AND r.submitted_at IS NULL
-          AND r.created_at < $2::timestamptz
-          AND r.requested_at IS NOT NULL AND r.requested_at <= NOW()
-          AND q.shipped_at IS NULL AND q.delivered_at IS NULL
-          AND COALESCE(q.accepted_at, q.created_at) + make_interval(days => $1::int) > NOW()`,
-      [REVIEW_DAYS_AFTER_PAYMENT(), REVIEW_HOLD_BEFORE]);
     const { rows } = await pool.query(
       `SELECT * FROM reviews
         WHERE sent_at IS NULL AND submitted_at IS NULL
@@ -32693,7 +32700,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('stripe refunds', reconcileRecentRefunds);
     await step('stripe disputes', reconcileRecentDisputes);
     await step('stripe payouts', reconcileFailedPayouts);
-    await step('review asks', sendDueReviewRequests);
+    await step('review asks', reviewAsksStep);
     await step('review follow-ups', sendReviewFollowUps);
     /* Reminders text as well as email, so they wait for daytime (9am-6pm
        Chicago); the hourly sweep picks them up at 9. */

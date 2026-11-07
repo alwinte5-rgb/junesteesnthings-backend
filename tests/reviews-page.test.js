@@ -85,7 +85,7 @@ const ROWS = [
 function desk(fn) {
   const updates = [], sent = [];
   const sandbox = {
-    REVIEW_BATCH: 50, REVIEW_FOLLOWUP_DAYS: () => 5, REVIEW_DAYS_AFTER_PAYMENT: () => 21, REVIEW_HOLD_BEFORE: '2026-11-07T12:00:00Z',
+    REVIEW_BATCH: 50, REVIEW_FOLLOWUP_DAYS: () => 5,
     console: { error() {}, log() {} },
     isUnsubscribed: async (email) => email === 'gone@example.com',
     refundedInFull: async (r) => r.quote_code === 'Q2',
@@ -97,8 +97,6 @@ function desk(fn) {
     },
     pool: {
       query: async (sql, args = []) => {
-        // The cancelled and pre-change hold steps run first and change nothing here.
-        if (/^UPDATE reviews r SET /.test(sql)) return { rows: [], rowCount: 0 };
         if (/^\s*SELECT \* FROM reviews/.test(sql)) return { rows: ROWS.map((r) => ({ ...r })) };
         if (/^UPDATE reviews/.test(sql)) { updates.push({ sql, args }); return { rows: [] }; }
         throw new Error('unexpected query: ' + sql.slice(0, 80));

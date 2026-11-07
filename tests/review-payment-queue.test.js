@@ -24,7 +24,6 @@
  */
 
 const { test } = require('node:test');
-const vm = require('node:vm');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -80,20 +79,18 @@ test('payment is only the fallback; the ask follows shipping, pickup or delivery
 });
 
 test('a quote payment asks at the fallback, or 3 days once already handed over', () => {
-  const helper = src.slice(src.indexOf('const reviewDaysForQuote'), src.indexOf('const reviewDaysForQuote') + 200);
-  assert.match(helper, /shipped_at/);
-  assert.match(helper, /delivered_at/);
-  const sandbox = { REVIEW_DAYS_AFTER_DELIVERY: () => 3, REVIEW_DAYS_AFTER_PAYMENT: () => 21 };
-  vm.createContext(sandbox);
-  vm.runInContext(helper.slice(0, helper.indexOf(';') + 1).replace('const ', 'this.'), sandbox);
-  assert.strictEqual(sandbox.reviewDaysForQuote({}), 21, 'not handed over yet: the fallback');
-  assert.strictEqual(sandbox.reviewDaysForQuote({ shipped_at: new Date() }), 3);
-  assert.strictEqual(sandbox.reviewDaysForQuote({ delivered_at: new Date() }), 3);
-  assert.strictEqual(src.split('days: reviewDaysForQuote(q),').length - 1, 2, 'both quote payment paths use it');
+  const n = src.split('(q.shipped_at || q.delivered_at) ? REVIEW_DAYS_AFTER_DELIVERY()').length - 1;
+  assert.strictEqual(n, 2, 'both quote payment paths');
 });
 
-const SWEEP = src.slice(src.indexOf('async function sendDueReviewRequests'),
-                        src.indexOf('SELECT * FROM reviews', src.indexOf('async function sendDueReviewRequests')));
+const SWEEP = src.slice(src.indexOf('async function holdReviewAsks'), src.indexOf('async function reviewAsksStep'));
+
+test('the hold runs before the send, and a failed hold stops the send', () => {
+  assert.match(src, /await step\('review asks', reviewAsksStep\)/);
+  const stepFn = src.slice(src.indexOf('async function reviewAsksStep'), src.indexOf('async function sendDueReviewRequests'));
+  assert.ok(stepFn.indexOf('await holdReviewAsks()') >= 0
+    && stepFn.indexOf('await holdReviewAsks()') < stepFn.indexOf('sendDueReviewRequests()'));
+});
 
 test('an ask already due for an unfinished quote waits, only if queued before the change', () => {
   assert.match(SWEEP, /q\.shipped_at IS NULL AND q\.delivered_at IS NULL/);

@@ -533,14 +533,12 @@ test('a review ask is not sent for a job refunded in full, and cannot come back 
   const updates = [];
   const sentTo = [];
   const sandbox = {
-    REVIEW_BATCH: 25, REVIEW_DAYS_AFTER_PAYMENT: () => 21, REVIEW_HOLD_BEFORE: '2026-11-07T12:00:00Z',
+    REVIEW_BATCH: 25,
     console: { log() {}, error() {} },
     isUnsubscribed: async () => false,
     requestReview: async (r) => { sentTo.push(r.email); },
     pool: {
       query(sql, args = []) {
-        // The cancelled and pre-change hold steps run first and change nothing here.
-        if (/^UPDATE reviews r SET /.test(sql)) return Promise.resolve({ rows: [], rowCount: 0 });
         if (/SELECT \* FROM reviews/.test(sql)) {
           return Promise.resolve({ rows: [
             { id: 1, email: 'refunded@example.com', quote_code: 'Q_FULL' },
