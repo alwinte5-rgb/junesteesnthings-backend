@@ -117,3 +117,94 @@ test('a bell notice never repeats an email the shop already gets', () => {
     assert.strictEqual(NOTIFY.KINDS[k].email, false, `${k} is bell-only by default`);
   }
 });
+
+/* ── Event tags and the overpaid line (owner, 2026-11-07) ──────────────────── */
+
+const vm = require('node:vm');
+const lift = (sig) => {
+  const at = src.indexOf(sig);
+  assert.notStrictEqual(at, -1, sig);
+  let depth = 0, k = src.indexOf('{', src.indexOf(')', at));
+  for (let j = k; j < src.length; j++) {
+    if (src[j] === '{') depth++;
+    else if (src[j] === '}' && --depth === 0) return src.slice(at, j + 1);
+  }
+  throw new Error('unbalanced ' + sig);
+};
+const tagged = (it, event) => ({ ...it, event });
+const overpaid = (code, amt = '$5.00') => ({ subject: `💰 Overpaid by ${amt} — quote ${code}`, html: '<p>over</p>' });
+
+test('repeats are combined by the tag, not the subject line', () => {
+  const reworded = tagged({ subject: '💳 Money in for quote ABC234, $50.00', html: '<p>paid</p>' }, 'paid:ABC234');
+  const out = D.mergeRepeats([tagged(accepted('ABC234'), 'accepted:ABC234'), reworded]);
+  assert.strictEqual(out.length, 1, 'a reworded payment subject still folds');
+  assert.match(out[0].subject, /accepted — Ada Lovelace \$200\.00 · Money in, \$50\.00$/, 'the quote code is not said twice');
+  const wrongTag = tagged(paid('ABC234'), 'paid:ZZZ999');
+  assert.strictEqual(D.mergeRepeats([accepted('ABC234'), wrongTag]).length, 2, 'the tag wins over the subject');
+});
+
+test('an overpaid alert stays its own entry: only a payment with no email of its own sends one now', () => {
+  /* Folding it into the nearest card payment blamed that payment for money a
+     later hand-recorded one took (code review, 2026-11-07). */
+  const out = D.mergeRepeats([tagged(paid('ABC234'), 'paid:ABC234'), tagged(overpaid('ABC234'), 'overpaid:ABC234')]);
+  assert.strictEqual(out.length, 2);
+  assert.strictEqual(D.eventOf(tagged(overpaid('ABC234'), 'overpaid:ABC234')).over, '$5.00');
+});
+
+test('only a well-formed tag is stored', () => {
+  assert.strictEqual(D.validEvent('paid:ABC234'), 'paid:ABC234');
+  assert.strictEqual(D.validEvent('overpaid:QWERTY2345'), 'overpaid:QWERTY2345');
+  for (const bad of [null, '', 'paid', 'paid:abc234', 'refund:ABC234', 'paid:ABC234; DROP', 'x'.repeat(500)]) {
+    assert.strictEqual(D.validEvent(bad), null, String(bad).slice(0, 20));
+  }
+});
+
+test('the server stores the tag with a held email and reads it back', () => {
+  assert.match(src, /ADD COLUMN IF NOT EXISTS event TEXT/);
+  assert.match(src, /SHOPDIGEST\.validEvent\(event\)/, 'never a raw value');
+  assert.match(src, /RETURNING id, subject, html, reply_to, created_at, event/, 'the sweep reads it back');
+  assert.ok(src.includes('event: `accepted:${q.code}`'), 'the accept email is tagged');
+  assert.strictEqual(src.split('event: `paid:${code}`').length - 1, 2, 'both card payment emails are tagged');
+});
+
+function payDesk({ total = 100, paidBefore = 0, amount }) {
+  const alerts = [];
+  const sandbox = {
+    console: { error() {}, log() {} }, round2: (n) => Math.round(n * 100) / 100, money: (n) => '$' + Number(n).toFixed(2),
+    escEmail: String, quoteLink: (c) => 'https://www.jtees.net/q/' + c, quoteTaxable: () => true,
+    syncPaidAmount: async () => paidBefore + amount,
+    alertShop: async (subject, html, opts) => { alerts.push({ subject, html, opts }); },
+    pool: { query: async (sql) => (/SELECT tax, total, taxable/.test(sql) ? { rows: [{ tax: 0, total, taxable: true }] }
+      : /SELECT code, name, total, paid_amount, written_off/.test(sql)
+        ? { rows: [{ code: 'ABC234', name: 'Ada', total, paid_amount: paidBefore + amount, written_off: 0 }] } : { rows: [] }) },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext([lift('function overpaidBy('), lift('function overpaidNote('), lift('async function recordPayment(')].join('\n'), sandbox);
+  return { sandbox, alerts };
+}
+
+test('a card payment carries "overpaid by" in its own email; recordPayment does not send a second one', async () => {
+  const quiet = payDesk({ amount: 105 });
+  const r = await quiet.sandbox.recordPayment({ code: 'ABC234', amount: 105, method: 'card', overInOwnEmail: true });
+  assert.strictEqual(r.over, 5, 'the figure comes back to the caller');
+  assert.strictEqual(quiet.alerts.length, 0, 'no separate overpaid email');
+
+  const loud = payDesk({ amount: 105 });
+  await loud.sandbox.recordPayment({ code: 'ABC234', amount: 105, method: 'cash' });
+  assert.strictEqual(loud.alerts.length, 1, 'a payment with no email of its own keeps the alert');
+  assert.strictEqual(loud.alerts[0].opts && loud.alerts[0].opts.event, 'overpaid:ABC234', 'tagged');
+
+  const exact = payDesk({ amount: 100 });
+  assert.strictEqual((await exact.sandbox.recordPayment({ code: 'ABC234', amount: 100, method: 'cash' })).over, 0);
+  assert.strictEqual(exact.alerts.length, 0);
+
+  const note = quiet.sandbox.overpaidNote(5);
+  assert.strictEqual(note.suffix, ' · overpaid by $5.00');
+  assert.match(note.html, /Refund it, or apply it to another job/);
+});
+
+test('both card emails, and the cancelled-quote alert, use the one overpaid note', () => {
+  assert.strictEqual(src.split('overNote ? overNote.suffix').length - 1, 2, 'both card subjects');
+  assert.strictEqual(src.split('overNote ? overNote.html').length - 1, 3, 'both card bodies and the cancelled alert');
+  assert.ok(src.includes("overInOwnEmail: via !== 'apply'"), "'apply' sends no shop email, so it keeps the alert");
+});

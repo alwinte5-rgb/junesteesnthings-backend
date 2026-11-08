@@ -56,13 +56,45 @@ const CODE = '([A-Z0-9]{6}|[A-Z0-9]{10})';
 const ACCEPTED_RE = new RegExp(`^✅ Quote ${CODE} accepted\\b(.*)$`);
 const PAID_RE = new RegExp(`^💳 (Deposit paid|Balance paid|Paid in Stripe) — quote ${CODE}\\b(.*)$`);
 
-/** What a held subject announces: { kind: 'accepted' | 'paid', code, label, rest } or null. */
+/* An overpaid alert is read (it has a tag) but never folded: the card
+   payments say "overpaid by" in their own email (owner, 2026-11-07), so the
+   only overpaid alert left comes from a payment that sends no email of its
+   own, a payment recorded by hand say, and has nothing right to join. */
+const OVERPAID_RE = new RegExp(`^💰 Overpaid by (\\$[0-9,]+\\.[0-9]{2}) — quote ${CODE}\\b`);
+
+/* The tag a sender stores with a held email (server.js shop_digest_items.event,
+   owner 2026-11-07): "<kind>:<quote code>". Anything else is not stored. */
+const EVENT_RE = new RegExp(`^(accepted|paid|overpaid):${CODE}$`);
+function validEvent(tag) {
+  const t = String(tag == null ? '' : tag).trim();
+  return EVENT_RE.test(t) ? t : null;
+}
+
+/** What a held email announces: { kind: 'accepted' | 'paid' | 'overpaid',
+ *  code, label, rest, over } or null. The stored tag decides the kind and the
+ *  quote; the subject only supplies the wording. An item held before tags
+ *  existed is read from its subject, as before. */
 function eventOf(item) {
   const subject = String((item && item.subject) || '');
-  let m = ACCEPTED_RE.exec(subject);
-  if (m) return { kind: 'accepted', code: m[1], rest: m[2] };
-  m = PAID_RE.exec(subject);
-  return m ? { kind: 'paid', code: m[2], label: m[1], rest: m[3] } : null;
+  const tag = validEvent(item && item.event);
+  const acc = ACCEPTED_RE.exec(subject), pay = PAID_RE.exec(subject), ovr = OVERPAID_RE.exec(subject);
+  if (tag) {
+    const [kind, code] = tag.split(':');
+    if (kind === 'accepted') return { kind, code, rest: acc && acc[1] === code ? acc[2] : '' };
+    if (kind === 'paid') {
+      if (pay && pay[2] === code) return { kind, code, label: pay[1], rest: pay[3] };
+      /* A reworded subject still folds: its own words, minus the icon and
+         the quote code the merged line already names. */
+      const words = subject.replace(/^[^A-Za-z0-9]+/, '')
+        .replace(new RegExp(`\\s*(?:—\\s*)?(?:(?:for|on)\\s+)?(?:quote\\s+)?${code}\\b`, 'i'), '').trim();
+      return { kind, code, label: words || 'Paid', rest: '' };
+    }
+    return { kind, code, over: ovr && ovr[2] === code ? ovr[1] : '' };
+  }
+  if (acc) return { kind: 'accepted', code: acc[1], rest: acc[2] };
+  if (pay) return { kind: 'paid', code: pay[2], label: pay[1], rest: pay[3] };
+  if (ovr) return { kind: 'overpaid', code: ovr[2], over: ovr[1] };
+  return null;
 }
 
 /** The held items with each quote's "accepted" folded into its first payment
@@ -141,4 +173,4 @@ function build(held, { esc, when }) {
   };
 }
 
-module.exports = { MAX_ITEMS, MAX_ITEM_HTML, on, isShopAddress, dueHour, build, mergeRepeats, eventOf };
+module.exports = { MAX_ITEMS, MAX_ITEM_HTML, on, isShopAddress, dueHour, build, mergeRepeats, eventOf, validEvent };

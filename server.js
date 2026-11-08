@@ -898,6 +898,11 @@ async function initDB() {
       sent_at    TIMESTAMPTZ
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS shop_digest_unsent ON shop_digest_items (to_addr) WHERE sent_at IS NULL`);
+  /* What a held email announces, as "<kind>:<quote>" (accepted, paid,
+     overpaid). The summary folds repeats by this tag rather than by reading
+     subject lines, so rewording a subject cannot split an event in two
+     (owner, 2026-11-07). Older rows have none and fall back to the subject. */
+  await pool.query(`ALTER TABLE shop_digest_items ADD COLUMN IF NOT EXISTS event TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS team_chat_alert_days (
       reader TEXT NOT NULL,
@@ -2542,7 +2547,8 @@ async function anchorUndatedPaidJobs() {
  */
 async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
                                source = 'manual', session = null, pi = null,
-                               extRef = null, note = null, createdAt = null }) {
+                               extRef = null, note = null, createdAt = null,
+                               overInOwnEmail = false }) {
   /* The tax inside this payment, apportioned by how much of the job it covers.
      Computed at write time so the set-aside figure never has to re-derive
      itself from a quote total that may since have been edited. A correction or
@@ -2584,27 +2590,33 @@ async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
      Checked after the rollup so it reads the same figure the board does, and
      only on money going IN — a refund taking the balance back to zero is the
      resolution, not a new alert. Never throws: an alert must not be able to
-     fail a payment that has already banked. */
+     fail a payment that has already banked.
+
+     A caller that emails the shop about this payment itself passes
+     overInOwnEmail and says "overpaid by" in that email, so one payment is one
+     email even with the daily summary off (owner, 2026-11-07). The figure is
+     returned either way. */
+  let over = 0;
   if (round2(amount) > 0) {
     try {
       const { rows: oq } = await pool.query(
         'SELECT code, name, total, paid_amount, written_off FROM quotes WHERE code = $1', [code]);
-      const over = oq.length ? overpaidBy(oq[0]) : 0;
-      if (over > 0) {
+      over = oq.length ? overpaidBy(oq[0]) : 0;
+      if (over > 0 && !overInOwnEmail) {
         await alertShop(`💰 Overpaid by ${money(over)} — quote ${code}`,
           `<p>Quote <b>${escEmail(code)}</b>${oq[0].name ? ' for ' + escEmail(oq[0].name) : ''}
               has taken <b>${money(Number(oq[0].paid_amount || 0))}</b> against a total of
               <b>${money(Number(oq[0].total || 0))}</b>.</p>
            <p>Overpaid by <b>${money(over)}</b>. Refund it, or apply it to another job
               and record that here so the books balance.</p>
-           <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`);
+           <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>`, { event: `overpaid:${code}` });
       }
     } catch (err) {
       console.error('overpayment check failed:', err.message);
     }
   }
 
-  return { ok: true, duplicate: false, paid };
+  return { ok: true, duplicate: false, paid, over };
 }
 
 /** Money taken above what the quote asks for. Zero when square or still owing.
@@ -2612,6 +2624,17 @@ async function recordPayment({ code, amount, fee = 0, method, kind = 'payment',
  *  The counterpart to balanceOf(), which clamps at zero so a screen never shows
  *  a negative amount due. That clamp is right for the customer and wrong for
  *  the shop: it is exactly what made an overpayment invisible. */
+/** How a shop email says a payment went over the total: the subject's words
+ *  and the box in the body. One place, so the card emails, the cancelled-quote
+ *  alert and recordPayment's own alert say the same thing (owner, 2026-11-07). */
+function overpaidNote(over) {
+  return {
+    suffix: ` · overpaid by ${money(over)}`,
+    html: `<p style="background:#fff4e0;border:1px solid #f5d48a;border-radius:8px;padding:9px 12px;color:#8a5a00">
+         <b>Overpaid by ${money(over)}.</b> Refund it, or apply it to another job and record that here so the books balance.</p>`,
+  };
+}
+
 function overpaidBy(q, total) {
   const t = Number(total != null ? total : (q && q.total) || 0);
   const paid = Number((q && q.paid_amount) || 0) + Number((q && q.written_off) || 0);
@@ -2885,12 +2908,13 @@ async function withTextsInvite(to, html, now = new Date()) {
    sendShopDigest. Files are never held: the summary carries no attachments.
    True when held; a hold that fails lets the email go now, because a lost
    alert is worse than an extra email. */
-async function holdForShopDigest({ to, subject, html, replyTo, attachments }) {
+async function holdForShopDigest({ to, subject, html, replyTo, attachments, event }) {
   if (!SHOPDIGEST.on() || (Array.isArray(attachments) && attachments.some((a) => a && a.content))) return false;
   if (!SHOPDIGEST.isShopAddress(to, [NOTIFY_EMAIL, SHOP_EMAIL])) return false;
   try {
-    await pool.query(`INSERT INTO shop_digest_items (to_addr, subject, html, reply_to) VALUES ($1, $2, $3, $4)`,
-      [String(to).trim().toLowerCase(), String(subject || '').slice(0, 300), String(html || ''), replyTo ? String(replyTo).slice(0, 200) : null]);
+    await pool.query(`INSERT INTO shop_digest_items (to_addr, subject, html, reply_to, event) VALUES ($1, $2, $3, $4, $5)`,
+      [String(to).trim().toLowerCase(), String(subject || '').slice(0, 300), String(html || ''), replyTo ? String(replyTo).slice(0, 200) : null,
+       SHOPDIGEST.validEvent(event)]);
     console.log(`email held for the daily summary -> ${to}: ${String(subject).slice(0, 60)}`);
     return true;
   } catch (e) {
@@ -2899,8 +2923,8 @@ async function holdForShopDigest({ to, subject, html, replyTo, attachments }) {
   }
 }
 
-async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [], urgent = false }) {
-  if (!urgent && !marketing && await holdForShopDigest({ to, subject, html, replyTo, attachments })) return;
+async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [], urgent = false, event = null }) {
+  if (!urgent && !marketing && await holdForShopDigest({ to, subject, html, replyTo, attachments, event })) return;
   if (marketing && await isUnsubscribed(to)) {
     console.log(`sendEmail: skipped ${to} (unsubscribed)`);
     return;
@@ -17796,10 +17820,10 @@ app.get(['/q/:code/pay/card', '/q/:code/pay/balance', '/q/:code/pay/full'], asyn
  */
 /** Operational alert to the shop. Never throws — an alert must not be able to
  *  fail a webhook and cause Stripe to retry a payment that already banked. */
-async function alertShop(subject, innerHtml) {
+async function alertShop(subject, innerHtml, { event = null } = {}) {
   return sendEmail({
     to: SHOP_EMAIL,
-    subject,
+    subject, event,
     html: `<div style="font-family:system-ui,sans-serif;max-width:560px">${innerHtml}</div>`,
   }).catch((e) => console.error('shop alert failed:', e.message));
 }
@@ -18109,9 +18133,12 @@ async function bankStripeSession(session) {
     pi: typeof session.payment_intent === 'string' ? session.payment_intent : null,
     note: `${isBalance ? 'Balance' : 'Deposit'} via Stripe Checkout` +
           (fee > 0 ? ` (customer paid ${money(gross)} incl. ${money(fee)} card fee)` : ''),
+    overInOwnEmail: true,   // both emails below say it
   });
 
   if (res.duplicate) return { ok: true, duplicate: true };
+  /* Called only when over: tests lift this function without its neighbours. */
+  const overNote = Number(res.over) > 0 ? overpaidNote(Number(res.over)) : null;
 
   /* Paid after the quote was cancelled: a card page opened before the
      cancellation, still open in a tab. A cancelled quote cannot open a new one
@@ -18134,6 +18161,7 @@ async function bankStripeSession(session) {
           receipt and nothing from the shop.</p>
        <p><b>Refund it in Stripe</b>, or if the job is back on, press <b>Restore</b> on the quote and
           let them know.</p>
+       ${overNote ? overNote.html : ''}
        <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p>
        ${pi ? `<p><a href="https://dashboard.stripe.com/payments/${encodeURIComponent(pi)}">Open in Stripe &rarr;</a></p>` : ''}`);
     return { ok: true, duplicate: false, paid: res.paid, cancelled: true };
@@ -18155,17 +18183,23 @@ async function bankStripeSession(session) {
   sendEmail({
     to: SHOP_EMAIL,
     subject: `💳 ${isBalance ? 'Balance' : 'Deposit'} paid — quote ${code}, ${money(gross)}` +
-             (taxIn > 0 ? ` (set aside ${money(taxIn)})` : ''),
+             (overNote ? overNote.suffix : '') + (taxIn > 0 ? ` (set aside ${money(taxIn)})` : ''),
+    event: `paid:${code}`,
     html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Payment received</h2>
       <p>${escEmail(q.name || '')} paid <b>${money(gross)}</b> by card for quote ${code}
          (${isBalance ? 'remaining balance' : 'deposit'}).</p>
+      ${overNote ? overNote.html : ''}
       <p style="color:#6b7280">Applied to quote: ${money(res.paid)} of ${money(q.total)}.
          ${fee > 0 ? `Card fee ${money(fee)}.` : ''}
          ${stillDue > 0 ? `Balance outstanding ${money(stillDue)}.` : 'Paid in full.'}</p>
       ${taxIn > 0 ? `<p style="background:#fff8ed;border:1px solid #fde3c0;border-radius:8px;padding:9px 12px;color:#8a5a00;font-size:13px">
          <b>${money(taxIn)}</b> of this is sales tax — set it aside, it is not income.</p>` : ''}
       <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p></div>`,
-  }).catch((e) => console.error(`payment alert to shop FAILED for quote ${code}:`, e.message));
+  }).catch((e) => {
+    console.error(`payment alert to shop FAILED for quote ${code}:`, e.message);
+    // It also carried the overpaid flag, which nothing else sends now.
+    if (overNote && typeof reportError === 'function') reportError('overpaid-alert', e).catch(() => {});
+  });
 
   const to = q.email || session.customer_details?.email;
   if (to) {
@@ -18949,8 +18983,11 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
     code, amount: net, fee, method, source: 'stripe', pi, extRef, createdAt,
     note: `${how.charAt(0).toUpperCase() + how.slice(1)}` +
           (fee > 0 ? ` (customer paid ${money(gross)} incl. ${money(fee)} card fee)` : ''),
+    overInOwnEmail: via !== 'apply',   // 'apply' sends no shop email, so the alert has to
   });
   if (res.duplicate) return { duplicate: true, code };
+  /* Called only when over: tests lift this function without its neighbours. */
+  const overNote = Number(res.over) > 0 ? overpaidNote(Number(res.over)) : null;
 
   /* A chargeback recorded while the payment was on no quote named no quote.
      It is this quote's now, and the reminders and review asks look for it by
@@ -18976,8 +19013,10 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
     sendEmail({
       to: SHOP_EMAIL,
       subject: `💳 Paid in Stripe — quote ${code}, ${money(gross)}` +
-               (taxIn > 0 ? ` (set aside ${money(taxIn)})` : ''),
+               (overNote ? overNote.suffix : '') + (taxIn > 0 ? ` (set aside ${money(taxIn)})` : ''),
+      event: `paid:${code}`,
       html: `<div style="font-family:system-ui,sans-serif"><h2 style="color:#1848B8">Payment received</h2>
+        ${overNote ? overNote.html : ''}
         <p>${escEmail(q.name || 'A customer')} paid <b>${money(gross)}</b> for quote ${code}, taken in
            Stripe (${escEmail(how)}) rather than through the quote's checkout. It named this quote, so it
            is on the quote now: there is nothing to record by hand.</p>
@@ -18987,7 +19026,10 @@ async function landStripePaymentOnQuote(q, { gross, pi, extRef, createdAt, how, 
         ${taxIn > 0 ? `<p style="background:#fff8ed;border:1px solid #fde3c0;border-radius:8px;padding:9px 12px;color:#8a5a00;font-size:13px">
            <b>${money(taxIn)}</b> of this is sales tax — set it aside, it is not income.</p>` : ''}
         <p><a href="${quoteLink(code)}">${quoteLink(code)}</a></p></div>`,
-    }).catch((e) => console.error(`stripe payment alert to shop FAILED for quote ${code}:`, e.message));
+    }).catch((e) => {
+      console.error(`stripe payment alert to shop FAILED for quote ${code}:`, e.message);
+      if (overNote && typeof reportError === 'function') reportError('overpaid-alert', e).catch(() => {});
+    });
   }
 
   const to = q.email || email;
@@ -19767,6 +19809,7 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
         to: SHOP_EMAIL,
         replyTo: q.email || undefined,
         subject: `✅ Quote ${q.code} accepted — ${escEmail(q.name || q.phone)} ${money(tt.total)}`,
+        event: `accepted:${q.code}`,
         html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto">
           <h2 style="color:#1848B8">Quote accepted</h2>
           <p style="color:#374151"><b>${escEmail(q.name || '')}</b><br>${escEmail(q.phone || '')}<br>${escEmail(q.email || '')}</p>
@@ -33720,7 +33763,7 @@ async function sendShopDigest() {
   for (const { to_addr: to } of inboxes) {
     const { rows: items } = await pool.query(
       `UPDATE shop_digest_items SET sent_at = NOW() WHERE to_addr = $1 AND sent_at IS NULL
-        RETURNING id, subject, html, reply_to, created_at`, [to]);
+        RETURNING id, subject, html, reply_to, created_at, event`, [to]);
     if (!items.length) continue;
     items.sort((a, b) => new Date(a.created_at) - new Date(b.created_at) || a.id - b.id);
     const mail = SHOPDIGEST.build(items, { esc: escEmail, when });

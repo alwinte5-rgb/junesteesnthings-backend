@@ -44,7 +44,7 @@ test('a runaway day is cut off and says so', () => {
 });
 
 test('sendEmail holds shop mail unless urgent, marketing or carrying files, and sends if the hold fails', () => {
-  assert.match(after('async function sendEmail(', 400), /urgent = false \}\) \{\s*if \(!urgent && !marketing && await holdForShopDigest\(/);
+  assert.match(after('async function sendEmail(', 400), /urgent = false, event = null \}\) \{\s*if \(!urgent && !marketing && await holdForShopDigest\(/);
   const h = after('async function holdForShopDigest(', 1200);
   assert.match(h, /SHOPDIGEST\.on\(\)/);
   assert.match(h, /attachments\.some\(\(a\) => a && a\.content\)\)\) return false;/);
