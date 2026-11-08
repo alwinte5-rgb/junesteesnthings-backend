@@ -26621,22 +26621,58 @@ function designVisibleMessage(m) {
   return m.status === 'received' || DESIGN_MESSAGE_KINDS.has(String(m.kind));
 }
 
+/* How many held messages the job page lists before pointing at Approvals. */
+const WAITING_SHOWN = 10;
+
 async function jobMessagesCard(q, query, { design = false, readOnly = false } = {}) {
   const code = q.code;
-  const { rows: history } = await pool.query(
-    `SELECT * FROM (
-       SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at, sent_by, id, attachments
-         FROM client_emails WHERE quote_code = $1
-       UNION ALL
-       SELECT 'text', template, NULL, body, status, error, created_at, sent_by, NULL, media
-         FROM sms_messages WHERE quote_code = $1) m
-      ORDER BY created_at DESC LIMIT 60`, [code]).catch((e) => {
-    console.error(`messages for ${code} failed:`, e.message);
-    return { rows: [] };
+  /* A helper's message held for the owner. Until 2026-11-07 the page said
+     "Saved for the owner to approve" once and then showed nothing, so a held
+     message read as sent. It shows here until it is sent or sent back. The
+     design page shows a designer only their own, as it hides every message
+     that is not about the design; the owner sees them all. One more row than
+     shown is fetched, so the box can say when there are more. */
+  const me = currentActor();
+  const onlyBy = design && me && me.kind === 'staff' ? me.id : null;
+  let waitingFailed = false;
+  const [{ rows: history }, { rows: waitingRows }] = await Promise.all([
+    pool.query(
+      `SELECT * FROM (
+         SELECT 'email' AS channel, kind, subject, preview AS body, status, error, created_at, sent_by, id, attachments
+           FROM client_emails WHERE quote_code = $1
+         UNION ALL
+         SELECT 'text', template, NULL, body, status, error, created_at, sent_by, NULL, media
+           FROM sms_messages WHERE quote_code = $1) m
+        ORDER BY created_at DESC LIMIT 60`, [code]).catch((e) => {
+      console.error(`messages for ${code} failed:`, e.message);
+      return { rows: [] };
+    }),
+    pool.query(
+      `SELECT id, status, payload, requested_by, created_at FROM staff_approvals
+        WHERE kind = 'message' AND subject_id = $1 AND status IN ('pending', 'processing')
+          AND ($2::int IS NULL OR requested_by = $2::int)
+        ORDER BY created_at DESC LIMIT ${WAITING_SHOWN + 1}`, [code, onlyBy]).catch((e) => {
+      /* Said on the card: an empty box here would read as "nothing waiting". */
+      console.error(`waiting messages for ${code} failed:`, e.message);
+      waitingFailed = true;
+      return { rows: [] };
+    }),
+  ]);
+  /* An approval whose send went through but whose bookkeeping did not (a
+     restart, a failed step after the send) stays pending. If the same words
+     are in the history after it was written, it went: say so, so nobody
+     presses Approve and sends it twice. */
+  const words = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase();
+  const waiting = waitingRows.slice(0, WAITING_SHOWN).map((a) => {
+    const said = words(a.payload && a.payload.text);
+    const went = !!said && history.some((m) => new Date(m.created_at) >= new Date(a.created_at)
+      && words(m.body).startsWith(said.slice(0, Math.min(said.length, 80))));
+    return { ...a, went };
   });
+  const moreWaiting = waitingRows.length > WAITING_SHOWN;
   /* Which helper sent a message. Blank is the owner or the shop's automatic
      emails, which is how it read before helpers existed. */
-  const roster = history.some((m) => m.sent_by != null) ? await staffRoster().catch(() => []) : [];
+  const roster = history.some((m) => m.sent_by != null) || waiting.length ? await staffRoster().catch(() => []) : [];
   const phone = normalizeUsPhone(q.phone);
   let textWhyNot = !phone ? 'no phone number on this quote'
     : !smsConfigured() ? 'texting is not switched on yet' : '';
@@ -26773,17 +26809,40 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
   }
   const shown = design ? history.filter(designVisibleMessage) : history;
   const list = shown.length ? `<div class="rows">${shown.map(row).join('')}</div>`
-    : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.');
+    : (waiting.length || waitingFailed) ? '' : emptyState('Nothing sent yet. Receipts, reminders and updates show here as they go out.');
+  const waitingList = waitingFailed
+    ? `<div class="warn" style="margin:0 0 12px">Could not check for messages waiting for approval. Reload the page, or look on ${isOwner() ? '<a href="/admin/approvals">Approvals</a>' : 'Approvals'}.</div>`
+    : !waiting.length ? '' : `
+      <div style="margin:0 0 12px;padding:10px 12px;border:1px solid #f3d27a;border-radius:10px;background:#fffbeb">
+        <b style="font-size:13.5px">Waiting for June to approve</b>
+        <div class="muted" style="font-size:12.5px;margin:2px 0 6px">Not sent to the customer yet. It goes when June approves it${isOwner() ? ` on <a href="/admin/approvals">Approvals</a>` : ''}.</div>
+        <div class="rows">${waiting.map((a) => {
+          const p = a.payload || {};
+          const body = String(p.text || '');
+          const files = Array.isArray(p.attachments) ? p.attachments.length : 0;
+          const state = a.went ? pill('looks sent', 'green') : a.status === 'processing' ? pill('sending', 'blue') : pill('waiting', 'amber');
+          return `<div class="row-i msg-row">
+          <span class="ico ico-amber">${icon(p.channel === 'text' ? 'phone' : 'mail')}</span>
+          <span class="row-main"><b>${escEmail(p.channel === 'text' ? 'Text' : (p.subject || 'Email'))}</b>
+            <div class="row-sub" style="white-space:pre-wrap">${escEmail(body.length > 400 ? body.slice(0, 399).trimEnd() + '…' : body)}</div>
+            ${files ? `<div class="row-sub">&#128206; ${files} file${files === 1 ? '' : 's'}</div>` : ''}
+            ${a.went ? `<div class="row-sub" style="color:#166534">The same words are in the list below, sent after this was written. Check before approving it again.</div>` : ''}</span>
+          <span class="row-end msg-end">${state}
+            <span class="muted msg-when">${p.channel === 'text' ? 'text' : 'email'} &middot; ${escEmail(when(a.created_at))} &middot; by ${escEmail(nameOf(roster, a.requested_by))}</span></span></div>`;
+        }).join('')}</div>
+        ${moreWaiting ? `<div class="muted" style="font-size:12.5px;margin-top:6px">More are waiting. ${isOwner() ? '<a href="/admin/approvals">See them all on Approvals</a>' : 'June sees them all on Approvals'}.</div>` : ''}</div>`;
+  // The heading counts what is waiting too, so a job with only held messages does not read as quiet.
+  const countText = (n) => `${n || ''}${waiting.length ? `${n ? ' · ' : ''}${waiting.length}${moreWaiting ? '+' : ''} waiting` : ''}`;
   /* Someone on the schedule without messaging reads the conversation only. */
   if (readOnly) {
     return `<div class="card" id="messages" style="margin-top:14px">
-      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${shown.length || ''}</span></h2>
+      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${countText(shown.length)}</span></h2>
       <p class="muted" style="font-size:12.5px">Read only. To write to the customer, ask in Team chat or leave a note below.</p>
-      ${comingUp}${list}</div>`;
+      ${comingUp}${waitingList}${list}</div>`;
   }
   return `
     <div class="card" id="messages" style="margin-top:14px">
-      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${history.length || ''}</span></h2>
+      <h2 class="card-title">Messages${first ? ' with ' + escEmail(first) : ''} <span class="muted">${countText(history.length)}</span></h2>
       ${sent ? `<div class="ok">Sent by ${sent}. It is in the list below.</div>` : ''}
       ${String(query.sent) === 'held' ? `<div class="ok">Saved for the owner to approve. It goes out when they send it.</div>` : ''}
       ${failed ? `<div class="warn">${escEmail(failed)}</div>` : ''}
@@ -26867,7 +26926,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         </form></details>
       ${design ? `<p class="muted" style="font-size:12.5px">Your message goes to the customer from the shop.${
         inboundReady ? ' Their replies show in the list below.' : ' Their reply comes to the owner, who passes on anything for you.'}</p>` : ''}
-      ${comingUp}${list}
+      ${comingUp}${waitingList}${list}
     </div>
     <script>
       (function(){

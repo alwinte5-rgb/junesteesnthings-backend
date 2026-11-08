@@ -152,9 +152,10 @@ test('a customer text reply is kept on their latest quote, matched by phone', ()
 
 /* ── The card ───────────────────────────────────────────────────────────── */
 
-function card({ stopped = false, history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {}, unsubscribed = false, messageLevel = 'on', query = {} } = {}) {
+function card({ stopped = false, history = [], smsOn = true, consent = true, q = {}, due = 0, refunded = false, opts = {}, unsubscribed = false, messageLevel = 'on', query = {}, waiting = [], owner = true, actor = null, approvalsDown = false, asked = [] } = {}) {
   const sandbox = {
-    pool: { query: async (sql) => (/quote_payments|stripe_disputes/.test(sql)
+    pool: { query: async (sql, args) => /staff_approvals/.test(sql)
+      ? (asked.push(args), approvalsDown ? Promise.reject(new Error('db down')) : { rows: waiting }) : (/quote_payments|stripe_disputes/.test(sql)
       ? { rows: refunded && /quote_payments/.test(sql) ? [{ x: 1 }] : [] } : { rows: history }) },
     normalizeUsPhone: (p) => (p ? '+1' + String(p).replace(/\D/g, '').slice(-10) : null),
     smsConfigured: () => smsOn, smsConsentFor: async () => ({ transactional: consent }),
@@ -164,7 +165,7 @@ function card({ stopped = false, history = [], smsOn = true, consent = true, q =
     SHOP_TZ: 'America/Chicago', console: { error() {} },
     intIn: () => null, PROOFS: require('../tools/lib/job-proofs'),
     /* The owner's "they agreed elsewhere" button (2026-10-15). */
-    isOwner: () => true, lastSaidNoToTexts: async () => { if (stopped === null) throw new Error('db down'); return stopped; },
+    isOwner: () => owner, lastSaidNoToTexts: async () => { if (stopped === null) throw new Error('db down'); return stopped; },
     /* Hand-sent texts are blocked only by a STOP (2026-11-06). */
     saidStop: async () => { if (stopped === null) throw new Error('db down'); return stopped; },
     reviewAskText: (n) => `Hi ${String(n || '').split(' ')[0]}, it's June's Tees`,
@@ -176,13 +177,15 @@ function card({ stopped = false, history = [], smsOn = true, consent = true, q =
     CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
     /* The reminders still to come (2026-10-15). */
     FOLLOWUPS: require('../tools/lib/followups'), process: { env: {} },
+    currentActor: () => actor, WAITING_SHOWN: 10,
+    staffRoster: async () => [{ id: 7, name: 'Eli Ramos' }],
     isUnsubscribed: async () => unsubscribed, actorLevel: (k) => (k === 'customers.message' ? messageLevel : 'on'),
   };
   sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
   vm.runInContext([grab('const MESSAGE_KINDS = {', '};'), grab('const MESSAGE_ERRORS = {', '};'),
     grab('const ADMIN_ICONS = {', '};'), lift('icon'), lift('escEmail'), lift('pill'), lift('emptyState'),
-    lift('reminderDelays'), lift('designVisibleMessage'), lift('jobMessagesCard')].join('\n'), sandbox);
+    lift('reminderDelays'), lift('designVisibleMessage'), lift('nameOf'), lift('jobMessagesCard')].join('\n'), sandbox);
   return sandbox.jobMessagesCard({ code: 'AB12CD', name: 'Ada Brooks', email: 'ada@example.com',
                                    phone: '(773) 555-0100', ...q }, query, opts);
 }
@@ -691,4 +694,60 @@ test('a text sent by hand needs no consent row, only no STOP; automatic ones sti
     assert.ok(at > -1, t);
     assert.doesNotMatch(src.slice(at - 200, at), /staffSent/, t);
   }
+});
+
+test("a helper's message waiting for the owner shows as waiting, not sent (owner, 2026-11-07)", async () => {
+  /* The page said "Saved for the owner to approve" once and then nothing, so
+     a held message read as sent. */
+  const waiting = [{ id: 1, status: 'pending', requested_by: 7, created_at: new Date().toISOString(),
+    payload: { channel: 'email', subject: 'Your proof', text: 'Hi <b>Ada</b>, proof attached', attachments: [{ name: 'a.pdf' }] } }];
+  const html = await card({ waiting });
+  assert.match(html, /Waiting for June to approve/);
+  assert.match(html, /Not sent to the customer yet/);
+  assert.match(html, /Your proof[\s\S]*Hi &lt;b&gt;Ada&lt;\/b&gt;, proof attached/, 'the text is shown, escaped');
+  assert.match(html, /1 file\b/, 'its files are mentioned');
+  assert.match(html, /by Eli Ramos/, 'and who wrote it');
+  assert.match(html, /1 waiting<\/span><\/h2>/, 'the heading counts it');
+  assert.match(html, /href="\/admin\/approvals"/, 'the owner gets the link to approve it');
+  assert.doesNotMatch(html, /Nothing sent yet/, 'a waiting message is not an empty list');
+  assert.doesNotMatch(await card({ waiting, owner: false }), /href="\/admin\/approvals"/, 'a helper gets no Approvals link');
+  assert.match(await card({ waiting, opts: { readOnly: true } }), /Waiting for June to approve[\s\S]*1 waiting|1 waiting[\s\S]*Waiting for June/, 'read-only shows it too');
+  const texted = await card({ waiting: [{ ...waiting[0], payload: { channel: 'text', text: 'x'.repeat(500) } }] });
+  assert.match(texted, /<b>Text<\/b>[\s\S]*x{399}…/, 'a text is labelled and a long one cut');
+  assert.doesNotMatch(await card(), /Waiting for June/, 'nothing waiting, no box');
+});
+
+test('a held message whose words were already sent says so, so nobody sends it twice', async () => {
+  const at = new Date(Date.now() - 3600e3).toISOString();
+  const waiting = [{ id: 1, status: 'pending', requested_by: 7, created_at: at, payload: { channel: 'email', subject: 'S', text: 'Your shirts are ready for pickup' } }];
+  const history = [{ channel: 'email', kind: 'message', subject: 'S', body: 'Your shirts are ready for pickup', status: 'sent', created_at: new Date().toISOString() }];
+  const html = await card({ waiting, history });
+  assert.match(html, /looks sent/);
+  assert.match(html, /Check before approving it again/);
+  assert.match(await card({ waiting: [{ ...waiting[0], status: 'processing' }] }), /sending/);
+});
+
+test('a failed check for waiting messages is said, not shown as nothing waiting', async () => {
+  const html = await card({ approvalsDown: true });
+  assert.match(html, /Could not check for messages waiting for approval/);
+  assert.doesNotMatch(html, /Nothing sent yet/);
+});
+
+test('more than ten waiting points at Approvals', async () => {
+  const w = Array.from({ length: 11 }, (_, i) => ({ id: i, status: 'pending', requested_by: 7,
+    created_at: new Date().toISOString(), payload: { channel: 'email', subject: 'S' + i, text: 't' + i } }));
+  const html = await card({ waiting: w });
+  assert.match(html, /More are waiting/);
+  assert.match(html, /10\+ waiting/);
+  assert.strictEqual((html.match(/pill-amber">waiting/g) || []).length, 10);
+});
+
+test('the design page shows a designer only their own held messages; the owner sees all', async () => {
+  const mine = [], owners = [], shop = [];
+  await card({ opts: { design: true }, actor: { kind: 'staff', id: 7 }, asked: mine });
+  await card({ opts: { design: true }, actor: { kind: 'owner' }, asked: owners });
+  await card({ actor: { kind: 'staff', id: 7 }, asked: shop });
+  assert.strictEqual(mine[0][1], 7, 'the designer: their own');
+  assert.strictEqual(owners[0][1], null, 'the owner: every one');
+  assert.strictEqual(shop[0][1], null, 'the job page itself: every one');
 });
