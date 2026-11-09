@@ -12756,6 +12756,17 @@ function productGroupOf(name) {
               <input name="rush_pct" id="rushpct" type="number" step="0.01" min="0" max="${RUSH_MAX_PCT}"
                      inputmode="decimal" value="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}"${
                      canPrice ? '' : ' readonly title="Set from the needed-by date. Only the owner can change it."'}
+                     data-saved="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}" data-was-rushable="${(() => {
+                       /* What the save route reads for a helper: the saved rush stands
+                          while the date is unchanged, unless they took a rushable
+                          order off DTF. The box shows the same, so the total on
+                          screen is the total saved. */
+                       const mt = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
+                       return RUSH.rushAllowed((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional).map((it) => ({
+                         product: !!it.product_id,
+                         titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
+                       }))) ? '1' : '';
+                     })()}"
                      style="width:80px;padding:5px 6px;font-size:13px" placeholder="0">
               <span style="font-size:13px;color:#6b7280">% &middot;</span>
               <span id="rushwhy" style="font-size:12px;color:#b45309"></span>
@@ -12827,7 +12838,12 @@ function productGroupOf(name) {
 
       <div class="card">
         <label>Needed by <span style="text-transform:none;font-weight:400">(optional)</span></label>
-        <input name="needed_by" type="date" value="${E.needed_by ? String(E.needed_by).slice(0,10) : ''}">
+        <!-- pgDateYmd: node-pg hands a DATE back as a Date, and String() of that is
+             "Sat Nov 14 ...", which a date box cannot read. The box showed empty,
+             which hid and emptied the rush box, so every save wiped both the date
+             and the rush (owner, 2026-11-09). -->
+        <input name="needed_by" type="date" value="${pgDateYmd(E.needed_by) || ''}"
+               data-saved="${pgDateYmd(E.needed_by) || ''}">
         <p class="muted" id="eta" style="margin-top:8px"></p>
         <label>Quote good for (days)</label>
         <input name="valid_days" type="number" value="${validDaysLeft}" inputmode="numeric">
@@ -13216,7 +13232,15 @@ function productGroupOf(name) {
           box.value = String(pct);
         /* A helper's rush is always the ladder's figure (the save route
            enforces it); the owner's box keeps whatever they typed. */
-        if (fill && box.readOnly) box.value = pct > 0 ? String(pct) : '';
+        if (fill && box.readOnly) {
+          /* The save keeps the saved rush while the date is unchanged (unless a
+             rushable order was taken off DTF), so the box does too; otherwise
+             the ladder's figure. Without this the screen showed the ladder and
+             the save kept the owner's figure: two prices for one quote. */
+          var keep = dateEl.dataset.saved !== undefined && dateEl.value === dateEl.dataset.saved
+            && (dtfOnly || box.dataset.wasRushable !== '1');
+          box.value = keep ? (box.dataset.saved || '') : (pct > 0 ? String(pct) : '');
+        }
 
         if (why) {
           why.textContent = pct > 0
@@ -15832,6 +15856,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          page showed. Notes now stack, so one added while the form was open
          would otherwise be cleared without anyone reading it. A save from a
          form without the field (an older tab) clears as before. */
+      /* The total before this save and the card page open on it: a page made
+         for the old total must not stay payable once the total moves (AGENTS.md:
+         a balance change drops the stored link). */
+      const { rows: [before] } = await pool.query('SELECT total, stripe_session FROM quotes WHERE code=$1', [editing]);
       const seen = String(one(b.cr_seen) || '');
       let keepRequest = false;
       if (/^[0-9a-f]{64}$/.test(seen)) {
@@ -15861,6 +15889,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         return res.status(404).send(quotePage('Not found',
           `<div class="card"><div class="warn">That quote no longer exists.</div>
            <a class="btn btn-ghost" href="/admin/quotes">All quotes</a></div>`));
+      }
+      if (before && before.stripe_session && round2(Number(before.total) || 0) !== round2(Number(rows[0].total) || 0)) {
+        await dropQuoteCheckout(editing, before.stripe_session);
       }
     } else {
       let code = newQuoteCode();
@@ -17253,7 +17284,14 @@ app.get('/q/:code', async (req, res) => {
           ${!SHIP.quoteShips(q) && (delivOffered || String(q.ship_method || '') !== 'local') ? acceptDeliveryHtml(q, req, t, { local: delivOffered }) : ''}
           ${consentCheckboxesHtml()}
           <label>When do you need it? <span style="text-transform:none;font-weight:400">(optional)</span></label>
-          <input type="date" name="needed_by" value="${q.needed_by ? String(q.needed_by).slice(0,10) : ''}">
+          ${(() => {
+            /* The date already on the quote, if it is still ahead: a past one
+               would be sent back as the new date. Left out, accepting keeps
+               whatever is stored (COALESCE in the accept route). */
+            const saved = pgDateYmd(q.needed_by);
+            const today = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
+            return `<input type="date" name="needed_by" min="${today}" value="${saved && saved >= today ? saved : ''}">`;
+          })()}
           ${hasOptions ? `<p id="qoptsum" style="margin:14px 0 0;font-size:13.5px;color:#374151"></p>
           <input type="hidden" name="rev" value="${Number(q.revision) || 1}">` : ''}
           <button type="submit" id="qaccept" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
@@ -21394,7 +21432,7 @@ app.get('/admin/exports/quotes.csv', requireAdmin, async (req, res) => {
               Number(q.paid_amount || 0), Number(q.written_off || 0), balanceOf(q, t.total),
               overpaidBy(q, t.total),
               d(q.accepted_at), d(q.paid_at), d(q.delivered_at), d(q.cancelled_at),
-              q.cancel_reason || '', d(q.needed_by)];
+              q.cancel_reason || '', pgDateYmd(q.needed_by) || ''];   // a DATE: its own day, never via UTC
     });
     sendCsv(res, `jtees-quotes-${r ? r.label : 'all'}.csv`, head, body);
   } catch (err) {
@@ -24893,7 +24931,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
             ${q.deadline_flexible ? 'No fixed date — they are flexible.'
               : q.target_date ? `They gave no date. Working to <b>${dayShort(q.target_date)}</b>.`
               : 'They did not give a date. Set one to work to, so blanks get ordered in time.'}</span>
-          <input name="target_date" type="date" value="${q.target_date ? new Date(q.target_date).toISOString().slice(0,10) : ''}"
+          <input name="target_date" type="date" value="${pgDateYmd(q.target_date) || ''}"
                  style="flex:0 0 152px;padding:6px;font-size:12px">
           <button type="submit" class="kbtn kbtn-go" style="font-size:12px">Set</button>
           <button type="submit" name="flexible" value="1" class="kbtn" style="font-size:12px">No fixed date</button>
