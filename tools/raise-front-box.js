@@ -38,7 +38,7 @@ const { placementSet, SETS, aliasStages } = require('./lib/placements');
 
 const RAISE_IN = 2;
 const MARK = 'jt_front_raised';
-const MOVES = ['closed', 'kids'];
+const MOVES = ['closed', 'pocket', 'kids'];
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');

@@ -28,6 +28,11 @@ test('each garment gets the owner-approved placement set', () => {
     'Rabbit Skins RS4400 — Infant Short Sleeve Bodysuit': 'onesie',
     'Liberty Bags 8502 Cotton Tote Bag': 'bag',
     'Richardson 112 Snapback Trucker Cap': 'cap',
+    /* Owner, 2026-11-09: pocket tees get a right chest beside the left chest. */
+    'Comfort Colors 6030 Unisex Garment-Dyed Heavyweight Pocket T-Shirt': 'pocket',
+    'Comfort Colors 4410 Unisex Garment-Dyed Heavyweight Long Sleeve Pocket T-Shirt': 'pocket',
+    'ComfortWash by Hanes GDH250 Unisex Garment-Dyed Long Sleeve T-Shirt With a Pocket': 'pocket',
+    'Hanes HMB000 Men\'s V-Neck 1 Pocket Scrub Top': 'open',
   };
   for (const [name, set] of Object.entries(cases)) assert.strictEqual(placementSet(name), set, name);
 });
@@ -201,4 +206,17 @@ test('labels like "Full front" and "Back Side" are found; plain keys get no mark
   assert.deepStrictEqual(sideKeys({ a: { label: 'Left chest' } }), {});
   const out = aliasStages({ front: {}, back: {} }).restore({ front: { x: 1 }, back: { x: 2 } });
   assert.strictEqual(out.front.jt_key, undefined);
+});
+
+test('a pocket tee: full front, both chests on the front, mirrored, then the back', () => {
+  const b = boxesFor('pocket', m);
+  assert.deepStrictEqual(b.map((x) => x.key), ['front', 'left_chest', 'right_chest', 'back']);
+  assert.deepStrictEqual(b.map((x) => x.side), ['front', 'front', 'front', 'back'], 'all three on the front photo');
+  const [, left, right] = b;
+  assert.ok(left.cx > M.cx && right.cx < M.cx, 'wearer\'s right chest is the viewer\'s left');
+  assert.ok(Math.abs((left.cx - M.cx) - (M.cx - right.cx)) < 1e-9 && left.cy === right.cy && left.w === right.w, 'mirrored');
+  /* The designer tells a pocket tee from a zip by its left chest
+     (core/cart.php jt_front_open: a right chest and NO left chest). */
+  assert.ok(b.some((x) => x.key === 'left_chest'));
+  assert.deepStrictEqual(expectedKeys('pocket'), ['front', 'left_chest', 'right_chest', 'back'], 'the catalog audit expects all four');
 });
