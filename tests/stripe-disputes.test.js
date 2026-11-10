@@ -490,10 +490,7 @@ test('the review follow-up checks for a dispute too', () => {
 test('the quote page stops asking for money from the day a dispute opens, and says what happened', () => {
   const at = src.indexOf("app.get('/q/:code',");
   const page = src.slice(at, src.indexOf('app.get(', at + 20));
-  const mb = src.slice(src.indexOf('async function quoteMoneyBack(code)'), src.indexOf('\n}\n', src.indexOf('async function quoteMoneyBack(code)')));
-  assert.match(page, /const \{ refundedToCard, reversedByIssuer, disputed \} = await quoteMoneyBack\(q\.code\);/,
-    'the page reads refunds and disputes through quoteMoneyBack, as its printable copy does');
-  assert.match(mb, /EXISTS \(SELECT 1 FROM stripe_disputes WHERE quote_code = \$1\) AS disputed/);
+  assert.match(page, /EXISTS \(SELECT 1 FROM stripe_disputes WHERE quote_code = \$1\) AS disputed/);
   assert.match(page, /const stopAsking = refunded \|\| disputed;/);
   assert.match(page, /\$\{\(paid && balanceDue > 0 && !stopAsking(?: && !certLock)?\) \?/, 'no "Balance due" card');
   assert.match(page, /paid \|\| q\.requested_items \|\| q\.cancelled_at \|\| stopAsking \? '' : accepted \?/,

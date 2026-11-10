@@ -175,7 +175,17 @@ test('the route keeps the quote page guards and never writes', () => {
   assert.match(body, /TAXCERT\.quotePayLocked\(q, cert\)/, 'the certificate lock is read as on the quote page');
   assert.match(body, /Cache-Control', 'no-store'/);
   assert.match(src, /async function quoteMoneyBack\(code\)/);
-  assert.strictEqual((src.match(/quoteMoneyBack\(q\.code\)/g) || []).length, 2, 'the quote page and the paper read refunds one way');
+  /* The quote page keeps its own copy of the refund and dispute lookups (its
+     billing tests read them there); the paper's must be the same SQL, so the
+     two can never disagree about what went back to the customer. */
+  const sqlOf = (text) => (text.match(/`SELECT[\s\S]*?`/g) || []).map((q) => q.replace(/\s+/g, ' '));
+  const helper = src.slice(src.indexOf('async function quoteMoneyBack(code)'), src.indexOf('\n}\n', src.indexOf('async function quoteMoneyBack(code)')));
+  const pageAt = src.indexOf("app.get('/q/:code',");
+  const page = src.slice(pageAt, src.indexOf('app.get(', pageAt + 20));
+  const helperSql = sqlOf(helper);
+  assert.strictEqual(helperSql.length, 2);
+  for (const q of helperSql) assert.ok(sqlOf(page).includes(q), 'the quote page runs the same lookup: ' + q.slice(0, 60));
+  assert.match(body, /quoteMoneyBack\(q\.code\)/, 'the paper reads it through quoteMoneyBack');
 });
 
 test('the shop, the customer and staff can all reach it', () => {

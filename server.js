@@ -16185,12 +16185,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
   }
 });
 
-/** What has gone back to the customer on a quote: its card refunds (refund
- *  rows, less any refund that failed and came back), what a card issuer
- *  reversed in a chargeback, and whether a dispute was ever opened. The
- *  customer's quote page and its printable copy read this one lookup, so the
- *  screen and the paper agree. A failed lookup reads as none, logged, so the
- *  page still renders. */
+/** What has gone back to the customer on a quote, for its printable copy: its
+ *  card refunds (refund rows, less any refund that failed and came back), what
+ *  a card issuer reversed in a chargeback, and whether a dispute was ever
+ *  opened. The same two queries as the customer's quote page, which keeps its
+ *  own inline copy (its billing tests read them there);
+ *  tests/quote-print.test.js checks the two stay identical. A failed lookup
+ *  reads as none, logged, so the page still renders. */
 async function quoteMoneyBack(code) {
   const [{ rows: rf }, { rows: dq }] = await Promise.all([pool.query(
     `SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) AS gross
@@ -16689,12 +16690,23 @@ app.get('/q/:code', async (req, res) => {
        refund was issued is the shop's call, so if anything is still owed after
        one, the shop sends the payment link (those routes are unchanged). A
        failed lookup renders the page without it rather than not at all. */
-    const { refundedToCard, reversedByIssuer, disputed } = await quoteMoneyBack(q.code);
+    const { rows: rf } = await pool.query(
+      `SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) AS gross
+         FROM quote_payments WHERE quote_code = $1 AND ext_ref ~ '^(ch|py)_[A-Za-z0-9_]+:'`, [q.code])
+      .catch((e) => { console.error(`quote ${q.code}: refund lookup failed:`, e.message); return { rows: [] }; });
+    const refundedToCard = round2(Number(rf[0]?.gross || 0));
     const refunded = refundedToCard > 0;
     /* A chargeback stops the asking too, from the day it opens: the page would
        otherwise offer the balance to someone disputing the deposit, or, once a
        dispute is lost, the reversed money as a balance due. What the issuer
        gave back is its own line, in its own words. */
+    const { rows: dq } = await pool.query(
+      `SELECT (SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) FROM quote_payments
+                WHERE quote_code = $1 AND kind = 'dispute') AS reversed,
+              EXISTS (SELECT 1 FROM stripe_disputes WHERE quote_code = $1) AS disputed`, [q.code])
+      .catch((e) => { console.error(`quote ${q.code}: dispute lookup failed:`, e.message); return { rows: [] }; });
+    const reversedByIssuer = round2(Number(dq[0]?.reversed || 0));
+    const disputed = !!dq[0]?.disputed;
     const stopAsking = refunded || disputed;
     /* An untaxed quote whose exemption needs a certificate shows the upload in
        place of every way to pay (card, Zelle and cash alike) until one is on
