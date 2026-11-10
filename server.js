@@ -12659,6 +12659,10 @@ function productGroupOf(name) {
       [existing.from_submission_id]).catch(() => ({ rows: [] }))).rows[0] || null;
   }
   const refCard = quoteReferenceCard({ lead: sourceLead, quote: isEdit ? existing : null });
+  const customerNotes = isEdit ? (await pool.query(
+    `SELECT body, created_at FROM lead_notes WHERE quote_code=$1 AND kind='customer_note' ORDER BY created_at DESC, id DESC LIMIT 30`,
+    [existing.code])).rows : [];
+
 
   res.send(quotePage('New quote', `
     <h1>${isEdit ? 'Edit quote ' + escEmail(existing.code)
@@ -12671,6 +12675,9 @@ function productGroupOf(name) {
       ? 'Their link stays the same — it updates the moment you save.'
       : 'Save it, then text or email it from the shop on the next page.'}</div>
     ${refCard}
+    ${customerNotes.length ? `<div class="card"><b>Customer notes</b>
+      ${customerNotes.map((n) => `<p style="white-space:pre-wrap;margin-top:8px"><span class="muted">${fmtDate(n.created_at)}</span><br>${escEmail(n.body)}</p>`).join('')}
+      <p class="muted">These instructions are saved with the job. They do not put acceptance or payment on hold.</p></div>` : ''}
     ${(() => {
       /* What the customer asked for, if anything — the note they typed and the
          numbers they moved, shown before the form so it is read before the
@@ -14640,10 +14647,14 @@ ${uploadStatusScript()}
           fetch('/admin/api/quotes/prior?q='+encodeURIComponent(q))
             .then(function(r){return r.json();})
             .then(function(d){
-              if(!d.found){ document.getElementById('prior').innerHTML=''; return; }
+              var resume = (d.resumes || []).map(function(r){
+                return '<p><a href="'+r.link+'">Resume draft '+r.code+'</a></p>';
+              }).join('');
+              if(!d.found){ document.getElementById('prior').innerHTML=resume; return; }
+              var safe = function(v){ return String(v || '').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
               var lines = (d.lines||[]).map(function(l,ix){
                 return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:5px">'+
-                  '<span style="font-size:12.5px">'+l.desc+'</span>'+
+                  '<span style="font-size:12.5px">'+safe(l.desc)+'</span>'+
                   '<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:12px;white-space:nowrap"'+
                   ' onclick="usePrice('+l.unit+')">$'+l.unit.toFixed(2)+' ea — use</button></div>';
               }).join('');
@@ -14664,6 +14675,7 @@ ${uploadStatusScript()}
                 '<b>Returning customer</b> — '+d.count+' quote'+(d.count===1?'':'s')+
                 ', quoted '+d.lifetime_quoted+', paid '+d.lifetime_spent+
                 ' &middot; <a href="'+d.link+'" target="_blank">full history</a>'+
+                ' &middot; <a href="'+d.resume+'">Open / resume latest quote</a>'+resume+
                 mg+
                 '<div class="muted" style="margin-top:6px;font-size:12px">Last quoted '+d.when+':</div>'+
                 lines+'</div>';
@@ -14673,6 +14685,13 @@ ${uploadStatusScript()}
       document.forms[0].phone.addEventListener('input', lookup);
       document.forms[0].email.addEventListener('input', lookup);
     </script>
+    ${exam ? '' : `<script src="/assets/js/quote-recovery.js?v=20261110"></script>
+    <script>JTQuoteRecovery({
+      scope: ${JSON.stringify((currentActor() || OWNER_ACTOR).kind + ':' + ((currentActor() || OWNER_ACTOR).id || 'owner') + ':' + (isEdit ? existing.code : 'new:' + (lead ? lead.id : reorderOf ? reorderOf.code : cartEmail || '')))},
+      addLine: addLine, reindex: reindex, bind: bind,
+      recalculate: function(){ calc(); rushSync(false); }
+    }); lookup();</script>`}
+
   `));
 });
 
@@ -14807,15 +14826,22 @@ app.post('/admin/api/sign-price', requireAdmin, (req, res) => {
 app.get('/admin/api/quotes/prior', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 5) return res.json({ found: false });
-  const digits = q.replace(/\D/g, '');
+  const rawDigits = q.replace(/\D/g, '');
+  const digits = rawDigits.length >= 10 ? rawDigits.slice(-10) : '';
   try {
+    const { rows: drafts } = await pool.query(
+      `SELECT code, name, created_at FROM quotes WHERE status = 'draft' AND cancelled_at IS NULL
+        AND ((email <> '' AND lower(email) = lower($1))
+          OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2))
+        ORDER BY created_at DESC LIMIT 5`, [q, digits.slice(-10)]);
+    const resumes = drafts.map((d) => ({ code: d.code, link: `/admin/quote/${d.code}/edit` }));
     const { rows } = await pool.query(
       `SELECT * FROM quotes
         WHERE ((email <> '' AND lower(email) = lower($1))
            OR ($2 <> '' AND regexp_replace(coalesce(phone,''), '\\D', '', 'g') LIKE '%' || $2))
           AND status <> 'draft'   -- an unfinished quote is not history (Codex #129)
         ORDER BY created_at DESC LIMIT 25`, [q, digits.slice(-10)]);
-    if (!rows.length) return res.json({ found: false });
+    if (!rows.length) return res.json({ found: false, resumes });
     const last = rows[0];
     const item = (last.items || [])[0] || {};
     const quoted = rows.reduce((a, r) => a + Number(r.total || r.subtotal || 0), 0);
@@ -14833,7 +14859,8 @@ app.get('/admin/api/quotes/prior', requireAdmin, async (req, res) => {
       : null;
 
     res.json({
-      found: true,
+      found: true, resumes,
+      resume: `/admin/quote/${last.code}/edit`,
       name: last.name || '',
       summary: quoteSummary(last.items),
       unit: item.unit_price != null ? money(item.unit_price) + ' ea' : money(last.total || last.subtotal),
@@ -15934,6 +15961,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
 
     const q = rows[0];
     const code = q.code;
+    /* A recovery copy survives failed submissions; only a confirmed write
+       acknowledges it. The random token cannot name somebody else's draft. */
+    const recoveryToken = QFORM.formKeyOf(one(b.recovery_token));
+    if (recoveryToken) res.cookie('jt_quote_saved', recoveryToken,
+      { sameSite: 'strict', secure: req.secure, maxAge: 7 * 86400000, path: '/admin' });
     /* Awaited, so the form's next save (held behind this one) finds it. */
     if (formKey && !QUOTE_CODE_RE.test(editing)) {
       /* Not logActivity, which swallows a failure: a lost row here is the
@@ -17068,6 +17100,8 @@ app.get('/q/:code', async (req, res) => {
      * Accepting is not paying. Once a deposit lands the job is scheduled and
      * blanks may be on order, so THAT is where a change becomes a conversation
      * rather than a form. */
+    const { rows: customerNotes } = await pool.query(
+      `SELECT body, created_at FROM lead_notes WHERE quote_code=$1 AND kind='customer_note' ORDER BY created_at DESC, id DESC LIMIT 30`, [code]);
     const canEditQty = !paid && !q.cancelled_at;
     /* Lines the customer picks from. Accepting settles them (applyOptionChoice),
        so an accepted quote has none and none of the option UI renders. */
@@ -17377,6 +17411,9 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>` : ''}
 
+      ${canEditQty ? `<div class="warn" id="unsent-changes" style="display:none">
+        You have unsent size or quantity changes. <a href="#changeform">Send your changes to ${SHOP_SIGNER}</a>
+        before accepting or paying, or put the numbers back to keep your original quote.</div>` : ''}
       ${paid || q.requested_items || q.cancelled_at || stopAsking ? '' : accepted ? certLock ? '' : `
       <div class="card">
         <h1 style="font-size:18px">Pay your ${t.deposit >= t.total ? 'balance' : 'deposit'} — ${money(t.deposit)}</h1>
@@ -17467,6 +17504,9 @@ app.get('/q/:code', async (req, res) => {
             const today = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
             return `<input type="date" name="needed_by" min="${today}" value="${saved && saved >= today ? saved : ''}">`;
           })()}
+          <label for="accept-note">Notes for ${SHOP_SIGNER} <span style="text-transform:none;font-weight:400">(optional)</span></label>
+          <textarea id="accept-note" name="customer_note" rows="3" maxlength="2000" placeholder="Add instructions or details about your order"></textarea>
+          <p class="muted" style="font-size:12px">Your note is saved with your quote. You can continue to accept and pay.</p>
           ${hasOptions ? `<p id="qoptsum" style="margin:14px 0 0;font-size:13.5px;color:#374151"></p>
           <input type="hidden" name="rev" value="${Number(q.revision) || 1}">` : ''}
           <button type="submit" id="qaccept" style="width:100%;margin-top:14px">Accept &amp; choose payment</button>
@@ -17488,6 +17528,18 @@ app.get('/q/:code', async (req, res) => {
         </div>
       </div>`}
 
+      ${q.cancelled_at ? '' : `<div class="card" id="customer-notes">
+        <b>Notes for ${SHOP_SIGNER}</b>
+        <p class="muted" style="margin:6px 0">Add instructions or details. Saving a note lets you continue accepting and paying for this quote.</p>
+        ${String(req.query.note || '') === 'saved' ? '<p class="ok">Your note has been saved.</p>' : ''}
+        <form method="POST" action="/q/${q.code}/note" id="noteform">
+          <label for="customer-note">Your note</label>
+          <textarea id="customer-note" name="customer_note" rows="3" maxlength="2000" required></textarea>
+          <button type="submit" class="btn-ghost" style="margin-top:10px">Save note</button>
+        </form>
+        ${customerNotes.map((n) => `<div style="margin-top:12px;white-space:pre-wrap"><span class="muted">${fmtDate(n.created_at)}</span><br>${escEmail(n.body)}</div>`).join('')}
+      </div>`}
+
       ${(paid || q.cancelled_at) ? '' : `
       <div class="card">
         <b style="color:#0B1F4B">Need something changed?</b>
@@ -17497,6 +17549,7 @@ app.get('/q/:code', async (req, res) => {
         <p class="muted" style="margin:0 0 10px;font-size:13px">The total above does not change until
           ${SHOP_SIGNER} has confirmed it — a different quantity can land at a different price per piece.</p>
         <form method="POST" action="/q/${q.code}/changes" id="changeform">
+          <input type="hidden" name="revision" value="${Number(q.revision) || 1}">
           <textarea name="message" rows="3"
             placeholder="e.g. navy rather than black, or needed a week earlier"></textarea>
           <button type="submit" class="btn-ghost" style="width:100%;margin-top:10px">Send changes to ${SHOP_SIGNER}</button>
@@ -17532,6 +17585,7 @@ ${quotePricingSource()}
       var LINES = ${JSON.stringify(customerLinePricing(q.items || [], catalog))};
       var QITEMS = ${JSON.stringify((q.items || []).map((i) => ({
         qty: Number(i.qty) || 0, line_total: Number(i.line_total) || 0,
+        size_mix: i.size_mix || {},
         /* The each the page SHOWS, which carries any supplier charge shown
            inside the item's price (customerLineFigures). */
         unit_price: customerLineFigures(i).each,
@@ -17616,6 +17670,13 @@ ${quotePricingSource()}
         });
         return { qty: qty, mix: mix };
       }
+      function lineChanged(ix, lq){
+        var before = QITEMS[ix] || {};
+        if (lq.qty !== (before.qty || 0)) return true;
+        if (!lq.mix) return false;
+        var old = before.size_mix || {}, keys = Object.keys(old).concat(Object.keys(lq.mix));
+        return keys.some(function(sz){ return (Number(old[sz]) || 0) !== (Number(lq.mix[sz]) || 0); });
+      }
       function estimate(){
         var moved = false, sub = 0, sharedSeen = {};
         /* Lines in one run share a price band, as the save route prices them
@@ -17626,7 +17687,7 @@ ${quotePricingSource()}
         });
         LINES.forEach(function(L, ix){
           var lq = lineQty(ix), mix = lq.mix, qty = lq.qty;
-          if (qty !== (QITEMS[ix] ? QITEMS[ix].qty : 0)) moved = true;
+          if (lineChanged(ix, lq)) moved = true;
 
           var r = priceLine({
             qty: qty, product: L.product, method: L.method, stage: L.stage,
@@ -17649,7 +17710,7 @@ ${quotePricingSource()}
 
           var each = document.querySelector('[data-each="' + ix + '"]');
           var amt  = document.querySelector('[data-amount="' + ix + '"]');
-          var same = qty === (QITEMS[ix] ? QITEMS[ix].qty : 0);
+          var same = !lineChanged(ix, lq);
           if (each) each.innerHTML = same ? each.dataset.orig
             : '<span style="color:#9aa3b2;text-decoration:line-through">' +
               (L.precise ? mEach(QITEMS[ix].unit_price) : m2(QITEMS[ix].unit_price)) + '</span><br><b style="color:#b45309">' +
@@ -17675,6 +17736,15 @@ ${quotePricingSource()}
           });
         });
 
+        window.jtQuoteEditsPending = Array.prototype.some.call(document.querySelectorAll('.cq'), function(el){ return String(el.value) !== String(el.defaultValue); });
+        var warning = document.getElementById('unsent-changes');
+        if (warning) warning.style.display = window.jtQuoteEditsPending ? '' : 'none';
+        var acceptButton = document.getElementById('qaccept');
+        if (acceptButton) acceptButton.disabled = window.jtQuoteEditsPending || !!(window.jtOptionsEmpty);
+        document.querySelectorAll('a[href*="/pay/"]').forEach(function(a){
+          a.setAttribute('aria-disabled', window.jtQuoteEditsPending ? 'true' : 'false');
+          a.style.opacity = window.jtQuoteEditsPending ? '.5' : '';
+        });
         var row = document.getElementById('estrow');
         if (!moved) { row.style.display = 'none'; return; }
         /* Rush before the discount, matching quoteTotals(). */
@@ -17682,8 +17752,10 @@ ${quotePricingSource()}
         var gross = Math.round((sub + rush) * 100) / 100;
         var disc = DISC_VAL <= 0 ? 0
           : Math.min(DISC_KIND === 'pct' ? gross * DISC_VAL / 100 : DISC_VAL, gross);
-        var net = gross - disc;
-        var total = net + (TAXABLE ? net * TAX : 0);
+        var net = Math.round((gross - disc) * 100) / 100;
+        var tax = TAXABLE ? Math.round(net * TAX * 100) / 100 : 0;
+        var delivery = window.jtDelivFee === undefined ? ${Number(t.delivery) || 0} : window.jtDelivFee;
+        var total = net + tax + delivery + ${Number(t.shipping) || 0};
         document.getElementById('esttotal').textContent = m2(total);
         row.style.display = '';
       }
@@ -17798,7 +17870,8 @@ ${applyOptionChoice.toString()}
 
           var btn = document.getElementById('qaccept');
           var none = !T.required && !pick.length;
-          if (btn) { btn.disabled = none; btn.style.opacity = none ? '.5' : ''; }
+          window.jtOptionsEmpty = none;
+          if (btn) { btn.disabled = none || !!window.jtQuoteEditsPending; btn.style.opacity = btn.disabled ? '.5' : ''; }
           set('qoptsum', none
             ? '<b>Tick at least one item above to accept.</b>'
             : pick.length
@@ -17816,6 +17889,8 @@ ${applyOptionChoice.toString()}
         update();
       })();
       </script>` : ''}
+      <script src="/assets/js/quote-customer-form.js?v=20261110"
+        data-quote="${q.code}" data-revision="${Number(q.revision) || 1}"></script>
       ${quoteAnalyticsTags(q.code, req.query)}
     `));
   } catch (err) {
@@ -19824,6 +19899,8 @@ app.post('/q/:code/accept', orderRateLimit, async (req, res) => {
        having old ticks applied to new lines. */
     let choice = null;
     const q0 = cur[0];
+    if (q0 && !q0.cancelled_at && !['held', 'draft'].includes(q0.status))
+      await saveCustomerQuoteNote(code, rb.customer_note);
     if (q0 && !q0.accepted_at && (q0.items || []).some((i) => i && i.optional)) {
       const rev = Number(q0.revision) || 1;
       if (parseInt(rb.rev, 10) !== rev) return res.redirect(`/q/${code}?e=changed#accept`);
@@ -20126,6 +20203,35 @@ const requestedEditLines = (edits) => edits.map((e) => {
   return e.description + ' — ' + (bits.length ? bits.join(', ') + ' (' + total + ')' : total);
 });
 
+async function saveCustomerQuoteNote(code, raw) {
+  const note = typeof raw === 'string' ? raw.trim().slice(0, 2000) : '';
+  if (!note) return false;
+  const { rows } = await pool.query(
+    `INSERT INTO lead_notes (quote_code, kind, body)
+       SELECT code, 'customer_note', $2::text FROM quotes
+       WHERE code = $1 AND status NOT IN ('held', 'draft') AND cancelled_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM lead_notes WHERE quote_code = $1 AND kind = 'customer_note'
+         AND body = $2::text AND created_at > NOW() - INTERVAL '5 minutes') RETURNING id`, [code, note]);
+  return !!rows.length;
+}
+
+app.post('/q/:code/note', quoteToolRateLimit, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.status(404).send('Quote not found');
+  const note = req.body && req.body.customer_note;
+  if (typeof note !== 'string' || !note.trim() || note.length > 2000)
+    return res.status(400).send(quotePage('Note not saved', '<p>Please enter a note of up to 2,000 characters. Go back to your quote to try again.</p>'));
+  try {
+    const { rows } = await pool.query(`SELECT code FROM quotes WHERE code=$1 AND status NOT IN ('held', 'draft') AND cancelled_at IS NULL`, [code]);
+    if (!rows.length) return res.status(404).send('Quote not found');
+    await saveCustomerQuoteNote(code, note);
+    return res.redirect(303, `/q/${code}?note=saved#customer-notes`);
+  } catch (err) {
+    console.error('customer quote note failed:', err.message);
+    return res.status(500).send(quotePage('Note not saved', '<p>Your note could not be saved. Please go back and try again.</p>'));
+  }
+});
+
 app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/');
@@ -20135,6 +20241,10 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
     const { rows: found } = await pool.query(`SELECT * FROM quotes WHERE code=$1 AND status NOT IN ('held', 'draft')`, [code]);
     if (!found.length) return res.redirect('/q/' + code);
     const q = found[0];
+    const seenRevision = Number(one(b.revision));
+    if (seenRevision && seenRevision !== (Number(q.revision) || 1))
+      return res.status(409).send(quotePage('Quote updated', '<p>This quote was updated while you had it open. Refresh the quote and check the latest items before sending your changes.</p>'));
+
 
     /* Paid means printed or scheduled — past the point where a quote is a
        proposal. Everything else can still be asked about. */
@@ -20242,9 +20352,10 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
           END,
           requested_items = CASE WHEN $5::boolean THEN NULL ELSE COALESCE($3::jsonb, requested_items) END,
           status = 'changes'
-        WHERE code=$1 RETURNING *`,
-      [code, msg || null, requested ? JSON.stringify(requested) : null, `${stamp}:\n`, withdrawn]);
-    if (!rows.length) return res.redirect('/q/' + code);
+        WHERE code=$1 AND cancelled_at IS NULL AND COALESCE(paid_amount, 0) = 0
+          AND COALESCE(revision, 1) = $6::int RETURNING *`,
+      [code, msg || null, requested ? JSON.stringify(requested) : null, `${stamp}:\n`, withdrawn, Number(q.revision) || 1]);
+    if (!rows.length) return res.status(409).send(quotePage('Quote updated', '<p>This quote changed while your request was saving. Refresh it and check the latest details before trying again.</p>'));
 
     const saved = rows[0];
     res.locals.quoteEvent = 'changes';   // the page records it in analytics
@@ -20273,6 +20384,7 @@ app.post('/q/:code/changes', orderRateLimit, async (req, res) => {
     }).catch(e => console.error('change alert failed:', e.message));
   } catch (err) {
     console.error('change request failed:', err.message);
+    return res.status(500).send(quotePage('Changes not saved', '<p>Your changes could not be saved. Please go back and try again. Nothing has been accepted or charged.</p>'));
   }
   /* Each request its own token, so a second one is counted too (Codex #138). */
   res.redirect('/q/' + code + (res.locals.quoteEvent === 'changes' ? '?ev=changes&r=' + Date.now().toString(36) : ''));
@@ -36188,7 +36300,7 @@ async function jobNotesCard(code) {
     staffRoster(),
   ]);
   return `<div class="card" id="notes"><b>Notes</b>
-    ${rows.map((n) => `<div class="row-i"><span class="row-main">${pill(NOTE_KINDS[n.kind] || n.kind, 'neutral')}
+    ${rows.map((n) => `<div class="row-i"><span class="row-main">${pill(n.kind === 'customer_note' ? 'Customer note' : NOTE_KINDS[n.kind] || n.kind, 'neutral')}
       <span style="white-space:pre-wrap">${escEmail(n.body)}</span>
       <div class="row-sub">${escEmail(nameOf(roster, n.staff_id))} &middot; ${escEmail(whenShort(n.created_at))}</div></span></div>`).join('')
       || '<p class="muted">No notes yet.</p>'}
@@ -36293,7 +36405,7 @@ function leadWorkPanel(l, notes, roster, actor) {
       l.next_follow_up_on ? ` &middot; follow up ${escEmail(fmtDate(l.next_follow_up_on))}` : ''}${
       l.platform ? ` &middot; ${escEmail(l.platform)}` : ''}</summary>
     ${l.profile_url ? `<p><a href="${escEmail(l.profile_url)}" target="_blank" rel="noopener noreferrer">Open their profile</a></p>` : ''}
-    ${notes.map((n) => `<div class="row-sub" style="white-space:pre-wrap">${pill(NOTE_KINDS[n.kind] || n.kind, 'neutral')}
+    ${notes.map((n) => `<div class="row-sub" style="white-space:pre-wrap">${pill(n.kind === 'customer_note' ? 'Customer note' : NOTE_KINDS[n.kind] || n.kind, 'neutral')}
       ${escEmail(n.body)} <span class="muted">— ${escEmail(nameOf(roster, n.staff_id))}, ${escEmail(whenShort(n.created_at))}</span></div>`).join('')}
     <form method="post" action="/admin/lead/${l.id}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       <input type="hidden" name="back" value="/admin/leads">
