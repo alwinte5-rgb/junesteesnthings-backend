@@ -23,12 +23,23 @@ test('--only-emb-logos dry run writes the four logo methods and nothing else', (
 });
 
 test('every logo size has a 36-49 band halfway between 25-35 and 50-74', () => {
-  const want = { 8: ['25.00', '23.50', '22.00'], 9: ['36.00', '34.50', '33.00'],
-    10: ['47.00', '45.50', '44.00'], 11: ['80.00', '78.50', '77.00'] };
+  for (const id of ['8', '9', '10', '11']) {
+    const p = prices(id);
+    const mid = ((Number(p['35']) + Number(p['74'])) / 2).toFixed(2);
+    assert.strictEqual(p['49'], mid, '#' + id + ' 36-49 halfway');
+  }
+});
+
+/* Owner, 2026-11-10: logo prices lowered to the local market. */
+test('logo prices are the owner\'s 2026-11-10 table, falling with quantity', () => {
+  const want = {
+    8:  ['18.00', '16.00', '14.00', '13.00', '12.00', '11.00', '10.00'],
+    9:  ['25.00', '22.00', '19.00', '17.50', '16.00', '15.00', '14.00'],
+    10: ['32.00', '29.00', '26.00', '24.50', '23.00', '22.00', '21.00'],
+    11: ['60.00', '56.00', '52.00', '50.00', '48.00', '46.00', '45.00'],
+  };
   for (const [id, w] of Object.entries(want)) {
     const p = prices(id);
-    assert.deepStrictEqual(['35', '49', '74'].map((q) => p[q]), w, '#' + id);
-    assert.strictEqual(p['11'], (Number(w[0]) + 5).toFixed(2), '#' + id + ' 1-11 unchanged');
-    assert.strictEqual(p['1000'], (Number(w[2]) - 2).toFixed(2), '#' + id + ' 100+ anchor unchanged');
+    assert.deepStrictEqual(['11', '24', '35', '49', '74', '99', '1000'].map((q) => p[q]), w, '#' + id);
   }
 });

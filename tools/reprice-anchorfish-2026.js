@@ -341,9 +341,31 @@ const EMB_INSERTS = [
 
 /* One method's tier table: names walk their own taper, a flat method holds one
    price at every quantity, and logos are fitted from the vendor's stitch cost. */
-function tiersFor(m) {
+/* LOGO PRICES, typed (owner, 2026-11-10). The fitted line above ($20 chest ->
+   $75 full back, plus the taper) sat at two to three times the local market for
+   the stitching alone: a Medium logo was $41 at 1-11 and still $31 at 100+,
+   against $6-15 for a standard left-chest logo elsewhere. Lowered by hand.
+   Still above DTF at every band (a Medium $25 vs a DTF chest logo $14.75).
+   Small runs (to 24) are sewn here on the one-head machine; 25 and up go to
+   Anchorfish, whose cost (EMB above, $3.25-14.25) these clear by about 2.5-3.5x.
+   Band ceilings match EMB_TAPER. The fitted line still prices the digitizing
+   notes and the stitch-band printout; it no longer sets the logo rows. */
+const EMB_LOGO_PRICES = {
+  //        1-11   12-24  25-35  36-49  50-74  75-99  100+
+  8:  [    18.00, 16.00, 14.00, 13.00, 12.00, 11.00, 10.00 ],  // Small
+  9:  [    25.00, 22.00, 19.00, 17.50, 16.00, 15.00, 14.00 ],  // Medium
+  10: [    32.00, 29.00, 26.00, 24.50, 23.00, 22.00, 21.00 ],  // Large
+  11: [    60.00, 56.00, 52.00, 50.00, 48.00, 46.00, 45.00 ],  // Full back
+};
+
+function tiersFor(m, id) {
   if (m.flat) return FL.map((f) => [EMB_CEIL[f], m.flat]);
   if (m.name) return NAME_TAPER.map(([ceil, f]) => [ceil, up05(NAME_BASE[m.name] * f)]);
+  if (EMB_LOGO_PRICES[id]) {
+    const p = EMB_LOGO_PRICES[id];
+    if (p.length !== EMB_TAPER.length) { console.error('  !! logo ' + id + ' has ' + p.length + ' prices for ' + EMB_TAPER.length + ' bands'); process.exit(3); }
+    return EMB_TAPER.map(([ceil], i) => [ceil, p[i]]);
+  }
   /* Logo prices are fitted from the vendor's stitch-band cost at the 1-24 row —
      the anchors describe that shape — then multiplied by the quantity taper, so
      the fitted relativity between sizes survives at every band. */
@@ -424,10 +446,8 @@ for (const [id, d] of Object.entries(DIGITIZING)) {
 console.log('\n  ' + DIG_NOTE);
 
 console.log('\n\nEMBROIDERY RUN RATES — sewn in house.');
-console.log('Chest logo $' + EMB_PRICE.chest.toFixed(2) + ', full back $' + EMB_PRICE.fullBack.toFixed(2) +
-  ', sizes between fitted on the vendor sheet.');
-console.log('Tapers to the anchors at 100+, lifted below that so embroidery is never\n' +
-  'cheaper than DTF on a small run.\n');
+console.log('Logo prices typed by the owner 2026-11-10 (EMB_LOGO_PRICES), lowered to the');
+console.log('local market. 1-24 sewn in house, 25+ sent to Anchorfish. Still above DTF.\n');
 const FL = Object.keys(EMB).map(Number).sort((a, b) => a - b);
 
 /* Logos and names are shown as two tables because they band differently —
@@ -460,7 +480,7 @@ let hdr = bandHeader(EMB_TAPER.map(([c]) => c), 1);
 console.log(hdr);
 console.log('  ' + '-'.repeat(hdr.length));
 for (const [id, m] of logoIds) {
-  const tiers = tiersFor(m);
+  const tiers = tiersFor(m, id);
   emit(id, m, tiers);
   stmts.push('UPDATE lumise_printings SET title=' + sq(m.title) +
     ', calculate=' + sq(fixedCalc(tiers)) + ' WHERE id=' + id + ';');
