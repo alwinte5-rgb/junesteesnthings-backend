@@ -45,15 +45,16 @@ const env = {
   SHOP_ADDRESS_LINE: '3047 N Lincoln Ave, Chicago, IL 60657',
   PUBLIC_BASE_URL: 'https://www.jtees.net',
   ZELLE_HANDLE: '(773) 849-1854', ZELLE_NAME: 'Andrea Winters', BALANCE_WHEN: 'on pickup or before delivery',
+  SHOP_TZ: 'America/Chicago', CARD_FEE: 0.04, DELIV: { isYmd: (x) => /^\d{4}-\d{2}-\d{2}$/.test(x) },
 };
 vm.createContext(env);
-for (const fn of ['quoteDiscount', 'depositFor', 'quoteTotals', 'balanceOf', 'quoteTaxable', 'quoteLink', 'fmtDate',
+for (const fn of ['cardFee', 'pgDateYmd', 'addonRowView', 'quoteDiscount', 'depositFor', 'quoteTotals', 'balanceOf', 'quoteTaxable', 'quoteLink', 'fmtDate',
   'oneSizeList', 'normalisedAddons', 'addonTotalOf', 'shownAddons', 'shownAddonTotalOf', 'customerLineFigures',
   'moneyEach', 'eachText', 'quotePrintModel']) {
   vm.runInContext(lift(fn), env);
 }
-const model = (q, back = {}) => vm.runInContext('quotePrintModel', env)(q,
-  { catalog: { products: [], methods: [] }, back: { refundedToCard: 0, reversedByIssuer: 0, disputed: false, ...back }, staff: false });
+const model = (q, back = {}, certLock = false) => vm.runInContext('quotePrintModel', env)(q,
+  { catalog: { products: [], methods: [] }, back: { refundedToCard: 0, reversedByIssuer: 0, disputed: false, ...back }, certLock, staff: false });
 
 const base = {
   code: 'K7Q2MXAB34', name: 'Dana <Lee>', phone: '312-555-0100', email: 'dana@example.com',
@@ -78,7 +79,9 @@ test('before acceptance it is a QUOTE with the deposit to start', () => {
   assert.match(t, /Good through Nov 30, 2026/);
   assert.match(t, /Optional — not in the total unless chosen/);
   assert.match(t, /↳ Screens one time 2 \$25\.00 \$50\.00/, 'screens get their own row, as on the quote page');
-  assert.match(t, /Zelle to \(773\) 849-1854 \(Andrea Winters\) with K7Q2MXAB34 in the memo/);
+  assert.match(t, /To order, accept this quote online: https:\/\/www\.jtees\.net\/q\/K7Q2MXAB34/,
+    'before Accept the paper sends them to accept, as the quote page does: no Zelle or cash yet');
+  assert.doesNotMatch(t, /Zelle|Cash at pickup/);
   assert.ok(m.lines[m.lines.length - 1].optional, 'optional lines come last on paper');
 });
 
@@ -91,6 +94,38 @@ test('after acceptance it is an INVOICE with what was paid and the balance', () 
   assert.match(t, /Total \$298\.85/);
   assert.match(t, /Paid Nov 3, 2026 -\$150\.00/);
   assert.match(t, /Balance due \$148\.85/);
+  assert.match(t, /Online by card: \S+ \(\$154\.80 with the 4% card fee\)/, 'the card amount is the one the card page charges');
+  assert.match(t, /Zelle \$148\.85 to \(773\) 849-1854 \(Andrea Winters\) with K7Q2MXAB34 in the memo/);
+});
+
+test('an evening acceptance in Chicago is dated that day, not the next', () => {
+  /* 7:30pm Nov 3 in Chicago is 01:30 Nov 4 UTC; node-pg hands TIMESTAMPTZ over as a Date. */
+  const q = { ...base, items: [base.items[0]], accepted_at: new Date('2026-11-04T01:30:00Z'), created_at: new Date('2026-11-03T01:30:00Z'),
+    /* Made inside the context under test, so instanceof Date holds there as it does in server.js. */
+    valid_until: vm.runInContext('new Date(2026, 10, 30)', env), needed_by: vm.runInContext('new Date(2026, 10, 20)', env) };
+  const t = text(renderQuotePrint(model(q)));
+  assert.match(t, /Invoice date Nov 3, 2026/);
+  assert.match(t, /Quote date Nov 2, 2026/);
+  assert.match(t, /Needed by Nov 20, 2026/, 'a DATE column keeps its own day');
+});
+
+test('nothing is asked for while a change request waits or a certificate is missing', () => {
+  const acc = { ...base, items: [base.items[0]], accepted_at: '2026-11-03T16:00:00Z' };
+  const pending = text(renderQuotePrint(model({ ...acc, requested_items: [{ qty: 30 }] })));
+  assert.doesNotMatch(pending, /Deposit to start|Balance due|Zelle|Cash at pickup/);
+  assert.match(pending, /Your change request is with June\. Payment opens once the new price is confirmed/);
+  const locked = text(renderQuotePrint(model({ ...acc, taxable: false, tax: 0 }, {}, true)));
+  assert.doesNotMatch(locked, /Deposit to start|Balance due|Zelle|Cash at pickup/);
+  assert.match(locked, /Payment opens once your tax-exemption certificate is on file/);
+});
+
+test('a write-off is shown, so a settled invoice adds up under its stamp', () => {
+  const q = { ...base, items: [base.items[0]], tax: 22, accepted_at: '2026-11-03', paid_amount: 200, written_off: 100 };
+  const m = model(q);
+  const t = text(renderQuotePrint(m));
+  assert.match(t, /Total \$300\.00/);
+  assert.match(t, /Adjusted by the shop \(no longer owed\) -\$100\.00/);
+  assert.ok(m.paidInFull);
 });
 
 test('paid in full: a PAID stamp and no way-to-pay box', () => {
@@ -137,13 +172,15 @@ test('the route keeps the quote page guards and never writes', () => {
   assert.match(body, /status NOT IN \('held', 'draft'\)/, 'held and draft quotes are not printable');
   assert.match(body, /code = \$1/, 'the code is a bound parameter');
   assert.doesNotMatch(body, /UPDATE|INSERT|DELETE|applyAutoQuoteCode|fillBusinessShipTo/, 'printing changes nothing');
+  assert.match(body, /TAXCERT\.quotePayLocked\(q, cert\)/, 'the certificate lock is read as on the quote page');
   assert.match(body, /Cache-Control', 'no-store'/);
   assert.match(src, /async function quoteMoneyBack\(code\)/);
-  assert.strictEqual((src.match(/await quoteMoneyBack\(q\.code\)/g) || []).length, 2, 'the quote page and the paper read refunds one way');
+  assert.strictEqual((src.match(/quoteMoneyBack\(q\.code\)/g) || []).length, 2, 'the quote page and the paper read refunds one way');
 });
 
 test('the shop, the customer and staff can all reach it', () => {
   assert.match(src, /href="\/q\/\$\{escEmail\(q\.code\)\}\/print\$\{staffView \? '\?staff=1' : ''\}"/, 'a link on the customer quote page');
-  assert.match(src, /href="\/q\/\$\{q\.code\}\/print\?staff=1"/, 'a button on the quotes board');
+  assert.match(src, /q\.status === 'held' \|\| q\.status === 'draft' \? '' : `<a [^`]*href="\/q\/\$\{q\.code\}\/print\?staff=1"/,
+    'a button on the quotes board, not on held or draft quotes (the route would refuse them and spend the lookup budget)');
   assert.match(src, /\$\{showMoney \? `<a href="\/q\/\$\{encodeURIComponent\(q\.code\)\}\/print\?staff=1"/, 'a link on the job page, for staff who see money');
 });

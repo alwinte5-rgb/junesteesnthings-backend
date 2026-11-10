@@ -58,6 +58,7 @@ const api = vm.runInThisContext(`(() => {
   ${lift('addonTotalOf')}
   ${lift('shownAddons')}
   ${lift('shownAddonTotalOf')}
+  ${lift('addonRowView')}
   ${lift('addonRowsFor')}
   return { normalisedAddons, addonTotalOf, addonRowsFor, round2 };
 })()`);

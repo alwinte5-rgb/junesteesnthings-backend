@@ -66,7 +66,7 @@ function renderQuotePrint(m) {
   const s = m.shop || {};
   const { title, stamp } = docState(m);
   const bill = m.billTo || {};
-  const billLines = [bill.name, bill.business, ...(bill.address || []), bill.phone, bill.email].filter(Boolean);
+  const billLines = [bill.name, bill.phone, bill.email].filter(Boolean);
   const dates = (m.dates || []).filter((d) => d && d.value);
 
   return `<!doctype html>
@@ -170,4 +170,4 @@ function renderQuotePrint(m) {
 </body></html>`;
 }
 
-module.exports = { renderQuotePrint, docState, esc };
+module.exports = { renderQuotePrint, esc };
