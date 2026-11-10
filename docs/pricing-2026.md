@@ -58,16 +58,22 @@ DIGITIZING — charged at the vendor rate: $30 to 15k stitches, +$5 per extra 1k
 
 
 EMBROIDERY RUN RATES — sewn in house.
-Chest logo $20.00, full back $75.00, sizes between fitted on the vendor sheet.
-Tapers to the anchors at 100+, lifted below that so embroidery is never
-cheaper than DTF on a small run.
+Logo prices typed by the owner 2026-11-10 (EMB_LOGO_PRICES), lowered to the
+local market. 1-24 sewn in house, 25+ sent to Anchorfish. Still above DTF.
 
   id   item                 1-11      12-24      25-35      36-49      50-74      75-99   100-1000
   --------------------------------------------------------------------------------------------------
-    8  Small Logo (     $30.00     $28.00     $25.00     $23.50     $22.00     $21.00     $20.00
-    9  Medium Logo      $41.00     $39.00     $36.00     $34.50     $33.00     $32.00     $31.00
-   10  Large Logo (     $52.00     $50.00     $47.00     $45.50     $44.00     $43.00     $42.00
-   11  Full Back (≤     $85.00     $83.00     $80.00     $78.50     $77.00     $76.00     $75.00
+    8  Small Logo (     $18.00     $16.00     $14.00     $13.00     $12.00     $11.00     $10.00
+    9  Medium Logo      $25.00     $22.00     $19.00     $17.50     $16.00     $15.00     $14.00
+   10  Large Logo (     $32.00     $29.00     $26.00     $24.50     $23.00     $22.00     $21.00
+   11  Full Back (≤     $60.00     $56.00     $52.00     $50.00     $48.00     $46.00     $45.00
+
+  2026-11-10 (owner): lowered from $30-20 / $41-31 / $52-42 / $85-75. The old
+  fitted line was 2-3x the local market for the stitching ($6-15 for a
+  standard left-chest logo). One-head machine: 25+ pieces go to Anchorfish
+  (cost $3.25-14.25 a logo on their sheet; confirm it is current and add their
+  delivery to the quote). Applied with
+  `tools/reprice-anchorfish-2026.js --only-emb-logos --apply`.
 
   25-49 split at 36 (owner, 2026-10-23) to match the DTF bands, halfway
   between 25-35 and 50-74. Applied with
