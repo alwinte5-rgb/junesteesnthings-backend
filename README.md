@@ -11,6 +11,17 @@ There is no build step and no frontend framework. Pages are static HTML in
 
 ## Requirements
 
+### Staff task assignments
+
+Staff tasks are assigned manually by default. The timer sweep, daily/weekly
+routines, empty-lane refills, seasonal projects and software-lead task
+generation stay off, including after a task is closed or My Day is opened.
+Existing tasks and manually created projects remain available. Backlog-low
+notifications are cleared while automatic assignments are off.
+
+Only set `AUTO_STAFF_TASKS=true` if the owner explicitly wants automatic
+assignments again. Saving a backlog template does not enable automation.
+
 - **Node 18 or newer** (`node --version`) — the app uses the built-in `fetch`
 - **PostgreSQL** — any reachable instance; tables are created on boot
 - A **Brevo** account (email + contact sync). Brevo is a hard requirement:

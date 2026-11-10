@@ -37456,7 +37456,8 @@ app.get('/admin/tasks', requireAdmin, async (req, res) => {
     }
     res.set('Cache-Control', 'no-store');
     res.send(adminPage('Tasks', `${TASK_CSS}
-      ${pageHeader('Tasks', view === 'team' ? 'What each helper is working on right now. Every helper holds one task in each lane; when they finish one, the next comes from the backlog by itself.'
+      ${pageHeader('Tasks', !FLOW.automaticEnabled() && view !== 'done' ? 'Manual assignments only. Automatic backlog, routine and seasonal tasks are off. Hand out work from your agreed plan.'
+        : view === 'team' ? 'What each helper is working on right now. Every helper holds one task in each lane; when they finish one, the next comes from the backlog by itself.'
         : view === 'backlog' ? 'What each role gets next, in order. You never need to hand these out yourself.' : 'Everything finished in the last 30 days, with what was done and the files.')}
       ${flash(req.query)}
       ${tabs}
@@ -37500,14 +37501,14 @@ async function backlogSection(roster, pick) {
   const lanes = FLOW.LANE_KEYS.map((k) => {
     const list = rows.filter((t) => t.repeat === 'none' && t.lane === k);
     return `<div class="bl-lane"><b>${escEmail(FLOW.LANES[k].label)}</b> <span class="muted">${escEmail(FLOW.LANES[k].hint)} &middot; ${list.length} waiting</span>
-      ${list.length < FLOW.LOW ? `<div class="warn" style="margin:6px 0">Running low: add ${FLOW.LOW - list.length} or more.</div>` : ''}
+      ${FLOW.automaticEnabled() && list.length < FLOW.LOW ? `<div class="warn" style="margin:6px 0">Running low: add ${FLOW.LOW - list.length} or more.</div>` : ''}
       ${list.map(item).join('')}</div>`;
   }).join('');
   const routine = rows.filter((t) => t.repeat !== 'none');
   const opt = (v, label, on) => `<option value="${escEmail(v)}"${on ? ' selected' : ''}>${escEmail(label)}</option>`;
   const chips = tracks.map((k) => ({ label: JOB_TRACKS[k].label, href: `/admin/tasks?backlog=${encodeURIComponent(k)}#backlog`, on: k === track }));
   return `<div class="card" id="backlog"><h2 class="card-title">Backlog <span class="muted">what each role does next, without asking</span></h2>
-    <p class="muted" style="margin-top:0">Each helper holds one task in each lane. When they finish one, the next in that lane is handed to them at once. The routine comes every work day.</p>
+    <p class="muted" style="margin-top:0">${FLOW.automaticEnabled() ? 'Each helper holds one task in each lane. When they finish one, the next in that lane is handed to them at once. The routine comes every work day.' : 'Automatic assignments are off. Saved backlog items and routines do not create tasks. Hand out approved work from Team now.'}</p>
     ${filterChips(chips)}
     ${!ever && FLOW.STARTERS[track] ? `<form method="post" action="/admin/tasks/templates/starters" data-once style="margin:10px 0">
       <input type="hidden" name="track" value="${escEmail(track)}"><input type="hidden" name="back" value="${escEmail(back)}">
@@ -38191,6 +38192,7 @@ async function backfillTaskBriefs(now = new Date()) {
  *  helper that fails is logged and the others still run. Rings the bell at
  *  once when anything was handed out. */
 async function taskFlowSweep() {
+  if (!FLOW.automaticEnabled()) return '';
   const roster = await staffRoster({ activeOnly: true });
   const helpers = roster.filter((r) => !r.archived_at);
   const [shifts, { rows: templates }] = await Promise.all([
@@ -38225,6 +38227,7 @@ async function taskFlowSweep() {
  *  a minute per helper (the sweep and Done cover the rest); `now` skips that. */
 const taskFlowAt = new Map();
 async function taskFlowFor(helperId, { now = false } = {}) {
+  if (!FLOW.automaticEnabled()) return 0;
   if (!now && Date.now() - (taskFlowAt.get(helperId) || 0) < 60 * 1000) return 0;
   taskFlowAt.set(helperId, Date.now());
   const { rows: [h] } = await pool.query(
@@ -38246,6 +38249,10 @@ async function taskFlowForTrack(track) {
 /** The owner's "backlog running low" notices: one per role and lane a week,
  *  for roles someone works in and the owner has started a backlog for. */
 async function backlogNotices(roster) {
+  if (!FLOW.automaticEnabled()) {
+    await notifyClearResolved('owner', 'backlog', []);
+    return [];
+  }
   const tracks = [...new Set(roster.filter((r) => r.active && !r.archived_at).map((r) => r.training_track))];
   const [{ rows: started }, { rows: waiting }] = await Promise.all([
     pool.query('SELECT DISTINCT track FROM task_templates WHERE active AND track = ANY($1::text[])', [tracks]),

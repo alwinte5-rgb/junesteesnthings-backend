@@ -42,6 +42,10 @@ const LOW = 3;
 const TITLE_MAX = 200;
 const TEXT_MAX = 8000;
 
+/* Automatic work must be an explicit owner opt-in. Removing an assignment
+   must not silently replace it with another task or tomorrow's routine. */
+const automaticEnabled = (env = process.env) => env.AUTO_STAFF_TASKS === 'true';
+
 const one = (v, max) => String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, max);
 const many = (v, max) => String(v == null ? '' : v).replace(/\r\n?/g, '\n').trim().slice(0, max);
 
@@ -163,7 +167,7 @@ function proofMissing(brief, { files = 0, note = '' } = {}) {
 const { STARTERS } = require('./task-starters');
 
 module.exports = {
-  LANES, LANE_KEYS, DAILY, REPEATS, GOALS, LOW, TITLE_MAX, TEXT_MAX, STARTERS,
+  LANES, LANE_KEYS, DAILY, REPEATS, GOALS, LOW, TITLE_MAX, TEXT_MAX, STARTERS, automaticEnabled,
   shapeBrief, briefFromForm, proofMissing,
   cleanTemplate, lanesToFill, recurringDue, isWorkday, lowLanes, isoWeek,
 };
