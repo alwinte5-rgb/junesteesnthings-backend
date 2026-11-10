@@ -60,6 +60,7 @@ function pickupHowHtml() {
 const { verifyTwilioSignature, classifyInbound } = require('./tools/lib/twilio-webhook');
 const VOICE = require('./tools/lib/voice');
 const TAXCERT = require('./tools/lib/tax-certificates');
+const QPRINT = require('./tools/lib/quote-print');
 const QPHOTOS = require('./tools/lib/quote-photos');
 const LEADFILES = require('./tools/lib/lead-files');
 const SHOPDIGEST = require('./tools/lib/shop-digest');
@@ -10959,16 +10960,20 @@ async function emailQuote(q) {
   }
 }
 
-function fmtDate(d) {
+function fmtDate(d, opts) {
   if (!d) return '';
+  /* opts.year for paper (the printable quote): "Nov 10, 2026". A plain
+     parameter, not a destructured one: tests lift this function by its
+     first brace. */
+  const y = opts && opts.year ? { year: 'numeric' } : {};
   // DATE columns carry no time; timezone-converting them shifts the day back.
   const iso = (d instanceof Date) ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (m && !(String(d).includes('T') && !(d instanceof Date))) {
     return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-      .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      .toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...y });
   }
-  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...y, timeZone: 'America/Chicago' });
 }
 
 /** The three message templates. Kept together so the voice stays consistent. */
@@ -16174,6 +16179,139 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
   }
 });
 
+/** What has gone back to the customer on a quote: its card refunds (refund
+ *  rows, less any refund that failed and came back), what a card issuer
+ *  reversed in a chargeback, and whether a dispute was ever opened. The
+ *  customer's quote page and its printable copy read this one lookup, so the
+ *  screen and the paper agree. A failed lookup reads as none, logged, so the
+ *  page still renders. */
+async function quoteMoneyBack(code) {
+  const { rows: rf } = await pool.query(
+    `SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) AS gross
+       FROM quote_payments WHERE quote_code = $1 AND ext_ref ~ '^(ch|py)_[A-Za-z0-9_]+:'`, [code])
+    .catch((e) => { console.error(`quote ${code}: refund lookup failed:`, e.message); return { rows: [] }; });
+  const { rows: dq } = await pool.query(
+    `SELECT (SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) FROM quote_payments
+              WHERE quote_code = $1 AND kind = 'dispute') AS reversed,
+            EXISTS (SELECT 1 FROM stripe_disputes WHERE quote_code = $1) AS disputed`, [code])
+    .catch((e) => { console.error(`quote ${code}: dispute lookup failed:`, e.message); return { rows: [] }; });
+  return {
+    refundedToCard: round2(Number(rf[0]?.gross || 0)),
+    reversedByIssuer: round2(Number(dq[0]?.reversed || 0)),
+    disputed: !!dq[0]?.disputed,
+  };
+}
+
+/** The printable quote's model (tools/lib/quote-print.js lays it out): every
+ *  figure from the helpers the customer's quote page uses, so paper and screen
+ *  agree. Plain text throughout; the layout escapes it. */
+function quotePrintModel(q, ctx) {
+  const { catalog, back, staff } = ctx;
+  const t = quoteTotals(q);
+  const accepted = !!q.accepted_at;
+  const cancelled = !!q.cancelled_at;
+  const paidAmt = round2(Number(q.paid_amount || 0));
+  const balance = balanceOf(q, t.total);
+  const stopAsking = back.refundedToCard > 0 || back.disputed;
+  const long = (d) => fmtDate(d, { year: true });
+
+  const lines = (q.items || []).filter(Boolean).map((i) => {
+    const fig = customerLineFigures(i);
+    return {
+      optional: !!i.optional,
+      title: oneSizeList(i.description),
+      colour: i.colour || '',
+      deco: decorationSummary(i, catalog),
+      details: i.details || '',
+      qty: String(parseInt(i.qty, 10) || 0),
+      each: eachText(fig, i),
+      amount: money(fig.amount),
+      addons: shownAddons(i).map((a) => {
+        const n = Number(a.count) || 0;
+        const counted = (a.kind === 'per_screen' || a.kind === 'per_piece' || a.kind === 'per_piece_per_colour') && n > 0;
+        return {
+          label: a.label, once: a.kind === 'per_screen' || a.kind === 'fixed' || !a.kind,
+          count: counted ? String(n) : '', rate: counted && Number(a.rate) > 0 ? money(a.rate) : '', total: money(a.total),
+        };
+      }),
+    };
+  });
+  /* Optional lines last on paper, so the job reads first. */
+  lines.sort((a, b) => Number(a.optional) - Number(b.optional));
+
+  const totals = [{ label: 'Subtotal', amount: money(t.subtotal) }];
+  if (t.rush > 0) totals.push({ label: `Rush (${Number(t.rushPct).toFixed(Number(t.rushPct) % 1 ? 2 : 0)}%)${q.needed_by ? ' for ' + long(q.needed_by) : ''}`, amount: money(t.rush) });
+  if (t.discount > 0) totals.push({ kind: 'minus', label: `${q.discount_note || 'Discount'}${q.discount_kind === 'pct' ? ` (${Number(q.discount_value)}% off)` : ''}`, amount: '-' + money(t.discount) });
+  if (t.tax > 0) totals.push({ label: 'Illinois sales tax', amount: money(t.tax) });
+  else if (!quoteTaxable(q)) totals.push({ kind: 'note', label: `Sales tax: exempt${q.tax_exempt_ref ? ' (' + q.tax_exempt_ref + ')' : ''}`, amount: '' });
+  if (t.delivery > 0) totals.push({ label: 'Local delivery', amount: money(t.delivery) });
+  if (t.shipping > 0) totals.push({ label: `Shipping${q.shipping_service ? ' (' + q.shipping_service + ')' : ''}`, amount: money(t.shipping) });
+  else if (!accepted && SHIP.quoteShips(q)) totals.push({ kind: 'note', label: 'Shipping: priced from your address when you accept', amount: '' });
+  totals.push({ kind: 'total', label: 'Total', amount: money(t.total) });
+  if (paidAmt > 0) totals.push({ kind: 'minus', label: `Paid${q.paid_at ? ' ' + long(q.paid_at) : ''}`, amount: '-' + money(paidAmt) });
+  if (back.refundedToCard > 0) totals.push({ label: 'Refunded to your card', amount: money(back.refundedToCard) });
+  if (back.reversedByIssuer > 0) totals.push({ label: 'Reversed by your card issuer', amount: money(back.reversedByIssuer) });
+  if (!cancelled && !stopAsking) {
+    if (paidAmt > 0 && balance > 0) totals.push({ kind: 'due', label: 'Balance due', amount: money(balance) });
+    else if (paidAmt <= 0 && balance > 0) totals.push({ kind: 'due', label: t.deposit >= t.total ? 'Due to start (paid in full)' : 'Deposit to start (50%)', amount: money(t.deposit) });
+  }
+
+  const to = SHIP.quoteShips(q) ? SHIP.cleanShipTo(q.ship_to, q.name) : null;
+  const dates = accepted
+    ? [{ label: 'Invoice date', value: long(q.accepted_at) }, { label: 'Quote date', value: long(q.created_at) }]
+    : [{ label: 'Date', value: long(q.created_at) }, { label: 'Good through', value: long(q.valid_until) }];
+  if (q.needed_by) dates.push({ label: 'Needed by', value: long(q.needed_by) });
+
+  const owing = !cancelled && !stopAsking && balance > 0;
+  return {
+    code: q.code, accepted, cancelled,
+    paidInFull: !cancelled && accepted && paidAmt > 0 && balance <= 0 && !stopAsking,
+    shop: { name: SHOP_NAME, signer: SHOP_SIGNER, address: SHOP_ADDRESS_LINE, phone: SHOP_PHONE,
+            email: 'support@jtees.net', web: 'jtees.net', logo: `${PUBLIC_BASE_URL}/assets/images/brand/logo-current-900.png` },
+    dates,
+    billTo: { name: q.name || '', phone: q.phone || '', email: q.email || '' },
+    shipTo: to ? [to.name, to.street1, to.street2, `${to.city}${to.city && to.state ? ', ' : ''}${to.state} ${to.zip}`.trim()].filter(Boolean) : [],
+    lines, totals,
+    notes: q.notes || '',
+    pendingChange: !!q.requested_items,
+    payHow: owing ? [
+      `Online by card: ${quoteLink(q.code)}`,
+      `Zelle to ${ZELLE_HANDLE} (${ZELLE_NAME}) with ${q.code} in the memo`,
+      `Cash at pickup. Balance due ${BALANCE_WHEN}.`,
+    ] : [],
+    backUrl: staff ? `/admin/production/${q.code}` : `/q/${q.code}`,
+    backLabel: staff ? 'Back to the job' : 'Back to your quote',
+  };
+}
+
+/* The quote as a sheet of paper: QUOTE until accepted, INVOICE after, numbered
+   with the quote code. Read-only and public like /q/:code, behind the same
+   guards (the code is the password; a miss spends the lookup budget; held and
+   draft quotes are not shown). Opening it never marks the quote viewed and
+   never applies a code or address, unlike the quote page itself. */
+app.get('/q/:code/print', async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (quoteMissBudget.exhausted(req)) return tooManyQuoteLookups(res);
+  const missing = () => res.status(404).send(quotePage('Quote not found', `
+    <div class="card"><h1>We couldn't find that quote</h1>
+    <p class="muted" style="margin-top:8px">Text or call ${SHOP_PHONE} and we will resend it.</p></div>`));
+  if (!QUOTE_CODE_RE.test(code)) { quoteMissBudget.miss(req); return missing(); }
+  try {
+    const { rows } = await pool.query(`SELECT * FROM quotes WHERE code = $1 AND status NOT IN ('held', 'draft')`, [code]);
+    if (!rows.length) { quoteMissBudget.miss(req); return missing(); }
+    const q = rows[0];
+    let catalog = { products: [], methods: [] };
+    try { catalog = await getCatalog(); } catch { /* the line carries enough */ }
+    const back = await quoteMoneyBack(q.code);
+    res.set('Cache-Control', 'no-store');
+    res.send(QPRINT.renderQuotePrint(quotePrintModel(q, { catalog, back, staff: String(req.query.staff || '') === '1' })));
+  } catch (err) {
+    console.error(`quote ${code}: print failed:`, err.message);
+    res.status(500).send(quotePage('Something went wrong', `
+      <div class="card"><div class="warn">The printable copy could not be made. Please try again.</div></div>`));
+  }
+});
+
 /* What the customer opens. Public, no login. Reads like an invoice. */
 /* Sizes a line can be edited across, in the order a person expects to read them.
  *
@@ -16517,23 +16655,12 @@ app.get('/q/:code', async (req, res) => {
        refund was issued is the shop's call, so if anything is still owed after
        one, the shop sends the payment link (those routes are unchanged). A
        failed lookup renders the page without it rather than not at all. */
-    const { rows: rf } = await pool.query(
-      `SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) AS gross
-         FROM quote_payments WHERE quote_code = $1 AND ext_ref ~ '^(ch|py)_[A-Za-z0-9_]+:'`, [q.code])
-      .catch((e) => { console.error(`quote ${q.code}: refund lookup failed:`, e.message); return { rows: [] }; });
-    const refundedToCard = round2(Number(rf[0]?.gross || 0));
+    const { refundedToCard, reversedByIssuer, disputed } = await quoteMoneyBack(q.code);
     const refunded = refundedToCard > 0;
     /* A chargeback stops the asking too, from the day it opens: the page would
        otherwise offer the balance to someone disputing the deposit, or, once a
        dispute is lost, the reversed money as a balance due. What the issuer
        gave back is its own line, in its own words. */
-    const { rows: dq } = await pool.query(
-      `SELECT (SELECT COALESCE(-SUM(amount + COALESCE(fee, 0)), 0) FROM quote_payments
-                WHERE quote_code = $1 AND kind = 'dispute') AS reversed,
-              EXISTS (SELECT 1 FROM stripe_disputes WHERE quote_code = $1) AS disputed`, [q.code])
-      .catch((e) => { console.error(`quote ${q.code}: dispute lookup failed:`, e.message); return { rows: [] }; });
-    const reversedByIssuer = round2(Number(dq[0]?.reversed || 0));
-    const disputed = !!dq[0]?.disputed;
     const stopAsking = refunded || disputed;
     /* An untaxed quote whose exemption needs a certificate shows the upload in
        place of every way to pay (card, Zelle and cash alike) until one is on
@@ -17122,6 +17249,8 @@ app.get('/q/:code', async (req, res) => {
               <td class="num">${money(reversedByIssuer)}</td></tr>` : ''}
         </tbody></table>
 
+        <p style="margin:12px 0 0;text-align:right"><a href="/q/${escEmail(q.code)}/print${staffView ? '?staff=1' : ''}"
+          target="_blank" rel="noopener" style="font-size:13.5px;color:#1848B8;font-weight:600">&#128424; Print ${accepted ? 'invoice' : 'quote'} or save as PDF</a></p>
         <p class="muted" style="margin-top:12px;font-size:12.5px">The price each covers the item
           and all the printing listed on that line. Screens, setup and design work are charged once
           for the job, so they have their own rows above.</p>
@@ -23959,6 +24088,7 @@ async function renderBoard(VIEW, req, res) {
           <a class="btn" style="padding:8px 16px;font-size:13px" href="/admin/production/${q.code}">Open job</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/admin/quote/${q.code}/edit">Edit</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}?staff=1" target="_blank" rel="noopener">View as customer</a>
+          <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}/print?staff=1" target="_blank" rel="noopener">Print ${q.accepted_at ? 'invoice' : 'quote'}</a>
           ${outstanding > 0 ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="document.getElementById('mp-${q.code}').style.display='block';var a=document.getElementById('ap-${q.code}');if(a)a.style.display='block';this.style.display='none'">Record a payment</button>` : ''}
           ${outstanding > 0 && q.accepted_at ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
@@ -25071,7 +25201,10 @@ function jobOrderCard(q, catalog, { money: showMoney = true } = {}) {
     <div class="card" id="ordered" style="margin-top:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
         <h2 class="card-title" style="margin:0">What was ordered</h2>
-        <a href="/q/${encodeURIComponent(q.code)}?staff=1" target="_blank" rel="noopener" style="font-size:13px;color:#1848B8">the customer's quote page &rarr;</a>
+        <span style="display:flex;gap:14px;flex-wrap:wrap">
+          ${showMoney ? `<a href="/q/${encodeURIComponent(q.code)}/print?staff=1" target="_blank" rel="noopener" style="font-size:13px;color:#1848B8">&#128424; Print ${q.accepted_at ? 'invoice' : 'quote'}</a>` : ''}
+          <a href="/q/${encodeURIComponent(q.code)}?staff=1" target="_blank" rel="noopener" style="font-size:13px;color:#1848B8">the customer's quote page &rarr;</a>
+        </span>
       </div>
       <div style="overflow-x:auto;margin-top:8px">
         <table class="dt" style="width:100%;border-collapse:collapse;font-size:14px">

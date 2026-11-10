@@ -484,7 +484,10 @@ test('neither payment nudge goes to a quote that has had a refund', () => {
 test('the quote page shows a refund instead of asking for the money again', () => {
   const at = src.indexOf("app.get('/q/:code',");
   const page = src.slice(at, src.indexOf('app.get(', at + 20));
-  assert.match(page, /ext_ref ~ '\^\(ch\|py\)_\[A-Za-z0-9_\]\+:'/,
+  const mb = src.slice(src.indexOf('async function quoteMoneyBack(code)'), src.indexOf('\n}\n', src.indexOf('async function quoteMoneyBack(code)')));
+  assert.match(page, /const \{ refundedToCard, reversedByIssuer, disputed \} = await quoteMoneyBack\(q\.code\);/,
+    'the page reads refunds and disputes through quoteMoneyBack, as its printable copy does');
+  assert.match(mb, /ext_ref ~ '\^\(ch\|py\)_\[A-Za-z0-9_\]\+:'/,
     'what went back to the card is read from the refund rows, net of any that failed');
   /* The gate became stopAsking on 2026-09-27: a refund or a dispute. */
   assert.match(page, /const stopAsking = refunded \|\| disputed;/, 'a refund still stops the asking');
