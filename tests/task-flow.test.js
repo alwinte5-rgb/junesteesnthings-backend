@@ -117,7 +117,7 @@ test('the designer gets each season\'s project once, from the marketing calendar
   const a = fn('async function makeAutoTasks(');
   assert.match(a, /MKT_CAL\.dueNow\(now\)/);
   assert.match(a, /`mcal:\$\{e\.id\}:\$\{e\.year\}`/);
-  assert.match(a, /r\.training_track === 'design'/);
+  assert.match(a, /audiencesFor\(r\.training_track\)\.includes\('design'\)/);
   /* One season at a time: four seasons in prep never land at once. */
   assert.match(a, /AND \$\{PROJECT_OPEN\}/);
   assert.match(a, /if \(busy\.length\) return 0;/);

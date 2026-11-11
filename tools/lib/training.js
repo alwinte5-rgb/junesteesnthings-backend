@@ -57,7 +57,7 @@ const LESSON_PREFIXES = (() => {
   return [...seen].filter(([, arts]) => arts.size >= 3).map(([p]) => p);
 })();
 const LESSON_PREFIX = new RegExp(`^(${LESSON_PREFIXES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) ${LESSON_NUMBER}: `);
-const lessonTitle = (article) => article.replace(LESSON_PREFIX, '');
+const lessonTitle = (article) => article.replace(LESSON_PREFIX, '').replace('From free trial to paying customer', 'From first setup to a paying customer');
 
 /* Every quiz and exam passes at 80%, rounded up to a whole question. */
 const PASS_SHARE = 0.8;
@@ -113,7 +113,7 @@ function courseSteps(course, features = FEATURES) {
   const out = [];
   const mods = [...course.modules, { key: 'final', title: 'Final exam and sign-off', final: true }];
   mods.forEach((m, i) => {
-    const mod = { module: `${course.key}:${m.key}`, moduleTitle: m.title, moduleIndex: i, moduleIcon: m.icon || '', course: course.key };
+    const mod = { module: `${course.key}:${m.key}`, moduleTitle: m.title, moduleGoal: m.goal || '', moduleIndex: i, moduleIcon: m.icon || '', course: course.key };
     const push = (st) => { if (!st.needs || features.has(st.needs)) out.push({ ...st, ...mod }); };
     if (m.final) {
       push({ key: `buffer:${course.key}:final`, type: 'buffer', minutes: course.final.floating,

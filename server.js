@@ -111,6 +111,7 @@ const QFORM = require('./tools/lib/quote-form-key');
 const TEAM = require('./tools/lib/team-metrics');
 const TIMECLOCK = require('./tools/lib/timeclock');
 const TRAINING = require('./tools/lib/training');
+const TRAINING_GUIDE = require('./tools/lib/training-guidance');
 const TOUR = require('./tools/lib/tour');
 const QEXAM = require('./tools/lib/quote-exam');
 const RUSH = require('./tools/lib/rush');
@@ -12671,7 +12672,7 @@ function productGroupOf(name) {
     ${lead ? `<div class="sub">From the website enquiry on ${fmtDate(lead.created_at)}</div>` : ''}
     ${reorderOf ? `<div class="sub">The lines from <a href="/admin/production/${escEmail(reorderOf.code)}">${escEmail(reorderOf.code)}</a>
       (${fmtDate(reorderOf.created_at)}), copied across. Lines priced from the price list use today's prices, so check sizes, quantities and the total, then save.</div>` : ''}
-    <div class="sub">${isEdit
+    <div class="sub">${exam ? 'Practice only: enter this scenario, then press Check my quote. No quote is saved or sent.' : isEdit
       ? 'Their link stays the same — it updates the moment you save.'
       : 'Save it, then text or email it from the shop on the next page.'}</div>
     ${refCard}
@@ -12729,7 +12730,8 @@ function productGroupOf(name) {
         <b>Quote exam: ${escEmail(exam.title)}</b> <span class="muted">&middot; practice. Nothing is saved as a quote or sent to anyone.</span>
         <blockquote style="margin:10px 0;padding:10px 14px;background:#fff;border-radius:8px;border:1px solid #e3e8f2">${escEmail(exam.brief)}</blockquote>
         <p style="margin:0">They need it by <b>${escEmail(fmtDate(examDate))}</b> (${escEmail(examDate)}). Leave the name, email and phone empty.
-          Build the quote, then press <b>Check my quote</b>.</p></div>` : ''}
+          Follow the numbered form sections below, then press <b>Check my quote</b>.</p>
+        <details style="margin-top:12px"><summary><b>Show entry instructions and a worked example</b></summary>${TRAINING_GUIDE.EXAM}</details></div>` : ''}
       <div class="card">
         <div class="row">
           <div><label>First name <span style="text-transform:none;font-weight:400">(optional)</span></label>
@@ -15779,7 +15781,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     if (String(one(b.exam_scenario) || '').trim()) {
       const sc = QEXAM.byId(String(one(b.exam_scenario)).trim());
       if (!sc || String(req.params.code || '')) return back(res, '/admin/training', 'err', 'No such exam scenario.');
-      return finishExamAttempt(res, sc, { items, total, rushPct, catalog });
+      return finishExamAttempt(res, sc, { items, total, rushPct, catalog, neededBy: String(b.needed_by || '').trim() });
     }
 
     const days = Math.max(1, parseInt(b.valid_days, 10) || 14);
@@ -37784,7 +37786,7 @@ async function saveProject(p, { assignedTo = null, createdBy = null } = {}) {
 const shopToday = (now = new Date()) => now.toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
 
 async function makeAutoTasks(roster, now = new Date()) {
-  const designer = roster.filter((r) => r.active && !r.archived_at && r.training_track === 'design').sort((a, b) => a.id - b.id)[0];
+  const designer = roster.filter((r) => r.active && !r.archived_at && require('./tools/lib/tracks').audiencesFor(r.training_track).includes('design')).sort((a, b) => a.id - b.id)[0];
   if (!designer) return 0;
   /* The old one-task kits nobody started give way to projects (each season
      comes back as one); a kit the designer already started is theirs to
@@ -39307,8 +39309,8 @@ app.get('/admin/resources', requireAdmin, async (req, res) => {
   const owner = actor.kind !== 'staff';
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM staff_resources WHERE $1::text IS NULL OR audience IN ('all', $1) ORDER BY position, name`,
-      [owner ? null : TRAINING.trackOf(actor.track)]);
+      `SELECT * FROM staff_resources WHERE $1::text[] IS NULL OR audience = 'all' OR audience = ANY($1::text[]) ORDER BY position, name`,
+      [owner ? null : require('./tools/lib/tracks').audiencesFor(TRAINING.trackOf(actor.track))]);
     const card = (r) => `<div class="card res-card">
       <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
         <span style="flex:1 1 240px"><b style="font-size:16px">${escEmail(r.name)}</b> ${owner ? pill(RESOURCE_AUDIENCES[r.audience] || r.audience, 'neutral') : ''}
@@ -41950,7 +41952,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       modules[modules.length - 1].steps.push(s);
     }
     const moduleCard = (m) => {
-      if (!m.key) return `<div class="card">${m.steps.map(stepRow).join('')}</div>`;
+      if (!m.key) return `<div class="card">${TRAINING_GUIDE.moduleHtml(m.steps[0], escEmail)}${m.steps.map(stepRow).join('')}</div>`;
       const work = m.steps.filter((s) => s.type !== 'buffer');
       const doneN = work.filter((s) => s.done).length;
       const total = m.steps.reduce((n, s) => n + (Number(s.minutes) || 0), 0);
@@ -41960,7 +41962,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1 1 220px">${m.steps[0].moduleIcon ? `<span class="mod-icon" aria-hidden="true">${escEmail(m.steps[0].moduleIcon)}</span>` : ''}${escEmail(label)}: ${escEmail(m.title)}</b>
           <span class="muted">${mins(total)}</span>${locked && !owner ? pill('opens after the module before', 'gray')
             : doneN === work.length && work.length ? pill('done', 'green') : pill(`${doneN} of ${work.length}`, 'neutral')}</div>
-        ${m.steps.map(stepRow).join('')}</div>`;
+        ${TRAINING_GUIDE.moduleHtml(m.steps[0], escEmail)}${m.steps.map(stepRow).join('')}</div>`;
     };
     const gapRows = gaps;
     const roleLabel = role ? TRAINING.SALES_ROLES[role].label : null;
@@ -41982,7 +41984,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       ${owner && spent && spent.outstanding.length ? `<div class="card" style="border-left:4px solid #d97706"><details${spent.outstanding.length <= 12 ? ' open' : ''}>
         <summary><b style="color:#8a5a00">Still to do: ${spent.outstanding.length} step${spent.outstanding.length === 1 ? '' : 's'}, about ${TRAINING.hm(spent.outstandingMinutes)}</b></summary>
         ${outstandingRows(spent, staffId)}</details></div>` : ''}
-      ${modules.map(moduleCard).join('')}
+      ${TRAINING_GUIDE.START}<div class="card"><b>Your role and priorities</b><p>${escEmail(TRAINING.TRACKS[track].note)}</p></div>${modules.map(moduleCard).join('')}
       <div class="card"><b>Coaching notes</b>
         ${owner ? `<form method="post" action="/admin/feedback" style="margin:8px 0">
           <input type="hidden" name="staff_id" value="${staffId}">
@@ -42058,9 +42060,9 @@ app.get('/admin/training/paths', requireAdmin, async (req, res) => {
         ${path.role && !roleCourse ? '<div class="warn">This role\'s own course is not written yet. Until it is, someone given this role takes the Sales course below, the same as everyone in sales.</div>' : ''}
         <p style="margin:8px 0 0"><b>On this path:</b> ${on.length ? on.map((r) => `<a href="/admin/training?staff=${r.id}">${escEmail(r.name)}</a>`).join(', ')
           : '<span class="muted">nobody yet. Set a helper\'s path and sales role on <a href="/admin/staff">Staff</a>.</span>'}</p></div>
-      ${groups.map((g) => g.key ? `<div class="card"><b>${g.title === 'Final exam and sign-off' ? 'Final' : `Module ${g.index + 1}`}: ${escEmail(g.title)}</b>
-        <span class="muted"> &middot; ${mins(g.steps.reduce((n, st) => n + (Number(st.minutes) || 0), 0))}</span>${g.steps.map(row).join('')}</div>`
-        : `<div class="card">${g.steps.map(row).join('')}</div>`).join('')}`, 'paths'));
+      ${TRAINING_GUIDE.START}${groups.map((g) => g.key ? `<div class="card"><b>${g.title === 'Final exam and sign-off' ? 'Final' : `Module ${g.index + 1}`}: ${escEmail(g.title)}</b>
+        <span class="muted"> &middot; ${mins(g.steps.reduce((n, st) => n + (Number(st.minutes) || 0), 0))}</span>${TRAINING_GUIDE.moduleHtml(g.steps[0], escEmail)}${g.steps.map(row).join('')}</div>`
+        : `<div class="card">${TRAINING_GUIDE.moduleHtml(g.steps[0], escEmail)}${g.steps.map(row).join('')}</div>`).join('')}`, 'paths'));
   } catch (err) {
     console.error('training paths failed:', err.message);
     res.status(500).send(adminPage('Training', '<div class="card"><div class="warn">Could not load the training paths.</div></div>', 'paths'));
@@ -42174,6 +42176,7 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
       ${nav}
       ${pages > 1 ? `<div class="page-dots" aria-label="Page ${pageNo} of ${pages}">${pageMd.map((_, i) =>
         `<a href="${lessonHref(i + 1)}" class="${i + 1 === pageNo ? 'on' : ''}" aria-label="Page ${i + 1}"></a>`).join('')}</div>` : ''}
+      ${pageNo === 1 ? TRAINING_GUIDE.START : ''}
       ${pageNo === 1 && s.goals && s.goals.length ? `<div class="card" style="border-left:4px solid #1848B8"><b>🎯 By the end of this lesson you can</b>
         <ul style="margin:6px 0 8px 20px">${s.goals.map((g) => `<li>${withTips(escEmail(g), seen)}</li>`).join('')}</ul>
         <p class="muted" style="margin:0">Words with a dotted underline have a short explanation: hover, tap or tab to them.</p></div>` : ''}
@@ -42182,7 +42185,8 @@ app.get('/admin/training/lesson/:id', requireAdmin, async (req, res) => {
         you tell a customer a price, a minimum or a date from it.</div>` : ''}
       <div class="card lesson">${a ? withTips(kbRender(pageMd[pageNo - 1]), seen) : '<div class="warn">This lesson\'s article is missing from the Playbook. Tell June.</div>'}</div>
       ${pic && pic.alt ? `<p class="muted" style="margin:-6px 0 14px;font-size:13px">📷 ${escEmail(pic.alt)}</p>` : ''}
-      ${last && tryIt ? `<div class="card"><b>🛠 Try it</b><p class="muted">These open the real screen in a new tab. Nothing reaches a customer unless you send it.</p>
+      ${last ? `<div class="card"><h2>Before you take the module quiz</h2>${TRAINING_GUIDE.moduleHtml(s, escEmail)}<p>Explain what you would do without reading the answer aloud. If a screen is missing or a button is unavailable, send June the page link and what you see; do not substitute a live customer action for practice.</p></div>` : ''}
+      ${last && tryIt ? `<div class="card"><b>🛠 Try it</b><p class="muted">These open the real screen in a new tab. Opening is safe; saving may create a real record. Use the designated practice mode or draft instructions. Do not send, publish, spend, approve, or change live customer work during practice.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${tryIt}</div></div>` : ''}
       ${checks ? `<div class="card"><b>🧠 Check yourself</b>
         <p class="muted">Not marked. Pick an answer to see if you were right.</p>${checks}</div>` : ''}
@@ -42252,10 +42256,10 @@ async function examOpenFor(actor) {
 
 /** Marks a practice quote and shows the result. Called by the quote save
  *  route before anything is written. */
-async function finishExamAttempt(res, sc, { items, total, rushPct, catalog }) {
+async function finishExamAttempt(res, sc, { items, total, rushPct, catalog, neededBy }) {
   const actor = currentActor() || OWNER_ACTOR;
   if (!(await examOpenFor(actor))) return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
-  const r = QEXAM.grade(sc, items, rushPct, catalog);
+  const r = QEXAM.grade(sc, items, rushPct, catalog, { chosen: neededBy, expected: addBusinessDays(new Date(), sc.businessDays).toISOString().slice(0, 10) });
   if (actor.kind === 'staff') {
     await pool.query(
       `INSERT INTO staff_exam_attempts (staff_id, exam_key, scenario, passed, checks, items, total)
@@ -42298,6 +42302,7 @@ app.get('/admin/training/exam/:key', requireAdmin, async (req, res) => {
         `Build each request in the real quote form. Nothing is sent or saved as a quote. Get ${need} of ${QEXAM.SCENARIOS.length} right to pass; try each as often as you need.`,
         owner && roster.length ? listedStaff(roster, staffId).map((r) => `<a class="btn ${r.id === staffId ? '' : 'btn-ghost'}" href="/admin/training/exam/${QUOTE_EXAM_KEY}?staff=${r.id}">${escEmail(r.name)}</a>`).join(' ') : '')}
       ${flash(req.query)}
+      ${TRAINING_GUIDE.EXAM}
       ${staffId ? `<div class="card"><b>${passedN} of ${QEXAM.SCENARIOS.length} right</b>${progressBar(passedN, QEXAM.SCENARIOS.length)}
         <div class="muted">${passedN >= need ? 'Passed.' : `${need - passedN} more to pass.`}</div></div>` : ''}
       ${QEXAM.SCENARIOS.map((sc, i) => {
@@ -42360,7 +42365,7 @@ app.get('/admin/training/quiz/:key', requireAdmin, async (req, res) => {
     const at = path.findIndex((x) => x.type === 'quiz' && x.quiz === key);
     const lessonBefore = at > 0 ? path.slice(0, at).reverse().find((x) => x.type === 'lesson' && x.module === path[at].module) : null;
     res.send(adminPage('Training', `
-      ${pageHeader(view.title, `${view.questions.length} questions. Get ${view.pass} right to pass. No sums: pick what you would really do.`,
+      ${pageHeader(view.title, `${view.questions.length} questions. Get ${view.pass} right to pass. Read each question, choose one answer, and press Mark my answers at the bottom. This quiz tests decisions. Use the lesson’s practice exercise to rehearse the actual work before you submit.`,
         `${lessonBefore ? `<a class="btn btn-ghost" href="/admin/training/lesson/${encodeURIComponent(lessonBefore.key.slice('lesson:'.length))}">&larr; Back to the lesson</a> ` : ''}<a class="btn btn-ghost" href="/admin/training">Back to training</a>`)}
       <form method="post" action="/admin/training/quiz/${escEmail(key)}" data-once>
         <input type="hidden" name="_ord" value="${escEmail(TRAINING.signOrder(FORM_TOKEN_KEY, key, actor.id, Object.fromEntries(view.questions.map((x) => [x.id, x.order]))))}">
@@ -44740,6 +44745,19 @@ for (const [title, was, now] of [
 ]) {
   const x = KB_ADDED.find((y) => y.title === title);
   if (x && x.body.includes(now)) x.was = [...(x.was || []), x.body.split(now).join(was)];
+}
+// Update only stock practice instructions; retain any owner customization.
+{
+  const a = KB_ADDED.find(x => x.title === 'Practice quote: a basic screen print order');
+  const previous = a.body;
+  a.body = a.body
+    .replace('- Product: a basic short-sleeve tee (ask in Team chat if you are not sure which)', '- Under **1 What are we making**, select **T-Shirts**, then **Gildan 5000 Unisex Heavy Cotton Tee**. Choose the product first so its color and size fields load')
+    .replace('- Decoration: screen printing', '- Under **2 Printing**, leave **Front** ticked and select **Screen Printing** in its decoration list. Leave Back and both sleeves unticked')
+    .replace('- Ink colors in the design: **1** (white)', '- In the ink-colors control shown for the Front screen print, enter **1** (white). Do not count the automatically added base as another design color')
+    .replace('- Qty: `50`. Leave **Each $** blank: the system prices it', '- Under **3 Quantity & price**, enter Qty **50**. Leave **Each $** blank (staff may see **Priced from the list**); the system calculates it')
+    .replace('- Open **Details, photos & sizes**', '- Expand **Details, photos & sizes** below the item. Enter the garment color **Black**. The size boxes appear after the product is selected')
+    .replace('- Tell the owner in Team chat: "Practice quote saved, total $___". The owner opens it, checks it, and signs off the step', '- After Save as draft, confirm the saved draft opens, copy its page link and tell June in Team chat: "Practice quote saved: [link]. Total $___; Qty 50; sizes total 50; front Screen Printing, 1 design color." June reviews the actual draft and signs off the step. If saving fails, keep the form open and send June the error; do not press Finish instead');
+  a.was = [...(a.was || []), previous];
 }
 KB_ADDED.push(...TRAINING.lessonArticles());
 

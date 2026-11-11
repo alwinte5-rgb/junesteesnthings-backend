@@ -155,7 +155,7 @@ const placeOf = (loc) => String(loc || '').toLowerCase().replace(/_?sleeve$/, ''
  * @param catalog   { products: [{id, name}], methods: [{id, title}] }
  * @returns { passed, checks: [{ what, ok, got, want }] }
  */
-function grade(scenario, items, rushPct, catalog) {
+function grade(scenario, items, rushPct, catalog, dates = null) {
   const want = scenario.expect.line;
   const required = (items || []).filter((i) => !i.optional);
   const checks = [];
@@ -199,6 +199,7 @@ function grade(scenario, items, rushPct, catalog) {
       add(`Ink colours (${loc})`, got === n, got, n);
     }
   }
+  if (dates) add('Needed-by date', dates.chosen === dates.expected, dates.chosen || 'not entered', dates.expected);
   const rush = Number(rushPct) > 0;
   add('Rush', rush === !!scenario.expect.rush, rush ? `yes (${Number(rushPct)}%)` : 'no', scenario.expect.rush ? 'yes' : 'no');
   return { passed: checks.every((c) => c.ok), checks };
