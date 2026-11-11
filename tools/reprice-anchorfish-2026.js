@@ -39,13 +39,14 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { colorTable } = require('./lib/screenprint');
-const { urlFromStdinJson, mysqlUrlFrom, mysql, enjson, sq } = require('./lib/db');
+const { urlFromStdinJson, mysqlUrlFrom, mysql, enjson, dejson, sq } = require('./lib/db');
 const APPLY = process.argv.includes('--apply');
 /* `--only-dtf` writes method #1 alone, so a DTF band change cannot also move
    embroidery or screen print. */
 const ONLY_DTF = process.argv.includes('--only-dtf');
-/* `--only-emb-logos` writes the logo run rates (#8-#11) alone, so an
-   embroidery band change cannot also move names, digitizing or screen print. */
+/* `--only-emb-logos` writes the logo run rates alone: #8-#11 by id, plus the
+   Extra Large logo by title (created if missing, then repriced). Names,
+   digitizing and screen print are not touched. */
 const ONLY_EMB_LOGOS = process.argv.includes('--only-emb-logos');
 if (ONLY_DTF && ONLY_EMB_LOGOS) { console.error('  --only-dtf and --only-emb-logos cannot be used together'); process.exit(2); }
 const BACKUP_DIR = path.join(os.homedir(), 'jtees-backups');
@@ -255,7 +256,12 @@ const NAME_TAPER = [   // band ceiling, share of the 1-5 price
   [1000, 0.600 ],      // $12.00
 ];
 
-// Embroidery: qty floor -> [0-8k, 8k-10k, 10k-14k, 14k-18k, 20k-22k, 22k-25k, puff, smName, lgName]
+/* Anchorfish embroidery COST sheet. It sets NO price: logo prices are typed in
+   EMB_LOGO_PRICES and banded on EMB_BANDS. It is the vendor cost the job-cost
+   estimator (tools/lib/job-costs.js, J.EMBROIDERY) must match, and
+   tests/job-costs.test.js lifts it from here to check that, so change it only
+   when Anchorfish changes its sheet, and change the estimator with it.
+   qty floor -> [0-8k, 8k-10k, 10k-14k, 14k-18k, 20k-22k, 22k-25k, puff, smName, lgName] */
 const EMB = {
     1: [4.25, 6.25, 8.25, 10.25, 12.25, 14.25, 1.50, 2, 5],
    12: [4.25, 6.25, 8.25, 10.25, 12.25, 14.25, 1.50, 2, 5],
@@ -265,22 +271,16 @@ const EMB = {
   100: [3.25, 5.15, 7.15,  9.05, 11.05, 13.05, 1.25, 2, 5],
   150: [3.25, 5.15, 7.15,  9.05, 11.05, 13.05, 1.25, 2, 5],
 };
-// Band ceilings for those floors. 150+ is capped at 1000 — over 1,000 logos
-// Anchorfish quotes delivery separately, so it is not a shelf price anyway.
-const EMB_CEIL = { 1: 11, 12: 24, 25: 49, 50: 74, 75: 99, 100: 149, 150: 1000 };
 
-/* Which stitch column each existing method maps to. The size names are kept
-   because that is how the shop thinks about the work; the stitch band is added
-   to the title because that is what the supplier actually bills on. */
-/* Small -> medium steps up one band, not two. Mapping medium at 10k-14k made a
-   medium logo nearly double a small one, which is a cliff rather than the
-   gradual climb these sizes actually represent. */
+/* The embroidery methods. The size names are kept because that is how the shop
+   thinks about the work; the stitch band is in the title because that is what
+   the supplier bills on. Sizes are in inches (owner, 2026-11-11). */
 const EMB_METHODS = {
   7:  { name: 'chest', title: 'Embroidery — Name/Text (chest)' },
-  8:  { col: 0, title: 'Embroidery — Small Logo (≤2.5×2.5 in, to 8k stitches)' },
-  9:  { col: 1, title: 'Embroidery — Medium Logo (≤4×4 in, 8k–10k stitches)' },
-  10: { col: 2, title: 'Embroidery — Large Logo (≤5.5×5.5 in, 10k–14k stitches)' },
-  11: { col: 5, title: 'Embroidery — Full Back (≤12×12 in, 22k–25k stitches)' },
+  8:  { title: 'Embroidery — Small Logo (≤2.5×2.5 in, to 8k stitches)' },
+  9:  { title: 'Embroidery — Medium Logo (≤4×4 in, 8k–10k stitches)' },
+  10: { title: 'Embroidery — Large Logo (≤5.5×5.5 in, 10k–14k stitches)' },
+  11: { title: 'Embroidery — Full Back (≤12×12 in, 22k–25k stitches)' },
 };
 
 /* Names and text are sold by size, and the sheet already prices exactly two:
@@ -334,6 +334,13 @@ const priceAt = (tiers, q) => { const t = tiers.find(([c]) => q <= c); return t 
 
 function checkLogoRules(dtfMain) {
   const bad = [];
+  /* An unreadable DTF table would make every comparison below skip, so the
+     check would pass having tested nothing. Say so instead. */
+  if (!Array.isArray(dtfMain) || !dtfMain.length ||
+      dtfMain.some(([c, p]) => !Number.isFinite(c) || !Number.isFinite(p) || p <= 0) ||
+      Math.max(...dtfMain.map(([c]) => c)) < 1000) {
+    return ['DTF main print table is empty, unreadable or does not reach 1000 pieces: ' + JSON.stringify(dtfMain)];
+  }
   for (let i = 0; i < EMB_BANDS.length; i++) {
     for (let k = 1; k < EMB_LOGO_ORDER.length; k++) {
       const lo = EMB_LOGO_PRICES[EMB_LOGO_ORDER[k - 1]][i], hi = EMB_LOGO_PRICES[EMB_LOGO_ORDER[k]][i];
@@ -426,7 +433,6 @@ console.log('\n\nEMBROIDERY RUN RATES — 1-24 sewn in house, 25+ sent to Anchor
 console.log('Logo prices typed by the owner 2026-11-10 (EMB_LOGO_PRICES), lowered to the');
 console.log('local market. Sizes stay in order and never under DTF (checked before writing).');
 console.log('Anchorfish delivery on 25+ is NOT in these prices; add it to the quote.\n');
-const FL = Object.keys(EMB).map(Number).sort((a, b) => a - b);
 
 /* Logos and names are shown as two tables because they band differently —
    logos on the vendor's quantity rows, names on their own starting at 1-5.
@@ -457,17 +463,26 @@ const nameIds = Object.entries(EMB_METHODS).filter(([, m]) => m.name);
 let hdr = bandHeader(EMB_BANDS, 1);
 console.log(hdr);
 console.log('  ' + '-'.repeat(hdr.length));
+/* What each logo row must hold after --apply; checked by reading it back. */
+const logoExpect = [];
+const logoRows = {};  // printed below in size order (EMB_LOGO_ORDER)
 for (const [id, m] of logoIds) {
   const tiers = tiersFor(m, id);
-  emit(id, m, tiers);
+  logoExpect.push({ where: 'id=' + id, label: '#' + id, calc: fixedCalc(tiers) });
+  logoRows[id] = [id, m, tiers];
   stmts.push('UPDATE lumise_printings SET title=' + sq(m.title) +
     ', calculate=' + sq(fixedCalc(tiers)) + ' WHERE id=' + id + ';');
 }
 /* Extra Large is a logo, so it prints in this table on the logo bands. */
 for (const m of EMB_INSERTS.filter((x) => x.logo)) {
   const tiers = tiersFor(m);
-  emit('NEW', m, tiers);
+  logoExpect.push({ where: 'title=' + sq(m.title), label: m.title, calc: fixedCalc(tiers), byTitle: true });
+  logoRows[m.logo] = ['NEW', m, tiers];
   stmts.push(insertMethod(m.title, tiers));
+}
+for (const key of EMB_LOGO_ORDER) {
+  if (!logoRows[key]) { console.error('  !! logo ' + key + ' has prices but no method'); process.exit(3); }
+  emit(...logoRows[key]);
 }
 
 console.log('\n  NAMES & TEXT — own bands, shallow taper. Each name is a separate setup.');
@@ -581,8 +596,15 @@ console.log('  ' + '-'.repeat(dh.length));
   });
   stmts.push('UPDATE lumise_printings SET calculate=' + sq(calc) + ' WHERE id=1;');
 
+  /* Against the DTF this script would write, in every mode: --only-dtf must not
+     be able to lift DTF over the logos either. With --apply and
+     --only-emb-logos the live DTF is checked as well, in run() below. */
   const bad = checkLogoRules(main);
-  if (bad.length) { for (const b of bad) console.error('  !! ' + b); console.error('  logo prices break the size or DTF rule — refusing'); process.exit(3); }
+  if (bad.length) {
+    for (const b of bad) console.error('  !! ' + b);
+    console.error('  logo prices break the size or DTF rule — refusing');
+    process.exit(3);
+  }
 }
 
 console.log('\n  Every stitch count from 0 to 25k now has a price. The 14k-22k band is Extra Large,');
@@ -613,6 +635,20 @@ const run = (url) => {
   /* Snapshot BEFORE the transaction, and let a failure here stop the run. The
      backup is the only undo; writing prices we cannot roll back is worse than
      not repricing today. */
+  /* --only-emb-logos leaves DTF as it is live, so the never-under-DTF rule is
+     checked against the live DTF row, not only this script's own figures. */
+  if (ONLY_EMB_LOGOS) {
+    let liveMain;
+    try {
+      const live = mysql(url, 'SELECT calculate FROM lumise_printings WHERE id=1;', { rows: true });
+      if (!live || live.length !== 1) throw new Error((live ? live.length : 0) + ' rows for id=1');
+      liveMain = Object.entries(dejson(live[0].calculate).values.id)
+        .map(([c, p]) => [Number(c), Number(p.price)]).sort((a, b) => a[0] - b[0]);
+    } catch (e) { console.error('  could not read live DTF #1 (' + e.message + ') — refusing'); process.exit(3); }
+    const bad = checkLogoRules(liveMain);
+    if (bad.length) { for (const b of bad) console.error('  !! live ' + b); console.error('  logos would sit under the LIVE DTF — refusing'); process.exit(3); }
+  }
+
   try { backup(url, 'pre-reprice'); }
   catch (e) { console.error('  backup FAILED, refusing to write: ' + e.message); process.exit(2); }
 
@@ -620,7 +656,40 @@ const run = (url) => {
     'SELECT id, title FROM lumise_printings WHERE id IN (7,8,9,10,11,12,15,16,17) ORDER BY id;';
   try { mysql(url, sql); }
   catch (e) { console.error(e.message); process.exit(1); }
-  console.log('\n  TO UNDO: restore `calculate` from the backup named above.');
+
+  /* Read every logo row back and compare it with what was meant to be written.
+     A title that matched nothing (the Extra Large row is found by title) shows
+     here as missing instead of passing silently. */
+  /* The write has committed by now, so whatever goes wrong below, the undo
+     line is printed before exiting. */
+  const UNDO = '\n  TO UNDO: restore `calculate` from the backup named above.';
+  if (!ONLY_DTF) {
+    let wrong = 0;
+    try {
+      for (const e of logoExpect) {
+        const r = mysql(url, 'SELECT id, active, calculate FROM lumise_printings WHERE ' + e.where + ';', { rows: true });
+        if (r.length !== 1) { console.error('  !! ' + e.label + ': ' + r.length + ' rows after the write'); wrong++; }
+        else if (JSON.stringify(dejson(r[0].calculate)) !== JSON.stringify(dejson(e.calc))) { console.error('  !! ' + e.label + ': stored prices differ from the table'); wrong++; }
+        else if (e.byTitle && String(r[0].active) !== '1') {
+          console.error('  !! ' + e.label + ' (id ' + r[0].id + ') is switched OFF — the quote form only offers active methods; switch it on in Lumise');
+        }
+      }
+      /* XL is found by exact title. A live row under an older title would get a
+         second, new row beside it instead of the new prices. */
+      const xl = mysql(url, "SELECT id, title FROM lumise_printings WHERE title LIKE '%Extra Large%';", { rows: true });
+      if (xl.length > 1) {
+        console.error('  !! ' + xl.length + ' Extra Large rows: ' + xl.map((r) => '#' + r.id + ' ' + r.title).join('; ') +
+          ' — keep one (the new title) and switch the others off');
+        wrong++;
+      }
+    } catch (e) {
+      console.error('  read-back FAILED after the write committed: ' + e.message + ' — check the rows by hand' + UNDO);
+      process.exit(4);
+    }
+    if (wrong) { console.error('  ' + wrong + ' logo problem(s) after the write — restore from the backup and check' + UNDO); process.exit(4); }
+    console.log('  read back ' + logoExpect.length + ' logo rows: all match.');
+  }
+  console.log(UNDO);
 };
 
 /* `railway run -s MySQL` puts the URL in the environment; otherwise it comes

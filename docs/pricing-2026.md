@@ -67,8 +67,8 @@ Anchorfish delivery on 25+ is NOT in these prices; add it to the quote.
     8  Small Logo (     $21.00     $16.00     $14.00     $13.00     $12.00     $11.00     $10.00
     9  Medium Logo      $25.00     $22.00     $19.00     $17.50     $16.00     $15.00     $14.00
    10  Large Logo (     $32.00     $29.00     $26.00     $24.50     $23.00     $22.00     $21.00
-   11  Full Back (≤     $60.00     $56.00     $52.00     $50.00     $48.00     $46.00     $45.00
   NEW  Extra Large      $45.00     $42.00     $39.00     $37.50     $36.00     $35.00     $34.00
+   11  Full Back (≤     $60.00     $56.00     $52.00     $50.00     $48.00     $46.00     $45.00
 
   Sizes (titles in inches since 2026-11-11): Small ≤2.5×2.5 in, to 8k
   stitches; Medium ≤4×4 in, 8k-10k; Large ≤5.5×5.5 in, 10k-14k; Extra Large

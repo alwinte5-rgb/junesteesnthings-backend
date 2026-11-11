@@ -68,9 +68,10 @@ test('sizes stay in order at every quantity: Small < Medium < Large < XL < Full 
   }
 });
 
-/* The tool itself refuses a table that breaks the size or DTF rule; the full dry
-   run (DTF included) must therefore exit 0, and logos must sit at or above the
-   DTF main print it writes. */
+/* The tool itself refuses a table that breaks the size or DTF rule
+   (checkLogoRules), so the full dry run, DTF included, must exit cleanly. That
+   alone cannot catch a broken checkLogoRules, so the DTF rule is also checked
+   here on its own, from the DTF statement the dry run would write. */
 test('no logo is cheaper than a DTF main print at the same quantity', () => {
   const full = spawnSync(process.execPath, [path.join(__dirname, '../tools/reprice-anchorfish-2026.js')],
     { encoding: 'utf8', input: '', env: { PATH: process.env.PATH } });
@@ -79,9 +80,20 @@ test('no logo is cheaper than a DTF main print at the same quantity', () => {
   assert.ok(m, 'no DTF statement');
   const main = Object.entries(dejson(m[1]).values.id).map(([c, p]) => [Number(c), Number(p.price)])
     .sort((a, b) => a[0] - b[0]);
+  assert.ok(main.length && main[main.length - 1][0] >= 1000, 'DTF table reaches 1000');
   const at = (tiers, q) => (tiers.find(([c]) => q <= c) || [])[1];
   for (const id of ['8', '9', '10', 'xl', '11']) {
     const t = Object.entries(logo(id)).map(([c, p]) => [Number(c), Number(p)]).sort((a, b) => a[0] - b[0]);
-    for (let q = 1; q <= 1000; q++) assert.ok(at(t, q) >= at(main, q), id + ' at ' + q);
+    for (let q = 1; q <= 1000; q++) {
+      const dtf = at(main, q), emb = at(t, q);
+      assert.ok(dtf != null && emb != null, id + ' at ' + q + ' has no price');
+      assert.ok(emb >= dtf, id + ' at ' + q);
+    }
   }
+});
+
+test('the logo table prints in size order, Extra Large between Large and Full back', () => {
+  const rows = run.stdout.split('\n').filter((l) => /^\s+(\d+|NEW)\s+(Small|Medium|Large|Full|Extra)/.test(l))
+    .map((l) => l.trim().split(/\s+/)[0]);
+  assert.deepStrictEqual(rows, ['8', '9', '10', 'NEW', '11']);
 });

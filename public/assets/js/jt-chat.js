@@ -21,7 +21,7 @@
     ['⏱️ How fast can I get my order?', 'Small orders take 5–7 business days and larger orders 7–14, depending on the project. Need it in under 5 days? Rush turnaround is available for a fee. Have a deadline? Chat with us and tell us the date.'],
     ['👕 Do you have minimums?', 'No minimums! Order a single shirt or hundreds — DTF printing lets us do one-offs at a great price. Bulk orders get volume discounts with big breaks at 12, 24, 48, and 100+.'],
     ['🎨 Can you help me with my design?', 'Yes — free design help is included! You can also build it yourself in our online Design Studio (jtees.net) with uploads, fonts, graphics, and an AI designer.'],
-    ['🧵 Do you do embroidery?', 'We do! Embroidery is priced by size: small left-chest from $10/ea up to full-back from $45/ea, and prices drop with quantity. No stitch file? One-time digitizing is $25–$65 and reorders never pay it again.'],
+    ['🧵 Do you do embroidery?', 'We do! Embroidery is priced by size: small left-chest from $10/ea up to full-back from $45/ea, and prices drop with quantity. No stitch file? One-time digitizing is $30–$80 and reorders never pay it again.'],
     ['📦 Do you ship?', "Yes, we ship nationwide. Local Chicago customers can also pick up at 3047 N Lincoln Ave #435, Mon–Fri 10:30 AM–6 PM, by appointment — call or text (773) 900-4592 to set a time."],
     ['🏢 Business & team orders?', 'We outfit businesses and teams with embroidered polos, branded tees, hats, and jackets. Send your logo once — we keep it on file for every reorder. Volume pricing applies.'],
     ['🖼️ What files work best?', "Best: vector files (AI, EPS, SVG) or high-res PNG (300 DPI at print size). For embroidery: DST, PES, EXP, JEF, VP3, XXX, or EMB — or send regular art and we'll digitize it."],
