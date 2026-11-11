@@ -206,7 +206,7 @@ function homeBlock(events, now) {
     const b = bannerFor(c);
     const page = b ? b.href : (e.page || '');
     const banner = b ? bannerImg(b, { href: b.href, cls: 'ss-banner', from }) : '';
-    const tag = day <= cal.ymd(e.orderBy) ? `${esc(e.name)} &middot; order by ${esc(cal.longDate(e.orderBy))}` : esc(e.name);
+    const tag = !e.noCutoff && day <= cal.ymd(e.orderBy) ? `${esc(e.name)} &middot; order by ${esc(cal.longDate(e.orderBy))}` : esc(e.name);
     /* The first row carries the event's name, its order-by note and the link
        to its page; the ones after it just their own heading. */
     const rows = (c.rows || [{ title: c.title, products: c.products }]).map((r, i) => {
