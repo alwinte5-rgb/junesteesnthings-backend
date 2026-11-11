@@ -285,6 +285,8 @@ for (const c of ALL) {
   }
 }
 
+require('./beginner-updates')(ALL);
+
 const COURSES = { [SALES_CORE.key]: SALES_CORE, [SALES_LEADGEN.key]: SALES_LEADGEN, [SALES_CLOSER.key]: SALES_CLOSER,
   [SALES_ACCOUNTS.key]: SALES_ACCOUNTS, [DESIGN_CORE.key]: DESIGN_CORE, [CONTENT_CORE.key]: CONTENT_CORE,
   [ADS_CORE.key]: ADS_CORE, [BOOKS_CORE.key]: BOOKS_CORE,
@@ -305,8 +307,37 @@ function salesRoleOf(r) {
   return Object.prototype.hasOwnProperty.call(SALES_ROLES, r) ? r : null;
 }
 
+// A single combined course avoids duplicated Team basics, lesson IDs and
+// final sign-offs. Original lesson/quiz keys and the primary ready key stay
+// intact: assigning a second duty never deletes training or earned pay.
+const dualCourses = new Map();
+function dualCourse(track) {
+  if (dualCourses.has(track)) return dualCourses.get(track);
+  const isSales = track === 'sales-software';
+  const primary = isSales ? SOFTWARE_CORE : SALES_CORE;
+  const secondary = isSales ? SALES_CORE : DESIGN_CORE;
+  const secondaryFinal = {
+    key: `${secondary.key}:assessment`, title: `${secondary.title}: practical assessment`,
+    goal: `Demonstrate the ${secondary.title.toLowerCase()} work before working independently.`,
+    lessons: [], quiz: secondary.final.quiz, buffer: 5,
+    practice: [], // The combined final sign-off covers both duties; no early release here.
+  };
+  const team = SOFTWARE_CORE.modules[0];
+  const core = isSales
+    ? [team, ...SALES_CORE.modules, secondaryFinal, ...SOFTWARE_CORE.modules.filter(m => m.key !== 'team')]
+    : [team, ...DESIGN_CORE.modules.filter(m => m.key !== 'team'), secondaryFinal,
+        ...CONTENT_CORE.modules.filter(m => ['c2', 'c3', 'c5', 'c6', 'c7', 'c8'].includes(m.key)), ...SALES_CORE.modules];
+  const c = {
+    ...primary, key: track, title: isSales ? 'June’s Tees + COS Sales' : 'Design + Marketing & Light Sales', track,
+    modules: core.map((m, i) => ({ ...m, key: `${i}:${m.key}` })), final: primary.final,
+  };
+  dualCourses.set(track, c);
+  return c;
+}
+
 /** The courses a helper walks, in order: the track's core course, then their role's. */
 function coursesFor(track, role = null) {
+  if (['sales-software', 'design-marketing'].includes(track)) return [dualCourse(track)];
   if (track !== 'sales') return Object.prototype.hasOwnProperty.call(TRACK_COURSES, track) ? TRACK_COURSES[track] : [];
   const out = [SALES_CORE];
   const r = salesRoleOf(role);

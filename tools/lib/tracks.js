@@ -30,8 +30,26 @@ const TRACKS = {
   developer: { label: 'Developer', short: 'Developer', role: 'Developer', preset: 'team',
     note: 'The stack, shipping through pull requests, outages and roll-backs, secrets and safe code, payment code, tests and Claude Code, apps.' },
   software: { label: 'Software sales', short: 'Software sales', role: 'Software Sales Agent', preset: 'software', channel: true,
-    note: 'Our apps and their top plans, finding agencies, first messages and follow-ups, discovery and the demo, objections and approved offers, trials and setup, pay and the weekly report.' },
+    note: 'Learn COS hands-on, research a small audience, practise discovery and supported demos, help first users, then progress to agencies. Confirm pay and report real outcomes.' },
 };
+
+// Dual roles keep the member's existing pay and progress; only the training
+// assignment and the explicitly selected permission preset change.
+TRACKS['sales-software'] = {
+  label: 'June’s Tees + COS Sales', short: 'Apparel + COS sales', role: 'June’s Tees & COS Sales Agent', preset: 'dual-sales',
+  includes: ['sales', 'software'],
+  note: 'Start with June’s Tees sales (about 75% of effort) and supported COS outreach (about 25%), within agreed hours. Review the split after 30 days. Keep leads and commission records separate. No automatic task assignments.',
+};
+TRACKS['design-marketing'] = {
+  label: 'Design + Marketing & Light Sales', short: 'Design + marketing', role: 'Graphic Designer & Marketing Coordinator', preset: 'design-marketing',
+  includes: ['design', 'content', 'sales'],
+  note: 'Design remains primary: about 70% design, 20% campaigns/COS publishing and 10% sales training or inquiry follow-up. The designer creates artwork and captures or requests raw footage; the video editor edits it. Keep one main design task and one small secondary task active. All assignments remain manual; June approves prices, spend, samples and delivery promises.',
+};
+
+function audiencesFor(track) {
+  const t = Object.hasOwn(TRACKS, track) ? track : 'sales';
+  return [t, ...(TRACKS[t].includes || [])];
+}
 
 const pick = (field) => Object.fromEntries(Object.entries(TRACKS).map(([k, t]) => [k, t[field]]));
 
@@ -44,4 +62,4 @@ const NEXT_PRESET = Object.fromEntries(Object.values(TRACKS).filter((t) => t.tra
 /* Tracks whose channel is made at startup. */
 const CHANNEL_TRACKS = Object.keys(TRACKS).filter((k) => TRACKS[k].channel);
 
-module.exports = { TRACKS, AUDIENCES, ROLE_FOR_TRACK: pick('role'), PRESET_FOR_TRACK: pick('preset'), NEXT_PRESET, CHANNEL_TRACKS };
+module.exports = { TRACKS, AUDIENCES, ROLE_FOR_TRACK: pick('role'), PRESET_FOR_TRACK: pick('preset'), NEXT_PRESET, CHANNEL_TRACKS, audiencesFor };

@@ -34,8 +34,8 @@ test('resources: everyone reads, only the owner edits, and the menu offers it', 
 
 test('resources: a helper sees only the tools for everyone and for their own path', () => {
   const page = route("app.get('/admin/resources', requireAdmin");
-  assert.match(page, /WHERE \$1::text IS NULL OR audience IN \('all', \$1\)/);
-  assert.match(page, /\[owner \? null : TRAINING\.trackOf\(actor\.track\)\]/, 'the path comes from the signed-in helper, never the request');
+  assert.match(page, /WHERE \$1::text\[\] IS NULL OR audience = 'all' OR audience = ANY\(\$1::text\[\]\)/);
+  assert.match(page, /\[owner \? null : require\('\.\/tools\/lib\/tracks'\)\.audiencesFor\(TRAINING\.trackOf\(actor\.track\)\)\]/, 'the path comes from the signed-in helper, never the request');
   assert.match(page, /res\.set\('Cache-Control', 'no-store'\)/);
   assert.match(page, /href="\$\{escEmail\(r\.url\)\}" target="_blank" rel="noopener noreferrer"/);
   assert.doesNotMatch(src.slice(src.indexOf('CREATE TABLE IF NOT EXISTS staff_resources'), src.indexOf(')`);', src.indexOf('CREATE TABLE IF NOT EXISTS staff_resources'))),

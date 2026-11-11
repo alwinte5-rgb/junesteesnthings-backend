@@ -170,6 +170,25 @@ const PRESETS = {
     note: 'Team chat, the Playbook, Resources, their training and the production schedule, plus their own Software leads board and its AI finder.',
     perms: { 'kb.edit': 'approval', 'jobs.schedule': 'on', 'software.leads': 'on' },
   },
+  'dual-sales': {
+    label: 'June’s Tees + COS sales (review required)',
+    note: 'Draft apparel quotes and messages for owner review, plus own software leads. No finance, staff, tax or payout access.',
+    perms: {
+      'leads.view': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
+      'quotes.send': 'approval', 'quotes.discount': 'approval',
+      'customers.view': 'on', 'customers.message': 'approval',
+      'orders.view': 'on', 'art.request': 'on', 'kb.edit': 'approval', 'jobs.schedule': 'on', 'software.leads': 'on',
+    },
+  },
+  'design-marketing': {
+    label: 'Design + marketing & light sales (review required)',
+    note: 'Design work and proofs, plus apparel leads and draft quotes/messages for review. Publishing happens through approved tools. No finance, staff, tax or payout access.',
+    perms: {
+      'jobs.design': 'on', 'jobs.schedule': 'on', 'proofs.upload': 'on', 'art.work': 'on',
+      'leads.view': 'on', 'quotes.view': 'on', 'quotes.draft': 'on', 'quotes.send': 'approval',
+      'customers.view': 'on', 'customers.message': 'approval', 'kb.edit': 'approval',
+    },
+  },
   /* The Team preset plus read-only Finances: what a bookkeeper needs to
      close a month, and nothing that changes the books. */
   books: {

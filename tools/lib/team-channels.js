@@ -13,7 +13,7 @@
    have read it, however many messages arrive meanwhile. */
 
 const ALERT_AFTER_MIN = 10;
-const { AUDIENCES } = require('./tracks');
+const { AUDIENCES, audiencesFor } = require('./tracks');
 const NAME_MAX = 40;
 
 /** An audience from a form, or null. */
@@ -24,7 +24,7 @@ function audienceOf(a) {
 /** Is this helper (a roster row) in the channel? */
 function isMember(channel, helper, trackOf = (t) => t) {
   if (!channel || channel.archived_at || !helper || !helper.active) return false;
-  return channel.audience === 'all' || trackOf(helper.training_track) === channel.audience;
+  return channel.audience === 'all' || audiencesFor(trackOf(helper.training_track)).includes(channel.audience);
 }
 
 /** May this actor read and post in the channel? The owner always. */
