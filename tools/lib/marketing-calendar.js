@@ -60,7 +60,7 @@ const OCCASIONS = [
   { id: 'senior-night-fall', name: 'Senior night (fall sports)', event: (y) => d(y, 10, 1), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, senior posters, parent shirts' },
   { id: 'chicago-marathon', name: 'Chicago Marathon', event: (y) => nthWeekday(y, 10, 0, 2), season: (y) => d(y, 8, 15), page: '/services/big-head-cutouts.html', push: 'Big head cutouts, runner support shirts, race signs' },
   { id: 'halloween', note: 'Halloween is October 31.', name: 'Halloween', event: (y) => d(y, 10, 31), season: (y) => d(y, 9, 1), page: '/occasions/halloween-shirts-chicago.html', push: 'Witch squad and group costume shirts, kids shirts' },
-  { id: 'christmas', note: 'Christmas is December 25.', orderNote: 'Christmas orders close the Tuesday before Thanksgiving: we close for Thanksgiving and December fills up fast.', closes: (y) => christmasLastDay(y), name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
+  { id: 'christmas', note: 'Christmas is December 25.', noCutoff: true, orderNote: 'Christmas ordering stays open. Tell us your needed date so we can confirm production and delivery timing for your order.', closes: (y) => christmasLastDay(y), name: 'Christmas', event: (y) => d(y, 12, 25), season: (y) => d(y, 11, 1), page: '/occasions/christmas-shirts-chicago.html', push: 'Family Christmas shirts, photo gifts, Santa sacks' },
 ];
 
 /* `end` marks an occasion that is a whole season, not one day: weddings run
@@ -89,7 +89,7 @@ function datesFor(o, y) {
   if ((orderBy - season) / DAY < 14) throw new Error(`${o.id} ${y}: the season must open at least 2 weeks before the last order day`);
   return {
     id: o.id, name: o.name, note: o.note || '', year: y, page: o.page, push: o.push, live: !!o.page,
-    event, end, season, orderBy,
+    event, end, season, orderBy, noCutoff: !!o.noCutoff,
     prep: addDays(season, -7 * lead.prepWeeks),
     ads: addDays(season, -7 * lead.adsWeeks),
   };
@@ -102,7 +102,7 @@ const today = (now) => d(now.getUTCFullYear(), now.getUTCMonth() + 1, now.getUTC
 function status(e, now = new Date()) {
   const t = today(now);
   if (t > e.end) return 'past';
-  if (t > e.orderBy) return 'orders closed';
+  if (!e.noCutoff && t > e.orderBy) return 'orders closed';
   if (t >= e.season) return 'in season';
   if (t >= e.ads) return 'ads now';
   if (t >= e.prep) return 'prep now';

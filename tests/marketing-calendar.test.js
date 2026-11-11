@@ -48,7 +48,7 @@ test('"needs you now" shows an occasion from prep to season start, never once th
   assert.ok(!has(xmas.season));
   const day = (t, n) => new Date(t.getTime() + n * DAY);
   assert.strictEqual(CAL.status(xmas, xmas.orderBy), 'in season');
-  assert.strictEqual(CAL.status(xmas, day(xmas.orderBy, 1)), 'orders closed');
+  assert.strictEqual(CAL.status(xmas, day(xmas.orderBy, 1)), 'in season');
   assert.strictEqual(CAL.status(xmas, day(xmas.event, 1)), 'past');
   assert.strictEqual(CAL.ymd(xmas.orderBy), '2026-11-24'); // owner: Christmas orders close Tue Nov 24
 });
