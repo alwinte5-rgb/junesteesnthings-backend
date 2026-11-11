@@ -269,7 +269,11 @@ function emittedFormScript() {
   const start = src.indexOf("app.get(['/admin/quote/new'");
   assert.notStrictEqual(start, -1, 'quote form route not found');
   const seg = src.slice(start, src.indexOf('\napp.', start + 10));
-  const si = seg.indexOf('<script>'), se = seg.lastIndexOf('</script>');
+  const si = seg.indexOf('<script>');
+  /* Recovery adds a second inline initializer after the main form script.
+     Stop at this script's own closing tag so HTML between blocks is not
+     passed to the JavaScript parser. */
+  const se = seg.indexOf('</script>', si + 8);
   assert.ok(si > -1 && se > si, 'no <script> in the quote form');
   const js = seg.slice(si + 8, se);
   /* Interpolations become server-side values; replace each with a literal so
