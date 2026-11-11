@@ -27,7 +27,7 @@ MESSAGE:  Best: vector files (AI, EPS, SVG) or high-res PNG (300 DPI at print si
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: embroidery
-MESSAGE:  Embroidery pricing by size: Small left-chest from $12/ea, Medium center-chest from $20/ea, Large from $32/ea, Full Back from $65/ea — prices drop with quantity. No stitch file? One-time digitizing is $25–$65 by size, and reorders never pay it again.
+MESSAGE:  Embroidery pricing by size: Small left-chest from $10/ea, Medium center-chest from $14/ea, Large from $21/ea, Full Back from $45/ea — prices drop with quantity. No stitch file? One-time digitizing is $30–$80 by size, and reorders never pay it again.
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: screenprint

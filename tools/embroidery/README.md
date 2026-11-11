@@ -62,12 +62,12 @@ size. Quote from the upper figure.
 ## What it showed on its first run
 
 A solid 10 cm circle estimates at **13,400-31,500 stitches**. The size-based
-band the shop would sell it under is *Medium Logo (≤10×10 cm, 8k-10k stitches)*
-at $39 — the real count is up to three times that band's ceiling, and it
+band the shop would sell it under is *Medium Logo (≤4×4 in, 8k-10k stitches)*
+at $39 (prices then; Medium is $25 at 1-11 since the 2026-11-10 reprice) — the real count is up to three times that band's ceiling, and it
 exceeds every active band including Full Back.
 
 A thin 10 cm ring, the same footprint, estimates at **3,800-5,700** and lands
-correctly in Small Logo at $28.
+correctly in Small Logo at $28 (then; $21 now).
 
 Same size. $28 to off-the-ladder. **Size is the wrong axis**, and that is the
 whole reason the stitch ceilings read low: they are inherited from Anchorfish's

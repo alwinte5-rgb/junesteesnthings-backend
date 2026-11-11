@@ -39,13 +39,14 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { colorTable } = require('./lib/screenprint');
-const { urlFromStdinJson, mysqlUrlFrom, mysql, enjson, sq } = require('./lib/db');
+const { urlFromStdinJson, mysqlUrlFrom, mysql, enjson, dejson, sq } = require('./lib/db');
 const APPLY = process.argv.includes('--apply');
 /* `--only-dtf` writes method #1 alone, so a DTF band change cannot also move
    embroidery or screen print. */
 const ONLY_DTF = process.argv.includes('--only-dtf');
-/* `--only-emb-logos` writes the logo run rates (#8-#11) alone, so an
-   embroidery band change cannot also move names, digitizing or screen print. */
+/* `--only-emb-logos` writes the logo run rates alone: #8-#11 by id, plus the
+   Extra Large logo by title (created if missing, then repriced). Names,
+   digitizing and screen print are not touched. */
 const ONLY_EMB_LOGOS = process.argv.includes('--only-emb-logos');
 if (ONLY_DTF && ONLY_EMB_LOGOS) { console.error('  --only-dtf and --only-emb-logos cannot be used together'); process.exit(2); }
 const BACKUP_DIR = path.join(os.homedir(), 'jtees-backups');
@@ -220,52 +221,16 @@ const DTF = {
 
 /* ── Anchorfish cost sheets ─────────────────────────────────────────────── */
 
-/* Embroidery prices come from what the shop actually charges, not from a
- * multiple of the vendor sheet: a chest logo is $20 and a full back is $75.
- * Everything between is the straight line through those two points, plotted
- * against Anchorfish's own per-piece cost, so the intermediate sizes keep the
- * supplier's real relative spacing instead of being guessed.
+/* Embroidery logo bands. Logo PRICES are typed by the owner (EMB_LOGO_PRICES
+ * below); these are only the quantity ceilings they sit on. 25-49 is split at
+ * 36 to match DTF's bands (owner, 2026-10-23): a quote showing every other
+ * price drop at 36 left embroidery flat until 50.
  *
- * The columns on their sheet are stitch RANGES, not thousands of stitches:
- * $4.25 buys one piece with a logo of up to 8,000 stitches. (Price steps by
- * exactly $2.00 a column while the bands vary in width — 8k, 2k, 4k, 4k, 2k, 3k
- * — which per-thousand pricing could not do.) Because that step is uniform, the
- * fit lands on round $11 increments: 20, 31, 42, 53, 64, 75.
- *
- * The anchors are the 100+ price, NOT a flat rate. EMB_TAPER below lifts the
- * smaller runs above them; "$20 minimum" is honoured because nothing ever
- * prices under the anchor.
+ * History: until 2026-11-10 logos were fitted on a line from a $20 chest to a
+ * $75 full back, plus a small-run uplift. That sat at two to three times the
+ * local market and was replaced by the typed table.
  */
-const EMB_PRICE = { chest: 20.00, fullBack: 75.00 };
-
-/* Embroidery tapers DOWN to those anchors rather than sitting flat on them.
- *
- * Flat pricing made embroidery the CHEAPER click below 50 pieces: a chest logo
- * was $20 against DTF's $22.55 at 12 pieces and $28.15 at one. That is exactly
- * backwards — a 12-piece embroidery run is the most labour-intensive job in the
- * shop per piece, and it was the bargain button. DTF starts high at low volume
- * and falls steeply, so the two curves crossed at 50.
- *
- * The uplift is a flat DOLLAR ADDITION, not a multiple. A multiple compounds up
- * the size ladder — 1.5x turns the $75 full back into $112.50 while the chest
- * only moves $10 — which prices the big pieces off the table at exactly the
- * quantities they are most often ordered in. Adding a fixed amount lifts every
- * size by the small-run premium and keeps the $11 step between sizes intact.
- *
- * $20 chest / $75 full back remain the 100+ price exactly as agreed; this only
- * lifts the small runs, where embroidery was cheaper than DTF.
- */
-const EMB_TAPER = [   // band ceiling, dollars added to the anchor price
-  [  11, 10 ],        // chest $30.00, full back $85.00
-  [  24,  8 ],        // $28.00 / $83.00
-  [  35,  5 ],        // $25.00 / $80.00
-  /* 25-49 split at 36 to match DTF's bands (owner, 2026-10-23): a quote
-     showing every other price drop at 36 left embroidery flat until 50. */
-  [  49,  3.5 ],      // $23.50 / $78.50
-  [  74,  2 ],        // $22.00 / $77.00
-  [  99,  1 ],        // $21.00 / $76.00
-  [1000,  0 ],        // $20.00 / $75.00 — the agreed floor
-];
+const EMB_BANDS = [11, 24, 35, 49, 74, 99, 1000];
 
 /* Names and text are priced on their own, not fitted from the logo line.
  *
@@ -291,7 +256,12 @@ const NAME_TAPER = [   // band ceiling, share of the 1-5 price
   [1000, 0.600 ],      // $12.00
 ];
 
-// Embroidery: qty floor -> [0-8k, 8k-10k, 10k-14k, 14k-18k, 20k-22k, 22k-25k, puff, smName, lgName]
+/* Anchorfish embroidery COST sheet. It sets NO price: logo prices are typed in
+   EMB_LOGO_PRICES and banded on EMB_BANDS. It is the vendor cost the job-cost
+   estimator (tools/lib/job-costs.js, J.EMBROIDERY) must match, and
+   tests/job-costs.test.js lifts it from here to check that, so change it only
+   when Anchorfish changes its sheet, and change the estimator with it.
+   qty floor -> [0-8k, 8k-10k, 10k-14k, 14k-18k, 20k-22k, 22k-25k, puff, smName, lgName] */
 const EMB = {
     1: [4.25, 6.25, 8.25, 10.25, 12.25, 14.25, 1.50, 2, 5],
    12: [4.25, 6.25, 8.25, 10.25, 12.25, 14.25, 1.50, 2, 5],
@@ -301,29 +271,16 @@ const EMB = {
   100: [3.25, 5.15, 7.15,  9.05, 11.05, 13.05, 1.25, 2, 5],
   150: [3.25, 5.15, 7.15,  9.05, 11.05, 13.05, 1.25, 2, 5],
 };
-// Band ceilings for those floors. 150+ is capped at 1000 — over 1,000 logos
-// Anchorfish quotes delivery separately, so it is not a shelf price anyway.
-const EMB_CEIL = { 1: 11, 12: 24, 25: 49, 50: 74, 75: 99, 100: 149, 150: 1000 };
 
-/* The line through the two anchor prices, plotted against cost on the 1-24 row
-   (EMB[1][0] is the chest-logo cell, EMB[1][5] the full back). Derived rather
-   than typed, so moving either price re-fits everything between automatically. */
-const EMB_SLOPE = (EMB_PRICE.fullBack - EMB_PRICE.chest) / (EMB[1][5] - EMB[1][0]);
-const EMB_BASE = EMB_PRICE.chest - EMB_SLOPE * EMB[1][0];
-const embPrice = (cost) => up05(EMB_SLOPE * cost + EMB_BASE);
-
-/* Which stitch column each existing method maps to. The size names are kept
-   because that is how the shop thinks about the work; the stitch band is added
-   to the title because that is what the supplier actually bills on. */
-/* Small -> medium steps up one band, not two. Mapping medium at 10k-14k made a
-   medium logo nearly double a small one, which is a cliff rather than the
-   gradual climb these sizes actually represent. */
+/* The embroidery methods. The size names are kept because that is how the shop
+   thinks about the work; the stitch band is in the title because that is what
+   the supplier bills on. Sizes are in inches (owner, 2026-11-11). */
 const EMB_METHODS = {
   7:  { name: 'chest', title: 'Embroidery — Name/Text (chest)' },
-  8:  { col: 0, title: 'Embroidery — Small Logo (≤6×6 cm, to 8k stitches)' },
-  9:  { col: 1, title: 'Embroidery — Medium Logo (≤10×10 cm, 8k–10k stitches)' },
-  10: { col: 2, title: 'Embroidery — Large Logo (≤14×14 cm, 10k–14k stitches)' },
-  11: { col: 5, title: 'Embroidery — Full Back (≤30×30 cm, 22k–25k stitches)' },
+  8:  { title: 'Embroidery — Small Logo (≤2.5×2.5 in, to 8k stitches)' },
+  9:  { title: 'Embroidery — Medium Logo (≤4×4 in, 8k–10k stitches)' },
+  10: { title: 'Embroidery — Large Logo (≤5.5×5.5 in, 10k–14k stitches)' },
+  11: { title: 'Embroidery — Full Back (≤12×12 in, 22k–25k stitches)' },
 };
 
 /* Names and text are sold by size, and the sheet already prices exactly two:
@@ -332,45 +289,72 @@ const EMB_METHODS = {
    Only these two placements are offered — sleeves and cuffs are not sold. */
 const EMB_INSERTS = [
   { name: 'upperBack', title: 'Embroidery — Name/Text (upper back)' },
-  /* One flat price across 14k-22k rather than the $53 and $64 the fit gives.
-     It also closes the hole in the vendor sheet: Anchorfish prices 14k-18k and
-     20k-22k but has no 18k-20k column at all, so a 19,000-stitch logo had no
-     price anywhere. A single band spanning 14k-22k covers it. */
-  { flat: 60.00, title: 'Embroidery — Extra Large Logo (14k–22k stitches)' },
+  /* One band across 14k-22k. It also closes the hole in the vendor sheet:
+     Anchorfish prices 14k-18k and 20k-22k but has no 18k-20k column at all, so
+     a 19,000-stitch logo had no price anywhere. Priced in EMB_LOGO_PRICES.xl. */
+  { logo: 'xl', title: 'Embroidery — Extra Large Logo (14k–22k stitches)' },
 ];
 
-/* One method's tier table: names walk their own taper, a flat method holds one
-   price at every quantity, and logos are fitted from the vendor's stitch cost. */
-/* LOGO PRICES, typed (owner, 2026-11-10). The fitted line above ($20 chest ->
-   $75 full back, plus the taper) sat at two to three times the local market for
-   the stitching alone: a Medium logo was $41 at 1-11 and still $31 at 100+,
-   against $6-15 for a standard left-chest logo elsewhere. Lowered by hand.
-   Still above DTF at every band (a Medium $25 vs a DTF chest logo $14.75).
-   Small runs (to 24) are sewn here on the one-head machine; 25 and up go to
-   Anchorfish, whose cost (EMB above, $3.25-14.25) these clear by about 2.5-3.5x.
-   Band ceilings match EMB_TAPER. The fitted line still prices the digitizing
-   notes and the stitch-band printout; it no longer sets the logo rows. */
+/* LOGO PRICES, typed (owner, 2026-11-10), lowered to the local market. The old
+   fitted line had a Medium logo at $41 for 1-11 and $31 at 100+, against $6-15
+   for a standard left-chest logo elsewhere. Small runs (to 24) are sewn here on
+   the one-head machine; 25 and up go to Anchorfish (cost in EMB above,
+   $3.25-14.25), plus their delivery, which is not in these prices yet.
+
+   Two rules are checked before anything is written (checkLogoRules below):
+   - sizes stay in order at every quantity: Small < Medium < Large < XL < Full back
+   - no logo is ever cheaper than a DTF main print at the same quantity.
+   Small 1-11 is $21, not the $18 first typed, because DTF is $20.75 at 1-4.
+   XL (14k-22k) sits between Large and Full back; it was a flat $60 at every
+   quantity, more than the bigger Full back from 12 pieces up. */
 const EMB_LOGO_PRICES = {
   //        1-11   12-24  25-35  36-49  50-74  75-99  100+
-  8:  [    18.00, 16.00, 14.00, 13.00, 12.00, 11.00, 10.00 ],  // Small
+  8:  [    21.00, 16.00, 14.00, 13.00, 12.00, 11.00, 10.00 ],  // Small
   9:  [    25.00, 22.00, 19.00, 17.50, 16.00, 15.00, 14.00 ],  // Medium
   10: [    32.00, 29.00, 26.00, 24.50, 23.00, 22.00, 21.00 ],  // Large
+  xl: [    45.00, 42.00, 39.00, 37.50, 36.00, 35.00, 34.00 ],  // Extra large
   11: [    60.00, 56.00, 52.00, 50.00, 48.00, 46.00, 45.00 ],  // Full back
 };
+const EMB_LOGO_ORDER = ['8', '9', '10', 'xl', '11'];
 
+/* One method's tier table: names walk their own taper, logos read the typed table. */
 function tiersFor(m, id) {
-  if (m.flat) return FL.map((f) => [EMB_CEIL[f], m.flat]);
   if (m.name) return NAME_TAPER.map(([ceil, f]) => [ceil, up05(NAME_BASE[m.name] * f)]);
-  if (EMB_LOGO_PRICES[id]) {
-    const p = EMB_LOGO_PRICES[id];
-    if (p.length !== EMB_TAPER.length) { console.error('  !! logo ' + id + ' has ' + p.length + ' prices for ' + EMB_TAPER.length + ' bands'); process.exit(3); }
-    return EMB_TAPER.map(([ceil], i) => [ceil, p[i]]);
+  const key = m.logo || id;
+  const p = EMB_LOGO_PRICES[key];
+  if (!p || p.length !== EMB_BANDS.length) {
+    console.error('  !! logo ' + key + ' needs ' + EMB_BANDS.length + ' prices in EMB_LOGO_PRICES');
+    process.exit(3);
   }
-  /* Logo prices are fitted from the vendor's stitch-band cost at the 1-24 row —
-     the anchors describe that shape — then multiplied by the quantity taper, so
-     the fitted relativity between sizes survives at every band. */
-  return EMB_TAPER.map(([ceil, add]) =>
-    [ceil, up05(embPrice(EMB[1][m.col]) + add)]);
+  return EMB_BANDS.map((ceil, i) => [ceil, p[i]]);
+}
+
+/* Price at a quantity from a [[ceil, price], ...] table. */
+const priceAt = (tiers, q) => { const t = tiers.find(([c]) => q <= c); return t ? t[1] : null; };
+
+function checkLogoRules(dtfMain) {
+  const bad = [];
+  /* An unreadable DTF table would make every comparison below skip, so the
+     check would pass having tested nothing. Say so instead. */
+  if (!Array.isArray(dtfMain) || !dtfMain.length ||
+      dtfMain.some(([c, p]) => !Number.isFinite(c) || !Number.isFinite(p) || p <= 0) ||
+      Math.max(...dtfMain.map(([c]) => c)) < 1000) {
+    return ['DTF main print table is empty, unreadable or does not reach 1000 pieces: ' + JSON.stringify(dtfMain)];
+  }
+  for (let i = 0; i < EMB_BANDS.length; i++) {
+    for (let k = 1; k < EMB_LOGO_ORDER.length; k++) {
+      const lo = EMB_LOGO_PRICES[EMB_LOGO_ORDER[k - 1]][i], hi = EMB_LOGO_PRICES[EMB_LOGO_ORDER[k]][i];
+      if (!(hi > lo)) bad.push(EMB_LOGO_ORDER[k] + ' $' + hi + ' not above ' + EMB_LOGO_ORDER[k - 1] + ' $' + lo + ' at band to ' + EMB_BANDS[i]);
+    }
+  }
+  for (let q = 1; q <= 1000; q++) {
+    const dtf = priceAt(dtfMain, q);
+    for (const key of EMB_LOGO_ORDER) {
+      const emb = priceAt(EMB_BANDS.map((c, i) => [c, EMB_LOGO_PRICES[key][i]]), q);
+      if (dtf != null && emb < dtf) bad.push('logo ' + key + ' $' + emb + ' under DTF $' + dtf + ' at ' + q + ' pieces');
+    }
+  }
+  return bad;
 }
 
 /* Digitizing is charged at the vendor rate, with no multiple on top — unlike
@@ -445,10 +429,10 @@ for (const [id, d] of Object.entries(DIGITIZING)) {
 }
 console.log('\n  ' + DIG_NOTE);
 
-console.log('\n\nEMBROIDERY RUN RATES — sewn in house.');
+console.log('\n\nEMBROIDERY RUN RATES — 1-24 sewn in house, 25+ sent to Anchorfish.');
 console.log('Logo prices typed by the owner 2026-11-10 (EMB_LOGO_PRICES), lowered to the');
-console.log('local market. 1-24 sewn in house, 25+ sent to Anchorfish. Still above DTF.\n');
-const FL = Object.keys(EMB).map(Number).sort((a, b) => a - b);
+console.log('local market. Sizes stay in order and never under DTF (checked before writing).');
+console.log('Anchorfish delivery on 25+ is NOT in these prices; add it to the quote.\n');
 
 /* Logos and names are shown as two tables because they band differently —
    logos on the vendor's quantity rows, names on their own starting at 1-5.
@@ -476,14 +460,29 @@ function emit(id, m, tiers) {
 const logoIds = Object.entries(EMB_METHODS).filter(([, m]) => !m.name);
 const nameIds = Object.entries(EMB_METHODS).filter(([, m]) => m.name);
 
-let hdr = bandHeader(EMB_TAPER.map(([c]) => c), 1);
+let hdr = bandHeader(EMB_BANDS, 1);
 console.log(hdr);
 console.log('  ' + '-'.repeat(hdr.length));
+/* What each logo row must hold after --apply; checked by reading it back. */
+const logoExpect = [];
+const logoRows = {};  // printed below in size order (EMB_LOGO_ORDER)
 for (const [id, m] of logoIds) {
   const tiers = tiersFor(m, id);
-  emit(id, m, tiers);
+  logoExpect.push({ where: 'id=' + id, label: '#' + id, calc: fixedCalc(tiers) });
+  logoRows[id] = [id, m, tiers];
   stmts.push('UPDATE lumise_printings SET title=' + sq(m.title) +
     ', calculate=' + sq(fixedCalc(tiers)) + ' WHERE id=' + id + ';');
+}
+/* Extra Large is a logo, so it prints in this table on the logo bands. */
+for (const m of EMB_INSERTS.filter((x) => x.logo)) {
+  const tiers = tiersFor(m);
+  logoExpect.push({ where: 'title=' + sq(m.title), label: m.title, calc: fixedCalc(tiers), byTitle: true });
+  logoRows[m.logo] = ['NEW', m, tiers];
+  stmts.push(insertMethod(m.title, tiers));
+}
+for (const key of EMB_LOGO_ORDER) {
+  if (!logoRows[key]) { console.error('  !! logo ' + key + ' has prices but no method'); process.exit(3); }
+  emit(...logoRows[key]);
 }
 
 console.log('\n  NAMES & TEXT — own bands, shallow taper. Each name is a separate setup.');
@@ -502,20 +501,12 @@ for (const [id, m] of nameIds) {
    run twice, because the only way to check it worked is to run it. `active`
    is 0 to match every other decoration method; the quote form filters on
    use_for_quoting, not on active, so it still appears there. */
-for (const m of EMB_INSERTS) {
+for (const m of EMB_INSERTS.filter((x) => !x.logo)) {
   const tiers = tiersFor(m);
   emit('NEW', m, tiers);
   stmts.push(insertMethod(m.title, tiers));
 }
 
-console.log('\n  Fitted from your two prices: $' + EMB_PRICE.chest.toFixed(2) + ' chest -> $' +
-  EMB_PRICE.fullBack.toFixed(2) + ' full back, x' + EMB_SLOPE.toFixed(2) + ' on cost.');
-{
-  const bands = ['0-8k', '8k-10k', '10k-14k', '14k-18k', '20k-22k', '22k-25k'];
-  let r = '    by stitch band: ';
-  for (let i = 0; i < 6; i++) r += (bands[i] + ' $' + embPrice(EMB[1][i]).toFixed(0)).padStart(16);
-  console.log(r);
-}
 /* ── Screen print ───────────────────────────────────────────────────────── */
 
 const SPF = Object.keys(SP).map(Number).sort((a, b) => a - b);
@@ -604,9 +595,19 @@ console.log('  ' + '-'.repeat(dh.length));
     },
   });
   stmts.push('UPDATE lumise_printings SET calculate=' + sq(calc) + ' WHERE id=1;');
+
+  /* Against the DTF this script would write, in every mode: --only-dtf must not
+     be able to lift DTF over the logos either. With --apply and
+     --only-emb-logos the live DTF is checked as well, in run() below. */
+  const bad = checkLogoRules(main);
+  if (bad.length) {
+    for (const b of bad) console.error('  !! ' + b);
+    console.error('  logo prices break the size or DTF rule — refusing');
+    process.exit(3);
+  }
 }
 
-console.log('\n  Every stitch count from 0 to 25k now has a price. The 14k-22k band is flat $60,');
+console.log('\n  Every stitch count from 0 to 25k now has a price. The 14k-22k band is Extra Large,');
 console.log('  which also covers the 18k-20k gap Anchorfish leaves unpriced on their own sheet.');
 console.log('  Above 25k stitches there is still no rate — Anchorfish quotes those separately.');
 
@@ -619,8 +620,11 @@ if (ONLY_DTF) {
 }
 if (ONLY_EMB_LOGOS) {
   const ids = Object.keys(EMB_METHODS).filter((id) => !EMB_METHODS[id].name);
-  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')));
-  if (emb.length !== ids.length) { console.error('  --only-emb-logos found ' + emb.length + ' statements, expected ' + ids.length); process.exit(3); }
+  const xl = EMB_INSERTS.filter((m) => m.logo).map((m) => sq(m.title));
+  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')) ||
+    xl.some((t) => q.startsWith('INSERT INTO lumise_printings') && q.includes('WHERE title=' + t + ';')));
+  const want = ids.length + xl.length;
+  if (emb.length !== want) { console.error('  --only-emb-logos found ' + emb.length + ' statements, expected ' + want); process.exit(3); }
   stmts.splice(0, stmts.length, ...emb);
 }
 
@@ -631,6 +635,20 @@ const run = (url) => {
   /* Snapshot BEFORE the transaction, and let a failure here stop the run. The
      backup is the only undo; writing prices we cannot roll back is worse than
      not repricing today. */
+  /* --only-emb-logos leaves DTF as it is live, so the never-under-DTF rule is
+     checked against the live DTF row, not only this script's own figures. */
+  if (ONLY_EMB_LOGOS) {
+    let liveMain;
+    try {
+      const live = mysql(url, 'SELECT calculate FROM lumise_printings WHERE id=1;', { rows: true });
+      if (!live || live.length !== 1) throw new Error((live ? live.length : 0) + ' rows for id=1');
+      liveMain = Object.entries(dejson(live[0].calculate).values.id)
+        .map(([c, p]) => [Number(c), Number(p.price)]).sort((a, b) => a[0] - b[0]);
+    } catch (e) { console.error('  could not read live DTF #1 (' + e.message + ') — refusing'); process.exit(3); }
+    const bad = checkLogoRules(liveMain);
+    if (bad.length) { for (const b of bad) console.error('  !! live ' + b); console.error('  logos would sit under the LIVE DTF — refusing'); process.exit(3); }
+  }
+
   try { backup(url, 'pre-reprice'); }
   catch (e) { console.error('  backup FAILED, refusing to write: ' + e.message); process.exit(2); }
 
@@ -638,7 +656,40 @@ const run = (url) => {
     'SELECT id, title FROM lumise_printings WHERE id IN (7,8,9,10,11,12,15,16,17) ORDER BY id;';
   try { mysql(url, sql); }
   catch (e) { console.error(e.message); process.exit(1); }
-  console.log('\n  TO UNDO: restore `calculate` from the backup named above.');
+
+  /* Read every logo row back and compare it with what was meant to be written.
+     A title that matched nothing (the Extra Large row is found by title) shows
+     here as missing instead of passing silently. */
+  /* The write has committed by now, so whatever goes wrong below, the undo
+     line is printed before exiting. */
+  const UNDO = '\n  TO UNDO: restore `calculate` from the backup named above.';
+  if (!ONLY_DTF) {
+    let wrong = 0;
+    try {
+      for (const e of logoExpect) {
+        const r = mysql(url, 'SELECT id, active, calculate FROM lumise_printings WHERE ' + e.where + ';', { rows: true });
+        if (r.length !== 1) { console.error('  !! ' + e.label + ': ' + r.length + ' rows after the write'); wrong++; }
+        else if (JSON.stringify(dejson(r[0].calculate)) !== JSON.stringify(dejson(e.calc))) { console.error('  !! ' + e.label + ': stored prices differ from the table'); wrong++; }
+        else if (e.byTitle && String(r[0].active) !== '1') {
+          console.error('  !! ' + e.label + ' (id ' + r[0].id + ') is switched OFF — the quote form only offers active methods; switch it on in Lumise');
+        }
+      }
+      /* XL is found by exact title. A live row under an older title would get a
+         second, new row beside it instead of the new prices. */
+      const xl = mysql(url, "SELECT id, title FROM lumise_printings WHERE title LIKE '%Extra Large%';", { rows: true });
+      if (xl.length > 1) {
+        console.error('  !! ' + xl.length + ' Extra Large rows: ' + xl.map((r) => '#' + r.id + ' ' + r.title).join('; ') +
+          ' — keep one (the new title) and switch the others off');
+        wrong++;
+      }
+    } catch (e) {
+      console.error('  read-back FAILED after the write committed: ' + e.message + ' — check the rows by hand' + UNDO);
+      process.exit(4);
+    }
+    if (wrong) { console.error('  ' + wrong + ' logo problem(s) after the write — restore from the backup and check' + UNDO); process.exit(4); }
+    console.log('  read back ' + logoExpect.length + ' logo rows: all match.');
+  }
+  console.log(UNDO);
 };
 
 /* `railway run -s MySQL` puts the URL in the environment; otherwise it comes
