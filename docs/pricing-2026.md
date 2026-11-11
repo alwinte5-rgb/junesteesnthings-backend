@@ -57,39 +57,46 @@ DIGITIZING — charged at the vendor rate: $30 to 15k stitches, +$5 per extra 1k
   One-time charge per design, not per piece — waived if the customer supplies a usable DST/EMB file. Add as its own line, quantity 1.
 
 
-EMBROIDERY RUN RATES — sewn in house.
+EMBROIDERY RUN RATES — 1-24 sewn in house, 25+ sent to Anchorfish.
 Logo prices typed by the owner 2026-11-10 (EMB_LOGO_PRICES), lowered to the
-local market. 1-24 sewn in house, 25+ sent to Anchorfish. Still above DTF.
+local market. Sizes stay in order and never under DTF (checked before writing).
+Anchorfish delivery on 25+ is NOT in these prices; add it to the quote.
 
   id   item                 1-11      12-24      25-35      36-49      50-74      75-99   100-1000
   --------------------------------------------------------------------------------------------------
-    8  Small Logo (     $18.00     $16.00     $14.00     $13.00     $12.00     $11.00     $10.00
+    8  Small Logo (     $21.00     $16.00     $14.00     $13.00     $12.00     $11.00     $10.00
     9  Medium Logo      $25.00     $22.00     $19.00     $17.50     $16.00     $15.00     $14.00
    10  Large Logo (     $32.00     $29.00     $26.00     $24.50     $23.00     $22.00     $21.00
    11  Full Back (≤     $60.00     $56.00     $52.00     $50.00     $48.00     $46.00     $45.00
+  NEW  Extra Large      $45.00     $42.00     $39.00     $37.50     $36.00     $35.00     $34.00
+
+  Sizes (titles in inches since 2026-11-11): Small ≤2.5×2.5 in, to 8k
+  stitches; Medium ≤4×4 in, 8k-10k; Large ≤5.5×5.5 in, 10k-14k; Extra Large
+  14k-22k; Full Back ≤12×12 in, 22k-25k. The stitch count is what is billed.
 
   2026-11-10 (owner): lowered from $30-20 / $41-31 / $52-42 / $85-75. The old
-  fitted line was 2-3x the local market for the stitching ($6-15 for a
-  standard left-chest logo). One-head machine: 25+ pieces go to Anchorfish
-  (cost $3.25-14.25 a logo on their sheet; confirm it is current and add their
-  delivery to the quote). Applied with
-  `tools/reprice-anchorfish-2026.js --only-emb-logos --apply`.
+  fitted line ($20 chest to $75 full back) was 2-3x the local market for the
+  stitching ($6-15 for a standard left-chest logo) and is gone from the tool.
+  One-head machine: 25+ pieces go to Anchorfish (cost $3.25-14.25 a logo on
+  their sheet; confirm it is current and add their delivery to the quote).
+
+  2026-11-11 review fixes: Small 1-11 is $21, not $18, because DTF is $20.75 at
+  1-4 and embroidery must never be the cheaper button. Extra Large was a flat
+  $60 at every quantity, which cost more than the bigger Full Back from 12
+  pieces up; it now sits between Large and Full Back. The tool refuses to write
+  any table where a size is not above the one below it, or a logo is under the
+  DTF main print at any quantity. Applied with
+  `tools/reprice-anchorfish-2026.js --only-emb-logos --apply` (writes #8-#11
+  and Extra Large, nothing else).
 
   25-49 split at 36 (owner, 2026-10-23) to match the DTF bands, halfway
-  between 25-35 and 50-74. Applied with
-  `tools/reprice-anchorfish-2026.js --only-emb-logos --apply`. (The header
-  above used to read 25-49 ... 100-149, 150-1000 over six prices: the tool
-  printed the vendor's quantity rows, not its own bands.)
+  between 25-35 and 50-74.
 
   NAMES & TEXT — own bands, shallow taper. Each name is a separate setup.
   id   item                  1-5       6-11      12-24      25-49      50-74      75-99   100-1000
   --------------------------------------------------------------------------------------------------
     7  Name/Text (c     $20.00     $18.00     $16.00     $14.00     $13.00     $12.50     $12.00
   NEW  Name/Text (u     $50.00     $45.00     $40.00     $35.00     $32.50     $31.25     $30.00
-  NEW  Extra Large      $60.00     $60.00     $60.00     $60.00     $60.00     $60.00     $60.00
-
-  Fitted from your two prices: $20.00 chest -> $75.00 full back, x5.50 on cost.
-    by stitch band:         0-8k $20      8k-10k $31     10k-14k $42     14k-18k $53     20k-22k $64     22k-25k $75
 
 
 SCREEN PRINT — Anchorfish 2026, print only. Screens are NOT in these rates:
@@ -183,7 +190,7 @@ its size; a chest logo alone pays its own lower list price. A third place adds
 its list additional-location price. A $0.50 a piece credit in months over 400 is given by hand (the quote's
 credit or discount), not by the form.
 
-  Every stitch count from 0 to 25k now has a price. The 14k-22k band is flat $60,
+  Every stitch count from 0 to 25k now has a price. The 14k-22k band is Extra Large,
   which also covers the 18k-20k gap Anchorfish leaves unpriced on their own sheet.
   Above 25k stitches there is still no rate — Anchorfish quotes those separately.
 

@@ -62,8 +62,8 @@ const { digitizingOptions, DIGITIZING_METHOD_RE, EMBROIDERY_METHOD_RE } =
 const tier = (price) => ({ front: [{ min_qty: 1, price }] });
 const CATALOG = {
   methods: [
-    { id: 8,  title: 'Embroidery — Small Logo (≤6×6 cm, to 8k stitches)', use_for_quoting: true, positions: tier(20) },
-    { id: 11, title: 'Embroidery — Full Back (≤30×30 cm, 22k–25k stitches)', use_for_quoting: true, positions: tier(75) },
+    { id: 8,  title: 'Embroidery — Small Logo (≤2.5×2.5 in, to 8k stitches)', use_for_quoting: true, positions: tier(20) },
+    { id: 11, title: 'Embroidery — Full Back (≤12×12 in, 22k–25k stitches)', use_for_quoting: true, positions: tier(75) },
     { id: 12, title: 'DST Digitizing — one-time (to 15k stitches)', use_for_quoting: true, positions: tier(30) },
     { id: 17, title: 'DST Digitizing — one-time, Full Back (to 25k stitches)', use_for_quoting: true, positions: tier(80) },
     { id: 2,  title: 'Screen Printing — 1 Color', use_for_quoting: true, positions: tier(9.35) },
