@@ -73,7 +73,7 @@ Anchorfish delivery on 25+ is NOT in these prices; add it to the quote.
   Sizes (titles in inches since 2026-11-11; set 2026-11-12 to fit the shop's
   Ricoma MT-series hoops, 90/120/150/190/290 mm, with room for the presser
   foot): Small ≤3.5×3.5 in, to 8k stitches; Medium ≤4.5×4.5 in, 8k-10k;
-  Large ≤5.5×5.5 in, 10k-14k; Extra Large to 7 in, 14k-22k; Full Back
+  Large ≤5.5×5.5 in, 10k-14k; Extra Large ≤7×7 in, 14k-22k; Full Back
   ≤11×11 in, 22k-25k. The stitch count is what is billed.
 
   2026-11-10 (owner): lowered from $30-20 / $41-31 / $52-42 / $85-75. The old
