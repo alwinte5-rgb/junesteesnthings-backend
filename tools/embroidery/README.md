@@ -62,7 +62,7 @@ size. Quote from the upper figure.
 ## What it showed on its first run
 
 A solid 10 cm circle estimates at **13,400-31,500 stitches**. The size-based
-band the shop would sell it under is *Medium Logo (≤4×4 in, 8k-10k stitches)*
+band the shop would sell it under is *Medium Logo (≤4.5×4.5 in, 8k-10k stitches)*
 at $39 (prices then; Medium is $25 at 1-11 since the 2026-11-10 reprice) — the real count is up to three times that band's ceiling, and it
 exceeds every active band including Full Back.
 

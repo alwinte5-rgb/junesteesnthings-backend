@@ -70,9 +70,11 @@ Anchorfish delivery on 25+ is NOT in these prices; add it to the quote.
   NEW  Extra Large      $45.00     $42.00     $39.00     $37.50     $36.00     $35.00     $34.00
    11  Full Back (≤     $60.00     $56.00     $52.00     $50.00     $48.00     $46.00     $45.00
 
-  Sizes (titles in inches since 2026-11-11): Small ≤2.5×2.5 in, to 8k
-  stitches; Medium ≤4×4 in, 8k-10k; Large ≤5.5×5.5 in, 10k-14k; Extra Large
-  14k-22k; Full Back ≤12×12 in, 22k-25k. The stitch count is what is billed.
+  Sizes (titles in inches since 2026-11-11; set 2026-11-12 to fit the shop's
+  Ricoma MT-series hoops, 90/120/150/190/290 mm, with room for the presser
+  foot): Small ≤3.5×3.5 in, to 8k stitches; Medium ≤4.5×4.5 in, 8k-10k;
+  Large ≤5.5×5.5 in, 10k-14k; Extra Large to 7 in, 14k-22k; Full Back
+  ≤11×11 in, 22k-25k. The stitch count is what is billed.
 
   2026-11-10 (owner): lowered from $30-20 / $41-31 / $52-42 / $85-75. The old
   fitted line ($20 chest to $75 full back) was 2-3x the local market for the

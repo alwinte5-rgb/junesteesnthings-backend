@@ -4877,9 +4877,19 @@ async function textToLead(from, text, sid) {
     const { rows: seen } = await pool.query(`SELECT id FROM submissions WHERE dedupe_key = $1`, ['sms:' + sid]);
     if (seen.length) return { lead: seen[0].id };
   }
+  /* An open lead this number texted in, or one the shop texted from its card
+     ("Text them", 2026-11-12) in the last two weeks: the reply belongs with
+     what was said. Before, a web-form lead texted from Leads had its answer
+     filed as a brand-new lead. The lead texted from most recently wins. */
   const { rows: open } = await pool.query(
-    `SELECT id FROM submissions WHERE source = 'text' AND ${samePhone} AND dismissed_at IS NULL
-        AND created_at > NOW() - INTERVAL '14 days' ORDER BY created_at DESC LIMIT 1`, [digits]);
+    `SELECT s.id FROM submissions s
+      WHERE ${samePhone} AND s.dismissed_at IS NULL
+        AND ((s.source = 'text' AND s.created_at > NOW() - INTERVAL '14 days')
+          OR EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = 'text'
+                        AND n.body LIKE 'You texted:%' AND n.created_at > NOW() - INTERVAL '14 days'))
+      ORDER BY GREATEST(s.created_at, COALESCE((SELECT MAX(n.created_at) FROM lead_notes n
+                 WHERE n.submission_id = s.id AND n.kind = 'text' AND n.body LIKE 'You texted:%'), s.created_at)) DESC
+      LIMIT 1`, [digits]);
   if (open.length) {
     await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text', $2)`,
       [open[0].id, String(text).slice(0, 2000)]);
@@ -28207,7 +28217,9 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                 loses the only number that says the shop is leaving money on the
                 table, and it is untrue about the customer. */ ''}
           ${l.email ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block';if(f.style.display==='block')f.dispatchEvent(new Event('jt-open'))">Email them</button>` : ''}
+             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>` : ''}
+          ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('tx-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Text them</button>` : ''}
           <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
             <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
@@ -28222,11 +28234,35 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                  style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
           <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
         </form>
-        ${l.email ? leadEmailBox(l, backField) : ''}`}
+        ${l.email ? leadEmailBox(l, backField) : ''}
+        ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? leadTextBox(l, backField) : ''}`}
       </div>`;
 }
 
-/** Email a lead from their card. On opening, Claude writes a reply to what
+/** Text a lead from their card, from the shop's number (POST /admin/lead/:id/text).
+ *  "June's Tees:" goes in front and "Reply STOP to opt out." after, as on every
+ *  customer text; their reply comes back onto this lead. */
+function leadTextBox(l, backField) {
+  const max = LEADMAIL.TEXT_LIMIT;
+  return `<div id="tx-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+      <form method="POST" action="/admin/lead/${l.id}/text"
+            onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Sending...'">
+        <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.phone)}, from the shop number. It starts with "June's Tees:" and ends with "Reply STOP to opt out." Plain letters only: emoji are left out. Their reply shows on this lead (or on their job, if they have one).</p>
+        <textarea name="body" rows="4" maxlength="${max}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:4px"
+                  oninput="this.nextElementSibling.textContent=this.value.length+' / ${max}'"></textarea>
+        <div class="muted" style="font-size:12px;margin:0 0 8px;text-align:right">0 / ${max}</div>${backField}
+        <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Send text</button>
+      </form>
+      <script>/* A send that fails comes back to an empty box; the text typed is kept in this tab and put back,
+         only when the error is this lead's (the route answers with #lead-<id>). */
+      (function(){var k='jt-lead-text-${l.id}',box=document.getElementById('tx-${l.id}'),f=box&&box.querySelector('form');if(!f)return;
+      try{var p=new URLSearchParams(location.search),d=sessionStorage.getItem(k);
+        if(d&&p.get('err')&&location.hash==='#lead-${l.id}'){f.body.value=d;box.style.display='block';}else if(p.get('ok'))sessionStorage.removeItem(k);}catch(e){}
+      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,f.body.value);}catch(e){}});})();</script>
+    </div>`;
+}
+
+/** Email a lead from their card. On a button press, Claude writes a reply to what
  *  they asked (or a follow-up once written to) and puts it in the box to edit;
  *  the stock message stays underneath if Claude cannot answer. Below it, one
  *  press records an email sent from your own inbox. */
@@ -28263,7 +28299,7 @@ function leadEmailBox(l, backField) {
          Anything it cannot know comes back as [June to fill in: ...], which the server will not send.
          Rewrite sends the message as it is now with what to change (2026-10-24: before, a
          second press sent no instruction at all, so Claude wrote the same reply again). */
-      var ask=function(change){if(sg.disabled)return;sg.disabled=true;rd.disabled=true;asked=true;
+      var ask=function(change){if(sg.disabled)return;sg.disabled=true;rd.disabled=true;
         st.textContent=change?'Claude is rewriting it...':'Claude is writing a reply to what they asked...';
         fetch('/admin/api/lead/${l.id}/suggest-followup',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({draft:f.body.value===f.body.defaultValue?'':f.body.value,change:change||''})}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
@@ -28272,11 +28308,10 @@ function leadEmailBox(l, backField) {
           var need=(x.d.ask_shop||[]).filter(Boolean);
           st.textContent=need.length?'Suggested. Before sending, fill in: '+need.join('; '):'Suggested. Read it, change anything, then send.';})
         .catch(function(){sg.disabled=false;rd.disabled=false;st.textContent='Could not reach the server. Try again.';});};
-      var asked=false;sg.addEventListener('click',function(){ask('');});
+      sg.addEventListener('click',function(){ask('');});
       rd.addEventListener('click',function(){var c=ch.value.trim();if(!c){st.textContent='Type what to change first, e.g. "women\\'s cotton tees only".';ch.focus();return;}ask(c);});
       ch.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();rd.click();}});
-      /* The first time the box opens on the stock message, Claude writes the reply (not after a failed send put a draft back). */
-      box.addEventListener('jt-open',function(){if(!asked&&!sg.disabled&&f.body.value===f.body.defaultValue)ask();});})();</script>
+      /* Claude writes only when asked (owner, 2026-11-12: "stop claude from auto replying when I expand the lead"). */})();</script>
       <form method="POST" action="/admin/lead/${l.id}/note" style="margin-top:10px">
         <input type="hidden" name="kind" value="email"><input type="hidden" name="body" value="Emailed them from my own inbox.">${backField}
         <button type="submit" class="btn btn-ghost" style="padding:6px 14px;font-size:12.5px">I already emailed them</button>
@@ -35965,6 +36000,91 @@ async function sendLeadEmail(id, m, staffId) {
   }
   return { to, already: false, marked: await markLeadResponded(id, staffId ? { kind: 'staff', id: staffId } : null) };
 }
+
+/* Text a lead from the Leads page, from the shop's number (owner, 2026-11-12:
+   "add something where I can send text messages from the lead"). The same
+   people who may email a lead may text one; a helper whose texts need the
+   owner's OK writes a note instead, since no approval queue holds texts yet.
+   Their reply comes back to the shop number and lands on this lead for two
+   weeks (textToLead looks for a lead texted from here), or on their job when
+   they have one. Recorded as a text note only once Twilio accepted it. */
+const LEAD_TEXT_NOT_SENT = {
+  'no-phone': 'This lead has no usable US phone number, so nothing was sent.',
+  'no-consent': 'That number texted STOP, so it cannot be texted. Only they can turn texts back on, by texting START to the shop number.',
+  unconfigured: 'Texting is not switched on, so nothing was sent.',
+  duplicate: 'That text went out a moment ago, so it was not sent twice.',
+};
+/** Who may text a lead: the owner, or a helper with messaging fully on who can
+ *  see leads. The card offers the box only to them, and the route checks again. */
+function canTextLeads(actor) {
+  return !(actor && actor.kind === 'staff' && (actorLevel('customers.message') !== 'on' || actorLevel('leads.view') !== 'on'));
+}
+app.post('/admin/lead/:id/text', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const backTo = safeAdminPath(b.back, '/admin/leads');
+  if (!id) return res.redirect(backTo);
+  /* Every answer comes back to this lead's card, so its box (and only its box)
+     puts a failed text back to send again. */
+  const here = `${String(backTo).split('#')[0]}#lead-${id}`;
+  if (Object.keys(b).some((k) => !['body', 'back'].includes(k))) {
+    return back(res, here, 'err', 'That form was out of date. Reload the page and send it again.');
+  }
+  const actor = currentActor();
+  if (!canTextLeads(actor)) {
+    return back(res, here, 'err', 'Texts to leads go through the owner for now. Write what you want to say in a note on the lead.');
+  }
+  const m = LEADMAIL.cleanText(b);
+  if (m.error) return back(res, here, 'err', m.error);
+  if (actor && actor.kind === 'staff') {
+    const outside = FRAUD.mentionsOutsidePayment(m.text);
+    if (outside) {
+      logActivity(actor, 'message held: outside payment', { type: 'lead', id: String(id) }, { what: outside }, clientIp(req)).catch(() => {});
+      return back(res, here, 'err', 'That text mentions being paid outside the shop, so it was not sent. Ask June.');
+    }
+  }
+  try {
+    const { rows: [l] } = await pool.query('SELECT id, phone FROM submissions WHERE id = $1', [id]);
+    if (!l) return back(res, here, 'err', 'No such lead.');
+    const words = m.text;
+    const body = `June's Tees: ${words}${/https?:\/\/|jtees\.net/i.test(words) ? '' : ' jtees.net'} Reply STOP to opt out.`;
+    /* The same text to the same number within ten minutes is a double tap or a
+       resent form, not a new message: a rolling window, like sendLeadEmail's,
+       so a resend across a clock boundary is caught too. Two presses in the
+       same moment meet on the ref below (sms_messages_once). */
+    const to = normalizeUsPhone(l.phone);
+    if (to) {
+      const { rows: recent } = await pool.query(
+        `SELECT 1 FROM sms_messages WHERE phone = $1 AND template = 'lead-text' AND body = $2::text
+            AND status <> 'failed' AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`, [to, body]);
+      if (recent.length) return back(res, here, 'err', LEAD_TEXT_NOT_SENT.duplicate);
+    }
+    const digest = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16);
+    const status = await sendCustomerSms({ phone: l.phone, kind: 'transactional', staffSent: true,
+      ref: `lead-text:${id}:${digest}:${Math.floor(Date.now() / 600000)}`, msg: { template: 'lead-text', body } });
+    if (status !== 'sent') {
+      if (status === 'failed') reportError('lead-text', new Error(`text to lead ${id} was not accepted by Twilio`), `lead ${id}`).catch(() => {});
+      return back(res, here, 'err', LEAD_TEXT_NOT_SENT[status] || 'The text did not go, and the error has been logged. Try again, or email them.');
+    }
+    const staffId = actor && actor.kind === 'staff' ? actor.id : null;
+    let marked = false;
+    try {
+      await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'text', $2, $3)`,
+        [id, `You texted: ${words}`, staffId]);
+      marked = await markLeadResponded(id, actor);
+    } catch (e) {
+      reportError('lead-text', e, `recording text to lead ${id}`).catch(() => {});
+    }
+    /* The text went: never say it did not, or it is sent twice. */
+    if (!marked) return back(res, here, 'err', `Text sent to ${l.phone}, but the lead could not be marked Contacted. Mark it by hand; do not send it again.`);
+    const said = `Text sent to ${l.phone}.${m.dropped ? ' Emoji and symbols cannot go by text, so they were left out.' : ''}`;
+    return res.redirect(`${backTo.split('#')[0]}${backTo.includes('?') ? '&' : '?'}ok=${encodeURIComponent(said)}#lead-${id}`);
+  } catch (err) {
+    console.error('lead text failed:', err.message);
+    reportError('lead-text', err, `lead ${id}`).catch(() => {});
+    return back(res, here, 'err', 'The text did not send. Try again.');
+  }
+});
 
 app.post('/admin/lead/:id/assign', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);

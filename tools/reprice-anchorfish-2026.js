@@ -274,13 +274,16 @@ const EMB = {
 
 /* The embroidery methods. The size names are kept because that is how the shop
    thinks about the work; the stitch band is in the title because that is what
-   the supplier bills on. Sizes are in inches (owner, 2026-11-11). */
+   the supplier bills on. Sizes are in inches (owner, 2026-11-11) and fit the shop's
+   Ricoma MT-series hoops with room for the presser foot (owner, 2026-11-12): Small
+   3.5 in (90 mm hoop), Medium 4.5 in (120 mm), Large 5.5 in (150 mm), Extra Large
+   to 7 in (190 mm), Full Back 11 in (290 mm). */
 const EMB_METHODS = {
   7:  { name: 'chest', title: 'Embroidery — Name/Text (chest)' },
-  8:  { title: 'Embroidery — Small Logo (≤2.5×2.5 in, to 8k stitches)' },
-  9:  { title: 'Embroidery — Medium Logo (≤4×4 in, 8k–10k stitches)' },
+  8:  { title: 'Embroidery — Small Logo (≤3.5×3.5 in, to 8k stitches)' },
+  9:  { title: 'Embroidery — Medium Logo (≤4.5×4.5 in, 8k–10k stitches)' },
   10: { title: 'Embroidery — Large Logo (≤5.5×5.5 in, 10k–14k stitches)' },
-  11: { title: 'Embroidery — Full Back (≤12×12 in, 22k–25k stitches)' },
+  11: { title: 'Embroidery — Full Back (≤11×11 in, 22k–25k stitches)' },
 };
 
 /* Names and text are sold by size, and the sheet already prices exactly two:
