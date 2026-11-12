@@ -117,25 +117,55 @@ test('a reply to a lead texted from its card comes back onto that lead', () => {
   assert.match(src, /action="\/admin\/lead\/\$\{l\.id\}\/text"/);
 });
 
-test('text templates: first name in, fit the box, pass the text cleaner, no prices', () => {
-  const list = M.textTemplates({ name: 'Maria Lopez' });
+test('text templates: first name in, fit the box at the longest name, pass the cleaner, no prices', () => {
+  const list = M.textTemplates({ name: 'Maria Lopez', email: 'm@x.com' });
   assert.ok(list.length >= 5);
   const keys = new Set();
   for (const t of list) {
     assert.ok(!keys.has(t.key), 'keys are unique'); keys.add(t.key);
     assert.match(t.text, /^Hi Maria, /);
-    assert.ok(t.text.length <= M.TEXT_LIMIT, t.key + ' fits the box');
     assert.ok(!/\$\d/.test(t.text), t.key + ' carries no price');
+    assert.ok(!/jtees\.net|https?:/i.test(t.text), t.key + ' leaves the site link to the send route');
     const c = M.cleanText({ body: t.text });
     assert.ok(!c.error && !c.dropped, t.key + ' sends as written');
   }
-  assert.match(M.textTemplates({}).map((t) => t.text)[0], /^Hi, /, 'no name, no stray space');
+  for (const t of M.textTemplates({ name: 'Bartholomewwwwwwwwwwwwww', email: 'a@b.c' })) {
+    assert.ok(t.text.length <= M.TEXT_LIMIT, t.key + ' fits the box at the longest name');
+  }
+  assert.match(M.textTemplates({})[0].text, /^Hi, /, 'no name, no stray space');
   assert.match(list.find((t) => t.key === 'next_week').text, /booked for the rest of this week.*next week/);
 });
 
-test('the lead text box offers the templates, escaped, and never posts the picker', () => {
-  const box = src.slice(src.indexOf('function leadTextBox('), src.indexOf('function leadEmailBox('));
-  assert.match(box, /LEADMAIL\.textTemplates\(l\)/);
-  assert.match(box, /value="\$\{escEmail\(t\.text\)\}">\$\{escEmail\(t\.label\)\}/);
-  assert.ok(!/<select[^>]*\sname=/.test(box), 'the select has no name, so the route never sees it');
+test('templates about email are not offered to a lead with no email', () => {
+  const phoneOnly = M.textTemplates({ name: 'Ana', phone: '3125550100' });
+  assert.ok(!phoneOnly.some((t) => t.key === 'quote_sent'));
+  assert.ok(!phoneOnly.some((t) => /email/i.test(t.text)));
+  assert.match(M.textTemplates({ name: 'Ana', email: 'a@b.c' }).find((t) => t.key === 'artwork').text, /reply to our email/);
+});
+
+test('first name: cleaned, capitalised, nothing that is not a name', () => {
+  assert.strictEqual(M.firstName('maria lopez'), 'Maria');
+  assert.strictEqual(M.firstName('MARIA'), 'Maria');
+  assert.strictEqual(M.firstName('Maria,'), 'Maria');
+  assert.strictEqual(M.firstName("O'Neil"), "O'Neil");
+  assert.strictEqual(M.firstName('McKenzie'), 'McKenzie');
+  assert.strictEqual(M.firstName('info@acme.com'), '');
+  assert.strictEqual(M.firstName('3125550100'), '');
+  assert.strictEqual(M.firstName(''), '');
+  assert.match(M.infoRequest({ name: 'maria' }).body, /^Hi Maria,/);
+  assert.match(M.followUp({ name: 'info@x.com' }).body, /^Hi,/);
+});
+
+test('the lead text box renders the templates escaped, asks before replacing, never posts the picker', () => {
+  const vm = require('node:vm');
+  const grab = (name) => { const a = src.indexOf(`function ${name}(`); return src.slice(a, src.indexOf('\n}\n', a) + 2); };
+  const ctx = { LEADMAIL: M, escEmail: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') };
+  vm.createContext(ctx);
+  vm.runInContext(grab('leadTextBox'), ctx);
+  const html = ctx.leadTextBox({ id: 7, name: "O'Neil <b>", phone: '3125550100' }, '');
+  assert.ok(html.includes('value="Hi O&#39;Neil, sorry we missed your call.'), 'apostrophes are escaped in the value');
+  assert.ok(!html.includes('your email now'), 'no email, no email template');
+  const select = html.slice(html.indexOf('<select'), html.indexOf('>', html.indexOf('<select')));
+  assert.ok(!/\sname=/.test(select), 'the picker has no name, so the route never sees it');
+  assert.match(select, /confirm\('Replace what you have typed/);
 });

@@ -28250,7 +28250,7 @@ function leadTextBox(l, backField) {
         <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.phone)}, from the shop number. It starts with "June's Tees:" and ends with "Reply STOP to opt out." Plain letters only: emoji are left out. Their reply shows on this lead (or on their job, if they have one).</p>
         ${/* Picking a template fills the box to edit; it has no name, so it is never posted. */ ''}
         <select aria-label="Start from a template" style="width:100%;padding:6px;font-size:13px;margin-bottom:6px"
-                onchange="if(!this.value)return;var t=this.form.body;t.value=this.value;t.dispatchEvent(new Event('input'));t.focus();this.selectedIndex=0">
+                onchange="var v=this.value,t=this.form.body;this.selectedIndex=0;if(!v)return;if(t.value.trim()&&t.value!==v&&!confirm('Replace what you have typed with this template?'))return;t.value=v;t.dispatchEvent(new Event('input'));t.focus()">
           <option value="">Start from a template...</option>
           ${LEADMAIL.textTemplates(l).map((t) => `<option value="${escEmail(t.text)}">${escEmail(t.label)}</option>`).join('')}
         </select>

@@ -12,10 +12,20 @@ const FILL_IN = /\[\s*(june|owner)\s+to\s+fill\s+in\b/i;
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+/** The greeting name for a lead: the first word of their name, cleaned. A name
+ *  typed all lower or all upper case is capitalised, trailing punctuation goes,
+ *  and anything that is not a name (an email address, digits) gives '' so the
+ *  message says plain "Hi". Shared by the emails and the texts. */
+function firstName(name) {
+  const w = String(name || '').trim().split(/\s+/)[0].replace(/^[^\p{L}]+|[^\p{L}'’-]+$/gu, '').slice(0, 20);
+  if (!w || /[@\d]/.test(w) || !/^[\p{L}'’-]+$/u.test(w)) return '';
+  return w === w.toLowerCase() || w === w.toUpperCase() ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w;
+}
+
 /** The ready-made "more information needed" email for one lead. */
 function infoRequest(lead, { signer = 'June', shop = "June's Tees" } = {}) {
   const l = lead || {};
-  const first = String(l.name || '').trim().split(/\s+/)[0];
+  const first = firstName(l.name);
   const asked = String(l.description || '').replace(/\s+/g, ' ').trim();
   const about = asked ? ` about "${asked.length > 80 ? asked.slice(0, 77).trimEnd() + '...' : asked}"` : '';
   return {
@@ -43,7 +53,7 @@ ${shop}`,
  *  contacted leads"). Short, warm, one easy next step; editable. */
 function followUp(lead, { signer = 'June', shop = "June's Tees" } = {}) {
   const l = lead || {};
-  const first = String(l.name || '').trim().split(/\s+/)[0];
+  const first = firstName(l.name);
   const asked = String(l.description || '').replace(/\s+/g, ' ').trim();
   const about = asked ? ` for ${asked.length > 70 ? asked.slice(0, 67).trimEnd() + '...' : asked}` : '';
   return {
@@ -116,8 +126,8 @@ const TEXT_TEMPLATES = [
   { key: 'details', label: 'Ask for the details',
     text: (hi) => `${hi}, thanks for reaching out! So we can price it, please tell us the item and color, how many and what sizes, where the design goes, and the date you need it by.` },
   { key: 'artwork', label: 'Ask for their design',
-    text: (hi) => `${hi}, please send your logo or design to info@jtees.net, or text a photo of it here. A large, clear image works best.` },
-  { key: 'quote_sent', label: 'Quote is in their email',
+    text: (hi, l) => `${hi}, please text a photo of your logo or design here${l.email ? ', or reply to our email with the file' : ''}. A large, clear image works best.` },
+  { key: 'quote_sent', label: 'Quote is in their email', needsEmail: true,
     text: (hi) => `${hi}, your quote is in your email now. Any questions, just reply here.` },
   { key: 'next_week', label: 'Booked this week, next week OK',
     text: (hi) => `${hi}, our printer is booked for the rest of this week, but we can print yours next week. Does that still work for your date?` },
@@ -128,11 +138,15 @@ const TEXT_TEMPLATES = [
 ];
 
 /** The text templates for one lead: [{ key, label, text }], each with the lead's
- *  first name in it and short enough for the text box. */
+ *  first name in it. Ones about email are left out for a lead with no email.
+ *  firstName caps the name at 20, and the test holds every template under
+ *  TEXT_LIMIT at that length; one over it is refused by cleanText, never cut. */
 function textTemplates(lead) {
-  const first = String((lead && lead.name) || '').trim().split(/\s+/)[0].slice(0, 40);
+  const l = lead || {};
+  const first = firstName(l.name);
   const hi = first ? `Hi ${first}` : 'Hi';
-  return TEXT_TEMPLATES.map((t) => ({ key: t.key, label: t.label, text: t.text(hi).slice(0, TEXT_LIMIT) }));
+  return TEXT_TEMPLATES.filter((t) => !t.needsEmail || l.email)
+    .map((t) => ({ key: t.key, label: t.label, text: t.text(hi, l) }));
 }
 
-module.exports = { followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };
+module.exports = { firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };
