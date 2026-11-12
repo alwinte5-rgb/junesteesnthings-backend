@@ -218,7 +218,9 @@ test('an anonymous chat is a lead too, with no email', () => {
 
 test("an anonymous chat's card sends the owner to tawk.to, and no card opens on a separator", () => {
   /* The card shows the sale label (saleTypePill), which reads tools/lib/sales-credit. */
-  const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '' };   // the email box is tested elsewhere
+  const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '',
+    /* The text box is tested in lead-email.test.js. */
+    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '' };   // the email box is tested elsewhere
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
@@ -285,7 +287,9 @@ test('embroidery requests say what they are, and old ones are back-filled', () =
 test("a long message is never cut off on the lead card", () => {
   /* Cards showed the first 300 characters with no mark, so a customer's order
      (Yazmin, 2026-10-20) stopped mid-word and the rest could not be read. */
-  const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '' };
+  const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '',
+    /* The text box is tested in lead-email.test.js. */
+    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '' };
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',

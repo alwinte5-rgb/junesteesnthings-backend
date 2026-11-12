@@ -23,12 +23,13 @@ test('the follow-up names their enquiry, asks if they still need it, and has no 
   assert.ok(long.body.includes('x'.repeat(67) + '...'), 'a long enquiry is cut short');
 });
 
-test('every lead with an email gets Claude; it writes on first open, never from the stock message', () => {
+test('every lead with an email gets Claude, but only when its button is pressed, never from the stock message', () => {
   assert.match(src, /const m = \(contacted \? LEADMAIL\.followUp : LEADMAIL\.infoRequest\)\(l,/);
   // The button is on new leads too, not only contacted ones (owner, 2026-10-22).
   assert.match(src, /<div style="margin:0 0 8px">\s*<button type="button" class="btn" data-lsug="\$\{l\.id\}"[^>]*>\$\{contacted \? 'Suggest a follow-up with Claude' : 'Write a reply with Claude'\}/);
-  assert.match(src, /f\.dispatchEvent\(new Event\('jt-open'\)\)">Email them<\/button>/);
-  assert.match(src, /box\.addEventListener\('jt-open',function\(\)\{if\(!asked&&!sg\.disabled&&f\.body\.value===f\.body\.defaultValue\)ask\(\);\}\)/);
+  // Opening the box no longer asks Claude (owner, 2026-11-12: "stop claude from auto replying when I expand the lead").
+  assert.doesNotMatch(src, /jt-open/);
+  assert.match(src, /sg\.addEventListener\('click',function\(\)\{ask\(''\);\}\)/);
   // The generic template is not handed to Claude as the draft to keep.
   assert.match(src, /draft:f\.body\.value===f\.body\.defaultValue\?'':f\.body\.value/);
 });

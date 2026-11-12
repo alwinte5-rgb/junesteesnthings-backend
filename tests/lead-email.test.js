@@ -67,3 +67,52 @@ test('Contacted: a lead someone has answered, shown on the card and in its own f
   assert.match(src, /I already emailed them/);
   assert.match(src, /name="kind" value="email"/, 'that press is an email note, which marks them contacted');
 });
+
+/* Text a lead from the Leads page (owner, 2026-11-12). */
+const textRoute = src.slice(src.indexOf("app.post('/admin/lead/:id/text'"), src.indexOf("app.post('/admin/lead/:id/assign'"));
+
+test('a lead text is checked: needed, capped at 300, no [June to fill in], spaces collapsed', () => {
+  assert.ok(M.cleanText({ body: '   ' }).error);
+  assert.ok(M.cleanText({}).error);
+  assert.ok(M.cleanText({ body: 'x'.repeat(M.TEXT_LIMIT + 1) }).error);
+  assert.ok(M.cleanText({ body: 'Price is [June to fill in: price]' }).error);
+  assert.deepStrictEqual(M.cleanText({ body: ' Hi\n\nthere ' }), { text: 'Hi there', dropped: false });
+  // Accents become plain letters; emoji are left out and said so; the brand is added by the send.
+  assert.deepStrictEqual(M.cleanText({ body: 'Hola señora, ¿cuántas?' }), { text: 'Hola senora, cuantas?', dropped: true });
+  assert.deepStrictEqual(M.cleanText({ body: "June's Tees: ready 👍" }), { text: 'ready', dropped: true });
+  // Nothing left once the brand and emoji are gone: refused, never an empty text.
+  assert.ok(M.cleanText({ body: "June's Tees:" }).error);
+  assert.ok(M.cleanText({ body: '👍👍' }).error);
+  assert.strictEqual(M.TEXT_LIMIT, 300);
+});
+
+test('the lead text route: staff need full messaging and leads, only body/back accepted, sent from the shop number', () => {
+  assert.ok(textRoute.length > 200, 'route found');
+  assert.match(textRoute, /\['body', 'back'\]\.includes\(k\)/);
+  assert.match(textRoute, /if \(!canTextLeads\(actor\)\)/);
+  assert.match(src, /function canTextLeads\(actor\) \{\s*return !\(actor && actor\.kind === 'staff' && \(actorLevel\('customers\.message'\) !== 'on' \|\| actorLevel\('leads\.view'\) !== 'on'\)\);/);
+  // A rolling ten-minute window catches a resend across a clock boundary.
+  assert.match(textRoute, /template = 'lead-text' AND body = \$2::text[\s\S]*INTERVAL '10 minutes'/);
+  // A failed Contacted stamp is reported, not read as success (markLeadResponded returns false, never throws).
+  assert.match(textRoute, /marked = await markLeadResponded\(id, actor\);/);
+  assert.match(textRoute, /if \(!marked\) return back\(/);
+  assert.match(textRoute, /FRAUD\.mentionsOutsidePayment\(m\.text\)/);
+  assert.match(textRoute, /sendCustomerSms\(\{ phone: l\.phone, kind: 'transactional', staffSent: true,/);
+  assert.match(textRoute, /Reply STOP to opt out\./);
+  // Recorded and marked Contacted only after Twilio took it.
+  assert.ok(textRoute.indexOf("if (status !== 'sent')") < textRoute.indexOf("INSERT INTO lead_notes"));
+});
+
+test('the lead card offers Text them only for a usable phone, with a box that posts to the route', () => {
+  assert.match(src, /\$\{normalizeUsPhone\(l\.phone\) && canTextLeads\(currentActor\(\)\) \? `<button[^`]*>Text them<\/button>` : ''\}/);
+  assert.match(src, /\$\{normalizeUsPhone\(l\.phone\) && canTextLeads\(currentActor\(\)\) \? leadTextBox\(l, backField\) : ''\}/);
+  // A failed send is put back only into this lead's box.
+  assert.match(src, /p\.get\('err'\)&&location\.hash==='#lead-\$\{l\.id\}'/);
+});
+
+test('a reply to a lead texted from its card comes back onto that lead', () => {
+  const fn = src.slice(src.indexOf('async function textToLead('), src.indexOf('async function saveTextMedia('));
+  assert.match(fn, /n\.body LIKE 'You texted:%' AND n\.created_at > NOW\(\) - INTERVAL '14 days'/);
+  assert.match(textRoute, /`You texted: \$\{words\}`/);
+  assert.match(src, /action="\/admin\/lead\/\$\{l\.id\}\/text"/);
+});

@@ -79,4 +79,30 @@ function toHtml(text) {
     `<p style="margin:0 0 12px;line-height:1.55">${esc(p).replace(/\n/g, '<br>')}</p>`).join('');
 }
 
-module.exports = { followUp, LIMITS, infoRequest, cleanEmail, toHtml };
+/* A text to a lead from the Leads page (owner, 2026-11-12: "add something where
+ * I can send text messages from the lead"). 300 is the job page's text limit:
+ * the brand and the opt-out are added around it when it is sent. */
+const TEXT_LIMIT = 300;
+
+/* "June's Tees:" typed at the start; the send adds it, so it is taken off. */
+const BRAND_PREFIX = /^\s*june['’]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i;
+
+/** The text typed in the lead's text box, cleaned to what a text can carry
+ *  (plain characters: one emoji makes a text cost three times as much, and the
+ *  sender strips them). Accents become plain letters, so Spanish keeps its
+ *  words ("señora" goes as "senora"); anything else that cannot go is left out
+ *  and `dropped` says so. Returns { text, dropped } or { error }. */
+function cleanText(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const typed = String(b.body || '').replace(/\s+/g, ' ').trim();
+  if (!typed) return { error: 'Write the text first.' };
+  if (typed.length > TEXT_LIMIT) return { error: `The text is too long (${TEXT_LIMIT} characters at most).` };
+  if (FILL_IN.test(typed)) return { error: 'Fill in the [June to fill in] parts first.' };
+  const folded = typed.normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-');
+  const text = folded.replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim().replace(BRAND_PREFIX, '').trim();
+  if (!text) return { error: 'There is nothing left to send: texts carry plain letters only, and "June\'s Tees:" is added for you.' };
+  return { text, dropped: /[^\x20-\x7E]/.test(folded) };
+}
+
+module.exports = { followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml };
