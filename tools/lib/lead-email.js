@@ -105,4 +105,34 @@ function cleanText(body) {
   return { text, dropped: /[^\x20-\x7E]/.test(folded) };
 }
 
-module.exports = { followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml };
+/* Ready-made texts for the lead's text box (owner, 2026-11-12: "make message
+ * templates for people who send us messages so I can respond back"). Picking
+ * one fills the box with the lead's first name in it, to edit before sending.
+ * "June's Tees:" and "Reply STOP to opt out." are added when it is sent, so
+ * neither is written here. No prices: those change and belong on the quote. */
+const TEXT_TEMPLATES = [
+  { key: 'missed_call', label: 'Missed their call',
+    text: (hi) => `${hi}, sorry we missed your call. How can we help? Tell us what you'd like made and we'll get back to you.` },
+  { key: 'details', label: 'Ask for the details',
+    text: (hi) => `${hi}, thanks for reaching out! So we can price it, please tell us the item and color, how many and what sizes, where the design goes, and the date you need it by.` },
+  { key: 'artwork', label: 'Ask for their design',
+    text: (hi) => `${hi}, please send your logo or design to info@jtees.net, or text a photo of it here. A large, clear image works best.` },
+  { key: 'quote_sent', label: 'Quote is in their email',
+    text: (hi) => `${hi}, your quote is in your email now. Any questions, just reply here.` },
+  { key: 'next_week', label: 'Booked this week, next week OK',
+    text: (hi) => `${hi}, our printer is booked for the rest of this week, but we can print yours next week. Does that still work for your date?` },
+  { key: 'no_trademarks', label: "Can't print brand logos",
+    text: (hi) => `${hi}, we can't print brand, team or character logos we don't have permission to use. We'd be happy to print your own original design.` },
+  { key: 'check_in', label: 'Checking in',
+    text: (hi) => `${hi}, just checking in. Are you still looking to get this made? We're happy to help whenever you're ready.` },
+];
+
+/** The text templates for one lead: [{ key, label, text }], each with the lead's
+ *  first name in it and short enough for the text box. */
+function textTemplates(lead) {
+  const first = String((lead && lead.name) || '').trim().split(/\s+/)[0].slice(0, 40);
+  const hi = first ? `Hi ${first}` : 'Hi';
+  return TEXT_TEMPLATES.map((t) => ({ key: t.key, label: t.label, text: t.text(hi).slice(0, TEXT_LIMIT) }));
+}
+
+module.exports = { followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };

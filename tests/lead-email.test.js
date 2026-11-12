@@ -116,3 +116,26 @@ test('a reply to a lead texted from its card comes back onto that lead', () => {
   assert.match(textRoute, /`You texted: \$\{words\}`/);
   assert.match(src, /action="\/admin\/lead\/\$\{l\.id\}\/text"/);
 });
+
+test('text templates: first name in, fit the box, pass the text cleaner, no prices', () => {
+  const list = M.textTemplates({ name: 'Maria Lopez' });
+  assert.ok(list.length >= 5);
+  const keys = new Set();
+  for (const t of list) {
+    assert.ok(!keys.has(t.key), 'keys are unique'); keys.add(t.key);
+    assert.match(t.text, /^Hi Maria, /);
+    assert.ok(t.text.length <= M.TEXT_LIMIT, t.key + ' fits the box');
+    assert.ok(!/\$\d/.test(t.text), t.key + ' carries no price');
+    const c = M.cleanText({ body: t.text });
+    assert.ok(!c.error && !c.dropped, t.key + ' sends as written');
+  }
+  assert.match(M.textTemplates({}).map((t) => t.text)[0], /^Hi, /, 'no name, no stray space');
+  assert.match(list.find((t) => t.key === 'next_week').text, /booked for the rest of this week.*next week/);
+});
+
+test('the lead text box offers the templates, escaped, and never posts the picker', () => {
+  const box = src.slice(src.indexOf('function leadTextBox('), src.indexOf('function leadEmailBox('));
+  assert.match(box, /LEADMAIL\.textTemplates\(l\)/);
+  assert.match(box, /value="\$\{escEmail\(t\.text\)\}">\$\{escEmail\(t\.label\)\}/);
+  assert.ok(!/<select[^>]*\sname=/.test(box), 'the select has no name, so the route never sees it');
+});

@@ -28248,6 +28248,12 @@ function leadTextBox(l, backField) {
       <form method="POST" action="/admin/lead/${l.id}/text"
             onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Sending...'">
         <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.phone)}, from the shop number. It starts with "June's Tees:" and ends with "Reply STOP to opt out." Plain letters only: emoji are left out. Their reply shows on this lead (or on their job, if they have one).</p>
+        ${/* Picking a template fills the box to edit; it has no name, so it is never posted. */ ''}
+        <select aria-label="Start from a template" style="width:100%;padding:6px;font-size:13px;margin-bottom:6px"
+                onchange="if(!this.value)return;var t=this.form.body;t.value=this.value;t.dispatchEvent(new Event('input'));t.focus();this.selectedIndex=0">
+          <option value="">Start from a template...</option>
+          ${LEADMAIL.textTemplates(l).map((t) => `<option value="${escEmail(t.text)}">${escEmail(t.label)}</option>`).join('')}
+        </select>
         <textarea name="body" rows="4" maxlength="${max}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:4px"
                   oninput="this.nextElementSibling.textContent=this.value.length+' / ${max}'"></textarea>
         <div class="muted" style="font-size:12px;margin:0 0 8px;text-align:right">0 / ${max}</div>${backField}
