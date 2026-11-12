@@ -45,7 +45,7 @@ const APPLY = process.argv.includes('--apply');
    embroidery or screen print. */
 const ONLY_DTF = process.argv.includes('--only-dtf');
 /* `--only-emb-logos` writes the logo run rates alone: #8-#11 by id, plus the
-   Extra Large logo by title (created if missing, then repriced). Names,
+   Extra Large logo by id (XL_ID). Names,
    digitizing and screen print are not touched. */
 const ONLY_EMB_LOGOS = process.argv.includes('--only-emb-logos');
 if (ONLY_DTF && ONLY_EMB_LOGOS) { console.error('  --only-dtf and --only-emb-logos cannot be used together'); process.exit(2); }
@@ -295,10 +295,10 @@ const EMB_INSERTS = [
   /* One band across 14k-22k. It also closes the hole in the vendor sheet:
      Anchorfish prices 14k-18k and 20k-22k but has no 18k-20k column at all, so
      a 19,000-stitch logo had no price anywhere. Priced in EMB_LOGO_PRICES.xl. */
-  /* Sized to the 190 mm hoop (owner, 2026-11-12: "ADD EXTRA LARGE"). `was` is the
-     title it had before, renamed in place so the row (and its products) is kept. */
-  { logo: 'xl', title: 'Embroidery — Extra Large Logo (≤7×7 in, 14k–22k stitches)',
-    was: 'Embroidery — Extra Large Logo (14k–22k stitches)' },
+  /* Sized to the 190 mm hoop (owner, 2026-11-12: "ADD EXTRA LARGE"). Written by
+     id (XL_ID), never by title: the row exists, and the designer's product page
+     and garments.js already point at it. */
+  { logo: 'xl', title: 'Embroidery — Extra Large Logo (≤7×7 in, 14k–22k stitches)' },
 ];
 
 /* LOGO PRICES, typed (owner, 2026-11-10), lowered to the local market. The old
@@ -405,12 +405,11 @@ const up05 = (n) => Math.ceil(n * 20 - 1e-9) / 20;
  * `active` is only set on insert, so a method the shop has switched on or off
  * by hand keeps that state through a reprice.
  */
-/** Renames a method found by its old title. A plain WHERE: MySQL refuses an UPDATE
- *  that reads its own table in a subquery (error 1093). If both titles ever exist,
- *  the read-back after --apply reports two Extra Large rows. */
-function renameMethod(from, to) {
-  return 'UPDATE lumise_printings SET title=' + sq(to) + ' WHERE title=' + sq(from) + ';';
-}
+/* The Extra Large row's id. The designer's product page names it by id (19,
+   product.php $jt_emb 'xl', in the designer repo). It is written
+   by id like #8-#11: finding it by title could miss after a rename and insert a
+   second row (review, 2026-11-12). */
+const XL_ID = 19;
 
 function insertMethod(title, tiers) {
   return 'INSERT INTO lumise_printings (title, active, calculate, thumbnail, upload, description, author, created, updated)\n' +
@@ -489,11 +488,10 @@ for (const [id, m] of logoIds) {
 /* Extra Large is a logo, so it prints in this table on the logo bands. */
 for (const m of EMB_INSERTS.filter((x) => x.logo)) {
   const tiers = tiersFor(m);
-  logoExpect.push({ where: 'title=' + sq(m.title), label: m.title, calc: fixedCalc(tiers), byTitle: true });
-  logoRows[m.logo] = ['NEW', m, tiers];
-  /* Renamed first, so the insert below finds it and does not add a second row. */
-  if (m.was) stmts.push(renameMethod(m.was, m.title));
-  stmts.push(insertMethod(m.title, tiers));
+  logoExpect.push({ where: 'id=' + XL_ID, label: '#' + XL_ID + ' Extra Large', calc: fixedCalc(tiers), byTitle: true });
+  logoRows[m.logo] = [XL_ID, m, tiers];
+  stmts.push('UPDATE lumise_printings SET title=' + sq(m.title) +
+    ', calculate=' + sq(fixedCalc(tiers)) + ', updated=NOW() WHERE id=' + XL_ID + ';');
 }
 for (const key of EMB_LOGO_ORDER) {
   if (!logoRows[key]) { console.error('  !! logo ' + key + ' has prices but no method'); process.exit(3); }
@@ -634,13 +632,9 @@ if (ONLY_DTF) {
   stmts.splice(0, stmts.length, ...dtf);
 }
 if (ONLY_EMB_LOGOS) {
-  const ids = Object.keys(EMB_METHODS).filter((id) => !EMB_METHODS[id].name);
-  const xlRows = EMB_INSERTS.filter((m) => m.logo);
-  const xl = xlRows.map((m) => sq(m.title));
-  const renames = xlRows.filter((m) => m.was).map((m) => renameMethod(m.was, m.title));
-  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')) || renames.includes(q) ||
-    xl.some((t) => q.startsWith('INSERT INTO lumise_printings') && q.includes('WHERE title=' + t + ';')));
-  const want = ids.length + xl.length + renames.length;
+  const ids = [...Object.keys(EMB_METHODS).filter((id) => !EMB_METHODS[id].name), String(XL_ID)];
+  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')));
+  const want = ids.length;
   if (emb.length !== want) { console.error('  --only-emb-logos found ' + emb.length + ' statements, expected ' + want); process.exit(3); }
   stmts.splice(0, stmts.length, ...emb);
 }
@@ -666,20 +660,32 @@ const run = (url) => {
     if (bad.length) { for (const b of bad) console.error('  !! live ' + b); console.error('  logos would sit under the LIVE DTF — refusing'); process.exit(3); }
   }
 
+  /* Extra Large is written by id: #XL_ID must be the Extra Large row, or the
+     update would put its name and prices on some other method. Skipped for
+     --only-dtf, which does not touch it. */
+  if (!ONLY_DTF) {
+    let rows;
+    try { rows = mysql(url, 'SELECT id, title FROM lumise_printings WHERE id=' + XL_ID + ';', { rows: true }); }
+    catch (e) { console.error('  could not read #' + XL_ID + ' (' + e.message + ') — refusing'); process.exit(3); }
+    if (rows.length !== 1 || !/^Embroidery — Extra Large Logo\b/.test(String(rows[0].title))) {
+      console.error('  !! #' + XL_ID + ' is not the Extra Large logo row (found ' +
+        (rows.length ? '"' + rows[0].title + '"' : 'nothing') + ') — refusing, nothing written');
+      process.exit(3);
+    }
+  }
+
   try { backup(url, 'pre-reprice'); }
   catch (e) { console.error('  backup FAILED, refusing to write: ' + e.message); process.exit(2); }
 
   const sql = 'START TRANSACTION;\n' + stmts.join('\n') + '\nCOMMIT;\n' +
-    'SELECT id, title FROM lumise_printings WHERE id IN (7,8,9,10,11,12,15,16,17) ORDER BY id;';
+    'SELECT id, title FROM lumise_printings WHERE id IN (7,8,9,10,11,12,15,16,17,' + XL_ID + ') ORDER BY id;';
   try { mysql(url, sql); }
   catch (e) { console.error(e.message); process.exit(1); }
 
-  /* Read every logo row back and compare it with what was meant to be written.
-     A title that matched nothing (the Extra Large row is found by title) shows
-     here as missing instead of passing silently. */
+  /* Read every logo row back, by id, and compare it with what was meant to be written. */
   /* The write has committed by now, so whatever goes wrong below, the undo
      line is printed before exiting. */
-  const UNDO = '\n  TO UNDO: restore `calculate` from the backup named above.';
+  const UNDO = '\n  TO UNDO: restore `title` and `calculate` from the backup named above (titles changed too).';
   if (!ONLY_DTF) {
     let wrong = 0;
     try {
@@ -691,12 +697,12 @@ const run = (url) => {
           console.error('  !! ' + e.label + ' (id ' + r[0].id + ') is switched OFF — the quote form only offers active methods; switch it on in Lumise');
         }
       }
-      /* XL is found by exact title. A live row under an older title would get a
-         second, new row beside it instead of the new prices. */
+      /* A second Extra Large row (from an older run that inserted by title) would
+         split products and the quote form between two prices. */
       const xl = mysql(url, "SELECT id, title FROM lumise_printings WHERE title LIKE '%Extra Large%';", { rows: true });
       if (xl.length > 1) {
         console.error('  !! ' + xl.length + ' Extra Large rows: ' + xl.map((r) => '#' + r.id + ' ' + r.title).join('; ') +
-          ' — keep one (the new title) and switch the others off');
+          ' — keep #' + XL_ID + ' and switch the others off');
         wrong++;
       }
     } catch (e) {

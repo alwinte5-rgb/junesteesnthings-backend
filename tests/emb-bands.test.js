@@ -19,15 +19,16 @@ const prices = (id) => {
 
 test('--only-emb-logos dry run writes the five logo methods and nothing else', () => {
   assert.strictEqual(run.status, 0, run.stderr);
-  // #8-#11 by id, plus Extra Large by title (insert if missing, then update).
-  assert.strictEqual((run.stdout.match(/^UPDATE lumise_printings SET title=/gm) || []).length, 4);
-  assert.strictEqual((run.stdout.match(/^INSERT INTO lumise_printings/gm) || []).length, 1);
-  assert.ok(/WHERE title='Embroidery — Extra Large Logo \(14k–22k stitches\)';$/m.test(run.stdout), 'XL update');
+  // #8-#11 and Extra Large #19, all by id (2026-11-12): no insert, nothing found by title.
+  assert.strictEqual((run.stdout.match(/^UPDATE lumise_printings SET title=/gm) || []).length, 5);
+  assert.strictEqual((run.stdout.match(/^INSERT INTO lumise_printings/gm) || []).length, 0);
+  assert.ok(!/WHERE title=/m.test(run.stdout), 'nothing written by title');
+  assert.ok(/^UPDATE lumise_printings SET title='Embroidery — Extra Large Logo \(≤7×7 in, 14k–22k stitches\)', calculate='[^']+', updated=NOW\(\) WHERE id=19;$/m.test(run.stdout), 'XL by id');
   assert.ok(!/ WHERE id=1;$/m.test(run.stdout), 'no DTF write');
 });
 
 const xlPrices = () => {
-  const m = run.stdout.match(/^UPDATE lumise_printings SET calculate='([^']+)', updated=NOW\(\) WHERE title='Embroidery — Extra Large Logo/m);
+  const m = run.stdout.match(/^UPDATE lumise_printings SET title='Embroidery — Extra Large Logo[^']*', calculate='([^']+)', updated=NOW\(\) WHERE id=19;$/m);
   assert.ok(m, 'no XL statement');
   const v = dejson(m[1]).values;
   return Object.fromEntries(Object.entries(v[Object.keys(v)[0]]).map(([q, p]) => [q, p.price]));
@@ -95,5 +96,6 @@ test('no logo is cheaper than a DTF main print at the same quantity', () => {
 test('the logo table prints in size order, Extra Large between Large and Full back', () => {
   const rows = run.stdout.split('\n').filter((l) => /^\s+(\d+|NEW)\s+(Small|Medium|Large|Full|Extra)/.test(l))
     .map((l) => l.trim().split(/\s+/)[0]);
-  assert.deepStrictEqual(rows, ['8', '9', '10', 'NEW', '11']);
+  // Extra Large is #19, written by id since 2026-11-12.
+  assert.deepStrictEqual(rows, ['8', '9', '10', '19', '11']);
 });
