@@ -295,7 +295,10 @@ const EMB_INSERTS = [
   /* One band across 14k-22k. It also closes the hole in the vendor sheet:
      Anchorfish prices 14k-18k and 20k-22k but has no 18k-20k column at all, so
      a 19,000-stitch logo had no price anywhere. Priced in EMB_LOGO_PRICES.xl. */
-  { logo: 'xl', title: 'Embroidery — Extra Large Logo (14k–22k stitches)' },
+  /* Sized to the 190 mm hoop (owner, 2026-11-12: "ADD EXTRA LARGE"). `was` is the
+     title it had before, renamed in place so the row (and its products) is kept. */
+  { logo: 'xl', title: 'Embroidery — Extra Large Logo (≤7×7 in, 14k–22k stitches)',
+    was: 'Embroidery — Extra Large Logo (14k–22k stitches)' },
 ];
 
 /* LOGO PRICES, typed (owner, 2026-11-10), lowered to the local market. The old
@@ -402,6 +405,13 @@ const up05 = (n) => Math.ceil(n * 20 - 1e-9) / 20;
  * `active` is only set on insert, so a method the shop has switched on or off
  * by hand keeps that state through a reprice.
  */
+/** Renames a method found by its old title. A plain WHERE: MySQL refuses an UPDATE
+ *  that reads its own table in a subquery (error 1093). If both titles ever exist,
+ *  the read-back after --apply reports two Extra Large rows. */
+function renameMethod(from, to) {
+  return 'UPDATE lumise_printings SET title=' + sq(to) + ' WHERE title=' + sq(from) + ';';
+}
+
 function insertMethod(title, tiers) {
   return 'INSERT INTO lumise_printings (title, active, calculate, thumbnail, upload, description, author, created, updated)\n' +
     '  SELECT ' + sq(title) + ', 0, ' + sq(fixedCalc(tiers)) + ", '', '', '', '', NOW(), NOW()\n" +
@@ -481,6 +491,8 @@ for (const m of EMB_INSERTS.filter((x) => x.logo)) {
   const tiers = tiersFor(m);
   logoExpect.push({ where: 'title=' + sq(m.title), label: m.title, calc: fixedCalc(tiers), byTitle: true });
   logoRows[m.logo] = ['NEW', m, tiers];
+  /* Renamed first, so the insert below finds it and does not add a second row. */
+  if (m.was) stmts.push(renameMethod(m.was, m.title));
   stmts.push(insertMethod(m.title, tiers));
 }
 for (const key of EMB_LOGO_ORDER) {
@@ -623,10 +635,12 @@ if (ONLY_DTF) {
 }
 if (ONLY_EMB_LOGOS) {
   const ids = Object.keys(EMB_METHODS).filter((id) => !EMB_METHODS[id].name);
-  const xl = EMB_INSERTS.filter((m) => m.logo).map((m) => sq(m.title));
-  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')) ||
+  const xlRows = EMB_INSERTS.filter((m) => m.logo);
+  const xl = xlRows.map((m) => sq(m.title));
+  const renames = xlRows.filter((m) => m.was).map((m) => renameMethod(m.was, m.title));
+  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')) || renames.includes(q) ||
     xl.some((t) => q.startsWith('INSERT INTO lumise_printings') && q.includes('WHERE title=' + t + ';')));
-  const want = ids.length + xl.length;
+  const want = ids.length + xl.length + renames.length;
   if (emb.length !== want) { console.error('  --only-emb-logos found ' + emb.length + ' statements, expected ' + want); process.exit(3); }
   stmts.splice(0, stmts.length, ...emb);
 }
