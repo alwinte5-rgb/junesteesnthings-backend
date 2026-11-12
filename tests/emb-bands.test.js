@@ -19,10 +19,11 @@ const prices = (id) => {
 
 test('--only-emb-logos dry run writes the five logo methods and nothing else', () => {
   assert.strictEqual(run.status, 0, run.stderr);
-  // #8-#11 by id, plus Extra Large by title (insert if missing, then update).
-  assert.strictEqual((run.stdout.match(/^UPDATE lumise_printings SET title=/gm) || []).length, 4);
+  // #8-#11 by id, Extra Large renamed in place (2026-11-12), then by title (insert if missing, then update).
+  assert.strictEqual((run.stdout.match(/^UPDATE lumise_printings SET title=/gm) || []).length, 5);
+  assert.ok(/^UPDATE lumise_printings SET title='Embroidery — Extra Large Logo \(≤7×7 in, 14k–22k stitches\)', updated=NOW\(\) WHERE title='Embroidery — Extra Large Logo \(14k–22k stitches\)';$/m.test(run.stdout), 'XL rename');
   assert.strictEqual((run.stdout.match(/^INSERT INTO lumise_printings/gm) || []).length, 1);
-  assert.ok(/WHERE title='Embroidery — Extra Large Logo \(14k–22k stitches\)';$/m.test(run.stdout), 'XL update');
+  assert.ok(/^UPDATE lumise_printings SET calculate='[^']+', updated=NOW\(\) WHERE title='Embroidery — Extra Large Logo \(≤7×7 in, 14k–22k stitches\)';$/m.test(run.stdout), 'XL update');
   assert.ok(!/ WHERE id=1;$/m.test(run.stdout), 'no DTF write');
 });
 

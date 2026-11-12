@@ -409,8 +409,14 @@ const up05 = (n) => Math.ceil(n * 20 - 1e-9) / 20;
  *  that reads its own table in a subquery (error 1093). If both titles ever exist,
  *  the read-back after --apply reports two Extra Large rows. */
 function renameMethod(from, to) {
-  return 'UPDATE lumise_printings SET title=' + sq(to) + ' WHERE title=' + sq(from) + ';';
+  return 'UPDATE lumise_printings SET title=' + sq(to) + ', updated=NOW() WHERE title=' + sq(from) + ';';
 }
+/* The rename statements, tagged as they are made so --only-emb-logos picks them
+   by identity, not by rebuilding the SQL text. */
+const RENAMES = [];
+/* The Extra Large row's id. The designer's product page names it by id (19), so
+   --apply refuses to rename or reprice any other row by title. */
+const XL_ID = 19;
 
 function insertMethod(title, tiers) {
   return 'INSERT INTO lumise_printings (title, active, calculate, thumbnail, upload, description, author, created, updated)\n' +
@@ -492,7 +498,7 @@ for (const m of EMB_INSERTS.filter((x) => x.logo)) {
   logoExpect.push({ where: 'title=' + sq(m.title), label: m.title, calc: fixedCalc(tiers), byTitle: true });
   logoRows[m.logo] = ['NEW', m, tiers];
   /* Renamed first, so the insert below finds it and does not add a second row. */
-  if (m.was) stmts.push(renameMethod(m.was, m.title));
+  if (m.was) { const r = renameMethod(m.was, m.title); RENAMES.push(r); stmts.push(r); }
   stmts.push(insertMethod(m.title, tiers));
 }
 for (const key of EMB_LOGO_ORDER) {
@@ -637,10 +643,9 @@ if (ONLY_EMB_LOGOS) {
   const ids = Object.keys(EMB_METHODS).filter((id) => !EMB_METHODS[id].name);
   const xlRows = EMB_INSERTS.filter((m) => m.logo);
   const xl = xlRows.map((m) => sq(m.title));
-  const renames = xlRows.filter((m) => m.was).map((m) => renameMethod(m.was, m.title));
-  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')) || renames.includes(q) ||
+  const emb = stmts.filter((q) => ids.some((id) => q.endsWith(' WHERE id=' + id + ';')) || RENAMES.includes(q) ||
     xl.some((t) => q.startsWith('INSERT INTO lumise_printings') && q.includes('WHERE title=' + t + ';')));
-  const want = ids.length + xl.length + renames.length;
+  const want = ids.length + xl.length + RENAMES.length;
   if (emb.length !== want) { console.error('  --only-emb-logos found ' + emb.length + ' statements, expected ' + want); process.exit(3); }
   stmts.splice(0, stmts.length, ...emb);
 }
@@ -666,11 +671,25 @@ const run = (url) => {
     if (bad.length) { for (const b of bad) console.error('  !! live ' + b); console.error('  logos would sit under the LIVE DTF — refusing'); process.exit(3); }
   }
 
+  /* Extra Large is found by title. Before anything is written, exactly one row
+     must carry its old or new title, and it must be #XL_ID; otherwise the rename
+     would match nothing and the insert would add a second Extra Large row. */
+  for (const m of EMB_INSERTS.filter((x) => x.logo && x.was)) {
+    let rows;
+    try { rows = mysql(url, 'SELECT id, title FROM lumise_printings WHERE title IN (' + sq(m.was) + ', ' + sq(m.title) + ');', { rows: true }); }
+    catch (e) { console.error('  could not read the Extra Large row (' + e.message + ') — refusing'); process.exit(3); }
+    if (rows.length !== 1 || Number(rows[0].id) !== XL_ID) {
+      console.error('  !! Extra Large: expected one row #' + XL_ID + ' titled "' + m.was + '" or "' + m.title + '", found ' +
+        (rows.length ? rows.map((r) => '#' + r.id + ' ' + r.title).join('; ') : 'none') + ' — refusing, nothing written');
+      process.exit(3);
+    }
+  }
+
   try { backup(url, 'pre-reprice'); }
   catch (e) { console.error('  backup FAILED, refusing to write: ' + e.message); process.exit(2); }
 
   const sql = 'START TRANSACTION;\n' + stmts.join('\n') + '\nCOMMIT;\n' +
-    'SELECT id, title FROM lumise_printings WHERE id IN (7,8,9,10,11,12,15,16,17) ORDER BY id;';
+    'SELECT id, title FROM lumise_printings WHERE id IN (7,8,9,10,11,12,15,16,17,' + XL_ID + ') ORDER BY id;';
   try { mysql(url, sql); }
   catch (e) { console.error(e.message); process.exit(1); }
 
@@ -679,7 +698,7 @@ const run = (url) => {
      here as missing instead of passing silently. */
   /* The write has committed by now, so whatever goes wrong below, the undo
      line is printed before exiting. */
-  const UNDO = '\n  TO UNDO: restore `calculate` from the backup named above.';
+  const UNDO = '\n  TO UNDO: restore `title` and `calculate` from the backup named above (titles changed too).';
   if (!ONLY_DTF) {
     let wrong = 0;
     try {
