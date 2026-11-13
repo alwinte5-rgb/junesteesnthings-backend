@@ -68,4 +68,36 @@ function itemsOf(body) {
   return (Array.isArray(b.items) ? b.items : []).slice(0, 50);
 }
 
-module.exports = { LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf };
+/** Where a lead's reply goes (lead follow-ups, 2026-11-12): lead-<id>@<domain>,
+ *  so an answer to an email sent from the Leads page lands back on that lead. */
+function leadReplyAddress(id, domain) {
+  return `lead-${Number(id)}@${domain}`;
+}
+
+/** The lead id a message was addressed to (lead-<id>@domain), or null. */
+function leadFrom(item, domain) {
+  const boxes = [].concat(item && item.To || [], item && item.Cc || [], item && item.Recipients || []);
+  for (const b of boxes) {
+    const addr = String(typeof b === 'string' ? b : b && b.Address || '').trim().toLowerCase();
+    const at = addr.lastIndexOf('@');
+    if (at < 0 || addr.slice(at + 1) !== domain) continue;
+    const m = addr.slice(0, at).match(/^lead-([1-9][0-9]{0,9})$/);
+    if (m && Number(m[1]) < 2 ** 31) return Number(m[1]);
+  }
+  return null;
+}
+
+/* Subjects mail systems put on automatic answers. Whole phrases only: "Away
+ * game jerseys" or "Delivery status?" from a customer is a real reply. */
+const AUTO_SUBJECT = /^(auto(matic)?[ -]?(reply|response)|autoreply|automatische antwort|automatisch antwoord|out[ -]of[ -](the[ -])?office|ooo\b|undeliverable:|undelivered mail|delivery status notification|mail delivery (failed|subsystem)|returned mail:|autosvar|r[ée]ponse automatique|abwesenheitsnotiz|respuesta autom[aá]tica)/i;
+
+/** An automatic answer (out of office, a bounce), not a person replying. Read
+ *  from the subject (every Re:/Fwd: in front taken off) and the sender, which
+ *  is all a parsed message keeps. */
+function isAutoReply(m) {
+  const subject = String((m && m.subject) || '').replace(/^\s*((re|aw|sv|fwd?|wg|tr)\s*(\[\d+\])?\s*:\s*)+/i, '');
+  const from = String((m && m.from) || '');
+  return AUTO_SUBJECT.test(subject) || /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply)@/i.test(from);
+}
+
+module.exports = { isAutoReply, LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf, leadReplyAddress, leadFrom };

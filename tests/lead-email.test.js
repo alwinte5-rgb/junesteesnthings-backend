@@ -98,7 +98,8 @@ test('the lead text route: staff need full messaging and leads, only body/back a
   assert.match(textRoute, /if \(!marked\) return back\(/);
   assert.match(textRoute, /FRAUD\.mentionsOutsidePayment\(m\.text\)/);
   assert.match(textRoute, /sendCustomerSms\(\{ phone: l\.phone, kind: 'transactional', staffSent: true,/);
-  assert.match(textRoute, /Reply STOP to opt out\./);
+  assert.match(textRoute, /LEADMAIL\.textBody\(words\)/);
+  assert.match(M.textBody('hi'), /^June's Tees: hi jtees\.net Reply STOP to opt out\.$/);
   // Recorded and marked Contacted only after Twilio took it.
   assert.ok(textRoute.indexOf("if (status !== 'sent')") < textRoute.indexOf("INSERT INTO lead_notes"));
 });
@@ -156,16 +157,29 @@ test('first name: cleaned, capitalised, nothing that is not a name', () => {
   assert.match(M.followUp({ name: 'info@x.com' }).body, /^Hi,/);
 });
 
-test('the lead text box renders the templates escaped, asks before replacing, never posts the picker', () => {
+test('the lead text box carries only the name and email flag; the list is written once per page', () => {
   const vm = require('node:vm');
   const grab = (name) => { const a = src.indexOf(`function ${name}(`); return src.slice(a, src.indexOf('\n}\n', a) + 2); };
   const ctx = { LEADMAIL: M, escEmail: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') };
   vm.createContext(ctx);
   vm.runInContext(grab('leadTextBox'), ctx);
-  const html = ctx.leadTextBox({ id: 7, name: "O'Neil <b>", phone: '3125550100' }, '');
-  assert.ok(html.includes('value="Hi O&#39;Neil, sorry we missed your call.'), 'apostrophes are escaped in the value');
-  assert.ok(!html.includes('your email now'), 'no email, no email template');
-  const select = html.slice(html.indexOf('<select'), html.indexOf('>', html.indexOf('<select')));
-  assert.ok(!/\sname=/.test(select), 'the picker has no name, so the route never sees it');
-  assert.match(select, /confirm\('Replace what you have typed/);
+  const html = ctx.leadTextBox({ id: 7, name: "o'neil <b>", phone: '3125550100' }, '');
+  const select = html.slice(html.indexOf('<select'), html.indexOf('</select>'));
+  assert.match(select, /data-first="O&#39;neil"/, 'the name is cleaned and escaped');
+  assert.match(select, /data-email="0"/);
+  assert.ok(!/\sname=/.test(select.slice(0, select.indexOf('>'))), 'the picker has no name, so the route never sees it');
+  assert.ok(!select.includes('sorry we missed'), 'no template text inside the card');
+  assert.match(src, /String\(body\)\.includes\('data-jt-tt'\) \? LEADMAIL\.textTemplatesScript\(\) : ''/);
+});
+
+test('the page script: both sets, keys not text in the options, asks before replacing, no raw <', () => {
+  const js = M.textTemplatesScript();
+  const sets = JSON.parse(js.slice(js.indexOf('var S=') + 6, js.indexOf(';\nfunction fill')));
+  assert.ok(sets.e.some((t) => t.key === 'quote_sent') && !sets.n.some((t) => t.key === 'quote_sent'));
+  assert.ok(sets.e.every((t) => t.text.startsWith('{hi}, ')));
+  assert.match(js, /o\.value=list\[i\]\.key;o\.textContent=list\[i\]\.label/);
+  assert.match(js, /confirm\('Replace what you have typed with this template\?'\)/);
+  assert.ok(!js.replace(/^<script>|<\/script>$/g, '').includes('</'), 'nothing that could close the script early');
+  assert.ok(!js.slice(js.indexOf('var S='), js.indexOf(';\nfunction fill')).includes('<'), 'the data carries no raw <');
+  assert.deepStrictEqual(M.textTemplates({ name: 'ana', email: 'a@b.c' }).map((t) => t.key), sets.e.map((t) => t.key));
 });
