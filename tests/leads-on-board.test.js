@@ -53,14 +53,19 @@ const MATCH = (() => {
 })();
 function leadsDesk(rows) {
   const seen = [];
-  const sandbox = { pool: { query: async (sql) => { seen.push(sql); return { rows: rows.map((r) => ({ ...r })) }; } } };
+  const sandbox = { pool: { query: async (sql) => { seen.push(sql); return { rows: rows.map((r) => ({ ...r })) }; } },
+    LEADFU: require('../tools/lib/lead-followups') };
   vm.createContext(sandbox);
   /* Found by name, whatever its layout, so a reformat reaches the behaviour
      assertions instead of crashing the extraction (Codex #179). */
   const kAt = src.indexOf('const CONTACT_KINDS =');
   assert.notStrictEqual(kAt, -1, 'CONTACT_KINDS is gone: leadsWithStatus reads it');
   const kinds = src.slice(kAt, src.indexOf(';', kAt) + 1);
-  vm.runInContext([MATCH, kinds, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
+  /* The card's last-word subquery (lead follow-ups, 2026-11-12). */
+  const wAt = src.indexOf('const leadLastWordSql =');
+  assert.notStrictEqual(wAt, -1, 'leadLastWordSql is gone: leadsWithStatus reads it');
+  const lastWord = src.slice(wAt, src.indexOf('`;', wAt) + 2);
+  vm.runInContext([MATCH, kinds, lastWord, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
   return { sandbox, seen };
 }
 
