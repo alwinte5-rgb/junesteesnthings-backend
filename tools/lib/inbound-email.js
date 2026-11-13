@@ -68,4 +68,23 @@ function itemsOf(body) {
   return (Array.isArray(b.items) ? b.items : []).slice(0, 50);
 }
 
-module.exports = { LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf };
+/** Where a lead's reply goes (lead follow-ups, 2026-11-12): lead-<id>@<domain>,
+ *  so an answer to an email sent from the Leads page lands back on that lead. */
+function leadReplyAddress(id, domain) {
+  return `lead-${Number(id)}@${domain}`;
+}
+
+/** The lead id a message was addressed to (lead-<id>@domain), or null. */
+function leadFrom(item, domain) {
+  const boxes = [].concat(item && item.To || [], item && item.Cc || [], item && item.Recipients || []);
+  for (const b of boxes) {
+    const addr = String(typeof b === 'string' ? b : b && b.Address || '').trim().toLowerCase();
+    const at = addr.lastIndexOf('@');
+    if (at < 0 || addr.slice(at + 1) !== domain) continue;
+    const m = addr.slice(0, at).match(/^lead-([1-9][0-9]{0,9})$/);
+    if (m && Number(m[1]) < 2 ** 31) return Number(m[1]);
+  }
+  return null;
+}
+
+module.exports = { LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf, leadReplyAddress, leadFrom };

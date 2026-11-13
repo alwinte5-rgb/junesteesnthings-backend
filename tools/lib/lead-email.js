@@ -137,6 +137,13 @@ const TEXT_TEMPLATES = [
     text: (hi) => `${hi}, just checking in. Are you still looking to get this made? We're happy to help whenever you're ready.` },
 ];
 
+/** The templates with "{hi}" where the greeting goes: with an email on the
+ *  lead, or without (the ones about email left out or worded for texts). */
+function textTemplateSet(hasEmail) {
+  return TEXT_TEMPLATES.filter((t) => !t.needsEmail || hasEmail)
+    .map((t) => ({ key: t.key, label: t.label, text: t.text('{hi}', { email: hasEmail }) }));
+}
+
 /** The text templates for one lead: [{ key, label, text }], each with the lead's
  *  first name in it. Ones about email are left out for a lead with no email.
  *  firstName caps the name at 20, and the test holds every template under
@@ -145,8 +152,25 @@ function textTemplates(lead) {
   const l = lead || {};
   const first = firstName(l.name);
   const hi = first ? `Hi ${first}` : 'Hi';
-  return TEXT_TEMPLATES.filter((t) => !t.needsEmail || l.email)
-    .map((t) => ({ key: t.key, label: t.label, text: t.text(hi, l) }));
+  return textTemplateSet(!!l.email).map((t) => ({ ...t, text: t.text.replace('{hi}', hi) }));
 }
 
-module.exports = { firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };
+/** The script that fills every lead text box's template picker on the page
+ *  (select[data-jt-tt], with data-first and data-email), written once per page
+ *  rather than the whole list inside every card. Picking one fills the box,
+ *  asking first when something is already typed. */
+function textTemplatesScript() {
+  const sets = JSON.stringify({ e: textTemplateSet(true), n: textTemplateSet(false) }).replace(/</g, '\\u003c');
+  return `<script>(function(){var S=${sets};
+function fill(sel){if(sel.dataset.jtFilled)return;sel.dataset.jtFilled='1';var list=S[sel.dataset.email==='1'?'e':'n'];
+for(var i=0;i<list.length;i++){var o=document.createElement('option');o.value=list[i].key;o.textContent=list[i].label;sel.appendChild(o);}}
+var all=document.querySelectorAll('select[data-jt-tt]');for(var i=0;i<all.length;i++)fill(all[i]);
+document.addEventListener('change',function(ev){var sel=ev.target;if(!sel||!sel.matches||!sel.matches('select[data-jt-tt]'))return;
+var key=sel.value;sel.selectedIndex=0;if(!key)return;var list=S[sel.dataset.email==='1'?'e':'n'],t=null;
+for(var i=0;i<list.length;i++)if(list[i].key===key)t=list[i];if(!t)return;
+var hi=sel.dataset.first?'Hi '+sel.dataset.first:'Hi',v=t.text.replace('{hi}',hi),box=sel.form&&sel.form.body;if(!box)return;
+if(box.value.trim()&&box.value!==v&&!confirm('Replace what you have typed with this template?'))return;
+box.value=v;box.dispatchEvent(new Event('input'));box.focus();});})();</script>`;
+}
+
+module.exports = { textTemplateSet, textTemplatesScript, firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };
