@@ -44,8 +44,19 @@ function isInbound(note) {
   return !!note && (note.kind === 'text_in' || note.kind === 'email_in');
 }
 
-/* Failed sends in a row before the follow-ups stop for a lead. */
+/* Failed sends in a row, within one round, before the follow-ups stop. */
 const MAX_FAILS = 3;
+
+/** Do the failure counts on the lead belong to the round anchored at `anchor`
+ *  (our last word)? A newer word from either side starts a new round at 0. */
+function sameRound(l, anchor) {
+  return !!l.lead_fu_round_at && ms(l.lead_fu_round_at) >= anchor;
+}
+
+/** Stopped: 3 failed sends in this round. */
+function stopped(l, anchor) {
+  return sameRound(l, anchor) && (l.lead_fu_fails || 0) >= MAX_FAILS;
+}
 
 /** Can anything reach them: an email address or a US phone number. */
 function reachable(l, normalizePhone) {
@@ -61,10 +72,10 @@ function reachable(l, normalizePhone) {
 function decide(l, last, now, normalizePhone) {
   if (!l || l.lead_status !== 'contacted' || l.outcome || l.dismissed_at) return null;
   if (!reachable(l, normalizePhone)) return null;
-  if ((l.lead_fu_fails || 0) >= MAX_FAILS) return null;   // sends kept failing: by hand now
   if (isInbound(last)) return null;   // they wrote last: our move, not a nudge
   const anchor = Math.max(ms(l.first_response_at), ms(last && last.created_at));
   if (!anchor) return null;
+  if (stopped(l, anchor)) return null;   // sends kept failing this round: by hand now
   const fu1 = ms(l.lead_fu1_at), fu2 = ms(l.lead_fu2_at);
   /* Someone wrote after our last follow-up (we answered again): a new round. */
   if (!fu1 || anchor > fu1) {
@@ -111,7 +122,9 @@ ${shop}`,
 function cardLine(l, last, fmt) {
   const fu1 = ms(l.lead_fu1_at), fu2 = ms(l.lead_fu2_at);
   if (l.lead_status !== 'contacted') return '';
-  if ((l.lead_fu_fails || 0) >= MAX_FAILS) return 'Automatic follow-ups stopped: the sends kept failing. Follow up by hand.';
+  if (stopped(l, Math.max(ms(l.first_response_at), ms(last && last.created_at)))) {
+    return 'Automatic follow-ups stopped: the sends kept failing. Follow up by hand.';
+  }
   if (!fu1) return '';
   if (isInbound(last) && ms(last.created_at) > fu1) return 'They replied after the automatic follow-up · follow-ups paused';
   if (Math.max(ms(l.first_response_at), ms(last && last.created_at)) > fu1) return '';
@@ -119,5 +132,5 @@ function cardLine(l, last, fmt) {
   return `Follow-up 1 sent ${fmt(fu1)} · follow-up 2 ${fmt(fu1 + SECOND_AFTER)} if no reply`;
 }
 
-module.exports = { CONVERSATION_KINDS, MAX_FAILS, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
+module.exports = { CONVERSATION_KINDS, MAX_FAILS, sameRound, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
   FIRST_AFTER, SECOND_AFTER, LET_GO_AFTER, OLDEST };

@@ -87,4 +87,13 @@ function leadFrom(item, domain) {
   return null;
 }
 
-module.exports = { LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf, leadReplyAddress, leadFrom };
+/** An automatic answer (out of office, a bounce), not a person replying. Read
+ *  from the subject and the sender, which is all a parsed message keeps. */
+function isAutoReply(m) {
+  const subject = String((m && m.subject) || '');
+  const from = String((m && m.from) || '');
+  return /^(auto(matic)?[ -]?(reply|response)|out of (the )?office|ooo\b|away\b|undeliver|delivery status|mail delivery|returned mail|autosvar|r[ée]ponse automatique|abwesenheit)/i.test(subject.replace(/^(re|aw|fwd?):\s*/i, ''))
+    || /^(mailer-daemon|postmaster|no-?reply)@/i.test(from);
+}
+
+module.exports = { isAutoReply, LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf, leadReplyAddress, leadFrom };
