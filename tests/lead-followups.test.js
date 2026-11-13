@@ -35,11 +35,14 @@ test('follow-up 2 three days after the first, then let go three days after that'
 
 test('their reply stops it: the next word is ours', () => {
   const textBack = { kind: 'text', body: 'Yes still interested', created_at: ago(3) };
-  const emailBack = { kind: 'email', body: 'They emailed: Re: shirts\nyes', created_at: ago(3) };
+  const emailBack = { kind: 'email_in', body: 'They emailed: Re: shirts\nyes', created_at: ago(3) };
   assert.strictEqual(F.decide(lead({ first_response_at: ago(5) }), textBack, NOW, phone), null);
   assert.strictEqual(F.decide(lead({ first_response_at: ago(5), lead_fu1_at: ago(4) }), emailBack, NOW, phone), null);
   assert.ok(!F.isInbound({ kind: 'text', body: 'You texted: hi' }));
+  assert.ok(!F.isInbound({ kind: 'text', body: 'You replied: Sure, how many?' }), "the owner's relayed reply is the shop's word");
   assert.ok(!F.isInbound({ kind: 'email', body: 'Emailed "x":\ny' }));
+  assert.ok(F.isInbound({ kind: 'email_in', body: 'They emailed: Re\nyes' }));
+  assert.strictEqual(F.decide(lead({ first_response_at: ago(5) }), { kind: 'text', body: 'You replied: ok', created_at: ago(3) }, NOW, phone).step, 'first');
 });
 
 test('we answered again after a follow-up: a new round, from our answer', () => {
@@ -69,11 +72,18 @@ test('the messages: first name, no prices, texts fit, the second says it closes'
   assert.ok(sms.length <= 300);
 });
 
-test('the card line says what went and what is next', () => {
+test('the card line says what went and what is next, and not what will not happen', () => {
   const fmt = (t) => new Date(t).toISOString().slice(5, 10);
-  assert.strictEqual(F.cardLine(lead(), fmt), '');
-  assert.match(F.cardLine(lead({ lead_fu1_at: ago(1) }), fmt), /^Follow-up 1 sent 11-19 · follow-up 2 11-22 if no reply$/);
-  assert.match(F.cardLine(lead({ lead_fu1_at: ago(4), lead_fu2_at: ago(1) }), fmt), /^Follow-up 2 sent 11-19 · let go 11-22 if no reply$/);
+  assert.strictEqual(F.cardLine(lead(), null, fmt), '');
+  assert.match(F.cardLine(lead({ lead_fu1_at: ago(1) }), null, fmt), /^Follow-up 1 sent 11-19 · follow-up 2 11-22 if no reply$/);
+  assert.match(F.cardLine(lead({ first_response_at: ago(7), lead_fu1_at: ago(4), lead_fu2_at: ago(1) }), null, fmt), /^Follow-up 2 sent 11-19 · let go 11-22 if no reply$/);
+  assert.match(F.cardLine(lead({ first_response_at: ago(6), lead_fu1_at: ago(3) }), { kind: 'text', body: 'yes', created_at: ago(2) }, fmt), /They replied .* paused/);
+  assert.strictEqual(F.cardLine(lead({ first_response_at: ago(8), lead_fu1_at: ago(5) }), ours(1), fmt), '', 'we answered again: the old round is not shown');
+});
+
+test('internal notes are not the conversation', () => {
+  assert.ok(!F.CONVERSATION_KINDS.includes('note'));
+  assert.ok(F.CONVERSATION_KINDS.includes('email_in'));
 });
 
 test('lead reply addresses round-trip and refuse anything else', () => {
@@ -85,24 +95,36 @@ test('lead reply addresses round-trip and refuse anything else', () => {
   }
 });
 
-test('the job: claims before sending, re-checks nobody wrote, marks its own notes auto, texts reach the lead again', () => {
+test('the job: narrow query, claims before sending, conversation only, auto notes, retries a failed send', () => {
   const job = src.slice(src.indexOf('async function sendLeadFollowUps('), src.indexOf('/** The leads nobody has answered'));
-  assert.match(job, /WHERE submission_id = ANY\(\$1\) AND NOT auto/);
-  assert.match(job, /NOT EXISTS \(SELECT 1 FROM lead_notes n WHERE n\.submission_id = submissions\.id AND NOT n\.auto\s+AND n\.created_at > \$2::timestamptz \+ INTERVAL '1 millisecond'\)/);
+  assert.match(job, /\$\{leadLastWordSql\(1\)\} AS last_word/);
+  assert.match(job, /> NOW\(\) - INTERVAL '15 days'/, 'only leads with something in the last 15 days');
+  assert.match(job, /NOT EXISTS \(SELECT 1 FROM quotes q/);
+  assert.match(job, /AND n\.kind = ANY\(\$3\) AND n\.created_at > \$2::timestamptz \+ INTERVAL '1 millisecond'/);
   assert.ok(job.indexOf('UPDATE submissions SET lead_fu1_at = NOW()') < job.indexOf('sendEmail('), 'claimed before the email');
   assert.ok(job.indexOf('UPDATE submissions SET lead_fu1_at = NOW()') < job.indexOf('sendCustomerSms('), 'claimed before the text');
   assert.match(job, /isUnsubscribed\(email\)/);
   assert.match(job, /`You texted: \$\{msg\.text\}`/);
-  for (const m of job.match(/INSERT INTO lead_notes[^`]*/g)) assert.match(m, /auto\) VALUES|TRUE/, m);
+  for (const m of job.match(/INSERT INTO lead_notes[^`]*/g)) assert.match(m, /TRUE/, m);
   assert.match(job, /outcome = 'no_reply'/);
+  assert.match(job, /if \(failed && c < 2\) \{[\s\S]*?UPDATE submissions SET lead_fu1_at = \$2, lead_fu2_at = \$3 WHERE id = \$1/, 'a failed send hands the step back');
   assert.match(src, /if \(inTextingHours\(\)\) \{[\s\S]*?await step\('lead follow-ups', sendLeadFollowUps\);[\s\S]*?\n    \}/);
   assert.match(src, /ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT FALSE/);
+  assert.match(src, /const body = LEADMAIL\.textBody\(words\);/, 'hand texts and follow-ups share one wrapper');
+  assert.strictEqual(F.smsBody, require('../tools/lib/lead-email').textBody);
 });
 
-test('an email reply lands on the lead, once', () => {
+test('an email reply lands on the lead: address first, sender must match, once per message, let-go reopened', () => {
   const keep = src.slice(src.indexOf('async function keepInboundEmail('), src.indexOf('const recentInbound = new Set();'));
-  assert.match(keep, /INBOUND\.leadFrom\(m\.raw, INBOUND_DOMAIN\)/);
-  assert.match(keep, /`They emailed: /);
-  assert.match(keep, /WHERE NOT EXISTS \(SELECT 1 FROM lead_notes WHERE submission_id = \$1 AND kind = 'email' AND body = \$2::text/);
+  assert.ok(keep.indexOf('INBOUND.leadFrom(m.raw, INBOUND_DOMAIN)') < keep.indexOf("SELECT code FROM quotes WHERE lower(email) = $1"), 'the lead address beats an old job by sender');
+  assert.match(keep, /WHERE id = \$1 AND lower\(trim\(email\)\) = \$2/, 'only from the lead\'s own address');
+  assert.match(keep, /VALUES \(\$1, 'email_in', \$2, \$3\)\s+ON CONFLICT \(inbound_id\) WHERE inbound_id IS NOT NULL DO NOTHING/);
+  assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS lead_notes_inbound_once ON lead_notes \(inbound_id\) WHERE inbound_id IS NOT NULL/);
+  assert.match(keep, /dismiss_reason === LEADFU\.LET_GO_REASON/);
   assert.match(src, /replyTo: inboundReady \? INBOUND\.leadReplyAddress\(id, INBOUND_DOMAIN\) : undefined/);
+});
+
+test('Ask Claude reads their replies as theirs', () => {
+  assert.match(src, /inbound: LEADFU\.isInbound\(n\)/);
+  assert.match(src, /const lastOut = notes\.find\(\(n\) => CONTACT_KINDS\.includes\(n\.kind\) && !LEADFU\.isInbound\(n\)\);/);
 });

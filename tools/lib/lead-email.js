@@ -115,6 +115,13 @@ function cleanText(body) {
   return { text, dropped: /[^\x20-\x7E]/.test(folded) };
 }
 
+/** A text to a lead as it goes out: "June's Tees: <words> jtees.net Reply STOP
+ *  to opt out." The site link is added unless the words already carry one. One
+ *  wrapper for the lead's "Text them" box and the automatic follow-ups. */
+function textBody(words) {
+  return `June's Tees: ${words}${/https?:\/\/|jtees\.net/i.test(words) ? '' : ' jtees.net'} Reply STOP to opt out.`;
+}
+
 /* Ready-made texts for the lead's text box (owner, 2026-11-12: "make message
  * templates for people who send us messages so I can respond back"). Picking
  * one fills the box with the lead's first name in it, to edit before sending.
@@ -173,4 +180,4 @@ if(box.value.trim()&&box.value!==v&&!confirm('Replace what you have typed with t
 box.value=v;box.dispatchEvent(new Event('input'));box.focus();});})();</script>`;
 }
 
-module.exports = { textTemplateSet, textTemplatesScript, firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };
+module.exports = { textBody, textTemplateSet, textTemplatesScript, firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };

@@ -32,13 +32,22 @@ const LET_GO_REASON = 'No reply after two follow-ups';
 
 const ms = (d) => (d ? new Date(d).getTime() : 0);
 
+/* The note kinds that are a conversation with the customer, either way. An
+ * internal note (kind 'note') is not: a helper writing "left voicemail" did
+ * not say anything to them. 'email_in' is their email reply (keepInboundEmail). */
+const CONVERSATION_KINDS = ['call', 'email', 'text', 'chat', 'social', 'email_in'];
+
+/* Text notes the SHOP wrote: from the lead's box or a follow-up ("You texted:"),
+ * or the owner's reply relayed from her phone ("You replied:"). Every other text
+ * note on a lead is the customer's own text. */
+const SHOP_TEXT = /^You (texted|replied):/;
+
 /** A note the customer wrote (their text back, or their email), as opposed to
  *  something the shop did or wrote down. */
 function isInbound(note) {
   if (!note) return false;
-  const body = String(note.body || '');
-  if (note.kind === 'text') return !body.startsWith('You texted:');
-  if (note.kind === 'email') return body.startsWith('They emailed:');
+  if (note.kind === 'email_in') return true;
+  if (note.kind === 'text') return !SHOP_TEXT.test(String(note.body || ''));
   return false;
 }
 
@@ -49,7 +58,7 @@ function reachable(l, normalizePhone) {
 
 /**
  * What is due for one lead at `now`: 'first', 'second', 'let_go' or null.
- * `last` is the newest note on the lead that a person made or received (not
+ * `last` is the newest conversation note on the lead (CONVERSATION_KINDS, not
  * one of ours from this file): { kind, body, created_at } or null.
  * `anchor` in the answer is our last word, which the claim checks again.
  */
@@ -70,11 +79,8 @@ function decide(l, last, now, normalizePhone) {
   return now - fu2 >= LET_GO_AFTER ? { step: 'let_go', anchor } : null;
 }
 
-/** "June's Tees: <words> jtees.net Reply STOP to opt out.", as the lead's
- *  "Text them" box sends it. */
-function smsBody(words) {
-  return `June's Tees: ${words}${/https?:\/\/|jtees\.net/i.test(words) ? '' : ' jtees.net'} Reply STOP to opt out.`;
-}
+/** The text as it goes out: the same wrapper as the lead's "Text them" box. */
+const smsBody = LEADMAIL.textBody;
 
 /** The text and the email for follow-up 1 or 2. */
 function messages(step, l, { signer = 'June', shop = "June's Tees" } = {}) {
@@ -101,13 +107,18 @@ ${shop}`,
   };
 }
 
-/** "Follow-up 1 sent Nov 14 · next Nov 17", for the lead's card; '' when none. */
-function cardLine(l, fmt) {
+/** "Follow-up 1 sent Nov 14 · follow-up 2 Nov 17 if no reply", for the lead's
+ *  card; '' when no round is under way. `last` is the newest conversation note,
+ *  as decide() reads it: a reply from them pauses the round, and our own word
+ *  after a follow-up starts a new one, so the old dates are not shown. */
+function cardLine(l, last, fmt) {
   const fu1 = ms(l.lead_fu1_at), fu2 = ms(l.lead_fu2_at);
   if (!fu1 || l.lead_status !== 'contacted') return '';
+  if (isInbound(last) && ms(last.created_at) > fu1) return 'They replied after the automatic follow-up · follow-ups paused';
+  if (Math.max(ms(l.first_response_at), ms(last && last.created_at)) > fu1) return '';
   if (fu2) return `Follow-up 2 sent ${fmt(fu2)} · let go ${fmt(fu2 + LET_GO_AFTER)} if no reply`;
   return `Follow-up 1 sent ${fmt(fu1)} · follow-up 2 ${fmt(fu1 + SECOND_AFTER)} if no reply`;
 }
 
-module.exports = { decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
+module.exports = { CONVERSATION_KINDS, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
   FIRST_AFTER, SECOND_AFTER, LET_GO_AFTER, OLDEST };

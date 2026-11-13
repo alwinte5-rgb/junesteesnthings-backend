@@ -98,7 +98,8 @@ test('the lead text route: staff need full messaging and leads, only body/back a
   assert.match(textRoute, /if \(!marked\) return back\(/);
   assert.match(textRoute, /FRAUD\.mentionsOutsidePayment\(m\.text\)/);
   assert.match(textRoute, /sendCustomerSms\(\{ phone: l\.phone, kind: 'transactional', staffSent: true,/);
-  assert.match(textRoute, /Reply STOP to opt out\./);
+  assert.match(textRoute, /LEADMAIL\.textBody\(words\)/);
+  assert.match(M.textBody('hi'), /^June's Tees: hi jtees\.net Reply STOP to opt out\.$/);
   // Recorded and marked Contacted only after Twilio took it.
   assert.ok(textRoute.indexOf("if (status !== 'sent')") < textRoute.indexOf("INSERT INTO lead_notes"));
 });
