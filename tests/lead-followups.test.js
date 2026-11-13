@@ -126,9 +126,9 @@ test('the job: narrow query, claims before sending, conversation only, auto note
   for (const m of job.match(/INSERT INTO lead_notes[^`]*/g)) assert.match(m, /TRUE/, m);
   assert.match(job, /outcome = 'no_reply'/);
   assert.match(job, /lead_fu_fails = CASE WHEN lead_fu_round_at = \$2 THEN lead_fu_fails \+ 1 ELSE 1 END, lead_fu_round_at = \$2,[\s\S]*?RETURNING lead_fu_fails/, 'failures counted per round, the count read back');
-  assert.match(job, /AND s\.first_response_at <= s\.lead_fu_round_at \+ INTERVAL '1 millisecond'/, 'the same round as LEADFU.stopped');
+  assert.ok(!/lead_fu_fails >= /.test(job), 'decide() is the one gate for stopped');
+  assert.match(job, /if \(!f\) continue;/, 'a count that found no row is not "stopped"');
   assert.match(job, /'lead_fu1_at = \$3, lead_fu2_at = \$4'/, 'a failed send hands the step back');
-  assert.match(job, /AND NOT \(s\.lead_fu_fails >= \$2 AND s\.lead_fu_round_at IS NOT NULL/, 'stopped leads are not even fetched');
   assert.ok(!/LIKE \$2/.test(job), 'no counting by note wording');
   assert.match(job, /AND \$\{LEAD_QUOTE_LIVE\}\)/, 'one rule for a live quote');
   assert.match(src, /if \(inTextingHours\(\)\) \{[\s\S]*?await step\('lead follow-ups', sendLeadFollowUps\);[\s\S]*?\n    \}/);
@@ -141,7 +141,7 @@ test('an email reply lands on the lead: address first, sender must match, once p
   const keep = src.slice(src.indexOf('async function keepInboundEmail('), src.indexOf('const recentInbound = new Set();'));
   assert.ok(keep.indexOf('INBOUND.leadFrom(m.raw, INBOUND_DOMAIN)') < keep.indexOf("SELECT code FROM quotes WHERE lower(email) = $1"), 'the lead address beats an old job by sender');
   assert.match(keep, /if \(rows\.length && !autoReply\) \{\s+if \(m\.from && rows\[0\]\.email === m\.from\) leadRow = rows\[0\];\s+else otherSender = byAddr;/, 'only from the lead\'s own address; otherwise told, not misfiled');
-  assert.match(keep, /if \(!quote && !byAddr && !autoReply && m\.from\) \{\s+const \{ rows \} = await pool\.query\(\s+`SELECT code FROM quotes/, 'mail to a lead address is never filed on a job; auto-replies never by sender');
+  assert.match(keep, /if \(!quote && !leadRow && !otherSender && !autoReply && m\.from\) \{\s+const \{ rows \} = await pool\.query\(\s+`SELECT code FROM quotes/, 'mail to a lead is never filed on a job; auto-replies never by sender; a dead lead address falls back');
   assert.match(keep, /!quote && !leadRow && !otherSender && !autoReply && m\.from/);
   assert.match(keep, /const autoReply = INBOUND\.isAutoReply\(m\);/);
   assert.match(keep, /AND \(dismissed_at IS NULL OR dismiss_reason = \$2\)/, 'a plain email reopens a let-go lead too');
@@ -158,10 +158,11 @@ test('Ask Claude reads their replies as theirs', () => {
 
 test('auto-replies and bounces are not a person answering', () => {
   for (const [subject, from] of [['Automatic reply: Following up', 'a@b.c'], ['Out of Office', 'a@b.c'], ['RE: Out of office until Monday', 'a@b.c'],
-    ['RE: RE: Automatic reply: Following up', 'a@b.c'], ['AW: Re: Abwesenheitsnotiz', 'a@b.c'], ['Undeliverable: shirts', 'a@b.c'], ['hello', 'mailer-daemon@x.com']]) {
+    ['RE: RE: Automatic reply: Following up', 'a@b.c'], ['AW: Re: Abwesenheitsnotiz', 'a@b.c'], ['Undeliverable: shirts', 'a@b.c'], ['hello', 'mailer-daemon@x.com'],
+    ['Automatische Antwort: Following up', 'a@b.c'], ['Automatisch antwoord: x', 'a@b.c'], ['OOO until Monday', 'a@b.c'], ['hi', 'no-reply@x.com']]) {
     assert.ok(INBOUND.isAutoReply({ subject, from }), subject);
   }
-  for (const subject of ['Re: shirts', 'Awesome thanks', 'Yes!', 'Away game jerseys, yes go ahead', 'Delivery status?', 'Out of stock?']) {
+  for (const subject of ['Re: shirts', 'Awesome thanks', 'Yes!', 'Away game jerseys, yes go ahead', 'Delivery status?', 'Out of stock?', 'Oooh nice shirts']) {
     assert.ok(!INBOUND.isAutoReply({ subject, from: 'a@b.c' }), subject);
   }
 });
@@ -172,6 +173,8 @@ test('a text back to a lead the follow-ups let go reopens it; old customer texts
   assert.match(ttl, /\[digits, LEADFU\.LET_GO_REASON\]/);
   assert.match(ttl, /SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL\s+WHERE id = \$1 AND dismiss_reason = \$2/);
   assert.match(src, /WITH claim AS \(INSERT INTO once_fixes \(name\) VALUES \('lead-notes-text-in'\) ON CONFLICT DO NOTHING RETURNING 1\)\s+UPDATE lead_notes SET kind = 'text_in' WHERE EXISTS \(SELECT 1 FROM claim\)/, 'the backfill runs exactly once, at deploy');
-  assert.match(src, /alertShop\('A lead the follow-ups let go texted back'/, 'the shop is told');
+  assert.match(src, /return \{ lead: open\[0\]\.id, reopened: back\.rowCount > 0 \};/);
+  assert.match(src, /lead\.reopened \? 'lead L' \+ Number\(lead\.lead\) \+ ', let go by the follow-ups, back on Leads'/, 'the owner\'s forward says so');
+  assert.ok(!/lead_fu_round_at = first_response_at/.test(src), 'no round backfill');
   assert.match(src, /text_in: 'Their text', email_in: 'Their email'/, 'the shop can log their reply by hand');
 });

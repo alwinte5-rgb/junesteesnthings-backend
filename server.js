@@ -2087,9 +2087,6 @@ async function initStaffTables() {
     `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('lead-notes-text-in') ON CONFLICT DO NOTHING RETURNING 1)
      UPDATE lead_notes SET kind = 'text_in' WHERE EXISTS (SELECT 1 FROM claim) AND kind = 'text' AND NOT auto
         AND staff_id IS NULL AND body NOT LIKE 'You texted:%' AND body NOT LIKE 'You replied:%'`,
-    /* A lead stopped after failed sends before rounds were recorded: its round
-       is the shop's first answer, so it stays stopped until someone writes. */
-    'UPDATE submissions SET lead_fu_round_at = first_response_at WHERE lead_fu_fails > 0 AND lead_fu_round_at IS NULL',
     /* A cash or Zelle payment a helper recorded waits for the owner's
        "Confirm received" before it counts for commission (tools/lib/fraud-signals.js).
        recorded_by is the staff id, NULL meaning the owner. */
@@ -4921,17 +4918,12 @@ async function textToLead(from, text, sid) {
     /* Let go by the follow-ups and now texting back: on Leads again. */
     const back = await pool.query(`UPDATE submissions SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
                        WHERE id = $1 AND dismiss_reason = $2`, [open[0].id, LEADFU.LET_GO_REASON]);
-    if (back.rowCount) {
-      alertShop('A lead the follow-ups let go texted back',
-        `<p>They texted: <b>${escEmail(String(text).slice(0, 500))}</b></p>
-         <p>Their lead is back on Leads. <a href="${PUBLIC_BASE_URL}/admin/leads#lead-${open[0].id}">Open it</a>.</p>`)
-        .catch((e) => console.error('lead reopen alert failed:', e.message));
-    }
     /* 'text_in': their text, as 'email_in' is their email (lead follow-ups,
        2026-11-12). A text the shop logs or sends stays 'text'. */
     await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text_in', $2)`,
       [open[0].id, String(text).slice(0, 2000)]);
-    return { lead: open[0].id };
+    /* reopened: the owner's forward of this text says the lead is back. */
+    return { lead: open[0].id, reopened: back.rowCount > 0 };
   }
   /* Their name, if they have ever given it to us under this number. */
   const { rows: known } = await pool.query(
@@ -5169,7 +5161,8 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
           .then((r) => (r.rows[0] && r.rows[0].name) || '').catch(() => '') : '';
         const link = lead.quote ? `${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(lead.quote)}#messages`
           : lead.lead ? `${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}` : '';
-        const tag = lead.quote ? lead.quote : lead.lead ? 'new enquiry L' + Number(lead.lead) : 'new enquiry';
+        const tag = lead.quote ? lead.quote : lead.reopened ? 'lead L' + Number(lead.lead) + ', let go by the follow-ups, back on Leads'
+          : lead.lead ? 'new enquiry L' + Number(lead.lead) : 'new enquiry';
         const sent = await sendOwnerSms(`Text from ${smsPlain(who, 40) || from}${who ? ' ' + from : ''} (${tag}): ` +
           `"${smsPlain(said, 400)}" Reply here to answer them.${link ? ' ' + link : ''}`, pictures)
           .catch((e) => { console.error('text forward to owner failed:', e.message); reportError('twilio:forward', e).catch(() => {}); return false; });
@@ -5304,7 +5297,8 @@ async function keepInboundEmail(m) {
     /* From another address (their work email, a corrected typo, or a stranger):
        not put on the lead, and not filed on an old job either: it was written
        to the lead. The shop is told which lead and decides. An auto-reply is
-       neither: it only reaches the shop's inbox. */
+       neither: it only reaches the shop's inbox. A lead address that matches no
+       lead (deleted, mangled) falls through to the sender's job as before. */
     if (rows.length && !autoReply) {
       if (m.from && rows[0].email === m.from) leadRow = rows[0];
       else otherSender = byAddr;
@@ -5312,7 +5306,7 @@ async function keepInboundEmail(m) {
   }
   /* Written to the shop's own address by an old email, or the code was
      mangled: their latest job from the last four months, by email address. */
-  if (!quote && !byAddr && !autoReply && m.from) {
+  if (!quote && !leadRow && !otherSender && !autoReply && m.from) {
     const { rows } = await pool.query(
       `SELECT code FROM quotes WHERE lower(email) = $1 AND created_at > NOW() - INTERVAL '120 days'
         ORDER BY created_at DESC LIMIT 1`, [m.from]);
@@ -28240,12 +28234,8 @@ async function sendLeadFollowUps(now = Date.now()) {
                        s.first_response_at)) > NOW() - INTERVAL '15 days'
         AND NOT EXISTS (SELECT 1 FROM quotes q WHERE (q.from_submission_id = s.id OR (${LEAD_QUOTE_MATCH}))
                            AND ${LEAD_QUOTE_LIVE})
-        -- stopped after repeated failed sends, and nobody has written since
-        AND NOT (s.lead_fu_fails >= $2 AND s.lead_fu_round_at IS NOT NULL
-                 AND s.first_response_at <= s.lead_fu_round_at + INTERVAL '1 millisecond'
-                 AND NOT EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND NOT n.auto AND n.kind = ANY($1)
-                                    AND n.created_at > s.lead_fu_round_at + INTERVAL '1 millisecond'))`,
-    [LEADFU.CONVERSATION_KINDS, LEADFU.MAX_FAILS]);
+`,
+    [LEADFU.CONVERSATION_KINDS]);
   const done = { first: 0, second: 0, let_go: 0, retry: 0 };
   for (const row of leads) {
     const l = { ...row, lead_status: 'contacted' };
@@ -28333,7 +28323,8 @@ async function sendLeadFollowUps(now = Date.now()) {
           SET lead_fu_fails = CASE WHEN lead_fu_round_at = $2 THEN lead_fu_fails + 1 ELSE 1 END, lead_fu_round_at = $2,
               ${n === 1 ? 'lead_fu1_at = $3, lead_fu2_at = $4' : 'lead_fu2_at = NULL'}
         WHERE id = $1 RETURNING lead_fu_fails`, n === 1 ? [l.id, anchor, l.lead_fu1_at, l.lead_fu2_at] : [l.id, anchor]);
-      fails = f ? f.lead_fu_fails : LEADFU.MAX_FAILS;
+      if (!f) continue;   // the lead is gone: nothing to count or note
+      fails = f.lead_fu_fails;
       done.retry++;
     }
     await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, auto) VALUES ($1, 'note', $2, TRUE)`,
