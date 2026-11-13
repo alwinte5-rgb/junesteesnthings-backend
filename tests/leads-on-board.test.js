@@ -65,7 +65,10 @@ function leadsDesk(rows) {
   const wAt = src.indexOf('const leadLastWordSql =');
   assert.notStrictEqual(wAt, -1, 'leadLastWordSql is gone: leadsWithStatus reads it');
   const lastWord = src.slice(wAt, src.indexOf('`;', wAt) + 2);
-  vm.runInContext([MATCH, kinds, lastWord, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
+  const liveAt = src.indexOf('const LEAD_QUOTE_LIVE =');
+  assert.notStrictEqual(liveAt, -1, 'LEAD_QUOTE_LIVE is gone: leadsWithStatus reads it');
+  const live = src.slice(liveAt, src.indexOf('`;', liveAt) + 2);
+  vm.runInContext([live, MATCH, kinds, lastWord, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
   return { sandbox, seen };
 }
 

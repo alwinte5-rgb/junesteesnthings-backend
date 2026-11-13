@@ -34,22 +34,18 @@ const ms = (d) => (d ? new Date(d).getTime() : 0);
 
 /* The note kinds that are a conversation with the customer, either way. An
  * internal note (kind 'note') is not: a helper writing "left voicemail" did
- * not say anything to them. 'email_in' is their email reply (keepInboundEmail). */
-const CONVERSATION_KINDS = ['call', 'email', 'text', 'chat', 'social', 'email_in'];
+ * not say anything to them. 'text_in' and 'email_in' are THEIR text and email
+ * (textToLead, keepInboundEmail); every other kind is the shop's. */
+const CONVERSATION_KINDS = ['call', 'email', 'text', 'chat', 'social', 'text_in', 'email_in'];
 
-/* Text notes the SHOP wrote: from the lead's box or a follow-up ("You texted:"),
- * or the owner's reply relayed from her phone ("You replied:"). Every other text
- * note on a lead is the customer's own text. */
-const SHOP_TEXT = /^You (texted|replied):/;
-
-/** A note the customer wrote (their text back, or their email), as opposed to
- *  something the shop did or wrote down. */
+/** A note the customer wrote (their text back, or their email). Told by its
+ *  kind, never by how the text starts. */
 function isInbound(note) {
-  if (!note) return false;
-  if (note.kind === 'email_in') return true;
-  if (note.kind === 'text') return !SHOP_TEXT.test(String(note.body || ''));
-  return false;
+  return !!note && (note.kind === 'text_in' || note.kind === 'email_in');
 }
+
+/* Failed sends in a row before the follow-ups stop for a lead. */
+const MAX_FAILS = 3;
 
 /** Can anything reach them: an email address or a US phone number. */
 function reachable(l, normalizePhone) {
@@ -65,6 +61,7 @@ function reachable(l, normalizePhone) {
 function decide(l, last, now, normalizePhone) {
   if (!l || l.lead_status !== 'contacted' || l.outcome || l.dismissed_at) return null;
   if (!reachable(l, normalizePhone)) return null;
+  if ((l.lead_fu_fails || 0) >= MAX_FAILS) return null;   // sends kept failing: by hand now
   if (isInbound(last)) return null;   // they wrote last: our move, not a nudge
   const anchor = Math.max(ms(l.first_response_at), ms(last && last.created_at));
   if (!anchor) return null;
@@ -113,12 +110,14 @@ ${shop}`,
  *  after a follow-up starts a new one, so the old dates are not shown. */
 function cardLine(l, last, fmt) {
   const fu1 = ms(l.lead_fu1_at), fu2 = ms(l.lead_fu2_at);
-  if (!fu1 || l.lead_status !== 'contacted') return '';
+  if (l.lead_status !== 'contacted') return '';
+  if ((l.lead_fu_fails || 0) >= MAX_FAILS) return 'Automatic follow-ups stopped: the sends kept failing. Follow up by hand.';
+  if (!fu1) return '';
   if (isInbound(last) && ms(last.created_at) > fu1) return 'They replied after the automatic follow-up · follow-ups paused';
   if (Math.max(ms(l.first_response_at), ms(last && last.created_at)) > fu1) return '';
   if (fu2) return `Follow-up 2 sent ${fmt(fu2)} · let go ${fmt(fu2 + LET_GO_AFTER)} if no reply`;
   return `Follow-up 1 sent ${fmt(fu1)} · follow-up 2 ${fmt(fu1 + SECOND_AFTER)} if no reply`;
 }
 
-module.exports = { CONVERSATION_KINDS, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
+module.exports = { CONVERSATION_KINDS, MAX_FAILS, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
   FIRST_AFTER, SECOND_AFTER, LET_GO_AFTER, OLDEST };

@@ -34,12 +34,14 @@ test('follow-up 2 three days after the first, then let go three days after that'
 });
 
 test('their reply stops it: the next word is ours', () => {
-  const textBack = { kind: 'text', body: 'Yes still interested', created_at: ago(3) };
+  const textBack = { kind: 'text_in', body: 'Yes still interested', created_at: ago(3) };
   const emailBack = { kind: 'email_in', body: 'They emailed: Re: shirts\nyes', created_at: ago(3) };
   assert.strictEqual(F.decide(lead({ first_response_at: ago(5) }), textBack, NOW, phone), null);
   assert.strictEqual(F.decide(lead({ first_response_at: ago(5), lead_fu1_at: ago(4) }), emailBack, NOW, phone), null);
   assert.ok(!F.isInbound({ kind: 'text', body: 'You texted: hi' }));
   assert.ok(!F.isInbound({ kind: 'text', body: 'You replied: Sure, how many?' }), "the owner's relayed reply is the shop's word");
+  assert.ok(!F.isInbound({ kind: 'text', body: 'Sent the size chart' }), 'a text the shop logs by hand is the shop\'s, whatever it says');
+  assert.ok(F.isInbound({ kind: 'text_in', body: 'You texted me?' }), 'their text is theirs, whatever it says');
   assert.ok(!F.isInbound({ kind: 'email', body: 'Emailed "x":\ny' }));
   assert.ok(F.isInbound({ kind: 'email_in', body: 'They emailed: Re\nyes' }));
   assert.strictEqual(F.decide(lead({ first_response_at: ago(5) }), { kind: 'text', body: 'You replied: ok', created_at: ago(3) }, NOW, phone).step, 'first');
@@ -77,13 +79,21 @@ test('the card line says what went and what is next, and not what will not happe
   assert.strictEqual(F.cardLine(lead(), null, fmt), '');
   assert.match(F.cardLine(lead({ lead_fu1_at: ago(1) }), null, fmt), /^Follow-up 1 sent 11-19 · follow-up 2 11-22 if no reply$/);
   assert.match(F.cardLine(lead({ first_response_at: ago(7), lead_fu1_at: ago(4), lead_fu2_at: ago(1) }), null, fmt), /^Follow-up 2 sent 11-19 · let go 11-22 if no reply$/);
-  assert.match(F.cardLine(lead({ first_response_at: ago(6), lead_fu1_at: ago(3) }), { kind: 'text', body: 'yes', created_at: ago(2) }, fmt), /They replied .* paused/);
+  assert.match(F.cardLine(lead({ first_response_at: ago(6), lead_fu1_at: ago(3) }), { kind: 'text_in', body: 'yes', created_at: ago(2) }, fmt), /They replied .* paused/);
+  assert.match(F.cardLine(lead({ lead_fu_fails: 3 }), null, fmt), /stopped: the sends kept failing/);
   assert.strictEqual(F.cardLine(lead({ first_response_at: ago(8), lead_fu1_at: ago(5) }), ours(1), fmt), '', 'we answered again: the old round is not shown');
+});
+
+test('three failed sends in a row stop the follow-ups for that lead', () => {
+  assert.strictEqual(F.decide(lead({ lead_fu_fails: 2 }), null, NOW, phone).step, 'first');
+  assert.strictEqual(F.decide(lead({ lead_fu_fails: 3 }), null, NOW, phone), null);
 });
 
 test('internal notes are not the conversation', () => {
   assert.ok(!F.CONVERSATION_KINDS.includes('note'));
-  assert.ok(F.CONVERSATION_KINDS.includes('email_in'));
+  assert.ok(F.CONVERSATION_KINDS.includes('email_in') && F.CONVERSATION_KINDS.includes('text_in'));
+  const ttl = src.slice(src.indexOf('async function textToLead('), src.indexOf('/* Their name, if they have ever given it to us'));
+  assert.match(ttl, /VALUES \(\$1, 'text_in', \$2\)/, 'their text back is kept as text_in');
 });
 
 test('lead reply addresses round-trip and refuse anything else', () => {
@@ -107,7 +117,9 @@ test('the job: narrow query, claims before sending, conversation only, auto note
   assert.match(job, /`You texted: \$\{msg\.text\}`/);
   for (const m of job.match(/INSERT INTO lead_notes[^`]*/g)) assert.match(m, /TRUE/, m);
   assert.match(job, /outcome = 'no_reply'/);
-  assert.match(job, /if \(failed && c < 2\) \{[\s\S]*?UPDATE submissions SET lead_fu1_at = \$2, lead_fu2_at = \$3 WHERE id = \$1/, 'a failed send hands the step back');
+  assert.match(job, /if \(failed\) \{[\s\S]*?UPDATE submissions SET lead_fu1_at = \$2, lead_fu2_at = \$3, lead_fu_fails = lead_fu_fails \+ 1 WHERE id = \$1/, 'a failed send hands the step back and counts');
+  assert.ok(!/LIKE \$2/.test(job), 'no counting by note wording');
+  assert.match(job, /AND \$\{LEAD_QUOTE_LIVE\}\)`/, 'one rule for a live quote');
   assert.match(src, /if \(inTextingHours\(\)\) \{[\s\S]*?await step\('lead follow-ups', sendLeadFollowUps\);[\s\S]*?\n    \}/);
   assert.match(src, /ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT FALSE/);
   assert.match(src, /const body = LEADMAIL\.textBody\(words\);/, 'hand texts and follow-ups share one wrapper');
@@ -117,7 +129,9 @@ test('the job: narrow query, claims before sending, conversation only, auto note
 test('an email reply lands on the lead: address first, sender must match, once per message, let-go reopened', () => {
   const keep = src.slice(src.indexOf('async function keepInboundEmail('), src.indexOf('const recentInbound = new Set();'));
   assert.ok(keep.indexOf('INBOUND.leadFrom(m.raw, INBOUND_DOMAIN)') < keep.indexOf("SELECT code FROM quotes WHERE lower(email) = $1"), 'the lead address beats an old job by sender');
-  assert.match(keep, /WHERE id = \$1 AND lower\(trim\(email\)\) = \$2/, 'only from the lead\'s own address');
+  assert.match(keep, /rows\[0\]\.email === m\.from\) leadRow = rows\[0\];\s+else if \(rows\.length\) otherSender = byAddr;/, 'only from the lead\'s own address; otherwise told, not misfiled');
+  assert.match(keep, /!quote && !leadRow && !otherSender && m\.from/);
+  assert.match(keep, /AND \(dismissed_at IS NULL OR dismiss_reason = \$2\)/, 'a plain email reopens a let-go lead too');
   assert.match(keep, /VALUES \(\$1, 'email_in', \$2, \$3\)\s+ON CONFLICT \(inbound_id\) WHERE inbound_id IS NOT NULL DO NOTHING/);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS lead_notes_inbound_once ON lead_notes \(inbound_id\) WHERE inbound_id IS NOT NULL/);
   assert.match(keep, /dismiss_reason === LEADFU\.LET_GO_REASON/);
