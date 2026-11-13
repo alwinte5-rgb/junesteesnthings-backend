@@ -47,6 +47,12 @@ function isInbound(note) {
 /* Failed sends in a row, within one round, before the follow-ups stop. */
 const MAX_FAILS = 3;
 
+/** The start of the current round: our last word (the first answer, or the
+ *  newest conversation note). One rule for the job and the card. */
+function anchorOf(l, last) {
+  return Math.max(ms(l.first_response_at), ms(last && last.created_at));
+}
+
 /** Do the failure counts on the lead belong to the round anchored at `anchor`
  *  (our last word)? A newer word from either side starts a new round at 0. */
 function sameRound(l, anchor) {
@@ -73,7 +79,7 @@ function decide(l, last, now, normalizePhone) {
   if (!l || l.lead_status !== 'contacted' || l.outcome || l.dismissed_at) return null;
   if (!reachable(l, normalizePhone)) return null;
   if (isInbound(last)) return null;   // they wrote last: our move, not a nudge
-  const anchor = Math.max(ms(l.first_response_at), ms(last && last.created_at));
+  const anchor = anchorOf(l, last);
   if (!anchor) return null;
   if (stopped(l, anchor)) return null;   // sends kept failing this round: by hand now
   const fu1 = ms(l.lead_fu1_at), fu2 = ms(l.lead_fu2_at);
@@ -122,15 +128,16 @@ ${shop}`,
 function cardLine(l, last, fmt) {
   const fu1 = ms(l.lead_fu1_at), fu2 = ms(l.lead_fu2_at);
   if (l.lead_status !== 'contacted') return '';
-  if (stopped(l, Math.max(ms(l.first_response_at), ms(last && last.created_at)))) {
+  const anchor = anchorOf(l, last);
+  if (stopped(l, anchor)) {
     return 'Automatic follow-ups stopped: the sends kept failing. Follow up by hand.';
   }
   if (!fu1) return '';
   if (isInbound(last) && ms(last.created_at) > fu1) return 'They replied after the automatic follow-up · follow-ups paused';
-  if (Math.max(ms(l.first_response_at), ms(last && last.created_at)) > fu1) return '';
+  if (anchor > fu1) return '';
   if (fu2) return `Follow-up 2 sent ${fmt(fu2)} · let go ${fmt(fu2 + LET_GO_AFTER)} if no reply`;
   return `Follow-up 1 sent ${fmt(fu1)} · follow-up 2 ${fmt(fu1 + SECOND_AFTER)} if no reply`;
 }
 
-module.exports = { CONVERSATION_KINDS, MAX_FAILS, sameRound, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
+module.exports = { CONVERSATION_KINDS, MAX_FAILS, anchorOf, sameRound, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
   FIRST_AFTER, SECOND_AFTER, LET_GO_AFTER, OLDEST };

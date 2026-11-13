@@ -84,6 +84,11 @@ test('the card line says what went and what is next, and not what will not happe
   assert.strictEqual(F.cardLine(lead({ first_response_at: ago(8), lead_fu1_at: ago(5) }), ours(1), fmt), '', 'we answered again: the old round is not shown');
 });
 
+test('one anchor rule for the job and the card', () => {
+  assert.strictEqual(F.anchorOf(lead({ first_response_at: ago(5) }), ours(2)), ago(2).getTime());
+  assert.strictEqual(F.anchorOf(lead({ first_response_at: ago(5) }), null), ago(5).getTime());
+});
+
 test('three failed sends in a row stop the follow-ups for that lead', () => {
   const r = ago(3);   // lead() answers 3 days ago: this round
   assert.strictEqual(F.decide(lead({ lead_fu_fails: 2, lead_fu_round_at: r }), null, NOW, phone).step, 'first');
@@ -120,7 +125,8 @@ test('the job: narrow query, claims before sending, conversation only, auto note
   assert.match(job, /`You texted: \$\{msg\.text\}`/);
   for (const m of job.match(/INSERT INTO lead_notes[^`]*/g)) assert.match(m, /TRUE/, m);
   assert.match(job, /outcome = 'no_reply'/);
-  assert.match(job, /lead_fu_fails = CASE WHEN lead_fu_round_at = \$2 THEN lead_fu_fails \+ 1 ELSE 1 END, lead_fu_round_at = \$2/, 'failures counted per round');
+  assert.match(job, /lead_fu_fails = CASE WHEN lead_fu_round_at = \$2 THEN lead_fu_fails \+ 1 ELSE 1 END, lead_fu_round_at = \$2,[\s\S]*?RETURNING lead_fu_fails/, 'failures counted per round, the count read back');
+  assert.match(job, /AND s\.first_response_at <= s\.lead_fu_round_at \+ INTERVAL '1 millisecond'/, 'the same round as LEADFU.stopped');
   assert.match(job, /'lead_fu1_at = \$3, lead_fu2_at = \$4'/, 'a failed send hands the step back');
   assert.match(job, /AND NOT \(s\.lead_fu_fails >= \$2 AND s\.lead_fu_round_at IS NOT NULL/, 'stopped leads are not even fetched');
   assert.ok(!/LIKE \$2/.test(job), 'no counting by note wording');
@@ -134,8 +140,8 @@ test('the job: narrow query, claims before sending, conversation only, auto note
 test('an email reply lands on the lead: address first, sender must match, once per message, let-go reopened', () => {
   const keep = src.slice(src.indexOf('async function keepInboundEmail('), src.indexOf('const recentInbound = new Set();'));
   assert.ok(keep.indexOf('INBOUND.leadFrom(m.raw, INBOUND_DOMAIN)') < keep.indexOf("SELECT code FROM quotes WHERE lower(email) = $1"), 'the lead address beats an old job by sender');
-  assert.match(keep, /rows\[0\]\.email === m\.from && !autoReply\) leadRow = rows\[0\];\s+else if \(rows\.length\) otherSender = byAddr;/, 'only from the lead\'s own address; otherwise told, not misfiled');
-  assert.match(keep, /if \(!quote && !leadRow && m\.from\) \{\s+const \{ rows \} = await pool\.query\(\s+`SELECT code FROM quotes/, 'another sender still files on their own job');
+  assert.match(keep, /if \(rows\.length && !autoReply\) \{\s+if \(m\.from && rows\[0\]\.email === m\.from\) leadRow = rows\[0\];\s+else otherSender = byAddr;/, 'only from the lead\'s own address; otherwise told, not misfiled');
+  assert.match(keep, /if \(!quote && !byAddr && !autoReply && m\.from\) \{\s+const \{ rows \} = await pool\.query\(\s+`SELECT code FROM quotes/, 'mail to a lead address is never filed on a job; auto-replies never by sender');
   assert.match(keep, /!quote && !leadRow && !otherSender && !autoReply && m\.from/);
   assert.match(keep, /const autoReply = INBOUND\.isAutoReply\(m\);/);
   assert.match(keep, /AND \(dismissed_at IS NULL OR dismiss_reason = \$2\)/, 'a plain email reopens a let-go lead too');
@@ -152,10 +158,12 @@ test('Ask Claude reads their replies as theirs', () => {
 
 test('auto-replies and bounces are not a person answering', () => {
   for (const [subject, from] of [['Automatic reply: Following up', 'a@b.c'], ['Out of Office', 'a@b.c'], ['RE: Out of office until Monday', 'a@b.c'],
-    ['Undeliverable: shirts', 'a@b.c'], ['hello', 'mailer-daemon@x.com'], ['hi', 'noreply@x.com']]) {
+    ['RE: RE: Automatic reply: Following up', 'a@b.c'], ['AW: Re: Abwesenheitsnotiz', 'a@b.c'], ['Undeliverable: shirts', 'a@b.c'], ['hello', 'mailer-daemon@x.com']]) {
     assert.ok(INBOUND.isAutoReply({ subject, from }), subject);
   }
-  for (const subject of ['Re: shirts', 'Awesome thanks', 'Yes!']) assert.ok(!INBOUND.isAutoReply({ subject, from: 'a@b.c' }), subject);
+  for (const subject of ['Re: shirts', 'Awesome thanks', 'Yes!', 'Away game jerseys, yes go ahead', 'Delivery status?', 'Out of stock?']) {
+    assert.ok(!INBOUND.isAutoReply({ subject, from: 'a@b.c' }), subject);
+  }
 });
 
 test('a text back to a lead the follow-ups let go reopens it; old customer texts become text_in once', () => {
@@ -163,6 +171,7 @@ test('a text back to a lead the follow-ups let go reopens it; old customer texts
   assert.match(ttl, /AND \(s\.dismissed_at IS NULL OR s\.dismiss_reason = \$2\)/);
   assert.match(ttl, /\[digits, LEADFU\.LET_GO_REASON\]/);
   assert.match(ttl, /SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL\s+WHERE id = \$1 AND dismiss_reason = \$2/);
-  assert.match(src, /UPDATE lead_notes SET kind = 'text_in' WHERE kind = 'text' AND NOT auto AND staff_id IS NULL[\s\S]{0,200}created_at < '2026-11-13T06:00:00Z'/);
+  assert.match(src, /WITH claim AS \(INSERT INTO once_fixes \(name\) VALUES \('lead-notes-text-in'\) ON CONFLICT DO NOTHING RETURNING 1\)\s+UPDATE lead_notes SET kind = 'text_in' WHERE EXISTS \(SELECT 1 FROM claim\)/, 'the backfill runs exactly once, at deploy');
+  assert.match(src, /alertShop\('A lead the follow-ups let go texted back'/, 'the shop is told');
   assert.match(src, /text_in: 'Their text', email_in: 'Their email'/, 'the shop can log their reply by hand');
 });

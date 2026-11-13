@@ -2077,12 +2077,19 @@ async function initStaffTables() {
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS lead_fu_fails INTEGER NOT NULL DEFAULT 0',
     /* The round (our last word) those failures belong to: a new round starts at 0. */
     'ALTER TABLE submissions ADD COLUMN IF NOT EXISTS lead_fu_round_at TIMESTAMPTZ',
-    /* Their texts, kept as kind 'text' until text_in existed (2026-11-12): moved
-       over once. Bounded by date so a text the shop logs by hand later is
-       never moved; one logged by the owner before then reads as theirs, which
-       only pauses that lead's follow-ups. */
-    `UPDATE lead_notes SET kind = 'text_in' WHERE kind = 'text' AND NOT auto AND staff_id IS NULL
-       AND body NOT LIKE 'You texted:%' AND body NOT LIKE 'You replied:%' AND created_at < '2026-11-13T06:00:00Z'`,
+    /* Data fixes that must run exactly once, at the first boot of the code that
+       needs them: the name is claimed in the same statement that does the work. */
+    'CREATE TABLE IF NOT EXISTS once_fixes (name TEXT PRIMARY KEY, ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW())',
+    /* Their texts were kind 'text' until text_in existed (lead follow-ups,
+       2026-11-12): moved over once, at deploy. A text the owner logged by hand
+       before then (staff_id NULL) reads as theirs, which only pauses that
+       lead's follow-ups; anything logged after deploy is never touched. */
+    `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('lead-notes-text-in') ON CONFLICT DO NOTHING RETURNING 1)
+     UPDATE lead_notes SET kind = 'text_in' WHERE EXISTS (SELECT 1 FROM claim) AND kind = 'text' AND NOT auto
+        AND staff_id IS NULL AND body NOT LIKE 'You texted:%' AND body NOT LIKE 'You replied:%'`,
+    /* A lead stopped after failed sends before rounds were recorded: its round
+       is the shop's first answer, so it stays stopped until someone writes. */
+    'UPDATE submissions SET lead_fu_round_at = first_response_at WHERE lead_fu_fails > 0 AND lead_fu_round_at IS NULL',
     /* A cash or Zelle payment a helper recorded waits for the owner's
        "Confirm received" before it counts for commission (tools/lib/fraud-signals.js).
        recorded_by is the staff id, NULL meaning the owner. */
@@ -4912,8 +4919,14 @@ async function textToLead(from, text, sid) {
       LIMIT 1`, [digits, LEADFU.LET_GO_REASON]);
   if (open.length) {
     /* Let go by the follow-ups and now texting back: on Leads again. */
-    await pool.query(`UPDATE submissions SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
+    const back = await pool.query(`UPDATE submissions SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
                        WHERE id = $1 AND dismiss_reason = $2`, [open[0].id, LEADFU.LET_GO_REASON]);
+    if (back.rowCount) {
+      alertShop('A lead the follow-ups let go texted back',
+        `<p>They texted: <b>${escEmail(String(text).slice(0, 500))}</b></p>
+         <p>Their lead is back on Leads. <a href="${PUBLIC_BASE_URL}/admin/leads#lead-${open[0].id}">Open it</a>.</p>`)
+        .catch((e) => console.error('lead reopen alert failed:', e.message));
+    }
     /* 'text_in': their text, as 'email_in' is their email (lead follow-ups,
        2026-11-12). A text the shop logs or sends stays 'text'. */
     await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text_in', $2)`,
@@ -5289,14 +5302,17 @@ async function keepInboundEmail(m) {
     const { rows } = await pool.query(
       `SELECT id, lower(trim(email)) AS email, dismissed_at, dismiss_reason FROM submissions WHERE id = $1`, [byAddr]);
     /* From another address (their work email, a corrected typo, or a stranger):
-       not put on the lead, and not filed on an old job either. The shop is told
-       which lead it was addressed to and decides. */
-    if (rows.length && m.from && rows[0].email === m.from && !autoReply) leadRow = rows[0];
-    else if (rows.length) otherSender = byAddr;
+       not put on the lead, and not filed on an old job either: it was written
+       to the lead. The shop is told which lead and decides. An auto-reply is
+       neither: it only reaches the shop's inbox. */
+    if (rows.length && !autoReply) {
+      if (m.from && rows[0].email === m.from) leadRow = rows[0];
+      else otherSender = byAddr;
+    }
   }
   /* Written to the shop's own address by an old email, or the code was
      mangled: their latest job from the last four months, by email address. */
-  if (!quote && !leadRow && m.from) {
+  if (!quote && !byAddr && !autoReply && m.from) {
     const { rows } = await pool.query(
       `SELECT code FROM quotes WHERE lower(email) = $1 AND created_at > NOW() - INTERVAL '120 days'
         ORDER BY created_at DESC LIMIT 1`, [m.from]);
@@ -28226,6 +28242,7 @@ async function sendLeadFollowUps(now = Date.now()) {
                            AND ${LEAD_QUOTE_LIVE})
         -- stopped after repeated failed sends, and nobody has written since
         AND NOT (s.lead_fu_fails >= $2 AND s.lead_fu_round_at IS NOT NULL
+                 AND s.first_response_at <= s.lead_fu_round_at + INTERVAL '1 millisecond'
                  AND NOT EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND NOT n.auto AND n.kind = ANY($1)
                                     AND n.created_at > s.lead_fu_round_at + INTERVAL '1 millisecond'))`,
     [LEADFU.CONVERSATION_KINDS, LEADFU.MAX_FAILS]);
@@ -28309,16 +28326,14 @@ async function sendLeadFollowUps(now = Date.now()) {
        at all (unsubscribed and STOP) keeps the step: nobody can be reached. */
     const tag = `Automatic follow-up ${n} did not go`;
     /* Failures count within this round (anchored on our last word); a new
-       round starts again from 0. */
-    const sameRound = LEADFU.sameRound(l, due.anchor);
-    const fails = (sameRound ? l.lead_fu_fails || 0 : 0) + 1;
+       round starts again at 1. The count is the database's, as written. */
+    let fails = 0;
     if (failed) {
-      /* $2 is this round's anchor; the step is handed back and the failure
-         counted against this round (1 again when it is a new round). */
-      await pool.query(`UPDATE submissions
+      const { rows: [f] } = await pool.query(`UPDATE submissions
           SET lead_fu_fails = CASE WHEN lead_fu_round_at = $2 THEN lead_fu_fails + 1 ELSE 1 END, lead_fu_round_at = $2,
               ${n === 1 ? 'lead_fu1_at = $3, lead_fu2_at = $4' : 'lead_fu2_at = NULL'}
-        WHERE id = $1`, n === 1 ? [l.id, anchor, l.lead_fu1_at, l.lead_fu2_at] : [l.id, anchor]);
+        WHERE id = $1 RETURNING lead_fu_fails`, n === 1 ? [l.id, anchor, l.lead_fu1_at, l.lead_fu2_at] : [l.id, anchor]);
+      fails = f ? f.lead_fu_fails : LEADFU.MAX_FAILS;
       done.retry++;
     }
     await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, auto) VALUES ($1, 'note', $2, TRUE)`,
