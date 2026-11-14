@@ -193,17 +193,19 @@ Christmas ordering stays open)
   retried left no trace except a server log. Now:
   - `bankStripeSession` reads the quote before banking and writes that row to its
     History only once it has banked the money (`Stripe: card payment $104.00`, shown as
-    "Stripe", not "Owner"). The webhook/return-page race, a retry and a failed write leave
-    no extra line, and nothing deletes history.
+    "Stripe", not "Owner"), and only if no other change was saved in between, so History
+    stays in order. The webhook/return-page race, a retry and a failed write leave no extra
+    line, and nothing deletes history.
   - Every webhook delivery for a quote writes one `stripe_events` row (event id, type,
-    quote, handled/failed, error) after Stripe has its answer. Refunds and disputes find
-    their quote by payment intent. Failures are always kept; handled events for no quote
-    are not.
+    Stripe object id, quote, handled/failed, error) after Stripe has its answer. Refunds and
+    disputes find their quote by payment intent. Deliveries for no quote are not kept; their
+    failures already reach `app_errors` and the digest.
   - The job page's History card lists the deliveries with their event ids. An unsettled
-    failure opens the card and is counted in its summary; one later handled with the same
-    event id reads "failed, then handled on retry". Only the owner sees error text.
-  - Tests: `tests/stripe-audit-trail.test.js` (17); real Postgres + server:
-    `~/.local/share/jtees-e2e/run-stripe-audit.cjs` (22 checks).
+    failure opens the card and is counted in its summary. It is settled by a LATER handled
+    row with the same event id, or by the ledger holding that checkout session (so a lost
+    log row cannot leave a false alarm). Only the owner sees error text.
+  - Tests: `tests/stripe-audit-trail.test.js` (19); real Postgres + server:
+    `~/.local/share/jtees-e2e/run-stripe-audit.cjs` (23 checks).
 - [ ] **New table `stripe_events` needs the owner's gate approval.**
 
 ## Workstream F: Codex coordination

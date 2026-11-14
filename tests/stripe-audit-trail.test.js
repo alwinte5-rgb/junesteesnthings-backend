@@ -74,8 +74,9 @@ function desk() {
     query(sql, args = []) {
       const s = sql.replace(/\s+/g, ' ').trim();
       if (/^SELECT \* FROM quotes WHERE code=\$1$/.test(s)) return Promise.resolve({ rows: [{ ...Q }] });
-      if (/^SELECT to_jsonb\(q\.\*\) AS row FROM quotes q WHERE code = \$1$/.test(s)) {
-        return Promise.resolve({ rows: [{ row: { ...Q } }] });
+      if (/^SELECT to_jsonb\(q\.\*\) AS row, \(SELECT COALESCE\(MAX\(id\), 0\) FROM quote_revisions/.test(s)) {
+        if (out.failRead) return Promise.reject(new Error('read failed'));
+        return Promise.resolve({ rows: [{ row: { ...Q }, last_rev: 0 }] });
       }
       if (/^UPDATE quotes SET status='accepted'/.test(s)) { Q.status = 'accepted'; return Promise.resolve({ rows: [] }); }
       return Promise.reject(new Error('unexpected query: ' + s.slice(0, 120)));
@@ -88,8 +89,9 @@ function desk() {
     quoteLink: (code) => 'https://www.jtees.net/q/' + code,
     /* The real one takes the row before the change; here it records the call
        and the quote's paid amount at that moment. */
-    saveQuoteRevision: async (code, row, action) => {
-      out.snapshots.push({ id: nextId++, code, action, paidBefore: row.paid_amount });
+    reportError: async (where) => { out.reported = where; },
+    snapshotQuote: async (code, action, ip, pre) => {
+      out.snapshots.push({ id: nextId++, code, action, pre, paidBefore: pre && pre.row.paid_amount });
     },
     recordPayment: async (p) => {
       await new Promise((r) => setImmediate(r));   // lets two callers interleave, as the real INSERT does
@@ -162,8 +164,30 @@ test('an unpaid or unlinked session snapshots nothing', async () => {
   assert.strictEqual(d.snapshots.length, 0);
 });
 
-test('without saveQuoteRevision in scope (other tests lift this alone) banking still works', () => {
-  assert.match(lift('bankStripeSession'), /typeof saveQuoteRevision === 'function'/);
+test('a failed read of the quote is reported, and the payment still banks', async () => {
+  const d = desk();
+  d.failRead = true;
+  const r = await d.bank(session());
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(d.ledger.length, 1);
+  assert.strictEqual(d.snapshots.length, 0);
+  assert.strictEqual(d.reported, 'quote-snapshot');
+});
+
+test('the line carries the pre-read row and where History stood', async () => {
+  const d = desk();
+  await d.bank(session());
+  assert.ok(d.snapshots[0].pre && d.snapshots[0].pre.row.code === CODE && d.snapshots[0].pre.lastRev === 0);
+});
+
+test('without snapshotQuote in scope (other tests lift this alone) banking still works', () => {
+  assert.match(lift('bankStripeSession'), /typeof snapshotQuote === 'function'/);
+});
+
+test('only Stripe writes a Stripe: line, so the History credit cannot go to the wrong person', () => {
+  const calls = src.match(/snapshotQuote\([^;]*?['`]Stripe:/g) || [];
+  assert.strictEqual(calls.length, 1, 'one caller, in bankStripeSession');
+  assert.ok(lift('bankStripeSession').includes(calls[0]));
 });
 
 test('the line is written only after the ledger accepted the payment, and history is never deleted', () => {
@@ -171,7 +195,7 @@ test('the line is written only after the ledger accepted the payment, and histor
   const read = fn.indexOf('SELECT to_jsonb(q.*) AS row');
   const bank = fn.indexOf('await recordPayment(');
   const dup = fn.indexOf('if (res.duplicate) return');
-  const write = fn.indexOf('await saveQuoteRevision(');
+  const write = fn.indexOf('await snapshotQuote(code, `Stripe: card payment');
   assert.ok(read < bank && bank < dup && dup < write, 'read before, write after the duplicate check');
   assert.doesNotMatch(src, /DELETE FROM quote_revisions/);
 });
@@ -197,35 +221,35 @@ function logger({ fail = false, ledger = {} } = {}) {
 
 test('a handled delivery is one row: event id, type, quote, outcome', async () => {
   const l = logger();
-  await l.log({ id: 'evt_1', type: 'checkout.session.completed', data: { object: { client_reference_id: CODE.toLowerCase() } } }, 'handled');
+  await l.log({ id: 'evt_1', type: 'checkout.session.completed', data: { object: { id: 'cs_1', client_reference_id: CODE.toLowerCase() } } }, 'handled');
   // Through JSON: arrays made inside the vm context carry its prototypes.
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(l.rows)), [['evt_1', 'checkout.session.completed', CODE, 'handled', null]]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(l.rows)), [['evt_1', 'checkout.session.completed', 'cs_1', CODE, 'handled', null]]);
 });
 
 test('a failed delivery keeps the error, capped', async () => {
   const l = logger();
   await l.log({ id: 'evt_2', type: 'charge.refunded', data: { object: { metadata: { quote_code: CODE } } } },
     'failed', new Error('x'.repeat(1000)));
-  assert.strictEqual(l.rows[0][2], CODE, 'a charge names its quote in metadata');
-  assert.strictEqual(l.rows[0][3], 'failed');
-  assert.strictEqual(l.rows[0][4].length, 300);
+  assert.strictEqual(l.rows[0][3], CODE, 'a charge names its quote in metadata');
+  assert.strictEqual(l.rows[0][4], 'failed');
+  assert.strictEqual(l.rows[0][5].length, 300);
 });
 
 test('a refund or dispute finds its quote by payment intent', async () => {
   const l = logger({ ledger: { pi_deposit: CODE } });
   await l.log({ id: 'evt_5', type: 'charge.dispute.created', data: { object: { payment_intent: 'pi_deposit' } } }, 'handled');
   await l.log({ id: 'evt_6', type: 'charge.refunded', data: { object: { payment_intent: { id: 'pi_deposit' } } } }, 'handled');
-  assert.deepStrictEqual(l.rows.map((r) => r[2]), [CODE, CODE]);
+  assert.deepStrictEqual(l.rows.map((r) => r[3]), [CODE, CODE]);
 });
 
-test('a handled event with no quote is not kept; a failed one always is', async () => {
+test('a delivery for no quote is not kept, handled or failed (failures reach app_errors via reportError)', async () => {
   const l = logger();
   await l.log({ id: 'evt_3', type: 'checkout.session.completed', data: { object: { client_reference_id: '10' } } }, 'handled');
   await l.log({ id: 'evt_7', type: 'payout.paid', data: { object: {} } }, 'handled');
-  assert.strictEqual(l.rows.length, 0);
   await l.log({ id: 'evt_8', type: 'payout.failed', data: { object: {} } }, 'failed', new Error('z'));
-  assert.strictEqual(l.rows.length, 1);
-  assert.strictEqual(l.rows[0][2], null);
+  assert.strictEqual(l.rows.length, 0);
+  const route = src.slice(src.indexOf("app.post('/webhooks/stripe'"), src.indexOf('async function logStripeDelivery'));
+  assert.match(route, /reportError\('stripe-webhook', err\)/);
 });
 
 test('the log never throws, so it can never turn a banked payment into a retry', async () => {
@@ -258,18 +282,24 @@ test('stripe_events is created, and the History card lists deliveries', () => {
   assert.match(card, /owner && d\.error/, 'the raw error is the owner\'s to see, not a helper\'s');
   assert.match(card, /openFailures \? ' open' : ''/, 'an unsettled failure opens the card');
   assert.match(card, /Could not load the Stripe deliveries/, 'a failed read says so instead of looking empty');
-  assert.match(card, /settled\.has\(d\.event_id\)/, 'a failure is settled only by the same event id');
+  assert.match(card, /h\.event_id === d\.event_id && Number\(h\.id\) > Number\(d\.id\)/, 'settled only by a LATER handled row of the same event');
+  assert.match(card, /d\.banked \|\|/, 'or by the ledger holding the checkout');
 });
 
-test('saveQuoteRevision stores the row it is given, credited to nobody, and never throws', async () => {
+test('snapshotQuote with a pre-read row writes it only if nothing newer was saved', async () => {
   const calls = [];
-  const sandbox = { console: { error() {} }, reportError: async () => {},
-    pool: { query: async (sql, args) => { calls.push({ sql, args }); if (args[2] === 'boom') throw new Error('x'); return { rows: [] }; } } };
+  const sandbox = { console: { error() {}, warn() {} }, reportError: async () => {}, currentActor: () => null,
+    pool: { query: async (sql, args) => { calls.push({ sql, args }); return { rowCount: args[1] === 'raced' ? 0 : 1, rows: [] }; } } };
   vm.createContext(sandbox);
-  vm.runInContext(lift('saveQuoteRevision'), sandbox);
-  await sandbox.saveQuoteRevision('ab12cd34ef', { code: CODE, total: 200 }, 'Stripe: card payment $104.00');
-  assert.match(calls[0].sql, /VALUES \(\$1, \$2::jsonb, \$3, NULL, NULL\)/);
+  vm.runInContext(lift('snapshotQuote'), sandbox);
+  await sandbox.snapshotQuote('ab12cd34ef', 'Stripe: card payment $104.00', null, { row: { code: CODE, total: 200 }, lastRev: 7 });
+  const s = calls[0].sql.replace(/\s+/g, ' ');
+  assert.match(s, /SELECT \$1::text, \$5::jsonb, \$2::text, \$3::int, \$4::text WHERE NOT EXISTS \(SELECT 1 FROM quote_revisions WHERE quote_code = \$1::text AND id > \$6::bigint\)/,
+    'every parameter cast: Postgres cannot infer them in INSERT ... SELECT');
   assert.strictEqual(calls[0].args[0], CODE);
-  assert.deepStrictEqual(JSON.parse(calls[0].args[1]), { code: CODE, total: 200 });
-  await assert.doesNotReject(sandbox.saveQuoteRevision(CODE, {}, 'boom'));
+  assert.deepStrictEqual(JSON.parse(calls[0].args[4]), { code: CODE, total: 200 });
+  assert.strictEqual(calls[0].args[5], 7);
+  await assert.doesNotReject(sandbox.snapshotQuote(CODE, 'raced', null, { row: {}, lastRev: 1 }));
+  await sandbox.snapshotQuote(CODE, 'edit');
+  assert.match(calls[2].sql, /to_jsonb\(q\.\*\)/, 'without pre it still snapshots the live row');
 });
