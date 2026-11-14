@@ -3236,6 +3236,14 @@ function activePromoCode() {
    promises it and the checkout that takes it agree. */
 const { promoOffer } = require('./tools/lib/promo-offer');
 const BUSINESS = require('./tools/lib/business-contact');
+/** The offer a code was issued at, as the designer reports it (amount, min),
+ *  so a text describes the code the customer actually holds. Falls back to this
+ *  server's own offer when the designer sends nothing usable (an older build). */
+function issuedOffer(b) {
+  const amount = Number(b && b.amount), min = Number(b && b.min);
+  if (!Number.isFinite(amount) || amount <= 0) return promoOffer();
+  return promoOffer({ JT_PROMO_AMOUNT: String(amount), JT_PROMO_MIN: Number.isFinite(min) ? String(min) : '' });
+}
 console.log(`Active recovery promo code this week: ${activePromoCode()}`);
 
 /* HTML escaping, used on every interpolated value in this file.
@@ -3398,6 +3406,9 @@ function joinBusinessList(instance) {
   instance.interceptors.request.use((cfg) => {
     if (cfg.jtNoBusinessList || String(cfg.method).toLowerCase() !== 'post' || cfg.url !== '/contacts') return cfg;
     const body = contactWriteBody(cfg);
+    /* An unsubscribe (pushOptoutToBrevo) is not someone getting in touch: it
+       must never put a person on, or create them in, a marketing list. */
+    if (body && 'emailBlacklisted' in body) return cfg;
     const next = BUSINESS.withBusinessList(body);
     if (!body || next === body) return cfg;
     return { ...cfg, data: next, jtBusinessListId: next.listIds[next.listIds.length - 1] };
@@ -3406,7 +3417,9 @@ function joinBusinessList(instance) {
     const cfg = err && err.config;
     const body = contactWriteBody(cfg);
     const status = err && err.response ? err.response.status : 0;   // only a refusal of the write itself; a dead key or outage is not retried
-    if (!cfg || !cfg.jtBusinessListId || cfg.jtNoBusinessList || !body || (status !== 400 && status !== 404)) return Promise.reject(err);
+    const said = String((err && err.response && err.response.data && err.response.data.message) || '');
+    if (!cfg || !cfg.jtBusinessListId || cfg.jtNoBusinessList || !body || (status !== 400 && status !== 404)
+        || !/\blist/i.test(said)) return Promise.reject(err);   // a refusal about anything else is not ours to retry
     console.warn('brevo: contact write refused with the business list added; sending it without —',
       err.response && err.response.data && err.response.data.message || err.message);
     const listIds = (Array.isArray(body.listIds) ? body.listIds : []).filter((id) => id !== cfg.jtBusinessListId);
@@ -6770,7 +6783,7 @@ app.post('/api/sms-cart-code', requireInternalKey, capPerRecipient('sms-cart-cod
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
   const status = await sendCustomerSms({
     phone: consent.phone, kind: 'marketing', ref: 'cart-code:' + day,
-    msg: SMS.cartCode({ code, offer: promoOffer(), restoreUrl }),
+    msg: SMS.cartCode({ code, offer: issuedOffer(b), restoreUrl }),
   });
   res.json({ ok: status === 'sent' || status === 'duplicate', status });
 });
@@ -6790,7 +6803,7 @@ app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart
   const month = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }).slice(0, 7);
   const status = await sendCustomerSms({
     phone, kind: 'marketing', ref: 'cart-followup:' + month,
-    msg: SMS.cartFollowup({ code, offer: promoOffer(), restoreUrl }),
+    msg: SMS.cartFollowup({ code, offer: issuedOffer(b), restoreUrl }),
   });
   // Settled outcomes answer 200 so the cron marks the cart done. Not-set-up or
   // a failed send answers 503 so the next hourly run tries again.
@@ -6910,7 +6923,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
       <p>${again ? (code ? 'Here is your code from when you signed up.' : 'Thanks for being with us.')
         : code ? "Here's your code. We've texted it to you too." : 'Your code is on its way.'}</p></div>
     <div class="tx-wrap"><div class="tx-card" style="text-align:center">
-      ${code ? `<div style="font-weight:700;color:#0B1F4B">Your ${REINTRO.OFFER.short} code</div>
+      ${code ? `<div style="font-weight:700;color:#0B1F4B">${again ? 'Your code' : `Your ${REINTRO.OFFER.short} code`}</div>
         <div class="tx-code">${escEmail(code)}</div>
         <p class="tx-small">Use it at checkout in the Design Lab, or mention it when you get a quote.
           Good once, for ${REINTRO.CODE_DAYS} days${again ? ' from when you signed up. Used or run out? Call or text us at (773) 900-4592' : ''}.</p>`

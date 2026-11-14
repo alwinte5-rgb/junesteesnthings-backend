@@ -118,3 +118,31 @@ test('reads and other routes are never touched', async () => {
 test('the Brevo client is built with the business-list rule outermost', () => {
   assert.match(src, /const brevo = joinBusinessList\(keepFirstSource\(keepContactsWhenPhoneFails\(explainFailures\(/);
 });
+
+test('an unsubscribe never joins (or creates someone on) the business list', async () => {
+  const { client, sent } = fakeBrevo();
+  await client.post('/contacts', { email: 'jane@acme.org', emailBlacklisted: true, updateEnabled: true });
+  assert.ok(!('listIds' in sent[0].body));
+});
+
+test('a refusal about something other than the list is not retried', async () => {
+  const sent = [];
+  const adapter = async (config) => {
+    sent.push(JSON.parse(config.data));
+    const response = { status: 400, statusText: 'x', headers: {}, config, data: { code: 'invalid_parameter', message: 'Invalid attribute FOO' } };
+    throw new axios.AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST', config, null, response);
+  };
+  const client = joinBusinessList(axios.create({ baseURL: 'https://api.brevo.test/v3', adapter }));
+  await assert.rejects(client.post('/contacts', { email: 'owner@acme.co', listIds: [2] }));
+  assert.strictEqual(sent.length, 1);
+});
+
+test('a mistyped list setting is said out loud, not silently off', () => {
+  const warn = console.warn; let said = '';
+  console.warn = (m) => { said += m; };
+  try {
+    delete B.businessListId.warned;
+    assert.strictEqual(B.businessListId({ BREVO_BUSINESS_LIST_ID: '#11' }), null);
+  } finally { console.warn = warn; }
+  assert.match(said, /not a list id/);
+});

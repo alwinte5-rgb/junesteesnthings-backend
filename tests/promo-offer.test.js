@@ -81,3 +81,17 @@ test('the static texts popup says the same offer as the helper', () => {
   assert.ok(js.includes(`var OFF = '${o.off}', FLOOR = '${o.floor}';`), 'popup words drifted from tools/lib/promo-offer.js');
   assert.doesNotMatch(js, /% off/);
 });
+
+test('a cart text describes the code at the amount the designer issued it', () => {
+  const src = read('server.js');
+  assert.match(src, /msg: SMS\.cartCode\(\{ code, offer: issuedOffer\(b\), restoreUrl \}\)/);
+  assert.match(src, /msg: SMS\.cartFollowup\(\{ code, offer: issuedOffer\(b\), restoreUrl \}\)/);
+  const i = src.indexOf('function issuedOffer(b) {');
+  const fn = new Function('promoOffer', src.slice(i, src.indexOf('\n}\n', i) + 2) + '\nreturn issuedOffer;')(promoOffer);
+  assert.strictEqual(fn({ amount: 10, min: 40 }).short, '$10 off $40+');
+  assert.strictEqual(fn({ pct: 10 }).short, '$15 off $50+', 'an older designer build falls back to the default offer');
+});
+
+test('a returning sign-up is not told an older code is worth the new offer', () => {
+  assert.ok(read('server.js').includes("${again ? 'Your code' : `Your ${REINTRO.OFFER.short} code`}"));
+});

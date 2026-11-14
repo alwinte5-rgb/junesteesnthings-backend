@@ -46,7 +46,13 @@ function businessListId(env = process.env) {
   if (raw.toLowerCase() === 'off') return null;
   if (raw === '') return 11;
   const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : null;
+  if (Number.isInteger(n) && n > 0) return n;
+  /* Anything but a list id or "off" is a typo; said once, not silently off. */
+  if (!businessListId.warned) {
+    businessListId.warned = true;
+    console.warn(`BREVO_BUSINESS_LIST_ID "${raw.slice(0, 20)}" is not a list id or "off"; business contacts are not being added to a list`);
+  }
+  return null;
 }
 
 /** A contact write's body with the business list added when it applies.
