@@ -291,8 +291,9 @@ test('the bar, homepage and service pages say small orders 5–7 days, larger 7�
   const emb = read('services/embroidery.html');
   assert.match(emb, /Embroidery is ready in 7 business days, and orders of 50 or more pieces in 7–14/);
   assert.doesNotMatch(emb, /Small orders take 5–7 business days/);
+  const occ = fs.readdirSync(path.join(__dirname, '..', 'public', 'occasions')).filter((f) => f.endsWith('.html')).map((f) => 'occasions/' + f);
   for (const rel of ['services/custom-tshirts-chicago.html', 'areas/custom-tshirts-lakeview.html', 'services/sublimation.html',
-    'services/custom-glassware.html', 'blog/screen-printing-tips.html', 'occasions/halloween-shirts-chicago.html']) {
+    'services/custom-glassware.html', 'blog/screen-printing-tips.html', 'assets/data/occasion-pages.json', ...occ]) {
     assert.doesNotMatch(read(rel), /(?<!\()7(–| to )14 business day(s)? (turnaround|after)|turnaround (for screen printing )?is 7(–| to )14/, rel);
   }
   for (const rel of ['services/dtf-transfers.html', 'services/embroidery.html', 'services/banners-signs.html']) {
