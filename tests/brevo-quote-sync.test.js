@@ -258,11 +258,15 @@ test('a cancelled quote is lost, whatever was paid; un-cancelled it goes back', 
 });
 
 test('cancelling and un-cancelling push the stage to the deal', () => {
-  for (const sig of ["app.post('/admin/quote/:code/cancel'", "app.post('/admin/quote/:code/uncancel'"]) {
-    const r = route(sig);
-    assert.match(r, /RETURNING \*/, sig);
-    assert.match(r, /if \(rows\.length\) syncDealStage\(rows\[0\]\)/, sig);
-  }
+  /* The cancel steps live in applyQuoteCancel (shared with the wholesale
+     API's cancel, 2026-11-14); the route must still go through it. */
+  assert.match(route("app.post('/admin/quote/:code/cancel'"), /await applyQuoteCancel\(code, reason,/);
+  const cancel = src.slice(src.indexOf('async function applyQuoteCancel('), src.indexOf("app.post('/admin/quote/:code/uncancel'"));
+  assert.match(cancel, /RETURNING \*/);
+  assert.match(cancel, /if \(!rows\.length\) return null;[\s\S]*syncDealStage\(q\)/);
+  const r = route("app.post('/admin/quote/:code/uncancel'");
+  assert.match(r, /RETURNING \*/);
+  assert.match(r, /if \(rows\.length\) syncDealStage\(rows\[0\]\)/);
 });
 
 /* ── SOURCE: a quote's first landing is a touch (keepFirstSource, on the

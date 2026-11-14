@@ -41,6 +41,8 @@ const SERVICES = require('./tools/lib/services');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const PARTNERS = require('./tools/lib/partners');
+/* Wholesale connector (docs/wholesale-api-v1.md): off until JT_WHOLESALE=on. */
+const WHOLESALE = require('./tools/lib/wholesale-routes');
 const PARTNERS_INVITE = require('./tools/lib/partners-invite');
 const PROGRESS = require('./tools/lib/order-progress');
 const BRAND = require('./tools/lib/brand-files');
@@ -257,6 +259,18 @@ const DEADLINE_ALERTS = false;
    marks a body as read, and the general parser below then leaves it alone. */
 app.use(['/q/:code/certificate', '/admin/quote/:code/certificate', '/api/tax-certificates'],
   express.json({ limit: '12mb' }));
+/* The wholesale API takes small JSON bodies: refused at 256 KB before they are
+   read, rather than after the general 1 MB parser has read them. */
+app.use('/api/wholesale', express.json({ limit: '256kb' }));
+/* Its own error shape for a body it refused (too large, not JSON), never the
+   default HTML error page. */
+app.use('/api/wholesale', (err, _req, res, next) => {
+  if (!err || !err.type) return next(err);
+  const big = err.type === 'entity.too.large';
+  res.set('Cache-Control', 'no-store');
+  res.status(big ? 413 : 400).json({ error: { code: big ? 'body_too_large' : 'invalid_body',
+    message: big ? 'Request body over 256 KB.' : 'Send a JSON object.' } });
+});
 /* A customer's email, parsed by Brevo: long HTML threads run past 1mb. */
 app.use('/webhooks/brevo/inbound', express.json({ limit: '8mb' }));
 app.use(express.json({
@@ -789,6 +803,16 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  /* Each opt-out is also put on Brevo's blocklist (brevoOptoutSync), so a
+     campaign sent from Brevo itself cannot reach somebody who unsubscribed
+     here. NULL brevo_synced_at = not there yet; the hourly sweep retries,
+     which is also how every opt-out from before this column reaches Brevo. */
+  for (const col of ['brevo_synced_at TIMESTAMPTZ', 'brevo_attempts INT NOT NULL DEFAULT 0', 'brevo_error TEXT',
+                     'brevo_tried_at TIMESTAMPTZ']) {
+    await pool.query(`ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS ${col}`);
+  }
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS email_optouts_brevo_pending ON email_optouts (created_at) WHERE brevo_synced_at IS NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS grad_orders (
       id             SERIAL PRIMARY KEY,
@@ -2170,6 +2194,9 @@ async function initStaffTables() {
       ship_to      JSONB,
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  /* Wholesale connector: partners, their production requests, the audit/event
+     log and the webhook outbox (tools/lib/wholesale-routes.js). */
+  await WHOLESALE.ensureTables(pool);
   await repairSentAsDelivered().catch((e) => console.error('sent-as-delivered repair failed:', e.message));
   /* After the server is listening: it calls Twilio and Cloudinary. */
   setTimeout(() => repairTextPictures().catch((e) => console.error('text picture repair failed:', e.message)), 30 * 1000).unref();
@@ -2811,6 +2838,21 @@ async function isUnsubscribed(email) {
   } catch { return false; }   // never block a send because the table is unreachable
 }
 
+/* The check a MARKETING send makes. Unlike isUnsubscribed it fails CLOSED: when
+   the opt-out list cannot be read, a promotion is held rather than risked on
+   somebody who asked to stop. Receipts, payment links and proofs never ask it,
+   so an outage cannot stop a customer hearing about their own order. */
+async function marketingBlocked(email) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM email_optouts WHERE email = $1 LIMIT 1', [String(email).toLowerCase()]);
+    return rows.length > 0;
+  } catch (e) {
+    console.error(`marketing email held for ${email}: opt-out list unreadable (${e.message})`);
+    return true;
+  }
+}
+
 /* Brevo answers a send with `201 Created` and a real messageId even when the
    account has zero send credits left, and then quietly discards the message.
    Nothing throws, so the Resend fallback below never fires and every caller
@@ -2927,8 +2969,8 @@ async function holdForShopDigest({ to, subject, html, replyTo, attachments, even
 
 async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [], urgent = false, event = null }) {
   if (!urgent && !marketing && await holdForShopDigest({ to, subject, html, replyTo, attachments, event })) return;
-  if (marketing && await isUnsubscribed(to)) {
-    console.log(`sendEmail: skipped ${to} (unsubscribed)`);
+  if (marketing && await marketingBlocked(to)) {
+    console.log(`sendEmail: skipped ${to} (unsubscribed, or the opt-out list was unreadable)`);
     return;
   }
   /* Marketing mail must carry an unsubscribe link that works. With no signing
@@ -8997,8 +9039,8 @@ async function logClientEmail(quote, kind, mail, status, error = null) {
  *  marketing email to someone who unsubscribed is not sent, and says so
  *  ('skipped') rather than reading as sent. */
 async function sendClientEmail({ quote, kind, ...mail }) {
-  if (mail.marketing && await isUnsubscribed(mail.to)) {
-    await logClientEmail(quote, kind, mail, 'skipped', 'unsubscribed from marketing email');
+  if (mail.marketing && await marketingBlocked(mail.to)) {
+    await logClientEmail(quote, kind, mail, 'skipped', 'unsubscribed from marketing email (or the opt-out list was unreadable)');
     return;
   }
   const { preview, ...email } = mail;   // for the record, not the customer
@@ -22301,40 +22343,59 @@ app.post('/admin/quote/:code/cancel', requireAdmin, async (req, res) => {
         return back(res, backTo, 'ok', 'This job is accepted or paid, so the owner decides. Your request is with them.');
       }
     }
-    await snapshotQuote(code, 'cancel', clientIp(req));
-    /* delivered_at is cleared: a cancelled job did not ship, and leaving the
-       stamp on would keep it counted as delivered work in the schedule. It is
-       also how these were being hidden before cancelling existed. */
-    const { rows } = await pool.query(
-      /* A cancelled DRAFT stays a draft: 'cancelled' would open it on the
-         customer's page, which hides only held and draft (Codex #129). */
-      `UPDATE quotes SET cancelled_at = NOW(), cancel_reason = $2,
-              status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END, delivered_at = NULL
-        WHERE code = $1 AND cancelled_at IS NULL RETURNING *`,
-      [code, reason || null]);
-    // Its Brevo deal moves to lost, rather than staying open in the pipeline.
-    if (rows.length) syncDealStage(rows[0]).catch(() => {});
-    /* A card page the customer opened before now could still be paid, and
-       the money would land on a job that no longer exists. Close it. */
-    if (rows.length && rows[0].stripe_session) await expireCheckoutSession(rows[0].stripe_session);
-    /* Its delivery seat is freed now, not when someone next opens the
-       delivery board (Codex #143). */
-    if (rows.length) await DELIVERY.cancelRef('quote:' + code, 'system', 'quote cancelled').catch(() => {});
-    /* Every cancelled job comes to the owner to follow up (owner, 2026-10-06),
-       whoever cancelled it: win it back, refund it, or let it go. */
-    if (rows.length) {
-      // A helper's request to cancel this job is answered by cancelling it.
-      await pool.query(`UPDATE owner_followups SET done_at = NOW(), outcome = 'done'
-                         WHERE quote_code = $1 AND kind = 'cancel_request' AND done_at IS NULL`, [code]).catch(() => {});
-      await raiseFollowup({ kind: 'cancelled', code, title: `Job cancelled: ${code}`,
-        detail: { ...facts, 'Cancelled by': actor.kind === 'staff' ? actor.name : 'You' } });
-    }
+    await applyQuoteCancel(code, reason, { ip: clientIp(req), facts,
+      by: actor.kind === 'staff' ? actor.name : 'You' });
   } catch (err) {
     console.error('cancel failed:', err.message);
   }
   // Back where it was cancelled from: the job page sends 'production'.
   res.redirect(backTo);
 });
+
+/* Cancelling a quote, every step of it, wherever the cancel comes from: the
+   job page, or a wholesale partner cancelling an unpaid request
+   (tools/lib/wholesale-routes.js). One copy, so a cancelled job is always
+   off the schedule, unpayable and on the owner's follow-up list. Returns the
+   cancelled row, or null when it was already cancelled / does not exist. */
+async function applyQuoteCancel(code, reason, { ip = null, facts = null, by = 'You', onlyUnpaid = false } = {}) {
+  /* Nothing to do for a quote that is gone or already cancelled, and no
+     history row claiming a cancel that never happened. `onlyUnpaid` (the
+     wholesale API) refuses a quote money has landed on since the caller looked:
+     that is the owner's call, as it is for a helper on the job page. */
+  const { rows: [cur] } = await pool.query('SELECT cancelled_at, paid_amount FROM quotes WHERE code = $1', [code]);
+  if (!cur || cur.cancelled_at || (onlyUnpaid && Number(cur.paid_amount || 0) > 0)) return null;
+  await snapshotQuote(code, 'cancel', ip);
+  /* delivered_at is cleared: a cancelled job did not ship, and leaving the
+     stamp on would keep it counted as delivered work in the schedule. It is
+     also how these were being hidden before cancelling existed. */
+  const { rows } = await pool.query(
+    /* A cancelled DRAFT stays a draft: 'cancelled' would open it on the
+       customer's page, which hides only held and draft (Codex #129). */
+    `UPDATE quotes SET cancelled_at = NOW(), cancel_reason = $2,
+            status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END, delivered_at = NULL
+      WHERE code = $1 AND cancelled_at IS NULL AND ($3::boolean IS NOT TRUE OR COALESCE(paid_amount, 0) = 0)
+      RETURNING *`,
+    [code, reason || null, onlyUnpaid]);
+  if (!rows.length) return null;
+  const q = rows[0];
+  // Its Brevo deal moves to lost, rather than staying open in the pipeline.
+  syncDealStage(q).catch(() => {});
+  /* A card page the customer opened before now could still be paid, and
+     the money would land on a job that no longer exists. Close it. */
+  if (q.stripe_session) await expireCheckoutSession(q.stripe_session);
+  /* Its delivery seat is freed now, not when someone next opens the
+     delivery board (Codex #143). */
+  await DELIVERY.cancelRef('quote:' + code, 'system', 'quote cancelled').catch(() => {});
+  /* Every cancelled job comes to the owner to follow up (owner, 2026-10-06),
+     whoever cancelled it: win it back, refund it, or let it go. */
+  // A helper's request to cancel this job is answered by cancelling it.
+  await pool.query(`UPDATE owner_followups SET done_at = NOW(), outcome = 'done'
+                     WHERE quote_code = $1 AND kind = 'cancel_request' AND done_at IS NULL`, [code]).catch(() => {});
+  await raiseFollowup({ kind: 'cancelled', code, title: `Job cancelled: ${code}`,
+    detail: { ...(facts || { Job: `${code} — ${q.name || ''}`, Total: money(q.total), Paid: money(q.paid_amount || 0),
+                             Reason: reason || '(none given)' }), 'Cancelled by': by } });
+  return q;
+}
 
 app.post('/admin/quote/:code/uncancel', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
@@ -23221,6 +23282,22 @@ app.post('/admin/partners/action', requireAdmin, async (req, res) => {
     res.redirect('/admin/partners?err=' + encodeURIComponent('That did not save: the designer could not be reached. Please try again.'));
   }
 });
+
+/* Wholesale connector: the partner API under /api/wholesale/v1 and the owner's
+   /admin/wholesale page. Off (404) until JT_WHOLESALE=on. */
+const wholesaleDeps = {
+  pool, quoteTotals, publicBase: PUBLIC_BASE_URL, alertShop, reportError, requireAdmin, isOwner,
+  adminPage, esc: escEmail, fmtDate, logActivity, actor: () => currentActor() || OWNER_ACTOR,
+  clientIp, quoteCodeRe: QUOTE_CODE_RE,
+  /* A line as the customer's quote page reads it: the item's own amount and
+     each, with only the extras shown on their own rows listed. */
+  lineFigures: (item) => {
+    const f = customerLineFigures(item);
+    return { unit_price: f.each, line_total: f.amount, extras: shownAddons(item) };
+  },
+  cancelQuote: (code, reason, partnerName) => applyQuoteCancel(code, reason, { by: `${partnerName} (wholesale API)`, onlyUnpaid: true }),
+};
+WHOLESALE.mount(app, wholesaleDeps);
 
 app.get('/admin/customers', requireAdmin, async (_req, res) => {
   try {
@@ -30136,6 +30213,74 @@ async function doUnsubscribe(email, source) {
     `INSERT INTO email_optouts (email, source) VALUES ($1, $2)
      ON CONFLICT (email) DO NOTHING`,
     [String(email).toLowerCase(), source || 'one-click']);
+  /* Straight on to Brevo's blocklist too. Awaited but never thrown: the opt-out
+     is already saved here (the app's own sends honour it at once), and a Brevo
+     failure is retried by the hourly sweep. */
+  await pushOptoutToBrevo(String(email).toLowerCase());
+}
+
+
+/* Put one address on Brevo's marketing blocklist (emailBlacklisted). That stops
+   Brevo CAMPAIGNS; transactional sends (receipts, payment links, proofs) are
+   not affected, which is what an unsubscribe from promotions should mean.
+   updateEnabled makes it one call whether or not Brevo has the contact.
+   Returns true when Brevo took it; records the error otherwise. */
+const OPTOUT_BREVO_TRIES = 10;
+async function pushOptoutToBrevo(email) {
+  if (!process.env.BREVO_API_KEY) return false;
+  try {
+    await brevo.post('/contacts', { email, emailBlacklisted: true, updateEnabled: true }, { timeout: 8000 });
+    await pool.query(
+      `UPDATE email_optouts SET brevo_synced_at = NOW(), brevo_error = NULL, brevo_attempts = brevo_attempts + 1,
+              brevo_tried_at = NOW() WHERE email = $1`, [email]);
+    return true;
+  } catch (e) {
+    const why = String(e.response?.data?.message || e.message || e).slice(0, 300);
+    await pool.query(
+      `UPDATE email_optouts SET brevo_attempts = brevo_attempts + 1, brevo_error = $2, brevo_tried_at = NOW()
+        WHERE email = $1`, [email, why])
+      .catch(() => {});
+    console.error(`unsubscribe ${email} not yet on Brevo's blocklist: ${why}`);
+    /* 'outage' when Brevo could not be reached or refused us as a whole (no
+       answer, 5xx, 401/403 key or IP block, 429): every address would fail
+       the same way. Anything else is about THIS address. */
+    const st = e.response && e.response.status;
+    return !st || st >= 500 || [401, 403, 429].includes(st) ? 'outage' : false;
+  }
+}
+
+/* Hourly: every opt-out Brevo has not confirmed. Hourly for the first
+   OPTOUT_BREVO_TRIES tries, then once a day for as long as it takes: an
+   opt-out is never abandoned, because until Brevo has it a Brevo campaign
+   could still reach that person. Reaching the tenth failure is reported once.
+   The batch stops at the first failure: in an outage every address fails the
+   same way, so trying the rest only holds up the hourly sweep; a refusal of one
+   address (a 400) skips past it instead. First run after
+   deploy copies the whole existing list (they are all unsynced), 200 an hour. */
+async function brevoOptoutSync() {
+  if (!process.env.BREVO_API_KEY) return '';
+  const { rows } = await pool.query(
+    `SELECT email, brevo_attempts FROM email_optouts
+      WHERE brevo_synced_at IS NULL
+        AND (brevo_attempts < $1 OR brevo_tried_at IS NULL OR brevo_tried_at < NOW() - interval '24 hours')
+      ORDER BY created_at LIMIT 200`, [OPTOUT_BREVO_TRIES]);
+  let ok = 0, stopped = false;
+  const overdue = [];
+  for (const r of rows) {
+    const done = await pushOptoutToBrevo(r.email);
+    if (done === true) { ok++; continue; }
+    if (r.brevo_attempts + 1 === OPTOUT_BREVO_TRIES) overdue.push(r.email);
+    /* An outage stops the batch (the rest would fail the same way); an
+       address Brevo refuses on its own merits never blocks the ones behind it. */
+    if (done === 'outage') { stopped = true; break; }
+  }
+  if (overdue.length) {
+    await reportError('brevo-optout-sync', new Error(
+      `An unsubscribe has failed to reach Brevo's blocklist ${OPTOUT_BREVO_TRIES} times; it is retried daily. ` +
+      'Add it to the blocklist in Brevo by hand before the next Brevo campaign'), overdue.join(', ').slice(0, 500));
+  }
+  const left = rows.length - ok;
+  return rows.length ? `${ok} opt-out(s) sent to Brevo${left ? `, ${left} still pending${stopped ? ' (stopped at a failure; next hour)' : ''}` : ''}` : '';
 }
 
 app.post('/api/unsubscribe', async (req, res) => {
@@ -33274,6 +33419,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
+    await step('brevo opt-out sync', brevoOptoutSync);
     await step('brevo quote catch-up', brevoQuoteCatchUp);
     await step('brevo quote re-sync', brevoQuoteResync);
     /* Cancelled quotes and refunded studio orders give their delivery seats
@@ -33311,6 +33457,10 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
   /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
   setTimeout(() => step('notifications', notifySweep), 20 * 1000);
   setInterval(() => step('notifications', notifySweep), 2 * 60 * 1000);
+  /* Wholesale: statuses derived from quotes and payments, and webhooks out,
+     every 2 minutes. Does nothing while JT_WHOLESALE is off. */
+  setInterval(() => step('wholesale', () => WHOLESALE.sweep(wholesaleDeps)),
+    Math.max(5000, Number(process.env.JT_WHOLESALE_SWEEP_MS) || 2 * 60 * 1000));
   /* The task flow: everyone's routine and empty lanes, every 10 minutes. */
   setTimeout(() => step('task flow', taskFlowSweep), 40 * 1000);
   setInterval(() => step('task flow', taskFlowSweep), 10 * 60 * 1000);

@@ -74,7 +74,6 @@ test('the history is written before every change that moves a quote or its money
   assert.match(fn('async function snapshotQuote('), /to_jsonb\(q\.\*\)/);
   for (const [sig, action] of [
     ["app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin", 'edit'],
-    ["app.post('/admin/quote/:code/cancel', requireAdmin", 'cancel'],
     ["app.post('/admin/quote/:code/uncancel', requireAdmin", 'restore'],
     ["app.post('/admin/quote/:code/settle', requireAdmin", 'settle'],
     ["app.post('/admin/quote/:code/mark-paid', requireAdmin", 'payment recorded'],
@@ -85,6 +84,12 @@ test('the history is written before every change that moves a quote or its money
        and 'edit' otherwise. */
     assert.match(route(sig), new RegExp(`snapshotQuote\\((?:code|editing), (?:[^;]*: )?'${action}'`), `${sig} → ${action}`);
   }
+  /* Cancelling goes through applyQuoteCancel (the job page and the wholesale
+     API share it), which snapshots before its UPDATE. */
+  assert.match(route("app.post('/admin/quote/:code/cancel', requireAdmin"), /await applyQuoteCancel\(/);
+  const cancelFn = fn('async function applyQuoteCancel(');
+  assert.match(cancelFn, /snapshotQuote\(code, 'cancel'/);
+  assert.ok(cancelFn.indexOf("snapshotQuote(code, 'cancel'") < cancelFn.indexOf('UPDATE quotes SET cancelled_at'), 'snapshot before the cancel');
   const save = route("app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin");
   assert.ok((save.indexOf("snapshotQuote(editing, ") > -1 && save.indexOf("snapshotQuote(editing, ") < save.indexOf('UPDATE quotes SET name=$2')), 'before the update, so it keeps the old row');
   assert.doesNotMatch(src, /DELETE FROM quote_revisions/, 'nothing deletes history');
@@ -211,7 +216,8 @@ test('a helper may cancel only what nothing was agreed or paid on', () => {
 });
 
 test('every cancelled job comes to the owner to follow up', () => {
-  const r = route("app.post('/admin/quote/:code/cancel', requireAdmin");
+  /* The route, then the shared steps it runs (applyQuoteCancel). */
+  const r = route("app.post('/admin/quote/:code/cancel', requireAdmin") + fn('async function applyQuoteCancel(');
   assert.match(r, /if \(!reason\) return back\(res, backTo, 'err'/, 'a helper says why');
   assert.match(r, /kind: 'cancel_request'/, 'an agreed or paid job becomes a request');
   assert.ok(r.indexOf("kind: 'cancel_request'") < r.indexOf("cancelled_at = NOW()"), 'and is not cancelled');

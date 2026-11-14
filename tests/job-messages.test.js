@@ -63,6 +63,7 @@ function clientMail({ fail = null, unsubscribed = false, inbound = false } = {})
     pool: { query: async (sql, args) => { if (/INSERT INTO client_emails/.test(sql)) rows.push(args.slice(0, 7)); return { rows: [] }; } },
     sendEmail: async (m) => { if (fail) throw new Error(fail); sent.push(m); },
     isUnsubscribed: async () => unsubscribed,
+    marketingBlocked: async () => unsubscribed,
     htmlToText: (h) => String(h).replace(/<[^>]+>/g, ''),
     attributedStaffId: () => null,
     console: { error() {} },
@@ -179,7 +180,7 @@ function card({ stopped = false, history = [], smsOn = true, consent = true, q =
     FOLLOWUPS: require('../tools/lib/followups'), process: { env: {} },
     currentActor: () => actor, WAITING_SHOWN: 10,
     staffRoster: async () => [{ id: 7, name: 'Eli Ramos' }],
-    isUnsubscribed: async () => unsubscribed, actorLevel: (k) => (k === 'customers.message' ? messageLevel : 'on'),
+    isUnsubscribed: async () => unsubscribed, marketingBlocked: async () => unsubscribed, actorLevel: (k) => (k === 'customers.message' ? messageLevel : 'on'),
   };
   sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);

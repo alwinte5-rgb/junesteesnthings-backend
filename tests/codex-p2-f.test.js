@@ -8,7 +8,8 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const after = (a, n = 1500) => { const i = src.indexOf(a); assert.ok(i > -1, a); return src.slice(i, i + n); };
 
 test('#143 deliveries: freed on cancel and hourly, delivered is said once, review ask moves', () => {
-  assert.match(after("app.post('/admin/quote/:code/cancel'", 4000), /DELIVERY\.cancelRef\('quote:' \+ code, 'system', 'quote cancelled'\)/);
+  assert.match(after("app.post('/admin/quote/:code/cancel'", 2000), /await applyQuoteCancel\(/);
+  assert.match(after('async function applyQuoteCancel(', 4000), /DELIVERY\.cancelRef\('quote:' \+ code, 'system', 'quote cancelled'\)/);
   assert.match(src, /await step\('delivery reconcile'/);
   const st = after("app.post('/admin/delivery/job/:id/status'", 1800);
   assert.match(st, /status === 'delivered' && !\(was && was\.status === 'delivered'\)/);
