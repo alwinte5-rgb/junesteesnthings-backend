@@ -3230,8 +3230,20 @@ function activePromoCode() {
   if (!pool.length) pool.push('SAVE10');
   return pool[Math.floor(Date.now() / 1000 / 604800) % pool.length];
 }
-/** The percentage that code takes off (JT_PROMO_PCT, default 10). */
-function activePromoPct() { return parseInt(process.env.JT_PROMO_PCT, 10) || 10; }
+/* What that code is worth: a set dollar amount off an order over a floor
+   (owner, 2026-11-14: $15 off $50+), from tools/lib/promo-offer.js. The
+   designer reads the same JT_PROMO_AMOUNT / JT_PROMO_MIN, so the email that
+   promises it and the checkout that takes it agree. */
+const { promoOffer } = require('./tools/lib/promo-offer');
+const BUSINESS = require('./tools/lib/business-contact');
+/** The offer a code was issued at, as the designer reports it (amount, min),
+ *  so a text describes the code the customer actually holds. Falls back to this
+ *  server's own offer when the designer sends nothing usable (an older build). */
+function issuedOffer(b) {
+  const amount = Number(b && b.amount), min = Number(b && b.min);
+  if (!Number.isFinite(amount) || amount <= 0) return promoOffer();
+  return promoOffer({ JT_PROMO_AMOUNT: String(amount), JT_PROMO_MIN: Number.isFinite(min) ? String(min) : '' });
+}
 console.log(`Active recovery promo code this week: ${activePromoCode()}`);
 
 /* HTML escaping, used on every interpolated value in this file.
@@ -3375,10 +3387,46 @@ function explainFailures(instance, service) {
    them and not the other, so every CRM call authenticated with a dead key
    while sending looked fine. Two homes for one secret is two chances to rotate
    half of it. */
-const brevo = keepFirstSource(keepContactsWhenPhoneFails(explainFailures(axios.create({
+const brevo = joinBusinessList(keepFirstSource(keepContactsWhenPhoneFails(explainFailures(axios.create({
   baseURL: 'https://api.brevo.com/v3',
   headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
-}), 'Brevo')));
+}), 'Brevo'))));
+
+/** New business contacts join the Brevo "Business" list (owner, 2026-11-14:
+ *  "add new businesses"), on the client every contact write passes through, so
+ *  no way in — quote form, checkout, chat, a quote the shop builds — can miss
+ *  it. A business is an email on a custom domain (tools/lib/business-contact.js;
+ *  BREVO_BUSINESS_LIST_ID picks the list, "off" stops it). The list is only
+ *  ever added to the write, never removed, so a contact already on it stays.
+ *  The list must never cost a contact: if Brevo refuses a write the list was
+ *  added to, the same write (phone and source already settled by the other
+ *  interceptors) is sent once more with only that list taken back out.
+ *  tests/business-contact.test.js. */
+function joinBusinessList(instance) {
+  instance.interceptors.request.use((cfg) => {
+    if (cfg.jtNoBusinessList || String(cfg.method).toLowerCase() !== 'post' || cfg.url !== '/contacts') return cfg;
+    const body = contactWriteBody(cfg);
+    /* An unsubscribe (pushOptoutToBrevo) is not someone getting in touch: it
+       must never put a person on, or create them in, a marketing list. */
+    if (body && 'emailBlacklisted' in body) return cfg;
+    const next = BUSINESS.withBusinessList(body);
+    if (!body || next === body) return cfg;
+    return { ...cfg, data: next, jtBusinessListId: next.listIds[next.listIds.length - 1] };
+  });
+  instance.interceptors.response.use(null, (err) => {
+    const cfg = err && err.config;
+    const body = contactWriteBody(cfg);
+    const status = err && err.response ? err.response.status : 0;   // only a refusal of the write itself; a dead key or outage is not retried
+    const said = String((err && err.response && err.response.data && err.response.data.message) || '');
+    if (!cfg || !cfg.jtBusinessListId || cfg.jtNoBusinessList || !body || (status !== 400 && status !== 404)
+        || !/\blist/i.test(said)) return Promise.reject(err);   // a refusal about anything else is not ours to retry
+    console.warn('brevo: contact write refused with the business list added; sending it without —',
+      err.response && err.response.data && err.response.data.message || err.message);
+    const listIds = (Array.isArray(body.listIds) ? body.listIds : []).filter((id) => id !== cfg.jtBusinessListId);
+    return instance.request({ ...cfg, data: { ...body, listIds }, jtNoBusinessList: true });
+  });
+  return instance;
+}
 
 /** The phone rule, where every contact write passes through. Brevo's SMS
  *  attribute must be E.164, and a phone it cannot use — typed as
@@ -6445,7 +6493,7 @@ async function sendDesignFollowups(now = new Date()) {
        ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [designFuCampaign(lead.id, step), lead.email]);
     if (!claim.length) continue;
     const m = DESIGN_FU.followupEmail(step, { name: lead.name, link: lead.design_url,
-      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(), pct: activePromoPct() });
+      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(), offer: promoOffer() });
     try {
       await sendEmail({ to: lead.email, subject: m.subject, html: customerEmailHtml(m.heading, m.inner), marketing: true, promo: false });
       await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [claim[0].id]);
@@ -6735,7 +6783,7 @@ app.post('/api/sms-cart-code', requireInternalKey, capPerRecipient('sms-cart-cod
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
   const status = await sendCustomerSms({
     phone: consent.phone, kind: 'marketing', ref: 'cart-code:' + day,
-    msg: SMS.cartCode({ code, pct: b.pct, restoreUrl }),
+    msg: SMS.cartCode({ code, offer: issuedOffer(b), restoreUrl }),
   });
   res.json({ ok: status === 'sent' || status === 'duplicate', status });
 });
@@ -6755,7 +6803,7 @@ app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart
   const month = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }).slice(0, 7);
   const status = await sendCustomerSms({
     phone, kind: 'marketing', ref: 'cart-followup:' + month,
-    msg: SMS.cartFollowup({ code, pct: b.pct, restoreUrl }),
+    msg: SMS.cartFollowup({ code, offer: issuedOffer(b), restoreUrl }),
   });
   // Settled outcomes answer 200 so the cron marks the cart done. Not-set-up or
   // a failed send answers 503 so the next hourly run tries again.
@@ -6766,7 +6814,7 @@ app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart
 /* ── The reintroduction campaign (tools/lib/reintro.js) ─────────────────────
    Owner, 2026-10-05: say hello to everyone, the safe way. A promotional TEXT
    only to phones with marketing consent; an EMAIL to the rest of the Brevo
-   list, inviting them to sign up for texts, and signing up earns a 10% code.
+   list, inviting them to sign up for texts, and signing up earns the $15-off-$50+ code.
    The owner starts each half from /admin/campaign; nothing here sends on its
    own until then. */
 
@@ -6789,15 +6837,16 @@ async function campaignTextPhones() {
   return REINTRO.marketingPhones(rows, foldSmsConsent);
 }
 
-/** A single-use 10% code for one sign-up, made in the studio's promo table. */
+/** A single-use sign-up code (the dollar offer, REINTRO.OFFER) for one sign-up, made in the studio's promo table. */
 async function mintSignupCode(email) {
   const expires = new Date(Date.now() + REINTRO.CODE_DAYS * 86400000).toISOString().slice(0, 10);
   let last = '';
   for (let i = 0; i < 3; i++) {
     const form = new URLSearchParams();
     form.set('code', REINTRO.newCode());
-    form.set('kind', 'percent');
-    form.set('value', String(REINTRO.PCT));
+    form.set('kind', 'amount');
+    form.set('value', String(REINTRO.OFFER.amount));
+    form.set('min_order', String(REINTRO.OFFER.min));
     form.set('expires', expires);
     form.set('note', `Text sign-up (${REINTRO.CAMPAIGN})`);
     form.set('max_uses', '1');
@@ -6874,18 +6923,18 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
       <p>${again ? (code ? 'Here is your code from when you signed up.' : 'Thanks for being with us.')
         : code ? "Here's your code. We've texted it to you too." : 'Your code is on its way.'}</p></div>
     <div class="tx-wrap"><div class="tx-card" style="text-align:center">
-      ${code ? `<div style="font-weight:700;color:#0B1F4B">Your ${REINTRO.PCT}% off code</div>
+      ${code ? `<div style="font-weight:700;color:#0B1F4B">${again ? 'Your code' : `Your ${REINTRO.OFFER.short} code`}</div>
         <div class="tx-code">${escEmail(code)}</div>
         <p class="tx-small">Use it at checkout in the Design Lab, or mention it when you get a quote.
           Good once, for ${REINTRO.CODE_DAYS} days${again ? ' from when you signed up. Used or run out? Call or text us at (773) 900-4592' : ''}.</p>`
-      : again ? `<p>Can't find your ${REINTRO.PCT}% off code? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a> and we'll sort it out.</p>`
-      : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
+      : again ? `<p>Can't find your ${REINTRO.OFFER.short} code? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a> and we'll sort it out.</p>`
+      : `<p>June will send your ${REINTRO.OFFER.short} code to you shortly.</p>`}
       <a class="tx-btn" href="${LAB}">Start designing</a>
       <div class="tx-garments">${garments}</div>
     </div></div>${foot}
     <script>/* Signed up: jtees.net's texts popup (assets/js/texts-popup.js) stops asking. */
       try { localStorage.setItem('jt_tx_joined', String(Date.now())); } catch (e) {}</script>` : `${top}
-    <div class="tx-hero"><h1>Get <span>${REINTRO.PCT}% off</span><br>your next order</h1>
+    <div class="tx-hero"><h1>Get <span>${REINTRO.OFFER.off}</span><br>your next order of ${REINTRO.OFFER.floor}+</h1>
       <p>Join June's Tees texts for new products, seasonal deals and first dibs on specials. Your code is yours right away.</p></div>
     <div class="tx-wrap"><div class="tx-card">
       ${error ? `<div class="tx-err">${escEmail(error)}</div>` : ''}
@@ -6900,7 +6949,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
         <input id="tx-first" name="first" maxlength="40" autocomplete="given-name" value="${v(first)}">
         <div style="margin-top:12px">${consentCheckboxesHtml()}</div>
         <p class="tx-small" style="margin:6px 0 0">Your code comes with the second box, our deals texts.</p>
-        <button type="submit" class="tx-btn">Get my ${REINTRO.PCT}% off</button>
+        <button type="submit" class="tx-btn">Get my ${REINTRO.OFFER.off}</button>
       </form>
       <ul class="tx-perks"><li>Design your own online: 45+ garments, live pricing, no minimums</li>
         <li>Printed by June's Tees in Chicago</li><li>Up to 4 texts a month. Reply STOP any time.</li></ul>
@@ -6910,7 +6959,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
      colour headings and inputs for a different layout, and leaked through. */
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Get ${REINTRO.PCT}% off - June's Tees</title>
+<title>Get ${REINTRO.OFFER.short} - June's Tees</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap">
 <style>*,*:before,*:after{box-sizing:border-box}${TEXTS_CSS}</style></head><body>${body}</body></html>`;
@@ -6954,8 +7003,8 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
     if (code) {
       sendCustomerSms({ phone: consent.phone, kind: 'marketing', ref: 'signup:' + REINTRO.CAMPAIGN, msg: REINTRO.codeText({ code }) })
         .catch((e) => console.error('sign-up code text failed:', e.message));
-      sendEmail({ to: email, subject: `Your ${REINTRO.PCT}% off code: ${code}`, promo: false,
-        html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
+      sendEmail({ to: email, subject: `Your ${REINTRO.OFFER.short} code: ${code}`, promo: false,
+        html: customerEmailHtml(`Here's your ${REINTRO.OFFER.short}`,
           `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
            <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout in the
              <a href="${STUDIO_BASE}/editor.php?product_base=12">Design Lab</a>, or mention it when you get a quote. It's good for
@@ -6963,7 +7012,7 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
         .catch((e) => console.error('sign-up code email failed:', e.message));
     } else {
       sendEmail({ to: NOTIFY_EMAIL, subject: `Text sign-up needs a code: ${email}`,
-        html: `<p>${escEmail(first || email)} signed up for texts, but the ${REINTRO.PCT}% code could not be made.
+        html: `<p>${escEmail(first || email)} signed up for texts, but the ${REINTRO.OFFER.short} code could not be made.
           Send them one from <a href="${PUBLIC_BASE_URL}/admin/discounts">Discounts</a>.</p>` }).catch(() => {});
     }
     res.send(textsPage({ done: true, code }));
@@ -6993,7 +7042,7 @@ async function joinByText(phone) {
     await sendCustomerSms({ phone, kind: 'marketing', ref: 'signup:' + REINTRO.CAMPAIGN, msg: REINTRO.codeText({ code }) });
   } else {
     sendEmail({ to: NOTIFY_EMAIL, subject: `Texted JOIN, needs a code: ${phone}`,
-      html: `<p>${escEmail(phone)} texted JOIN, but the ${REINTRO.PCT}% code could not be made. Text them one from
+      html: `<p>${escEmail(phone)} texted JOIN, but the ${REINTRO.OFFER.short} code could not be made. Text them one from
         <a href="${PUBLIC_BASE_URL}/admin/discounts">Discounts</a>.</p>` }).catch(() => {});
   }
 }
@@ -7213,14 +7262,14 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
           : '<p><b>Done</b>: everyone with deals consent has had the hello text.</p>'}
       </div>
       <div class="card" style="margin-top:14px">
-        <h2 class="card-title">2. The email, with ${REINTRO.PCT}% off for signing up for texts</h2>
+        <h2 class="card-title">2. The email, with ${REINTRO.OFFER.short} for signing up for texts</h2>
         ${brevoErr ? `<div class="warn">Could not read the Brevo list: ${escEmail(brevoErr)}</div>` : `
         <p class="muted"><b>${audience.length}</b> people on the Brevo list who are not getting the text and have not
           unsubscribed. Up to ${cap} a day go out, so your daily email allowance is not used up.</p>`}
         <p><b>Subject:</b> ${escEmail(mail.subject)}</p>
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">${mail.html}</div>
         <p class="muted" style="font-size:12.5px">The button goes to <a href="${REINTRO.SIGNUP_PATH}" target="_blank">the sign-up page</a>.
-          Each person who signs up gets their own single-use ${REINTRO.PCT}% code, by text, by email and on screen.</p>
+          Each person who signs up gets their own single-use ${REINTRO.OFFER.short} code, by text, by email and on screen.</p>
         <p>Emailed: <b>${emailedOk}</b>${cnt(em, ['failed']) ? ` · failed: ${cnt(em, ['failed'])}` : ''}</p>
         ${started('email') ? `<p class="muted">Started ${fmtDate(started('email').started_at)}. It carries on by itself each day until everyone has it.</p>`
           : brevoErr || !audience.length ? '' : `
@@ -7229,7 +7278,7 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
       </div>
       <div class="card" style="margin-top:14px">
         <h2 class="card-title">3. Keep growing the text list</h2>
-        <p class="muted">Every way in gives the same single-use ${REINTRO.PCT}% code and records their consent.</p>
+        <p class="muted">Every way in gives the same single-use ${REINTRO.OFFER.short} code and records their consent.</p>
         <table class="dtable" style="width:100%;font-size:14px">${Object.entries(REINTRO.SOURCES).map(([k, label]) =>
           `<tr><td style="padding:6px 4px">${escEmail(label)}</td><td style="text-align:right;padding:6px 4px"><b>${
             (su.find((r) => r.source === k) || { n: 0 }).n}</b></td></tr>`).join('')}
@@ -7260,7 +7309,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
   if (!isOwner()) return res.redirect('/admin/dashboard');
   const url = `${PUBLIC_BASE_URL}${REINTRO.SIGNUP_PATH}?src=shop`;
   const qr = `https://api.qrserver.com/v1/create-qr-code/?size=520x520&margin=8&data=${encodeURIComponent(url)}`;
-  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Get ${REINTRO.PCT}% off - June's Tees</title>
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Get ${REINTRO.OFFER.short} - June's Tees</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>body{font-family:system-ui,sans-serif;margin:0;color:#12203c;text-align:center}
       .s{max-width:640px;margin:0 auto;padding:36px 24px}h1{font-size:54px;margin:8px 0;color:#F0275A}
@@ -7268,7 +7317,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
       img.qr{width:300px;height:300px}.f{font-size:13px;color:#4b5563;line-height:1.5;margin-top:22px}
       @media print{.np{display:none}}</style></head><body><div class="s">
     <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo-current-900.png" alt="June's Tees" style="width:220px">
-    <h1>Get ${REINTRO.PCT}% off</h1>
+    <h1>Get ${REINTRO.OFFER.short}</h1>
     <p style="font-size:22px;margin:0">your next order when you join our texts</p>
     <img class="qr" src="${escEmail(qr)}" alt="QR code to sign up">
     <p style="font-size:18px;margin:4px 0">Scan to sign up</p>
@@ -8305,20 +8354,20 @@ app.post('/api/abandoned-cart-email', requireInternalKey, capPerRecipient('aband
       for (const [k, t] of recentCartEmails) if (Date.now() - t > CART_EMAIL_DEDUP_MS) recentCartEmails.delete(k);
     }
     const promoCode = activePromoCode();
-    const promoPct = activePromoPct();
+    const offer = promoOffer();
     const cartLine = `Your cart at June's Tees &amp; Things has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.`;
     const copy = count > 0 ? {
-      1: { subject: `Your cart is saved + here's ${promoPct}% off ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready — and code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off at checkout.`, cta: `Pick Up Where I Left Off →` },
+      1: { subject: `Your cart is saved + here's ${offer.off} ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready — and code <strong style="color:#F0275A;">${promoCode}</strong> takes ${offer.off} orders of ${offer.floor} or more at checkout.`, cta: `Pick Up Where I Left Off →` },
       2: { subject: `Your custom design is waiting for you 🎨`, heading: `You left something great behind!`, body: cartLine, cta: `Pick Up Where I Left Off →` },
-      3: { subject: `Take ${promoPct}% off and finish your order 🎉`, heading: `Here's a little something to help`, body: `${cartLine} Use code <strong style="color:#F0275A;">${promoCode}</strong> at checkout for ${promoPct}% off.`, cta: `Finish My Order →` },
+      3: { subject: `Take ${offer.off} and finish your order 🎉`, heading: `Here's a little something to help`, body: `${cartLine} Use code <strong style="color:#F0275A;">${promoCode}</strong> at checkout for ${offer.off} an order of ${offer.floor} or more.`, cta: `Finish My Order →` },
       4: { subject: `Still thinking it over? Your design is safe`, heading: `No rush — it's all saved`, body: `${cartLine} Want a hand with sizing, colors, or bulk pricing? Just reply to this email or text us.`, cta: `See My Saved Cart →` },
-      5: { subject: `Last call — your saved cart expires soon ⏳`, heading: `Don't lose your design`, body: `${cartLine} Saved carts are cleared after a while, so grab it before it's gone — code <strong style="color:#F0275A;">${promoCode}</strong> still gets you ${promoPct}% off.`, cta: `Rescue My Cart →` },
+      5: { subject: `Last call — your saved cart expires soon ⏳`, heading: `Don't lose your design`, body: `${cartLine} Saved carts are cleared after a while, so grab it before it's gone — code <strong style="color:#F0275A;">${promoCode}</strong> still gets you ${offer.off} an order of ${offer.floor} or more.`, cta: `Rescue My Cart →` },
     } : {
-      1: { subject: `Welcome to June's Tees — here's ${promoPct}% off 🎁`, heading: `Thanks for stopping by!`, body: `Ready when you are: design custom tees, hoodies, hats and more in minutes. Use code <strong style="color:#F0275A;">${promoCode}</strong> for ${promoPct}% off your order.`, cta: `Start Designing →` },
-      2: { subject: `Ready to create something custom?`, heading: `Your ideas, printed`, body: `Custom apparel for teams, events, businesses and birthdays — designed by you, printed with love in Chicago. Your ${promoPct}% off code <strong style="color:#F0275A;">${promoCode}</strong> is waiting.`, cta: `Start Designing →` },
-      3: { subject: `Your ${promoPct}% off code is still waiting 🎉`, heading: `Don't forget your discount`, body: `Code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off anything you design — tees, hoodies, hats, tote bags and more.`, cta: `Browse Products →` },
+      1: { subject: `Welcome to June's Tees — here's ${offer.off} 🎁`, heading: `Thanks for stopping by!`, body: `Ready when you are: design custom tees, hoodies, hats and more in minutes. Use code <strong style="color:#F0275A;">${promoCode}</strong> for ${offer.off} your order of ${offer.floor} or more.`, cta: `Start Designing →` },
+      2: { subject: `Ready to create something custom?`, heading: `Your ideas, printed`, body: `Custom apparel for teams, events, businesses and birthdays — designed by you, printed with love in Chicago. Your ${offer.off} code <strong style="color:#F0275A;">${promoCode}</strong> is waiting.`, cta: `Start Designing →` },
+      3: { subject: `Your ${offer.off} code is still waiting 🎉`, heading: `Don't forget your discount`, body: `Code <strong style="color:#F0275A;">${promoCode}</strong> takes ${offer.off} any order of ${offer.floor} or more you design — tees, hoodies, hats, tote bags and more.`, cta: `Browse Products →` },
       4: { subject: `Need ideas? Custom apparel made easy`, heading: `From idea to printed in days`, body: `Family reunions, team uniforms, memorials, birthdays, business merch — tell us what you're planning and we'll help you design it. Reply to this email or text us anytime.`, cta: `Get Started →` },
-      5: { subject: `Last call for your ${promoPct}% off ⏳`, heading: `Your discount is about to expire`, body: `This is the last reminder for code <strong style="color:#F0275A;">${promoCode}</strong> — ${promoPct}% off your custom order. We'd love to make something great with you.`, cta: `Use My Discount →` },
+      5: { subject: `Last call for your ${offer.off} ⏳`, heading: `Your discount is about to expire`, body: `This is the last reminder for code <strong style="color:#F0275A;">${promoCode}</strong> — ${offer.off} your custom order of ${offer.floor} or more. We'd love to make something great with you.`, cta: `Use My Discount →` },
     };
     const c = copy[stage];
     recentCartEmails.set(dedupKey, Date.now());
@@ -22803,7 +22852,7 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
     </tr>`;
 
   res.send(adminPage('Discounts', `<h1>Discounts</h1>${isOwner() ? `
-    <p style="margin:-4px 0 12px"><a href="/admin/campaign" style="color:#1848B8;font-weight:600">Reintroduction campaign: hello text + ${REINTRO.PCT}% off for signing up to texts &rarr;</a></p>` : ''}
+    <p style="margin:-4px 0 12px"><a href="/admin/campaign" style="color:#1848B8;font-weight:600">Reintroduction campaign: hello text + ${REINTRO.OFFER.short} for signing up to texts &rarr;</a></p>` : ''}
     ${customerList}
     <div class="sub">${liveCount} live &middot; ${codes.length} total &middot;
       <span class="muted" style="font-size:12px">codes you issue by hand, for design.jtees.net checkout</span></div>

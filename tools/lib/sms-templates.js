@@ -113,18 +113,18 @@ const T = {
 
   // Marketing: the "your work is saved" popup. Two segments when a cart link is
   // included — the restore link is long and cannot be shortened safely.
-  cartCode: ({ code, pct, restoreUrl }) => ({
+  cartCode: ({ code, offer = require('./promo-offer').promoOffer(), restoreUrl }) => ({
     template: 'cart-code',
-    body: `${BRAND}: So glad you stopped by! Your ${Number(pct) || 10}% off first-order code is ${plain(code, 20)}.` +
+    body: `${BRAND}: So glad you stopped by! Your ${offer.off} first-order code (orders of ${offer.floor}+) is ${plain(code, 20)}.` +
       (restoreUrl ? ` Pick up where you left off: ${short(restoreUrl)}` : ' Design yours at jtees.net') +
       ` ${STOP}`,
   }),
 
   // The one follow-up, 3+ days after a popup capture with a saved cart.
-  cartFollowup: ({ code, pct, restoreUrl }) => ({
+  cartFollowup: ({ code, offer = require('./promo-offer').promoOffer(), restoreUrl }) => ({
     template: 'cart-followup',
     body: `${BRAND}: Still thinking it over? Your design is saved: ${short(restoreUrl)}` +
-      ` Code ${plain(code, 20)} still takes ${Number(pct) || 10}% off your first order. ${STOP}`,
+      ` Code ${plain(code, 20)} still takes ${offer.off} your first order of ${offer.floor}+. ${STOP}`,
   }),
 
   // Design-studio orders (design.jtees.net)

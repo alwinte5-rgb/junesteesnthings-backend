@@ -1,6 +1,6 @@
 'use strict';
 
-/* The "10% off for joining our texts" popup on jtees.net (2026-10-18).
+/* The "$15 off $50+ for joining our texts" popup on jtees.net (2026-10-18).
  *
  * The popup is a copy of the /texts sign-up form that posts to /texts, so
  * what must hold is that the copy keeps matching the real thing:
