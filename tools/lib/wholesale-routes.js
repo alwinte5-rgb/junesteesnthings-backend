@@ -59,6 +59,9 @@ async function ensureTables(pool) {
       UNIQUE (partner_id, idempotency_key),
       UNIQUE (partner_id, external_ref)
     )`);
+  /* The quote revision last announced, so a re-priced quote is announced
+     (quote.revised) even when its status does not change. */
+  await pool.query(`ALTER TABLE wholesale_requests ADD COLUMN IF NOT EXISTS quote_revision_cache INTEGER`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS wholesale_requests_quote ON wholesale_requests (quote_code) WHERE quote_code IS NOT NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS wholesale_requests_open ON wholesale_requests (status_cache, updated_at)`);
   /* Every change, who made it, before and after. Append-only; it is also the
@@ -115,6 +118,11 @@ function send(res, status, body) {
 
 /** An event, its webhook row when the partner has a URL, in one transaction. */
 async function recordEvent(client, { partnerId, requestId, type, actor, before = null, after = null, data = null }) {
+  /* One writer at a time per partner, held to COMMIT, so a partner's event ids
+     are handed out in commit order. Without it an event given id 100 could
+     commit after id 101, and a reader already past 101 (GET /events?after=)
+     would never see it. */
+  await client.query('SELECT pg_advisory_xact_lock(7301, $1)', [partnerId]);
   const id = W.publicId('evt');
   const { rows: [ev] } = await client.query(
     `INSERT INTO wholesale_events (public_id, partner_id, request_id, type, actor, before_status, after_status, data)
@@ -142,7 +150,8 @@ async function inTx(pool, fn) {
 
 function mount(app, deps) {
   const { pool, quoteTotals, publicBase, alertShop, reportError, requireAdmin, isOwner,
-          adminPage, esc, fmtDate, logActivity, actor, clientIp, quoteCodeRe, env = process.env } = deps;
+          adminPage, esc, fmtDate, logActivity, actor, clientIp, quoteCodeRe, lineFigures = null,
+          cancelQuote, env = process.env } = deps;
   const perPartner = makeLimiter(Number(env.JT_WHOLESALE_RATE_PER_MIN) || 120);
   const perIpBadKey = makeLimiter(20);
   const quoteUrl = (code) => `${publicBase}/q/${encodeURIComponent(code)}`;
@@ -153,7 +162,7 @@ function mount(app, deps) {
     return rows[0] || null;
   }
 
-  const requestView = (r, q) => W.requestView(r, q, q ? quoteTotals(q) : null, q ? quoteUrl(q.code) : null);
+  const requestView = (r, q) => W.requestView(r, q, q ? quoteTotals(q) : null, q ? quoteUrl(q.code) : null, lineFigures);
 
   /* ── Auth for every /api/wholesale/v1 route ─────────────────────────── */
   async function partnerAuth(req, res, next) {
@@ -245,18 +254,37 @@ function mount(app, deps) {
     } catch (e) { fail(res, 'create')(e); }
   });
 
-  /* List, newest change first: the reconciliation read. */
+  /* List, OLDEST change first, with a cursor: the reconciliation read. Page
+     with next_cursor until it is null; nothing that changed is skipped, even
+     when many requests share one updated_at. */
   app.get(`${base}/requests`, partnerAuth, async (req, res) => {
     const since = req.query.updated_since ? new Date(String(req.query.updated_since).slice(0, 40)) : null;
     if (since && !Number.isFinite(since.getTime())) return send(res, 422, W.err('invalid_field', 'updated_since: an ISO date', 'updated_since'));
+    let after = null;
+    if (req.query.cursor) {
+      const m = /^([0-9T:.+\- ]{10,40})\|(\d{1,18})$/.exec(Buffer.from(String(req.query.cursor).slice(0, 120), 'base64url').toString());
+      if (!m || !Number.isFinite(Date.parse(m[1]))) return send(res, 422, W.err('invalid_field', 'cursor: pass next_cursor back unchanged', 'cursor'));
+      after = { at: m[1], id: m[2] };
+    }
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     try {
       const { rows } = await pool.query(
-        `SELECT * FROM wholesale_requests WHERE partner_id = $1 AND ($2::timestamptz IS NULL OR updated_at > $2::timestamptz)
-          ORDER BY updated_at DESC LIMIT $3`, [req.partner.id, since ? since.toISOString() : null, limit]);
-      const out = [];
-      for (const r of rows) out.push(requestView(r, await loadQuote(r.quote_code)));
-      send(res, 200, { requests: out });
+        `SELECT *, updated_at::text AS updated_at_text FROM wholesale_requests
+          WHERE partner_id = $1 AND ($2::timestamptz IS NULL OR updated_at > $2::timestamptz)
+            AND ($3::timestamptz IS NULL OR (updated_at, id) > ($3::timestamptz, $4::bigint))
+          ORDER BY updated_at, id LIMIT $5`,
+        [req.partner.id, since ? since.toISOString() : null, after ? after.at : null, after ? after.id : null, limit]);
+      const codes = rows.map((r) => r.quote_code).filter(Boolean);
+      const quotes = new Map();
+      if (codes.length) {
+        const { rows: qs } = await pool.query('SELECT * FROM quotes WHERE code = ANY($1::text[])', [codes]);
+        for (const q of qs) quotes.set(q.code, q);
+      }
+      const last = rows[rows.length - 1];
+      send(res, 200, {
+        requests: rows.map((r) => { const { updated_at_text, ...row } = r; return requestView(row, quotes.get(r.quote_code) || null); }),
+        next_cursor: rows.length === limit ? Buffer.from(`${last.updated_at_text}|${last.id}`).toString('base64url') : null,
+      });
     } catch (e) { fail(res, 'list')(e); }
   });
 
@@ -315,9 +343,17 @@ function mount(app, deps) {
       if (out[0] !== 200) return send(res, out[0], out[1]);
       const r = await ownRequest(req);
       if (r.quote_code) {
+        /* The linked quote is cancelled too, the same way the job page does
+           it: no reminder chases it, its card page is closed, and it lands on
+           the owner's follow-up list. If that fails the shop is told to do it
+           by hand, because an open quote could still be paid. */
+        let closed = false;
+        try { closed = !!(await cancelQuote(r.quote_code, `Wholesale request cancelled by ${req.partner.name}${reason ? `: ${reason}` : ''}`, req.partner.name)); }
+        catch (e) { reportError('wholesale-cancel-quote', e, r.quote_code).catch(() => {}); }
         alertShop(`Wholesale request cancelled: quote ${r.quote_code}`,
-          `<p><b>${esc(req.partner.name)}</b> cancelled request ${esc(r.public_id)}${reason ? `: ${esc(reason)}` : ''}.</p>
-           <p>Nothing was paid. Cancel quote <b>${esc(r.quote_code)}</b> on its job page so no reminder goes out.</p>`).catch(() => {});
+          `<p><b>${esc(req.partner.name)}</b> cancelled request ${esc(r.public_id)}${reason ? `: ${esc(reason)}` : ''}. Nothing had been paid.</p>
+           ${closed ? `<p>Quote <b>${esc(r.quote_code)}</b> was cancelled with it.</p>`
+             : `<p><b>Quote ${esc(r.quote_code)} could not be cancelled automatically.</b> Cancel it on its job page so it cannot be paid or chased.</p>`}`).catch(() => {});
       }
       send(res, 200, { request: requestView(r, await loadQuote(r.quote_code)) });
     } catch (e) { fail(res, 'cancel')(e); }
@@ -338,6 +374,8 @@ function mount(app, deps) {
         const q = await loadQuote(r.quote_code, c);
         const status = W.statusOf(r, q);
         if (ENDED.includes(status) || status === 'shipped') return [409, W.err('artwork_closed', `Artwork cannot change on a request that is ${status}.`)];
+        const lineCount = ((r.payload || {}).lines || []).length;
+        if (a.line !== null && a.line >= lineCount) return [422, W.err('invalid_field', `line: 0-${lineCount - 1} on this request`, 'line')];
         const list = Array.isArray(r.artwork) ? r.artwork : [];
         if (list.length >= 50) return [409, W.err('artwork_limit', 'This request already has 50 artwork versions.')];
         const version = list.filter((x) => (x.line ?? null) === a.line).length + 1;
@@ -538,56 +576,106 @@ function eventView(e) {
 }
 
 /* ── The sweep: every two minutes ─────────────────────────────────────────
-   1. Reconcile: work out each open request's status from its quote and
-      payments; announce any change. Deriving it here, instead of hooking every
-      place a quote changes (accept, the Stripe webhook, a manual payment, the
-      job board's stage buttons), means no path can be missed.
-   2. Deliver due webhooks, with backoff; give up after the last try and say so. */
-async function sweep(deps) {
-  const { pool, reportError, alertShop, env = process.env, fetchImpl = fetch } = deps;
+   1. Reconcile: work out each open request's status (and its quote's
+      revision) from the quote and payments; announce any change. Deriving it
+      here, instead of hooking every place a quote changes (accept, the Stripe
+      webhook, a manual payment, the job board's stage buttons, an edit), means
+      no path can be missed. EVERY open request is read, in batches.
+   2. Deliver due webhooks, with backoff; give up after the last try and say so.
+   One sweep at a time in this process; deliveries are also CLAIMED in the
+   database first, so two processes (or a run started by linking a quote)
+   never send the same delivery twice. */
+let sweeping = null;
+function sweep(deps) {
+  if (!sweeping) sweeping = runSweep(deps).finally(() => { sweeping = null; });
+  return sweeping;
+}
+
+async function runSweep(deps) {
+  const { pool, reportError, alertShop, esc = (x) => String(x), env = process.env, fetchImpl = fetch,
+          resolvesPublic = W.resolvesPublic } = deps;
   if (!W.on(env)) return '';
-  let changed = 0, delivered = 0, failed = 0;
-  const { rows } = await pool.query(
-    `SELECT r.*, row_to_json(q.*) AS q FROM wholesale_requests r LEFT JOIN quotes q ON q.code = r.quote_code
-      WHERE r.status_cache NOT IN ('delivered','cancelled','declined') ORDER BY r.updated_at LIMIT 300`);
-  for (const r of rows) {
-    const status = W.statusOf(r, r.q);
-    if (status === r.status_cache) continue;
-    try {
-      await inTx(pool, async (c) => {
-        const { rowCount } = await c.query(
-          'UPDATE wholesale_requests SET status_cache = $2, updated_at = NOW() WHERE id = $1 AND status_cache = $3', [r.id, status, r.status_cache]);
-        if (!rowCount) return;   // another sweep got there first
-        await recordEvent(c, { partnerId: r.partner_id, requestId: r.id, type: 'request.status_changed', actor: 'system',
-          before: r.status_cache, after: status, data: r.q ? { quote: r.q.code, revision: Number(r.q.revision) || 1 } : null });
-        changed++;
-      });
-    } catch (e) { reportError('wholesale-reconcile', e, r.public_id).catch(() => {}); }
+  let changed = 0, revised = 0, delivered = 0, failed = 0;
+
+  for (let lastId = 0; ;) {
+    const { rows } = await pool.query(
+      `SELECT r.*, row_to_json(q.*) AS q FROM wholesale_requests r LEFT JOIN quotes q ON q.code = r.quote_code
+        WHERE r.status_cache NOT IN ('delivered','cancelled','declined') AND r.id > $1
+        ORDER BY r.id LIMIT 200`, [lastId]);
+    if (!rows.length) break;
+    lastId = rows[rows.length - 1].id;
+    for (const r of rows) {
+      const status = W.statusOf(r, r.q);
+      const rev = r.q && W.quoteVisible(r.q) ? Number(r.q.revision) || 1 : null;
+      if (status === r.status_cache && rev === r.quote_revision_cache) continue;
+      try {
+        await inTx(pool, async (c) => {
+          const { rowCount } = await c.query(
+            `UPDATE wholesale_requests SET status_cache = $2, quote_revision_cache = $3, updated_at = NOW()
+              WHERE id = $1 AND status_cache = $4 AND quote_revision_cache IS NOT DISTINCT FROM $5`,
+            [r.id, status, rev, r.status_cache, r.quote_revision_cache]);
+          if (!rowCount) return;   // another sweep got there first
+          const data = r.q ? { quote: r.q.code, revision: rev } : null;
+          if (status !== r.status_cache) {
+            await recordEvent(c, { partnerId: r.partner_id, requestId: r.id, type: 'request.status_changed', actor: 'system',
+              before: r.status_cache, after: status, data });
+            changed++;
+          }
+          /* A re-priced quote: the business must look again before paying.
+             The first revision a partner sees arrives with its status change. */
+          if (rev !== null && r.quote_revision_cache !== null && rev !== r.quote_revision_cache) {
+            await recordEvent(c, { partnerId: r.partner_id, requestId: r.id, type: 'quote.revised', actor: 'system',
+              before: status, after: status,
+              data: { ...data, previous_revision: r.quote_revision_cache,
+                      reapproval_required: !!(r.authorized_revision && rev > r.authorized_revision) } });
+            revised++;
+          }
+        });
+      } catch (e) { reportError('wholesale-reconcile', e, r.public_id).catch(() => {}); }
+    }
   }
 
-  const { rows: due } = await pool.query(
+  /* Claim up to 50 due deliveries for active partners that still have a URL
+     (so a switched-off partner's backlog never blocks anyone else), by moving
+     their next try 15 minutes out; a crash mid-send therefore retries later
+     rather than never. */
+  const { rows: claimed } = await pool.query(
+    `UPDATE wholesale_deliveries SET next_at = NOW() + interval '15 minutes'
+      WHERE id IN (
+        SELECT d.id FROM wholesale_deliveries d JOIN wholesale_partners p ON p.id = d.partner_id
+         WHERE d.delivered_at IS NULL AND d.gave_up_at IS NULL AND d.next_at <= NOW()
+           AND p.status = 'active' AND p.webhook_url IS NOT NULL
+         ORDER BY d.id LIMIT 50 FOR UPDATE OF d SKIP LOCKED)
+      RETURNING id`);
+  const due = claimed.length ? (await pool.query(
     `SELECT d.*, e.public_id AS event_public_id, e.type, e.before_status, e.after_status, e.data, e.created_at,
-            p.webhook_url, p.status AS partner_status, p.name AS partner_name, r.public_id AS request_id
+            p.webhook_url, p.name AS partner_name, r.public_id AS request_id
        FROM wholesale_deliveries d JOIN wholesale_events e ON e.id = d.event_id
        JOIN wholesale_partners p ON p.id = d.partner_id LEFT JOIN wholesale_requests r ON r.id = e.request_id
-      WHERE d.delivered_at IS NULL AND d.gave_up_at IS NULL AND d.next_at <= NOW()
-      ORDER BY d.id LIMIT 50`);
+      WHERE d.id = ANY($1::bigint[]) ORDER BY d.id`, [claimed.map((x) => x.id)])).rows : [];
   for (const d of due) {
-    if (d.partner_status !== 'active' || !d.webhook_url) continue;
     const secret = W.partnerSecret(env.JT_WHOLESALE_SECRET, d.partner_id);
-    if (!secret) { reportError('wholesale-webhook', new Error('JT_WHOLESALE_SECRET is missing or under 32 characters; webhooks are held')).catch(() => {}); break; }
+    if (!secret) {
+      await pool.query('UPDATE wholesale_deliveries SET next_at = NOW() WHERE id = ANY($1::bigint[]) AND delivered_at IS NULL', [due.map((x) => x.id)]);
+      reportError('wholesale-webhook', new Error('JT_WHOLESALE_SECRET is missing or under 32 characters; webhooks are held')).catch(() => {});
+      break;
+    }
     const body = JSON.stringify({ api_version: W.API_VERSION, event: eventView({ ...d, public_id: d.event_public_id }) });
     let status = 0, error = null;
-    try {
-      const r = await fetchImpl(d.webhook_url, {
-        method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000),
-        headers: { 'Content-Type': 'application/json', 'User-Agent': 'JunesTees-Wholesale/1',
-                   'X-JT-Event-Id': d.event_public_id, 'X-JT-Signature': W.signatureHeader(secret, body) },
-        body,
-      });
-      status = r.status;
-      if (status < 200 || status >= 300) error = `answered ${status}`;
-    } catch (e) { error = String(e.message || e).slice(0, 200); }
+    if (!(await resolvesPublic(d.webhook_url))) {
+      error = 'webhook host does not resolve to a public address';
+    } else {
+      try {
+        const r = await fetchImpl(d.webhook_url, {
+          method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000),
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'JunesTees-Wholesale/1',
+                     'X-JT-Event-Id': d.event_public_id, 'X-JT-Signature': W.signatureHeader(secret, body) },
+          body,
+        });
+        status = r.status;
+        if (status < 200 || status >= 300) error = `answered ${status}`;
+      } catch (e) { error = String(e.message || e).slice(0, 200); }
+    }
     if (!error) {
       await pool.query('UPDATE wholesale_deliveries SET delivered_at = NOW(), attempts = attempts + 1, last_status = $2, last_error = NULL WHERE id = $1', [d.id, status]);
       delivered++;
@@ -602,11 +690,13 @@ async function sweep(deps) {
     if (!next) {
       reportError('wholesale-webhook-gave-up', new Error(`${d.partner_name}: ${d.type} ${d.event_public_id} undelivered after ${d.attempts + 1} tries (${error})`)).catch(() => {});
       alertShop(`Wholesale update not delivered to ${d.partner_name}`,
-        `<p>A status update (${d.type}, request ${d.request_id || ''}) could not reach ${d.partner_name}'s system after three days of retries (${error}).</p>
+        `<p>A status update (${esc(d.type)}, request ${esc(d.request_id || '')}) could not reach ${esc(d.partner_name)}'s system after three days of retries (${esc(error)}).</p>
          <p>Their system can still read it from the events feed. Let them know their webhook is down.</p>`).catch(() => {});
     }
   }
-  return changed || delivered || failed ? `${changed} status change(s), ${delivered} webhook(s) delivered, ${failed} failed` : '';
+  const parts = [changed && `${changed} status change(s)`, revised && `${revised} quote revision(s)`,
+                 delivered && `${delivered} webhook(s) delivered`, failed && `${failed} failed`].filter(Boolean);
+  return parts.join(', ');
 }
 
 module.exports = { ensureTables, mount, sweep, eventView, MAX_BODY };

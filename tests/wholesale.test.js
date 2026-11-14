@@ -66,6 +66,7 @@ test('quote view: a whitelist; shop-only fields never leave', () => {
     assert.ok(!json.includes(k), `${k} must not reach a partner`);
   }
   assert.deepStrictEqual(v.lines[0].extras, [{ label: 'Back print', amount: 48 }]);
+  assert.strictEqual(v.lines[0].line_total, 180, 'line_total is the item alone; extras are not counted twice');
   assert.deepStrictEqual(v.lines[0].mockups, ['https://res.cloudinary.com/a.png']);
   assert.strictEqual(v.pricing.total, 244.53);
   assert.strictEqual(v.payment.state, 'unpaid');
@@ -140,11 +141,42 @@ test('webhook URLs: https on a public host only', () => {
   }
 });
 
-test('retries: eight tries, then give up', () => {
+test('retries: first retry after 1 minute, give up after the last', () => {
   const t0 = Date.UTC(2026, 10, 14);
-  assert.strictEqual(W.nextAttemptAt(0, t0).getTime() - t0, 60e3);
-  assert.ok(W.nextAttemptAt(W.RETRY_MINUTES.length - 1, t0));
-  assert.strictEqual(W.nextAttemptAt(W.RETRY_MINUTES.length, t0), null);
+  assert.strictEqual(W.nextAttemptAt(1, t0).getTime() - t0, 60e3, 'the first failure waits 1 minute');
+  assert.strictEqual(W.nextAttemptAt(2, t0).getTime() - t0, 5 * 60e3);
+  assert.ok(W.nextAttemptAt(W.RETRY_MINUTES.length, t0));
+  assert.strictEqual(W.nextAttemptAt(W.RETRY_MINUTES.length + 1, t0), null);
+});
+
+test('expiry counts the last day in Chicago, not UTC', () => {
+  // 7 pm Chicago on the 28th is already the 29th in UTC.
+  const evening = new Date('2026-11-29T01:00:00Z');
+  assert.strictEqual(W.statusOf(req(), quote({ valid_until: '2026-11-28' }), evening), 'quoted');
+  assert.strictEqual(W.statusOf(req(), quote({ valid_until: '2026-11-28' }), new Date('2026-11-29T07:00:00Z')), 'expired');
+  // node-postgres hands a DATE back as local midnight; its local parts are the date.
+  assert.strictEqual(W.dateOnly(new Date(2026, 10, 28)), '2026-11-28');
+});
+
+test('sizes in different case are one size, added together', () => {
+  const r = W.parseRequest({ external_ref: 'x-1', lines: [{ product: 'Tee', sizes: { m: 3, M: 2 }, qty: 5 }] });
+  assert.deepStrictEqual(r.value.lines[0].sizes, { M: 5 });
+});
+
+test('line figures come from the quote page when given', () => {
+  const v = W.quoteView(quote({ items: [{ qty: 3000, unit_price: 0.1, line_total: 310, addons: [{ code: 'cutout_ship', total: 10 }] }] }),
+    { total: 310 }, 'u', () => ({ unit_price: 0.1033, line_total: 310, extras: [] }));
+  assert.deepStrictEqual([v.lines[0].unit_price, v.lines[0].line_total, v.lines[0].extras.length], [0.1033, 310, 0],
+    'a supplier charge folded into the price is not listed as an extra');
+});
+
+test('private addresses are refused at delivery time', async () => {
+  for (const ip of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.20.1.1', '192.168.1.1', '100.64.0.1', '::1', 'fd00::1', '::ffff:10.0.0.1'])
+    assert.ok(W.privateIp(ip), ip);
+  assert.ok(!W.privateIp('93.184.216.34'));
+  assert.strictEqual(await W.resolvesPublic('https://x.example/h', async () => [{ address: '93.184.216.34' }]), true);
+  assert.strictEqual(await W.resolvesPublic('https://x.example/h', async () => [{ address: '93.184.216.34' }, { address: '10.0.0.1' }]), false);
+  assert.strictEqual(await W.resolvesPublic('https://x.example/h', async () => { throw new Error('NXDOMAIN'); }), false);
 });
 
 test('off unless switched on', () => {

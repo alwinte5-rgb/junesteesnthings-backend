@@ -51,9 +51,23 @@ const STATUSES = [
 const QUOTE_HIDDEN = new Set(['held', 'draft']);   // never shown to a partner
 const PRODUCTION_COLS = ['artwork_at', 'proof_sent_at', 'proof_ok_at', 'blanks_ordered_at', 'blanks_in_at', 'production_at'];
 
-function dayKey(d) {
-  const t = d instanceof Date ? d : new Date(d);
-  return Number.isFinite(t.getTime()) ? t.toISOString().slice(0, 10) : null;
+/* A DATE column as YYYY-MM-DD. node-postgres builds a DATE as local midnight,
+   so its LOCAL parts are the stored date whatever the server's zone;
+   row_to_json gives the string itself. */
+function dateOnly(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+  const t = v instanceof Date ? v : new Date(v);
+  if (!Number.isFinite(t.getTime())) return null;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+}
+
+/* Today in the shop's zone. The database session and the quote page both
+   count a quote's last day in Chicago time, so a quote is still valid here
+   until midnight there, not until midnight UTC. */
+function shopToday(now = new Date(), tz = process.env.JT_TIMEZONE || 'America/Chicago') {
+  return new Date(now).toLocaleDateString('en-CA', { timeZone: tz });
 }
 
 /** Whether a partner may see this quote at all. A draft or held quote is the
@@ -82,8 +96,8 @@ function statusOf(req, q, now = new Date()) {
   if (total > 0 && paid >= total - 0.005) return 'paid';
   if (paid > 0) return 'deposit_paid';
   if (q.accepted_at || q.status === 'accepted') return 'awaiting_payment';
-  const until = q.valid_until ? dayKey(q.valid_until) : null;
-  if (q.status === 'expired' || (until && until < dayKey(now))) return 'expired';
+  const until = dateOnly(q.valid_until);
+  if (q.status === 'expired' || (until && until < shopToday(now))) return 'expired';
   return 'quoted';
 }
 
@@ -93,23 +107,34 @@ function statusOf(req, q, now = new Date()) {
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const str = (v, max) => (v == null ? null : String(v).slice(0, max));
 
-function lineView(i) {
+/* `figures` is the quote page's own reading of a line (server.js
+   customerLineFigures + shownAddons), so the partner sees the same each-price,
+   amount and extras as the customer page: supplier charges folded into an
+   item's price stay folded in, and a legacy setup fee shows once. Without it
+   (fixtures, tests) the stored fields are used as they are. */
+function lineView(i, figures) {
+  /* line_total is the item's OWN amount; extras are listed beside it, so
+     line_total + extras is what the line costs, and nothing is counted twice. */
+  const f = figures ? figures(i) : {
+    unit_price: r2(i.unit_price),
+    extras: Array.isArray(i.addons) ? i.addons : [],
+    line_total: r2(Number(i.line_total || 0) - (Array.isArray(i.addons) ? i.addons : [])
+      .reduce((n, a) => n + (Number(a && (a.amount ?? a.total)) || 0), 0)),
+  };
   return {
     description: str(i.description, 300),
     details: str(i.details, 400),
     colour: str(i.colour, 80),
     qty: Number(i.qty) || 0,
     sizes: i.size_mix && typeof i.size_mix === 'object' ? i.size_mix : null,
-    unit_price: r2(i.unit_price),
-    line_total: r2(i.line_total),
+    unit_price: Number(f.unit_price) || 0,
+    line_total: r2(f.line_total),
     optional: !!i.optional,
     prints: Array.isArray(i.prints)
       ? i.prints.map((p) => ({ location: str(p.loc, 40), method_id: p.method_id ?? null, colours: p.colours ?? null }))
       : null,
-    extras: Array.isArray(i.addons)
-      ? i.addons.map((a) => ({ label: str(a && (a.label || a.name), 120), amount: r2(a && (a.amount ?? a.total)) }))
-      : [],
-    setup_fee: r2(i.setup_fee),
+    extras: (f.extras || [])
+      .map((a) => ({ label: str(a && (a.label || a.name), 120), amount: r2(a && (a.amount ?? a.total)) })),
     mockups: [].concat(i.images || []).filter((u) => typeof u === 'string' && u.startsWith('https://')).slice(0, 10),
   };
 }
@@ -119,7 +144,7 @@ function lineView(i) {
  * passed in so this module never re-implements a price rule. `quoteUrl` is the
  * page the business owner accepts and pays on.
  */
-function quoteView(q, totals, quoteUrl) {
+function quoteView(q, totals, quoteUrl, figures = null) {
   if (!quoteVisible(q)) return null;
   const t = totals || {};
   const total = r2(t.total != null ? t.total : q.total);
@@ -127,10 +152,10 @@ function quoteView(q, totals, quoteUrl) {
   return {
     id: q.code,
     revision: Number(q.revision) || 1,
-    valid_until: q.valid_until ? dayKey(q.valid_until) : null,
-    needed_by: q.needed_by ? dayKey(q.needed_by) : null,
+    valid_until: dateOnly(q.valid_until),
+    needed_by: dateOnly(q.needed_by),
     url: quoteUrl,
-    lines: (q.items || []).filter(Boolean).map(lineView),
+    lines: (q.items || []).filter(Boolean).map((i) => lineView(i, figures)),
     pricing: {
       subtotal: r2(t.subtotal), rush: r2(t.rush), rush_pct: r2(t.rushPct),
       discount: r2(t.discount), discount_note: str(q.discount_note, 200),
@@ -154,14 +179,14 @@ function quoteView(q, totals, quoteUrl) {
  * The request as the partner sees it. `totals` (quoteTotals) and `quoteUrl` are
  * passed in by server.js, so no price rule lives here.
  */
-function requestView(r, q, totals, quoteUrl) {
+function requestView(r, q, totals, quoteUrl, figures = null, now = new Date()) {
   const p = r.payload || {};
-  const quote = q ? quoteView(q, totals, quoteUrl) : null;
+  const quote = q ? quoteView(q, totals, quoteUrl, figures) : null;
   /* A quote revised after the business authorized it needs a fresh look: the
      approval was for different figures. */
   const reapproval = !!(quote && r.authorized_revision && quote.revision > r.authorized_revision);
   return {
-    id: r.public_id, external_ref: r.external_ref, status: statusOf(r, q),
+    id: r.public_id, external_ref: r.external_ref, status: statusOf(r, q, now),
     created_at: r.created_at, updated_at: r.updated_at,
     needed_by: p.needed_by || null, notes: p.notes || null,
     lines: p.lines || [], ship_to: p.ship_to || null,
@@ -221,7 +246,8 @@ function parseRequest(body) {
       sizes = {};
       for (const [s, c] of ents) {
         if (!SIZE_RE.test(s) || !Number.isInteger(c) || c < 0 || c > MAX_QTY) return err('invalid_field', `sizes.${String(s).slice(0, 8)}: whole number 0-${MAX_QTY}`, f('sizes'));
-        if (c) sizes[s.toUpperCase()] = c;
+        /* "m" and "M" are one size: added together, never one overwriting the other. */
+        if (c) sizes[s.toUpperCase()] = (sizes[s.toUpperCase()] || 0) + c;
         qty += c;
       }
       if (l.qty != null && l.qty !== qty) return err('invalid_field', 'qty does not match the sizes', f('qty'));
@@ -251,7 +277,7 @@ function parseRequest(body) {
   }
   let needed_by = null;
   if (b.needed_by != null) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.needed_by)) || !dayKey(b.needed_by)) return err('invalid_field', 'needed_by: YYYY-MM-DD', 'needed_by');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.needed_by)) || !Number.isFinite(Date.parse(b.needed_by))) return err('invalid_field', 'needed_by: YYYY-MM-DD', 'needed_by');
     needed_by = String(b.needed_by);
   }
   let ship_to = null;
@@ -348,13 +374,16 @@ function bodyHash(value) {
 }
 
 /* ── Webhook retries ──────────────────────────────────────────────────────
-   1m, 5m, 30m, 2h, 6h, 12h, 24h, 24h: eight tries over about three days,
-   then the delivery is given up and reported. The pull feed (/events) still
-   has every event, so a receiver that was down can always catch up. */
+   The first try, then retries after 1m, 5m, 30m, 2h, 6h, 12h, 24h, 24h:
+   nine tries over about three days, then the delivery is given up and
+   reported. The pull feed (/events) still has every event, so a receiver
+   that was down can always catch up.
+   `failedTries` is how many tries have failed so far, this one included. */
 const RETRY_MINUTES = [1, 5, 30, 120, 360, 720, 1440, 1440];
-function nextAttemptAt(attempts, now = Date.now()) {
-  if (attempts >= RETRY_MINUTES.length) return null;   // give up
-  return new Date(now + RETRY_MINUTES[attempts] * 60e3);
+function nextAttemptAt(failedTries, now = Date.now()) {
+  const ix = failedTries - 1;
+  if (ix < 0 || ix >= RETRY_MINUTES.length) return null;   // give up
+  return new Date(now + RETRY_MINUTES[ix] * 60e3);
 }
 
 /* A webhook URL must be https on a public-looking host. Private addresses are
@@ -368,14 +397,36 @@ function webhookUrl(v) {
   return u;
 }
 
+/* Checked again at every delivery, on what the host resolves to NOW: a name
+   that passed webhookUrl() can later be pointed at a private address. */
+function privateIp(ip) {
+  const v = String(ip || '').toLowerCase();
+  if (v.includes(':')) {
+    if (v === '::1' || v === '::') return true;
+    if (v.startsWith('::ffff:')) return privateIp(v.slice(7));
+    return /^(fc|fd|fe8|fe9|fea|feb)/.test(v);
+  }
+  const p = v.split('.').map(Number);
+  if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  const [a, b] = p;
+  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+}
+async function resolvesPublic(url, lookup = require('dns').promises.lookup) {
+  try {
+    const addrs = await lookup(new URL(url).hostname, { all: true });
+    return addrs.length > 0 && addrs.every((a) => !privateIp(a.address));
+  } catch { return false; }
+}
+
 function publicId(prefix) {
   return `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
 }
 
 module.exports = {
-  API_VERSION, on, STATUSES, statusOf, quoteVisible, quoteView, lineView, requestView,
+  API_VERSION, on, STATUSES, statusOf, dateOnly, shopToday, quoteVisible, quoteView, lineView, requestView,
   parseRequest, parseArtwork, httpsUrl, err,
   newApiKey, keyPrefix, hashKey, keyMatches,
   partnerSecret, sign, signatureHeader, verifySignature, SIG_TOLERANCE_S,
-  idempotencyKey, bodyHash, RETRY_MINUTES, nextAttemptAt, webhookUrl, publicId,
+  idempotencyKey, bodyHash, RETRY_MINUTES, nextAttemptAt, webhookUrl, privateIp, resolvesPublic, publicId,
 };

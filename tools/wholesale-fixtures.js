@@ -81,6 +81,7 @@ function build() {
     ev('evt_00000000000000000007', 'request.status_changed', 'awaiting_payment', 'in_production', { quote: 'WHSL000001', revision: 1 }),
     ev('evt_00000000000000000008', 'artwork.changed_after_approval', 'in_production', 'in_production', { version: 3, line: 0 }),
     ev('evt_00000000000000000009', 'request.status_changed', 'in_production', 'delivered', { quote: 'WHSL000001', revision: 1 }),
+    ev('evt_00000000000000000010', 'quote.revised', 'quoted', 'quoted', { quote: 'WHSL000001', revision: 2, previous_revision: 1, reapproval_required: true }),
   ];
   /* A signed sample, with a test-only secret, so the receiver's verify code
      can be checked against a known-good header. */

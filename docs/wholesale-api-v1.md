@@ -51,7 +51,7 @@ So:
 - Suspended business: **403** `partner_suspended`.
 - Bad or missing key: **401**. More than 20 refused keys a minute from one IP: **429**.
 - Rate limit: 120 requests a minute per business (**429**, `Retry-After: 60`).
-- Bodies over 256 KB: **413**.
+- Bodies over 256 KB: **413**. The body is refused before it is read.
 
 ## 3. Statuses
 
@@ -117,8 +117,10 @@ send **one** request with the final quantities and sizes. The quote is priced on
 you send. To change a batch after it is quoted, contact the shop: they issue a new
 revision, which you authorize again (see `reapproval_required`).
 
-### `GET /requests?updated_since=<ISO>&limit=<1-100>`
-Newest change first. Use it to reconcile after downtime.
+### `GET /requests?updated_since=<ISO>&limit=<1-100>&cursor=<next_cursor>`
+**Oldest change first**, with `next_cursor` (null on the last page). To reconcile after
+downtime, pass `updated_since`, then pass each `next_cursor` back unchanged until it is null.
+Nothing is skipped, even when many requests share one timestamp.
 
 ### `GET /requests/:id`
 `{request}` (see section 5).
@@ -133,10 +135,12 @@ that url.
 
 ### `POST /requests/:id/cancel` `{"reason": "..."}`
 Allowed until money is paid on the wholesale quote. After that → **409**
-`payment_received`; the shop handles it.
+`payment_received`; the shop handles it. Cancelling also cancels the linked quote, the same
+way the shop does from the job page: it can't be paid or chased, and the shop is told.
 
 ### `POST /requests/:id/artwork` `{"url": "https://...", "name": "...", "note": "...", "line": 0}`
-Adds a version. Nothing is overwritten (`request.artwork[]` holds every version with
+Adds a version. `line` must be a line index on this request (or omitted for the whole job).
+Nothing is overwritten (`request.artwork[]` holds every version with
 `version`, `line` and `submitted_at`). After the proof is approved, the version is
 marked `after_approval: true`, the shop is alerted, and a new proof is needed. Refused
 once `shipped` or ended.
@@ -178,6 +182,11 @@ catching up**: webhooks are a convenience on top of it.
 - Money is dollars, 2 decimal places. `payment` comes from the payment ledger, which Stripe's
   webhook writes, so a checkout someone only *started* never shows as paid.
 - `reapproval_required` is true when the quote's revision is newer than the one you authorized.
+  A new revision also sends a `quote.revised` event (with `previous_revision` and
+  `reapproval_required`) even when the status does not change.
+- Line figures read exactly as the quote page does. `line_total` is the item's own amount,
+  and `extras` are listed beside it, so **`line_total` + `extras` is what the line costs**.
+  Supplier charges built into an item's price stay inside `unit_price`/`line_total`.
 - `needed_by` / `valid_until` are dates. **No turnaround is promised by the API.** Any
   estimate is on the quote page.
 
@@ -205,7 +214,10 @@ X-JT-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>
 ```
 
 Event types: `request.created`, `quote.linked`, `request.authorized`,
-`request.status_changed`, `artwork.submitted`, `artwork.changed_after_approval`.
+`request.status_changed`, `quote.revised`, `artwork.submitted`, `artwork.changed_after_approval`.
+
+Event ids are given out in commit order for each business, so `GET /events?after=` never
+skips one.
 
 **Receiver rules (Biz Dashboard must do all four):**
 1. Verify the signature on the **raw** body before parsing, with a timing-safe compare.
@@ -227,8 +239,9 @@ function verify(secret, header, raw) {
 }
 ```
 
-Retries: 1 m, 5 m, 30 m, 2 h, 6 h, 12 h, 24 h, 24 h (8 tries, about 3 days). Redirects are
-not followed and there is a 10 s timeout. After the last try the shop is told, and
+Retries: the first try, then after 1 m, 5 m, 30 m, 2 h, 6 h, 12 h, 24 h, 24 h (9 tries, about
+3 days). Redirects are not followed, there is a 10 s timeout, and the host must resolve to a
+public address at each try. After the last try the shop is told, and
 `/events` still has every event.
 
 Status is reconciled from June's Tees records every 2 minutes, so a status event can trail
