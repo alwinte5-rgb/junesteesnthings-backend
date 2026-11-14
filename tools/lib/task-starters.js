@@ -16,7 +16,7 @@
    They are ordinary backlog rows once added: the owner removes or reorders
    them on Tasks → Backlog. Nothing here promises a customer anything, and the
    shop's marketing rules hold in every one: no rush orders, no free
-   shipping, pickup by appointment, Lakeview (never Oak Lawn), 5 to 7 (50+:
+   shipping, pickup by appointment, Lakeview (never Oak Lawn), 5 to 10 (50+:
    7 to 14) business days, Instagram @jtees228, phone (773) 900-4592. */
 
 const R = {
@@ -42,7 +42,7 @@ const R = {
   reunions: { label: 'Family reunion designs', url: 'https://design.jtees.net/collection.php?c=family-reunion' },
 };
 
-const RULES = 'Shop rules for anything a customer sees: rush only for a fee (never show a percentage), no free shipping, pickup by appointment only, located in Lakeview (never Oak Lawn), small orders 5 to 7 business days and larger ones 7 to 14, Instagram @jtees228, phone (773) 900-4592.';
+const RULES = 'Shop rules for anything a customer sees: rush only for a fee (never show a percentage), no free shipping, pickup by appointment only, located in Lakeview (never Oak Lawn), small orders 5 to 10 business days and larger ones 7 to 14, Instagram @jtees228, phone (773) 900-4592.';
 
 const t = (lane, goal, title, description, how_to, brief) => ({ lane, goal, title, description, how_to, repeat: 'none', weekday: null, brief });
 const daily = (goal, title, description, how_to, brief) => ({ lane: 'daily', goal, title, description, how_to, repeat: 'daily', weekday: null, brief });
@@ -124,7 +124,7 @@ const STARTERS = {
         done: ['700 to 1,000 words on a question customers really ask', '3 or 4 of our own pictures with captions', 'Every fact matches the website, and the shop rules are followed', 'Ends by sending readers to request a quote', 'Draft and pictures in the Blog folder'],
         proof: 'The link to the draft in the Blog folder.',
         proof_required: true,
-        example: '"How to Order Family Reunion Shirts (Without the Stress)": start ordering 6 to 8 weeks before the date, collect sizes with one form, pick 1 or 2 ink colors to keep the price down, 5 to 7 business days once the proof is approved. Three photos of real reunion orders.',
+        example: '"How to Order Family Reunion Shirts (Without the Stress)": start ordering 6 to 8 weeks before the date, collect sizes with one form, pick 1 or 2 ink colors to keep the price down, 5 to 10 business days once the proof is approved. Three photos of real reunion orders.',
         time: 'About 4 to 6 hours',
         resources: [R.blog, R.photos, R.design, R.site],
       }),

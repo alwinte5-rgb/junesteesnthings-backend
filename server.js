@@ -7123,7 +7123,7 @@ app.get('/admin/marketing-calendar', requireAdmin, (req, res) => {
 <div class="card">
   <p style="margin:0 0 6px">Each occasion counts back from its <b>season start</b>, the day customers begin ordering:
   <b>prep</b> ${lead.prepWeeks} weeks before (designs, photos, page), <b>ads and email</b> ${lead.adsWeeks} weeks before. <b>Last day to order</b> is
-  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since small orders take 5 to 7 business days and larger ones 7 to 14
+  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since small orders take 5 to 10 business days and larger ones 7 to 14
   from the order (or from the proof, when we design it). An occasion can set its own lead times; the table always shows its real dates. Nothing here is sent automatically.</p>
 </div>
 ${dueBox}
@@ -9824,12 +9824,12 @@ const ORDER_SHARED_CODES = ADDONS.filter((a) => a.orderShared).map((a) => a.code
  * that costs money. Whatever the table says, the person quoting can still
  * override the percentage or clear it on any individual quote.
  */
-/* Owner, 2026-11-06: rush tops out at 70%, for same day; each day of lead
-   time steps it down. `days: 0` is today, or a date already past. */
+/* Owner, 2026-11-06: rush tops out at 70%; each day of lead time steps it
+   down. Owner, 2026-11-14: no same-day and no next-day orders, so the ladder
+   starts at 2 business days (tools/lib/rush.js rushFor refuses anything
+   sooner, and has its own steps for embroidery and 50+ pieces). */
 const RUSH_MAX_PCT = 70;
 const RUSH_TIERS_DEFAULT = [
-  { days: 0, pct: 70 },   // same day
-  { days: 1, pct: 50 },   // next business day
   { days: 2, pct: 35 },
   { days: 3, pct: 20 },
   { days: 4, pct: 10 },
@@ -9875,12 +9875,11 @@ function businessDaysUntil(to, from) {
   return n;
 }
 
-/** The rush percentage a requested date earns, before anyone overrides it. */
-function rushPctFor(neededBy, from) {
-  const days = businessDaysUntil(neededBy, from);
-  if (days === null) return 0;
-  for (const t of RUSH_TIERS) if (days <= t.days) return t.pct;
-  return 0;
+/** The rush percentage a requested date earns, before anyone overrides it.
+ *  slow: RUSH.slowOrder() (embroidery or 50+ pieces). A date no rush can buy
+ *  (same day, next day; under 3 days for a slow order) earns 0. */
+function rushPctFor(neededBy, from, slow) {
+  return RUSH.rushFor(businessDaysUntil(neededBy, from), RUSH_TIERS, !!slow).pct;
 }
 
 /* Holiday mode: everything takes HOLIDAY_EXTRA_DAYS longer. One switch rather
@@ -13251,12 +13250,9 @@ function productGroupOf(name) {
         return n;
       }
 
-      function rushSuggest(days) {
-        if (days === null) return 0;
-        for (var i = 0; i < RUSH_TIERS.length; i++)
-          if (days <= RUSH_TIERS[i].days) return RUSH_TIERS[i].pct;
-        return 0;
-      }
+      /* The rule itself, shipped by its source (tools/lib/rush.js) so the
+         form and the save cannot part. */
+      ${RUSH.rushFor.toString()}
 
       /* Show the row only when a date has been asked for, and say WHY the
          number is what it is — "2 business days" is checkable, a bare 50% is
@@ -13269,20 +13265,22 @@ function productGroupOf(name) {
         if (!dateEl || !row || !box) return;
 
         var days = rushDaysUntil(dateEl.value);
-        /* Only DTF can be rushed (tools/lib/rush.js): every decoration picked
-           on the form has to be DTF, and something has to be picked. The save
-           route makes a helper's rush 0 otherwise; the owner may type one. */
+        /* Only DTF and embroidery can be rushed (tools/lib/rush.js): every
+           decoration picked on the form has to be one of them, and something
+           has to be picked. The save route makes a helper's rush 0 otherwise;
+           the owner may type one. */
         /* Line by line, like the save (tools/lib/rush.js): every required line
            with a garment or a method needs a method, and every method is DTF.
            The pattern comes from the server as a string: a regex literal in
            this template would lose its backslashes. */
         var rushable = new RegExp(${JSON.stringify(RUSH.RUSHABLE.source)}, 'i');
         var lines = {};
-        Array.prototype.forEach.call(document.querySelectorAll('select[name], input[name^="product"]'), function (el) {
-          var m = /^(?:product|method2?|pr_m_[a-z]+?)([0-9]+)$/.exec(el.name || '');
+        Array.prototype.forEach.call(document.querySelectorAll('select[name], input[name^="product"], input[name^="qty"]'), function (el) {
+          var m = /^(?:product|qty|method2?|pr_m_[a-z]+?)([0-9]+)$/.exec(el.name || '');
           if (!m) return;
-          var i = m[1], L = lines[i] || (lines[i] = { product: false, titles: [] });
+          var i = m[1], L = lines[i] || (lines[i] = { product: false, titles: [], qty: 0 });
           if (/^product/.test(el.name)) { if (el.value) L.product = true; return; }
+          if (/^qty/.test(el.name)) { L.qty = parseInt(el.value, 10) || 0; return; }
           if (el.value && el.selectedIndex >= 0) L.titles.push(el.options[el.selectedIndex].text);
         });
         var real = Object.keys(lines).filter(function (i) {
@@ -13292,7 +13290,17 @@ function productGroupOf(name) {
         var dtfOnly = real.length > 0 && real.every(function (i) {
           return lines[i].titles.length > 0 && lines[i].titles.every(function (t) { return rushable.test(t); });
         });
-        var pct = dtfOnly ? rushSuggest(days) : 0;
+        /* Embroidery or 50+ pieces on the required lines: 7 days, never
+           sooner than 3 (owner, 2026-11-14), as RUSH.slowOrder counts it. */
+        var embroidery = new RegExp(${JSON.stringify(RUSH.EMBROIDERY.source)}, 'i');
+        var pieces = 0, slow = false;
+        real.forEach(function (i) {
+          pieces += lines[i].qty || 0;
+          if (lines[i].titles.some(function (t) { return embroidery.test(t); })) slow = true;
+        });
+        if (pieces >= ${RUSH.LARGE_QTY}) slow = true;
+        var r = rushFor(days, RUSH_TIERS, slow);
+        var pct = dtfOnly ? r.pct : 0;
 
         row.style.display = days === null ? 'none' : '';
         if (days === null) { box.value = ''; if (why) why.textContent = ''; calc(); return; }
@@ -13316,9 +13324,9 @@ function productGroupOf(name) {
 
         if (why) {
           why.textContent = pct > 0
-            ? (days === 0 ? 'today or earlier' : days + ' business day' + (days === 1 ? '' : 's'))
-              + ' — ladder suggests ' + pct + '%'
-            : !dtfOnly && rushSuggest(days) > 0 ? 'only DTF can be rushed: ask June about the date'
+            ? days + ' business days' + (slow ? ' (embroidery or 50+ pieces)' : '') + ' — ladder suggests ' + pct + '%'
+            : r.tooSoon ? 'too soon: no same-day or next-day orders' + (slow ? ', and embroidery or 50+ pieces need 3 business days' : '') + ': ask June about the date'
+            : !dtfOnly && r.pct > 0 ? 'only DTF and embroidery can be rushed: ask June about the date'
             : days + ' business days — no rush at this lead time';
         }
         calc();
@@ -14619,10 +14627,11 @@ ${uploadStatusScript()}
           nb.dataset.rushBound = '1';
           nb.addEventListener('input',  function(){ rushSync(true); });
           nb.addEventListener('change', function(){ rushSync(true); });
-          /* So does the decoration: only DTF can be rushed. */
+          /* So does the decoration (only DTF and embroidery can be rushed)
+             and the quantity (50+ pieces have their own steps). */
           document.addEventListener('change', function (e) {
             var n = e.target && e.target.name || '';
-            if (/^(method|pr_m_)/.test(n)) rushSync(true);
+            if (/^(method|pr_m_|qty[0-9])/.test(n)) rushSync(true);
           });
         }
         /* Remove clears the fee AND remembers that it was cleared, so editing
@@ -15691,13 +15700,18 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     let rushPct = Number(one(b.rush_pct));
     if (!Number.isFinite(rushPct) || rushPct < 0) rushPct = 0;
     rushPct = Math.min(rushPct, RUSH_MAX_PCT);
-    /* Only DTF can be rushed (tools/lib/rush.js). The owner may still type a
-       rush on anything; a helper's is 0 unless every required line is DTF. */
+    /* Only DTF and embroidery can be rushed (tools/lib/rush.js). The owner may
+       still type a rush on anything; a helper's is 0 unless every required
+       line can be rushed. */
     const methodTitle = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
-    const rushOk = RUSH.rushAllowed(items.filter((it) => !it.optional).map((it) => ({
+    const rushLines = items.filter((it) => !it.optional).map((it) => ({
       product: !!it.product_id,
+      qty: parseInt(it.qty, 10) || 0,
       titles: [...new Set([...(it.prints || []).map((p) => p.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
-    })));
+    }));
+    const rushOk = RUSH.rushAllowed(rushLines);
+    /* Embroidery or 50+ pieces: 7 days, never sooner than 3 (owner, 2026-11-14). */
+    const rushSlow = RUSH.slowOrder(rushLines);
     /* RUSH IS LOCKED FOR HELPERS (owner, 2026-10-08: "lock rush. keep open for
        me to override"). Without quotes.price a helper's rush is what the
        needed-by date earns on the ladder; whatever was typed is replaced, not
@@ -15721,7 +15735,7 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         }))) : false;
         rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk))
           ? Math.max(0, Number(was.rush_pct || 0))
-          : (wantDate && rushOk ? rushPctFor(wantDate) : 0);
+          : (wantDate && rushOk ? rushPctFor(wantDate, undefined, rushSlow) : 0);
       }
     }
     const rush = round2(subtotal * rushPct / 100);
@@ -44286,8 +44300,8 @@ function customerReplyText(body) {
    in [square brackets] is for the owner to fill in. */
 const KB_SEED = [
   { kind: 'faq', shortcut: 'turnaround', title: 'How long will my order take?', tags: 'turnaround, lead time, timing, when',
-    body: `Thanks for asking! Small orders are ready in 5–7 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\n\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`,
-    /* Owner, 2026-10-28: small 5-7 / larger 7-14 business days; rush for a fee,
+    body: `Thanks for asking! Small orders are ready in 5–10 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\n\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`,
+    /* Owner, 2026-10-28: small 5-10 / larger 7-14 business days; rush for a fee,
        no percentages shown. An unedited live copy of either older text updates. */
     was: [`Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',

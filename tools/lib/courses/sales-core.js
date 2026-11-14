@@ -377,7 +377,7 @@ Giant printed heads of players, graduates or family members, for games, parties 
 
 **Turnaround**
 
-- Small orders are ready in 5–7 business days and larger ones in 7–14, plus shipping time if we ship it
+- Small orders are ready in 5–10 business days and larger ones in 7–14, plus shipping time if we ship it
 - The clock starts when they pay the deposit, or when they approve the proof if we are designing it for them, not at the first message. Late artwork or a late approval moves the date
 - A Design Studio order (they designed it themselves on jtees.net) has no proof: it prints exactly as they made it
 

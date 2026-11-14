@@ -2,7 +2,7 @@
   "_about": "The one menu for every jtees.net page AND the Design Studio (design.jtees.net reads assets/data/site-nav.html). Edit this, then run: node tools/site-nav.js --write  (tests/site-nav.test.js fails if a page drifts).",
   "announcement": [
     {
-      "text": "⚡ Fast turnaround · Small orders 5–7 business days · Rush available",
+      "text": "⚡ Fast turnaround · Small orders 5–10 business days · Rush available",
       "href": "/contact"
     },
     {
