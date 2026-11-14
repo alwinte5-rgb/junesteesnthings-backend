@@ -962,6 +962,24 @@ async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_quote_idx ON stripe_disputes (quote_code)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_order_idx ON stripe_disputes (order_ref)`);
 
+  /* Every Stripe webhook delivery, handled or failed (see logStripeDelivery).
+     The ledger records money that landed; this records each attempt to land it,
+     so a delivery that failed and the retry that later succeeded both show, with
+     the error. One row per delivery: a retry is a second row for the same
+     event_id. Nothing here is a payment; quote_payments stays the books. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stripe_events (
+      id           BIGSERIAL PRIMARY KEY,
+      event_id     TEXT,
+      type         TEXT NOT NULL,
+      quote_code   TEXT,
+      outcome      TEXT NOT NULL,
+      error        TEXT,
+      received_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stripe_events_quote_idx ON stripe_events (quote_code, id DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stripe_events_event_idx ON stripe_events (event_id)`);
+
   /* Payouts Stripe could not deliver to the bank (see reportFailedPayout).
      A payout moves no money in these books, since a sale counts when the
      customer pays, so this is not a ledger: one row per failed payout, written
@@ -18469,6 +18487,15 @@ async function bankStripeSession(session) {
   const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
   if (!rows.length) return { ok: false, reason: 'unknown quote' };
 
+  /* The quote as it stood before the card payment, in its history, as a
+     manual payment already is. Skipped when this session is already banked
+     (a Stripe retry, or the redirect got there first), so a retry adds no
+     empty history line. */
+  if (typeof snapshotQuote === 'function') {
+    const { rows: banked } = await pool.query(
+      'SELECT 1 FROM quote_payments WHERE ext_ref = $1 LIMIT 1', [session.id]);
+    if (!banked.length) await snapshotQuote(code, 'Stripe: card payment');
+  }
   const res = await recordPayment({
     code, amount: net, fee, method: 'card', source: 'stripe',
     session: session.id,
@@ -19730,8 +19757,10 @@ app.post('/webhooks/stripe', async (req, res) => {
      is a payment nobody knows about. */
   try {
     await handleStripeEvent(req.body);
+    if (typeof logStripeDelivery === 'function') await logStripeDelivery(req.body, 'handled');
     res.sendStatus(200);
   } catch (err) {
+    if (typeof logStripeDelivery === 'function') await logStripeDelivery(req.body, 'failed', err);
     /* 500 so Stripe retries. It backs off over ~3 days, which is long enough
        for a database outage to end and the payment to land by itself. */
     console.error('Stripe webhook processing failed — asking Stripe to retry:', err.message);
@@ -19742,6 +19771,25 @@ app.post('/webhooks/stripe', async (req, res) => {
     if (!res.headersSent) res.sendStatus(500);
   }
 });
+
+/* One row per webhook delivery in stripe_events, after the work, so the row
+   says how it went. Never throws and never changes the answer to Stripe: a
+   missing log row must not turn a banked payment into a retry. The quote code
+   is the checkout's client_reference_id, or a charge's metadata.quote_code. */
+async function logStripeDelivery(event, outcome, err = null) {
+  try {
+    const obj = (event && event.data && event.data.object) || {};
+    const ref = String(obj.client_reference_id || (obj.metadata && obj.metadata.quote_code) || '').toUpperCase();
+    await pool.query(
+      `INSERT INTO stripe_events (event_id, type, quote_code, outcome, error) VALUES ($1, $2, $3, $4, $5)`,
+      [event && event.id ? String(event.id).slice(0, 80) : null,
+       String((event && event.type) || 'unknown').slice(0, 80),
+       QUOTE_CODE_RE.test(ref) ? ref : null, outcome,
+       err ? String(err.message || err).slice(0, 300) : null]);
+  } catch (e) {
+    console.error('stripe delivery log failed:', e.message);
+  }
+}
 
 /* The event handling itself, lifted out of the route so the route is only
    about signature checking and the answer. Throws on failure — that is the
@@ -36617,14 +36665,17 @@ async function jobUpsellCard(q) {
    customer's details back; money is changed through the quote form, where
    the price and the payment link are kept in step. */
 async function jobHistoryCard(q) {
-  const [{ rows }, roster, { rows: [now] }] = await Promise.all([
+  const [{ rows }, roster, { rows: [now] }, { rows: deliveries }] = await Promise.all([
     pool.query(`SELECT id, row, action, staff_id, ip, created_at FROM quote_revisions
                  WHERE quote_code = $1 ORDER BY id DESC LIMIT 40`, [q.code]),
     staffRoster(),
     // The current row in the same JSON shape as the saved ones, so dates and numbers compare like for like.
     pool.query('SELECT to_jsonb(q.*) AS row FROM quotes q WHERE code = $1', [q.code]),
+    // Each Stripe webhook delivery for this quote (logStripeDelivery), failures and their retries included.
+    pool.query(`SELECT type, outcome, error, received_at FROM stripe_events
+                 WHERE quote_code = $1 ORDER BY id DESC LIMIT 20`, [q.code]).catch(() => ({ rows: [] })),
   ]);
-  if (!rows.length) return '';
+  if (!rows.length && !deliveries.length) return '';
   const current = (now && now.row) || q;
   const owner = isOwner();
   /* Each revision is the row BEFORE its change; what it became is the next
@@ -36633,7 +36684,7 @@ async function jobHistoryCard(q) {
     const after = i === 0 ? current : rows[i - 1].row;
     const diff = FRAUD.quoteDiff(r.row, after);
     const contact = diff.some((d) => d.kind === 'contact');
-    const who = r.staff_id == null ? 'Owner' : nameOf(roster, r.staff_id);
+    const who = r.staff_id == null ? (/^Stripe:/.test(r.action) ? 'Stripe' : 'Owner') : nameOf(roster, r.staff_id);
     const shown = (field, v) => (v !== '' && ['total', 'tax', 'deposit'].includes(field) ? money(v)
       : field === 'credited_to' && v !== '' ? (Number(v) === CREDIT_OWNER ? 'Owner' : nameOf(roster, Number(v))) : v);
     const lines = diff.map((d) => `<div style="font-size:12.5px${d.kind === 'contact' ? ';color:#b91c1c;font-weight:600' : ''}">${escEmail(d.label)}${
@@ -36648,9 +36699,18 @@ async function jobHistoryCard(q) {
       <span class="row-end muted">${escEmail(whenShort(r.created_at))}</span></div>`;
   }).join('');
   const flagged = rows.some((r, i) => FRAUD.quoteDiff(r.row, i === 0 ? current : rows[i - 1].row).some((d) => d.kind === 'contact'));
+  /* Failed deliveries are shown in red. Stripe retries a failure for about three
+     days, so a red line followed by a newer "handled" one for the same event
+     type is a payment that landed late, not one that was lost. */
+  const stripeList = deliveries.length ? `<div style="margin-top:10px"><b style="font-size:13px">Stripe deliveries</b>
+    <div class="rows" style="margin-top:4px">${deliveries.map((d) => `<div class="row-i"${d.outcome === 'failed' ? ' style="background:#fef2f2"' : ''}>
+      <span class="row-main" style="white-space:normal;font-size:12.5px">${escEmail(d.type)} &middot; ${d.outcome === 'failed'
+        ? `<span style="color:#b91c1c;font-weight:600">failed</span>${d.error ? ` <span class="muted">(${escEmail(d.error)})</span>` : ''}`
+        : 'handled'}</span>
+      <span class="row-end muted">${escEmail(whenShort(d.received_at))}</span></div>`).join('')}</div></div>` : '';
   return `<details class="card" id="history" style="margin-top:14px"${flagged && owner ? ' open' : ''}>
     <summary><b>History</b> <span class="muted">${rows.length} change${rows.length === 1 ? '' : 's'}${flagged ? ' &middot; <span style="color:#b91c1c">customer details changed</span>' : ''}</span></summary>
-    <div class="rows" style="margin-top:8px">${items}</div>
+    <div class="rows" style="margin-top:8px">${items}</div>${stripeList}
     <p class="muted" style="font-size:12px;margin-top:6px">Kept for good. Nobody can delete history.</p></details>`;
 }
 

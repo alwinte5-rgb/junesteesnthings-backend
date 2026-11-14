@@ -43,8 +43,23 @@ are read through `/orders_feed.php`; they are not quotes.
   `size_entries`). It gathers names and sizes from many people into one quote, which the shop
   then prices. Wholesale batches use the same idea: the business gathers its retail orders,
   then sends one request with final quantities.
-- **Designer repo: not yet searched.** The attempt was stopped this session. Searching
-  `~/lumise-designer` for preorder/Kelty work needs the owner's go-ahead.
+- **Designer repo: none found** (searched 2026-11-14: `origin/main`, every remote branch,
+  PRs and issues in both repos, for `preorder`, `pre-order`, `kelty`).
+- **What the Kelty work actually is: a manual batch process, outside both repos.** A
+  monthly-batch brand customer sends a spreadsheet built from a June's Tees template (one
+  garment and one design per sheet, one row per item, rows sharing an order number ship as
+  one package). The shop prices the batch on the final counts, and a local converter turns
+  the sheet into a Shippo bulk-label CSV. The template and converter live on the owner's
+  Mac, not in a repo.
+- **Gaps that matter for wholesale preorder batches:**
+  - The deposit is always 50% of the whole quote (`depositFor`). The batch terms ask for
+    the deposit plus all shipping up front, so today that is handled by hand.
+  - `/admin/shipping` buys one label per job (one `ship_to`). A batch shipped to many
+    retail customers needs Shippo's bulk import or a new batch-shipping build.
+- **Conclusion for Workstream C:** there is no preorder code to reuse. A wholesale batch is
+  one production request with final quantities (what the connector already takes). Collecting
+  the retail preorders is Biz Dashboard's job. Ship-to-each-customer batches are a separate,
+  later build and need the owner's say on deposit and shipping terms.
 
 ## 4. Integrations that can affect live orders
 
@@ -109,3 +124,30 @@ Only `/api/wholesale/v1/*` (`docs/wholesale-api-v1.md`), with its own per-busine
 The Lumise designer is licensed for June's Tees' own install. Nothing in the wholesale
 connector uses it. Offering it to other businesses needs written confirmation of the
 license terms first.
+
+## 11. Payments and reliability (Workstream E), checked 2026-11-14
+
+Each issue in the brief, against current `main`. "Covered" means a fix is in place and the
+named tests assert it; all of them pass.
+
+| Reported issue | Where it is handled | Tests |
+|---|---|---|
+| Payment handoff failures | Webhook and return page call the same `bankStripeSession`; the webhook answers only after the work, so a failed write is retried by Stripe for ~3 days | `stripe-webhook-ack`, `paid-after-cancel` |
+| Orders without verified payment | Banking requires `payment_status === 'paid'`; the designer's `success.php` no longer marks orders paid; `placeorder.php` removed | `paid-after-cancel`, `customer-sms`, `board-orders-feed` |
+| Quote form losing changes | Quote form save lock and per-form key; reopen restores every field | `quote-edit-retains`, `quote-size-restore`, `quote-addon-restore` |
+| Quotes that cannot be resumed | Pressing Pay again closes the old card page and makes a new one (`expireCheckoutSession`) | `paid-after-cancel` |
+| Missing customer quote notes | `customer_note` carried from the designer and the quote page | `quote-customer-notes`, `order-customer-note` |
+| Duplicate orders / payments | `quote_payments.ext_ref` unique index; manual-payment minute key; size-link and lead dedupe | `quote-overpay`, `stripe-outside-checkout`, `unlinked-payments` |
+| Missing notifications | Payment alerts never swallow a failure; unlinked money recorded then alerted | `brevo-credits`, `unlinked-payments`, `notifications` |
+| Unreconciled Stripe webhooks | Hourly sweeps book charges, refunds, disputes and failed payouts the webhook missed | `stripe-refunds`, `stripe-disputes`, `stripe-outside-checkout`, `stripe-payment-visibility` |
+| Failed background sync | Brevo contacts/deals retried with caps and give-up reports | `brevo-quote-sync`, `brevo-contacts`, `brevo-breach-monitor` |
+
+**Audit trail.** Back-office changes go to `staff_activity` (who, route, result) and
+`snapshotQuote` keeps the quote row before each manual payment, cancel, restore and settle
+(`quote_revisions`). The ledger (`quote_payments`) records the provider's ids. **Gap fixed
+on `wholesale-phase2`:** Stripe-driven changes had no History line and failed webhook
+deliveries had no record; see ROADMAP Workstream E.
+
+**Not checked:** live incidents. Railway logs need `railway login`; the Stripe dashboard
+needs sign-in. Bring a specific order or date and it can be traced end to end.
+
