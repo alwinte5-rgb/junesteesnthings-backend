@@ -51,7 +51,8 @@ So:
 - Suspended business: **403** `partner_suspended`.
 - Bad or missing key: **401**. More than 20 refused keys a minute from one IP: **429**.
 - Rate limit: 120 requests a minute per business (**429**, `Retry-After: 60`).
-- Bodies over 256 KB: **413**. The body is refused before it is read.
+- Bodies over 256 KB: **413** `body_too_large`, refused before the body is read. A body
+  that is not JSON gets **400** `invalid_body`.
 
 ## 3. Statuses
 
@@ -166,9 +167,9 @@ catching up**: webhooks are a convenience on top of it.
     "id": "WHSL000001", "revision": 2, "valid_until": "2026-11-28", "needed_by": "2026-12-10",
     "url": "https://www.jtees.net/q/WHSL000001",
     "lines": [{"description": "...", "details": "...", "colour": "Black", "qty": 24, "sizes": {"S": 4, "M": 10, "L": 10},
-               "unit_price": 12.5, "line_total": 300, "optional": false,
+               "unit_price": 12.5, "line_total": 275, "optional": false,
                "prints": [{"location": "front", "method_id": 1, "colours": null}],
-               "extras": [{"label": "Setup", "amount": 25}], "setup_fee": 0, "mockups": ["https://..."]}],
+               "extras": [{"label": "Setup", "amount": 25}], "mockups": ["https://..."]}],
     "pricing": {"subtotal": 300, "rush": 0, "rush_pct": 0, "discount": 0, "discount_note": null, "promo_code": null,
                 "tax": 25, "delivery": 0, "shipping": 0, "total": 325, "deposit_required": 162.5, "currency": "usd"},
     "payment": {"paid": 170, "balance": 155, "state": "deposit_paid", "terms": "Deposit before production; balance before the goods leave. Paid on the quote page."},

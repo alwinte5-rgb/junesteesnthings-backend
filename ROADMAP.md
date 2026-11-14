@@ -78,8 +78,9 @@ Two briefs make up this plan:
   campaign could still email that person.
 - [x] **Fixed on the branch:** each unsubscribe is put on Brevo's blocklist
   (`emailBlacklisted`, which blocks campaigns only; receipts still go). A failed push is
-  retried hourly, up to 10 tries, and a give-up is reported. The same sweep copies the
-  existing opt-out list over, 200 an hour.
+  retried hourly for 10 tries, then daily, and is never abandoned. The 10th failure is
+  reported. A batch stops at the first failure, so an outage doesn't hold up the sweep. The
+  same sweep copies the existing opt-out list over, 200 an hour.
 - [x] **Fixed on the branch:** marketing sends now *fail closed* if the opt-out list
   can't be read. Before, they failed open and sent anyway.
 - [!] Consent rule (see Blockers).
@@ -158,14 +159,28 @@ Christmas ordering stays open)
 - [x] Audit log `wholesale_events`: who, which request/quote, before/after status, data.
 - [x] Owner page `/admin/wholesale`: connect a business (key shown once, never in a URL),
   link a quote, decline, switch off, undelivered-webhook warning.
-- [ ] `docs/wholesale-api-v1.md`: the versioned contract for Codex (schemas, status enum,
-  errors, webhook verification code, retry rules).
-- [ ] Mock fixtures + sandbox for Codex: JSON fixtures for every status and event, plus a
-  test-mode partner so Biz Dashboard never touches live orders.
+- [x] `docs/wholesale-api-v1.md`: the versioned contract for Codex (schemas, status enum,
+  errors, webhook verification code, retry rules, provider interface).
+- [x] Fixtures: `docs/wholesale-v1-fixtures.json`, generated from the API's own view code
+  (`node tools/wholesale-fixtures.js`). Covers every status, every event, a signed webhook and
+  sample errors. A test fails if it goes stale.
+- [ ] Sandbox: a test business on a non-production deploy. This is the owner's step, as it
+  needs a deploy.
 - [ ] Optional link to a Business Partner (`business_id`) is stored. Not used for pricing,
   since program rules apply on the quote page.
-- [ ] Future providers: Biz Dashboard should code against a provider interface, with
-  June's Tees as one implementation. Write this into the spec for Codex.
+- [x] Future providers: the spec tells Codex to code against a provider interface, with
+  June's Tees as one implementation.
+- [x] Code-review fixes:
+  - quote revisions announced (`quote.revised`)
+  - events numbered in commit order per partner
+  - list paging by cursor
+  - a partner's cancel closes the linked quote (shared `applyQuoteCancel`)
+  - deliveries claimed before sending, and a switched-off partner no longer blocks others
+  - every open request reconciled
+  - expiry by the Chicago date
+  - line figures taken from the quote page's helpers
+  - 256 KB body limit applied before reading
+  - a DNS check at every delivery
 
 ## Workstream E: Payments and reliability
 
@@ -184,13 +199,18 @@ Christmas ordering stays open)
 
 ## Tests
 
-- [x] `tests/wholesale.test.js`: 14 unit tests pass (status derivation, quote whitelist,
-  validation, idempotency, keys, signatures, SSRF, retries).
-- [~] End-to-end run on real Postgres (`~/.local/share/jtees-e2e/run-wholesale.cjs`, about
-  50 checks covering the connector and unsubscribe → Brevo). It is written but **has not run
-  yet**: the first try failed on a missing package (fixed), and the re-run was stopped.
-- [ ] Full existing suite (`node --test tests/*.test.js`) against the branch.
-- [ ] `/code-review` and `/security-review` over the branch (owner rule).
+- [x] `tests/wholesale.test.js` + `tests/wholesale-fixtures.test.js`: 23 tests pass.
+- [x] End-to-end run on real Postgres: `~/.local/share/jtees-e2e/run-wholesale.cjs`,
+  **72/72**. It covers auth, idempotency, isolation, drafts hidden, signed webhooks and
+  retries, revisions, payment-before-production, artwork after approval, cancel → quote
+  cancelled, paging, suspended partners, private DNS, and unsubscribe → Brevo (including
+  Brevo down).
+- [x] Full suite: 3,200+ tests. The only failures are the 9 files that already fail on main
+  (codex-p2-h, decoration-parity, delivery-estimate, discounts-page, pricing-parity-garment,
+  screenprint-min-notice, screenprint-minimum, shop-digest, warm-messages).
+- [x] `/security-review`: no high-confidence findings. Its two low notes are fixed (alert
+  escaping, DNS check at delivery).
+- [x] `/code-review` (high): 10 findings + 4 minor, all fixed. Re-review of the fixes is running.
 
 ## Delivery
 

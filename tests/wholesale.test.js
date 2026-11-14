@@ -171,9 +171,10 @@ test('line figures come from the quote page when given', () => {
 });
 
 test('private addresses are refused at delivery time', async () => {
-  for (const ip of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.20.1.1', '192.168.1.1', '100.64.0.1', '::1', 'fd00::1', '::ffff:10.0.0.1'])
+  for (const ip of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.20.1.1', '192.168.1.1', '100.64.0.1', '198.18.0.1',
+    '::1', 'fd00::1', 'fec0::1', '::ffff:10.0.0.1', '::ffff:a00:1', '::a00:1', '64:ff9b::a9fe:a9fe', 'not-an-ip'])
     assert.ok(W.privateIp(ip), ip);
-  assert.ok(!W.privateIp('93.184.216.34'));
+  for (const ip of ['93.184.216.34', '8.8.8.8', '2606:4700::1']) assert.ok(!W.privateIp(ip), ip);
   assert.strictEqual(await W.resolvesPublic('https://x.example/h', async () => [{ address: '93.184.216.34' }]), true);
   assert.strictEqual(await W.resolvesPublic('https://x.example/h', async () => [{ address: '93.184.216.34' }, { address: '10.0.0.1' }]), false);
   assert.strictEqual(await W.resolvesPublic('https://x.example/h', async () => { throw new Error('NXDOMAIN'); }), false);
@@ -182,4 +183,37 @@ test('private addresses are refused at delivery time', async () => {
 test('off unless switched on', () => {
   assert.strictEqual(W.on({}), false);
   assert.strictEqual(W.on({ JT_WHOLESALE: 'ON' }), true);
+});
+
+/* postWebhook connects ONLY to the address its own lookup approved. */
+function fakeNet(addrs) {
+  const { EventEmitter } = require('node:events');
+  const seen = {};
+  const dns = { lookup: (host, opts, cb) => setImmediate(() => cb(null, addrs)) };
+  const https = { request: (opts, onRes) => {
+    const req = new EventEmitter();
+    req.destroy = (e) => setImmediate(() => req.emit('error', e));
+    req.end = (body) => opts.lookup(opts.hostname, {}, (err, address) => {
+      if (err) return req.emit('error', err);
+      Object.assign(seen, { address, body, headers: opts.headers });
+      const res = new EventEmitter(); res.statusCode = 204; res.resume = () => setImmediate(() => res.emit('end'));
+      onRes(res);
+    });
+    return req;
+  } };
+  return { dns, https, seen };
+}
+
+test('webhook post: connects to the checked public address', async () => {
+  const n = fakeNet([{ address: '93.184.216.34', family: 4 }]);
+  const r = await W.postWebhook('https://hooks.example.com/jt', { 'X-JT-Signature': 's' }, '{}', n);
+  assert.strictEqual(r.status, 204);
+  assert.strictEqual(n.seen.address, '93.184.216.34');
+  assert.strictEqual(n.seen.headers['Content-Length'], 2);
+});
+
+test('webhook post: refused when any address is private (rebinding)', async () => {
+  const n = fakeNet([{ address: '93.184.216.34', family: 4 }, { address: '10.0.0.5', family: 4 }]);
+  await assert.rejects(W.postWebhook('https://hooks.example.com/jt', {}, '{}', n), /public address/);
+  assert.strictEqual(n.seen.address, undefined, 'never connected');
 });

@@ -397,26 +397,62 @@ function webhookUrl(v) {
   return u;
 }
 
-/* Checked again at every delivery, on what the host resolves to NOW: a name
-   that passed webhookUrl() can later be pointed at a private address. */
+/* Addresses a webhook may never reach. Checked on the address the connection
+   actually uses (postWebhook pins it), so a name that passed webhookUrl() and
+   was later pointed somewhere private is refused. IPv6 forms that embed an IPv4
+   address (mapped, compatible, NAT64, 6to4) are refused outright. */
+const { BlockList, isIP } = require('net');
+/* Two lists: a BlockList also tests an IPv4 address against IPv6 rules (as
+   ::ffff:a.b.c.d), so one list with ::ffff:0:0/96 would refuse every IPv4. */
+const PRIVATE4 = new BlockList();
+const PRIVATE6 = new BlockList();
+for (const [net, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]]) PRIVATE4.addSubnet(net, bits, 'ipv4');
+for (const [net, bits] of [['::', 96], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64],
+  ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]]) PRIVATE6.addSubnet(net, bits, 'ipv6');
 function privateIp(ip) {
-  const v = String(ip || '').toLowerCase();
-  if (v.includes(':')) {
-    if (v === '::1' || v === '::') return true;
-    if (v.startsWith('::ffff:')) return privateIp(v.slice(7));
-    return /^(fc|fd|fe8|fe9|fea|feb)/.test(v);
-  }
-  const p = v.split('.').map(Number);
-  if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-  const [a, b] = p;
-  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  const v = String(ip || '');
+  const fam = isIP(v);
+  if (!fam) return true;
+  return fam === 6 ? PRIVATE6.check(v, 'ipv6') : PRIVATE4.check(v, 'ipv4');
 }
 async function resolvesPublic(url, lookup = require('dns').promises.lookup) {
   try {
     const addrs = await lookup(new URL(url).hostname, { all: true });
     return addrs.length > 0 && addrs.every((a) => !privateIp(a.address));
   } catch { return false; }
+}
+
+/* POST a webhook over https, connecting ONLY to an address that was checked:
+   the lookup that picks the address is the one that refuses private ones, so
+   the name cannot resolve to something else between the check and the
+   connection. No redirects are followed (https.request never does). Resolves
+   { status }, or rejects with a reason. */
+function postWebhook(url, headers, body, { timeoutMs = 10000, https = require('https'), dns = require('dns') } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lookup = (host, opts, cb) => {
+      dns.lookup(host, { all: true }, (err, addrs) => {
+        if (err) return cb(err);
+        const ok = (addrs || []).filter((x) => !privateIp(x.address));
+        if (!addrs || !addrs.length || ok.length !== addrs.length) {
+          return cb(Object.assign(new Error('webhook host does not resolve to a public address'), { code: 'EPRIVATE' }));
+        }
+        if (opts && opts.all) return cb(null, ok);
+        cb(null, ok[0].address, ok[0].family);
+      });
+    };
+    const req = https.request({ method: 'POST', hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search,
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(body) }, lookup, timeout: timeoutMs }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode }));
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error(`no answer in ${timeoutMs / 1000}s`)));
+    req.on('error', reject);
+    req.end(body);
+  });
 }
 
 function publicId(prefix) {
@@ -428,5 +464,5 @@ module.exports = {
   parseRequest, parseArtwork, httpsUrl, err,
   newApiKey, keyPrefix, hashKey, keyMatches,
   partnerSecret, sign, signatureHeader, verifySignature, SIG_TOLERANCE_S,
-  idempotencyKey, bodyHash, RETRY_MINUTES, nextAttemptAt, webhookUrl, privateIp, resolvesPublic, publicId,
+  idempotencyKey, bodyHash, RETRY_MINUTES, nextAttemptAt, webhookUrl, privateIp, resolvesPublic, postWebhook, publicId,
 };

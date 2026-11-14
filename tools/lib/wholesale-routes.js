@@ -333,16 +333,18 @@ function mount(app, deps) {
         if (!r) return [404, W.err('not_found', 'No such request.')];
         const q = await loadQuote(r.quote_code, c);
         const status = W.statusOf(r, q);
-        if (status === 'cancelled') return [200, r];
+        if (status === 'cancelled') return [200, { already: true }];
         if (q && Number(q.paid_amount || 0) > 0) return [409, W.err('payment_received', 'Money has been paid on this job. Contact June\'s Tees to cancel it.')];
         if (ENDED.includes(status)) return [409, W.err('not_cancellable', `A request that is ${status} cannot be cancelled.`)];
         await c.query('UPDATE wholesale_requests SET cancelled_at = NOW(), cancel_reason = $2, status_cache = $3, updated_at = NOW() WHERE id = $1', [r.id, reason, 'cancelled']);
         await recordEvent(c, { partnerId: req.partner.id, requestId: r.id, type: 'request.status_changed', actor: `partner:${req.partner.id}`, before: status, after: 'cancelled', data: { reason } });
-        return [200, { ...r, quote_code: r.quote_code }];
+        return [200, { already: false }];
       });
       if (out[0] !== 200) return send(res, out[0], out[1]);
       const r = await ownRequest(req);
-      if (r.quote_code) {
+      /* Only the call that actually cancelled the request closes the quote: a
+         retried cancel (after a timeout) changes nothing and tells nobody. */
+      if (r.quote_code && !out[1].already) {
         /* The linked quote is cancelled too, the same way the job page does
            it: no reminder chases it, its card page is closed, and it lands on
            the owner's follow-up list. If that fails the shop is told to do it
@@ -353,7 +355,7 @@ function mount(app, deps) {
         alertShop(`Wholesale request cancelled: quote ${r.quote_code}`,
           `<p><b>${esc(req.partner.name)}</b> cancelled request ${esc(r.public_id)}${reason ? `: ${esc(reason)}` : ''}. Nothing had been paid.</p>
            ${closed ? `<p>Quote <b>${esc(r.quote_code)}</b> was cancelled with it.</p>`
-             : `<p><b>Quote ${esc(r.quote_code)} could not be cancelled automatically.</b> Cancel it on its job page so it cannot be paid or chased.</p>`}`).catch(() => {});
+             : `<p><b>Quote ${esc(r.quote_code)} was not cancelled automatically</b>: it was already cancelled, money arrived on it at the same moment, or the cancel failed. Check its job page.</p>`}`).catch(() => {});
       }
       send(res, 200, { request: requestView(r, await loadQuote(r.quote_code)) });
     } catch (e) { fail(res, 'cancel')(e); }
@@ -592,22 +594,42 @@ function sweep(deps) {
 }
 
 async function runSweep(deps) {
-  const { pool, reportError, alertShop, esc = (x) => String(x), env = process.env, fetchImpl = fetch,
-          resolvesPublic = W.resolvesPublic } = deps;
+  const { pool, reportError, alertShop, esc = (x) => String(x), env = process.env, post = W.postWebhook } = deps;
   if (!W.on(env)) return '';
   let changed = 0, revised = 0, delivered = 0, failed = 0;
 
   for (let lastId = 0; ;) {
     const { rows } = await pool.query(
-      `SELECT r.*, row_to_json(q.*) AS q FROM wholesale_requests r LEFT JOIN quotes q ON q.code = r.quote_code
-        WHERE r.status_cache NOT IN ('delivered','cancelled','declined') AND r.id > $1
+      /* Only what statusOf reads, not whole quote rows; and a request with no
+         quote yet is skipped (nothing it could change to happens without one:
+         linking, declining and cancelling set their status themselves). */
+      `SELECT r.id, r.public_id, r.partner_id, r.status_cache, r.quote_revision_cache, r.authorized_revision,
+              r.cancelled_at, r.declined_at,
+              CASE WHEN q.code IS NULL THEN NULL ELSE json_build_object(
+                'code', q.code, 'status', q.status, 'revision', q.revision, 'total', q.total, 'paid_amount', q.paid_amount,
+                'valid_until', q.valid_until, 'accepted_at', q.accepted_at, 'cancelled_at', q.cancelled_at,
+                'artwork_at', q.artwork_at, 'proof_sent_at', q.proof_sent_at, 'proof_ok_at', q.proof_ok_at,
+                'blanks_ordered_at', q.blanks_ordered_at, 'blanks_in_at', q.blanks_in_at, 'production_at', q.production_at,
+                'qc_at', q.qc_at, 'shipped_at', q.shipped_at, 'delivered_at', q.delivered_at) END AS q
+         FROM wholesale_requests r LEFT JOIN quotes q ON q.code = r.quote_code
+        WHERE r.status_cache NOT IN ('delivered','cancelled','declined') AND r.quote_code IS NOT NULL AND r.id > $1
         ORDER BY r.id LIMIT 200`, [lastId]);
     if (!rows.length) break;
     lastId = rows[rows.length - 1].id;
     for (const r of rows) {
       const status = W.statusOf(r, r.q);
-      const rev = r.q && W.quoteVisible(r.q) ? Number(r.q.revision) || 1 : null;
+      /* A quote put back to draft/held hides its revision; the last one
+         announced stands until it is visible again. */
+      const rev = r.q && W.quoteVisible(r.q) ? Number(r.q.revision) || 1 : r.quote_revision_cache;
       if (status === r.status_cache && rev === r.quote_revision_cache) continue;
+      /* First sight of a revision with nothing changed (e.g. the first sweep
+         after this column was added): remember it, quietly. Nothing changed for
+         the partner, so updated_at stays put and no event is sent. */
+      if (status === r.status_cache && r.quote_revision_cache === null) {
+        await pool.query('UPDATE wholesale_requests SET quote_revision_cache = $2 WHERE id = $1 AND quote_revision_cache IS NULL', [r.id, rev])
+          .catch((e) => reportError('wholesale-reconcile', e, r.public_id).catch(() => {}));
+        continue;
+      }
       try {
         await inTx(pool, async (c) => {
           const { rowCount } = await c.query(
@@ -662,20 +684,12 @@ async function runSweep(deps) {
     }
     const body = JSON.stringify({ api_version: W.API_VERSION, event: eventView({ ...d, public_id: d.event_public_id }) });
     let status = 0, error = null;
-    if (!(await resolvesPublic(d.webhook_url))) {
-      error = 'webhook host does not resolve to a public address';
-    } else {
-      try {
-        const r = await fetchImpl(d.webhook_url, {
-          method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000),
-          headers: { 'Content-Type': 'application/json', 'User-Agent': 'JunesTees-Wholesale/1',
-                     'X-JT-Event-Id': d.event_public_id, 'X-JT-Signature': W.signatureHeader(secret, body) },
-          body,
-        });
-        status = r.status;
-        if (status < 200 || status >= 300) error = `answered ${status}`;
-      } catch (e) { error = String(e.message || e).slice(0, 200); }
-    }
+    try {
+      const r = await post(d.webhook_url, { 'Content-Type': 'application/json', 'User-Agent': 'JunesTees-Wholesale/1',
+        'X-JT-Event-Id': d.event_public_id, 'X-JT-Signature': W.signatureHeader(secret, body) }, body);
+      status = r.status;
+      if (status < 200 || status >= 300) error = `answered ${status}`;
+    } catch (e) { error = String(e.message || e).slice(0, 200); }
     if (!error) {
       await pool.query('UPDATE wholesale_deliveries SET delivered_at = NOW(), attempts = attempts + 1, last_status = $2, last_error = NULL WHERE id = $1', [d.id, status]);
       delivered++;
