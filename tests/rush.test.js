@@ -46,8 +46,26 @@ test('the form suggests rush only when every picked decoration is DTF or embroid
   const sent = new RegExp(JSON.parse(JSON.stringify(RUSH.RUSHABLE.source)), 'i');
   assert.ok(sent.test('DTF Transfer') && sent.test('Embroidery') && !sent.test('Screen Printing') && !sent.test('ADTFX'));
   assert.match(src, /\$\{RUSH\.rushFor\.toString\(\)\}/, 'the form runs the save\'s own rule');
-  assert.match(src, /var r = rushFor\(days, RUSH_TIERS, slow\);\s+var pct = dtfOnly \? r\.pct : 0;/);
+  assert.match(src, /var r = rushFor\(days, RUSH_TIERS, slow, RUSH_RULE\);\s+var pct = dtfOnly \? r\.pct : 0;/);
   assert.match(src, /only DTF and embroidery can be rushed: ask June about the date/);
   assert.match(src, /too soon: no same-day or next-day orders/);
   assert.match(src, /if \(\/\^\(method\|pr_m_\|qty\[0-9\]\)\/\.test\(n\)\) rushSync\(true\);/, 'a quantity change re-checks the 50+ rule');
+});
+
+test('a helper keeps a saved rush only while the order stays slow or not slow, and cannot quote a too-soon date (code review)', () => {
+  const at = src.indexOf('const wasSlow = was ? RUSH.slowOrder(wasLines) : false;');
+  assert.ok(at > 0, 'the saved order is checked for embroidery or 50+ pieces');
+  const tail = src.slice(at, src.indexOf('const rush = round2(subtotal * rushPct / 100);', at));
+  assert.match(tail, /&& rushSlow === wasSlow\)/);
+  assert.match(tail, /RUSH\.rushFor\(businessDaysUntil\(wantDate\), RUSH_TIERS, rushSlow, RUSH_RULE\)\.tooSoon/);
+  assert.match(tail, /return res\.status\(400\)\.send\(quotePage\('That date is too soon'/);
+  assert.match(src, /data-was-slow="\$\{\(\(\) => \{/, 'the form knows it too');
+  assert.match(src, /\(box\.dataset\.wasSlow === undefined \|\| \(box\.dataset\.wasSlow === '1'\) === slow\)/);
+});
+
+test('the live chat turnaround reply updates from 5–7 to 5–10 (code review)', () => {
+  const at = src.indexOf("shortcut: 'turnaround', title: 'How long will my order take?'");
+  const entry = src.slice(at, src.indexOf("shortcut: 'deposit'", at));
+  assert.match(entry, /body: `Thanks for asking! Small orders are ready in 5–10 business days/);
+  assert.match(entry, /was: \[`Thanks for asking! Small orders are ready in 5–7 business days/);
 });

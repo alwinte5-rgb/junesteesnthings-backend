@@ -71,8 +71,8 @@ function rushPage({ saved = '2026-11-20', value = saved, rush = '25', readOnly =
     getElementById: (id) => els[id] || null,
     querySelectorAll: () => [select],
   };
-  const fn = new Function('document', 'RUSH_TIERS', 'rushFor', 'rushDaysUntil', 'calc',
-    body + '\nreturn rushSync;')(document, [], () => ({ pct: 50, tooSoon: false }), (v) => (v ? 2 : null), () => {});
+  const fn = new Function('document', 'RUSH_TIERS', 'RUSH_RULE', 'rushFor', 'rushDaysUntil', 'calc',
+    body + '\nreturn rushSync;')(document, [], {}, () => ({ pct: 50, tooSoon: false }), (v) => (v ? 2 : null), () => {});
   return { fn, box: els.rushpct, date };
 }
 

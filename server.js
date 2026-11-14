@@ -9879,8 +9879,12 @@ function businessDaysUntil(to, from) {
  *  slow: RUSH.slowOrder() (embroidery or 50+ pieces). A date no rush can buy
  *  (same day, next day; under 3 days for a slow order) earns 0. */
 function rushPctFor(neededBy, from, slow) {
-  return RUSH.rushFor(businessDaysUntil(neededBy, from), RUSH_TIERS, !!slow).pct;
+  return RUSH.rushFor(businessDaysUntil(neededBy, from), RUSH_TIERS, !!slow, RUSH_RULE).pct;
 }
+
+/* The floors and the slow ladder, from tools/lib/rush.js, for rushFor here
+   and on the quote form (which gets them as JSON, as it gets RUSH_TIERS). */
+const RUSH_RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS };
 
 /* Holiday mode: everything takes HOLIDAY_EXTRA_DAYS longer. One switch rather
    than a setting per stage, so the busy season cannot be half on. The failure
@@ -12837,6 +12841,15 @@ function productGroupOf(name) {
                          product: !!it.product_id,
                          titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
                        }))) ? '1' : '';
+                     })()}" data-was-slow="${(() => {
+                       /* Whether the saved order was embroidery or 50+ pieces: the
+                          save keeps a rush only while that is unchanged too. */
+                       const mt = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
+                       return RUSH.slowOrder((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional).map((it) => ({
+                         product: !!it.product_id,
+                         qty: parseInt(it.qty, 10) || 0,
+                         titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
+                       }))) ? '1' : '';
                      })()}"
                      style="width:80px;padding:5px 6px;font-size:13px" placeholder="0">
               <span style="font-size:13px;color:#6b7280">% &middot;</span>
@@ -13231,10 +13244,11 @@ function productGroupOf(name) {
          in, it never overwrites a figure that was typed or deliberately
          cleared. */
       var RUSH_TIERS = ${JSON.stringify(RUSH_TIERS)};
+      var RUSH_RULE = ${JSON.stringify(RUSH_RULE)};
 
       /* Business days between today and the requested date, the same count
-         rushPctFor() makes on the server. A date in the past is the most
-         urgent case there is, not the least, so it counts as zero. */
+         rushPctFor() makes on the server. A date in the past counts as zero,
+         like today: too soon to take (owner, 2026-11-14). */
       function rushDaysUntil(v) {
         if (!v) return null;
         var end = new Date(v + 'T12:00:00');
@@ -13299,7 +13313,7 @@ function productGroupOf(name) {
           if (lines[i].titles.some(function (t) { return embroidery.test(t); })) slow = true;
         });
         if (pieces >= ${RUSH.LARGE_QTY}) slow = true;
-        var r = rushFor(days, RUSH_TIERS, slow);
+        var r = rushFor(days, RUSH_TIERS, slow, RUSH_RULE);
         var pct = dtfOnly ? r.pct : 0;
 
         row.style.display = days === null ? 'none' : '';
@@ -13318,7 +13332,8 @@ function productGroupOf(name) {
              the ladder's figure. Without this the screen showed the ladder and
              the save kept the owner's figure: two prices for one quote. */
           var keep = dateEl.dataset.saved !== undefined && dateEl.value === dateEl.dataset.saved
-            && (dtfOnly || box.dataset.wasRushable !== '1');
+            && (dtfOnly || box.dataset.wasRushable !== '1')
+            && (box.dataset.wasSlow === undefined || (box.dataset.wasSlow === '1') === slow);
           box.value = keep ? (box.dataset.saved || '') : (pct > 0 ? String(pct) : '');
         }
 
@@ -15729,11 +15744,28 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         /* A rush kept from before is dropped when this helper took the order
            off DTF since: it was rushable then and is not now. An owner's
            figure on an order that was never rushable stays. */
-        const wasRushOk = was ? RUSH.rushAllowed((Array.isArray(was.items) ? was.items : []).filter((it) => it && !it.optional).map((it) => ({
+        const wasLines = was ? (Array.isArray(was.items) ? was.items : []).filter((it) => it && !it.optional).map((it) => ({
           product: !!it.product_id,
+          qty: parseInt(it.qty, 10) || 0,
           titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
-        }))) : false;
-        rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk))
+        })) : [];
+        const wasRushOk = was ? RUSH.rushAllowed(wasLines) : false;
+        /* Embroidery added or the order crossing 50 pieces (or back) changes
+           its ladder, so a kept rush would be the wrong one (code review). */
+        const wasSlow = was ? RUSH.slowOrder(wasLines) : false;
+        /* Owner, 2026-11-14: no same-day or next-day orders (3 days for
+           embroidery or 50+ pieces). A helper cannot quote such a date; the
+           owner still can, since rush is the owner's call. */
+        if (wantDate && RUSH.rushFor(businessDaysUntil(wantDate), RUSH_TIERS, rushSlow, RUSH_RULE).tooSoon
+            && !(was && wasDate === wantDate)) {
+          return res.status(400).send(quotePage('That date is too soon', `
+        <div class="card">
+          <div class="warn">Nothing was saved — we do not take same-day or next-day orders${rushSlow ? ', and embroidery or orders of 50 or more pieces need at least 3 business days' : ''}.</div>
+          <p class="muted" style="margin-top:8px">Pick a later needed-by date, or ask June about this one.</p>
+          <p style="margin-top:12px"><a class="btn" href="${backTo}">Go back</a></p>
+        </div>`));
+        }
+        rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk) && rushSlow === wasSlow)
           ? Math.max(0, Number(was.rush_pct || 0))
           : (wantDate && rushOk ? rushPctFor(wantDate, undefined, rushSlow) : 0);
       }
@@ -44302,8 +44334,9 @@ const KB_SEED = [
   { kind: 'faq', shortcut: 'turnaround', title: 'How long will my order take?', tags: 'turnaround, lead time, timing, when',
     body: `Thanks for asking! Small orders are ready in 5–10 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\n\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`,
     /* Owner, 2026-10-28: small 5-10 / larger 7-14 business days; rush for a fee,
-       no percentages shown. An unedited live copy of either older text updates. */
-    was: [`Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
+       no percentages shown. Owner, 2026-11-14: small 5-10. An unedited live
+       copy of any older text updates. */
+    was: [`Thanks for asking! Small orders are ready in 5–7 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\\n\\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
     body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
   { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',

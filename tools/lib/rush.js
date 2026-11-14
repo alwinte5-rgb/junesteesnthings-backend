@@ -56,16 +56,20 @@ function slowOrder(lines) {
 /**
  * The rush a needed-by date earns, `days` business days from today.
  *   tiers  the usual ladder (RUSH_TIERS on the server: the first band whose
- *          days the date falls at or under wins);
- *   slow   slowOrder(): its own 4 steps and the 3-day floor.
+ *          days the date falls at or under wins). An empty ladder turns rush
+ *          off for every order, slow ones too;
+ *   slow   slowOrder(): its own steps and floor;
+ *   rule   { earliest, slowEarliest, slowTiers } (EARLIEST_DAYS,
+ *          SLOW_EARLIEST_DAYS, SLOW_TIERS): passed in so the quote form can
+ *          run this same source (toString) with the server's figures.
  * Returns { pct, tooSoon }: tooSoon is a date no rush can buy (same day or
  * next day; under 3 days for a slow order), and then pct is 0.
- * Self-contained: the quote form runs this same source (toString).
  */
-function rushFor(days, tiers, slow) {
+function rushFor(days, tiers, slow, rule) {
   if (days === null || days === undefined) return { pct: 0, tooSoon: false };
-  if (days < (slow ? 3 : 2)) return { pct: 0, tooSoon: true };
-  var t = slow ? [{ days: 3, pct: 70 }, { days: 4, pct: 50 }, { days: 5, pct: 30 }, { days: 6, pct: 10 }] : (tiers || []);
+  if (days < (slow ? rule.slowEarliest : rule.earliest)) return { pct: 0, tooSoon: true };
+  if (!tiers || !tiers.length) return { pct: 0, tooSoon: false };
+  var t = slow ? rule.slowTiers : tiers;
   for (var i = 0; i < t.length; i++) if (days <= t[i].days) return { pct: t[i].pct, tooSoon: false };
   return { pct: 0, tooSoon: false };
 }

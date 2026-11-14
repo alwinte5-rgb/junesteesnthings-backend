@@ -52,12 +52,14 @@ function build(env) {
     ${PARSER}
     ${lift('businessDaysUntil')}
     ${lift('rushPctFor')}
+    ${src.match(/const RUSH_RULE = [^;]*;/)[0]}
     return { RUSH_TIERS, rushPctFor, businessDaysUntil };
   })()`);
 }
 
 const RUSH = require('../tools/lib/rush');
 globalThis.__JT_RUSH = RUSH;
+const RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS };
 
 /* A Tuesday, so a four-business-day reach crosses a weekend. */
 const TUE = new Date('2026-09-01T12:00:00');
@@ -86,8 +88,8 @@ test('the count is BUSINESS days, so a weekend is not lead time', () => {
 test('a date already past is too soon, like today (owner, 2026-11-14)', () => {
   const { rushPctFor } = build();
   assert.strictEqual(rushPctFor('2026-08-25', TUE), 0);
-  assert.strictEqual(RUSH.rushFor(0, [], false).tooSoon, true, 'past counts as today: too soon');
-  assert.strictEqual(RUSH.rushFor(1, [], false).tooSoon, true, 'next day: too soon');
+  assert.strictEqual(RUSH.rushFor(0, [{ days: 2, pct: 35 }], false, RULE).tooSoon, true, 'past counts as today: too soon');
+  assert.strictEqual(RUSH.rushFor(1, [{ days: 2, pct: 35 }], false, RULE).tooSoon, true, 'next day: too soon');
 });
 
 test('embroidery and 50+ pieces: 10 / 30 / 50 / 70, never sooner than 3 business days (owner, 2026-11-14)', () => {
@@ -99,10 +101,12 @@ test('embroidery and 50+ pieces: 10 / 30 / 50 / 70, never sooner than 3 business
   assert.strictEqual(rushPctFor('2026-09-08', TUE, slow), 30, '5 days');
   assert.strictEqual(rushPctFor('2026-09-09', TUE, slow), 10, '6 days');
   assert.strictEqual(rushPctFor('2026-09-10', TUE, slow), 0, '7 days is the usual time');
-  assert.strictEqual(RUSH.rushFor(2, [], true).tooSoon, true);
-  /* The form runs rushFor from its own source, so its table is a literal: it
-     must equal the exported one. */
-  for (const t of RUSH.SLOW_TIERS) assert.strictEqual(RUSH.rushFor(t.days, [], true).pct, t.pct);
+  assert.strictEqual(RUSH.rushFor(2, [{ days: 2, pct: 35 }], true, RULE).tooSoon, true);
+  for (const t of RUSH.SLOW_TIERS) assert.strictEqual(RUSH.rushFor(t.days, [{ days: 2, pct: 35 }], true, RULE).pct, t.pct);
+  /* An empty ladder turns rush off for slow orders too (code review). */
+  assert.strictEqual(RUSH.rushFor(3, [], true, RULE).pct, 0);
+  const off = build({ JT_RUSH_TIERS: '[]' });
+  assert.strictEqual(off.rushPctFor('2026-09-04', TUE, true), 0, 'JT_RUSH_TIERS=[] stops the slow ladder too');
 });
 
 test('what makes an order slow: any embroidery, or 50+ pieces on the required lines', () => {
