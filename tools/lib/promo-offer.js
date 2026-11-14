@@ -11,7 +11,8 @@
    (jt_promo_offer() in jt-auth.php) reading the same two variables, so the
    code a popup promises and the discount checkout takes cannot drift apart:
      JT_PROMO_AMOUNT  dollars off        (default 15, 1-100)
-     JT_PROMO_MIN     order floor, $     (default 50, 0-1000; never below 2x the amount)
+     JT_PROMO_MIN     order floor, $     (default 50; under twice the amount or outside 0-1000 it is
+                                         raised to the larger of 50 and twice the amount — same rule as the twin)
    Out-of-range or non-numeric values fall back to the defaults rather than
    produce "$0 off" or a floor the amount exceeds. */
 
