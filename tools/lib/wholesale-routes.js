@@ -594,7 +594,8 @@ function sweep(deps) {
 }
 
 async function runSweep(deps) {
-  const { pool, reportError, alertShop, esc = (x) => String(x), env = process.env, post = W.postWebhook } = deps;
+  const htmlEsc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const { pool, reportError, alertShop, esc = htmlEsc, env = process.env, post = W.postWebhook } = deps;
   if (!W.on(env)) return '';
   let changed = 0, revised = 0, delivered = 0, failed = 0;
 

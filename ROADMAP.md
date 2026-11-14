@@ -52,7 +52,7 @@ Two briefs make up this plan:
 - [~] Integrations that touch live orders: Stripe (checkout + webhook + refunds/disputes),
   Brevo (send + CRM deals + contacts), Twilio, Cloudinary, the designer (internal key),
   SinaLite/Signs365, Shippo (designer), Clover (rarely used). Still to write up in full.
-- [ ] Written baseline document (`docs/wholesale-audit.md`): models, webhooks, jobs, statuses.
+- [x] Written baseline: `docs/wholesale-audit.md` (flow, Partner Portal, preorders, integrations, jobs, webhooks, statuses, email baseline, licensing).
 
 ## Workstream B: Brevo marketing (brief 2, Phases 1–7)
 
@@ -210,7 +210,19 @@ Christmas ordering stays open)
   screenprint-min-notice, screenprint-minimum, shop-digest, warm-messages).
 - [x] `/security-review`: no high-confidence findings. Its two low notes are fixed (alert
   escaping, DNS check at delivery).
-- [x] `/code-review` (high): 10 findings + 4 minor, all fixed. Re-review of the fixes is running.
+- [x] `/code-review` (high): 10 findings + 4 minor, all fixed. Re-review of the fixes
+  (medium): 10 more, all fixed:
+  - the webhook connection pinned to the checked address
+  - wider private-address ranges
+  - retried cancels change nothing
+  - the quote is cancelled only while unpaid
+  - JSON errors for refused bodies
+  - no updated_at bump on deploy
+  - a lighter sweep
+  - one bad address no longer stalls the opt-out sync
+  - the doc matches the line fields
+- [x] Security review of the fix commits: no findings. Its one note (the escaping default) is fixed.
+- [x] End-to-end now **75/75**.
 
 ## Delivery
 
