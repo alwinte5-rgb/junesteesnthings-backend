@@ -6,7 +6,7 @@
  * newest consent includes marketing. A number given for an order or quote is
  * consent to order updates, not promotions, and every promotional text sent
  * without written consent is its own fine. Everyone else is emailed, and the
- * 10% code is earned by signing up for texts.
+ * $15-off-$50+ code (tools/lib/promo-offer.js) is earned by signing up for texts.
  */
 
 const { test } = require('node:test');
@@ -76,9 +76,10 @@ test('codes are unguessable-enough, unambiguous and in the shape the studio acce
   assert.ok(seen.size > 190);
 });
 
-test('the email offers the 10% for signing up, links to sign-up with their address, and escapes names', () => {
+test('the email offers the dollar offer for signing up, links to sign-up with their address, and escapes names', () => {
   const m = R.helloEmail({ first: '<b>Ann</b>', email: 'ann+x@example.com' });
-  assert.match(m.subject, /10% off/);
+  assert.match(m.subject, /\$15 off \$50\+/);
+  assert.doesNotMatch(m.subject + m.html, /\d+% off/, 'no percentage offer left in the email');
   assert.match(m.html, /https:\/\/www\.jtees\.net\/texts\?src=email&amp;e=ann%2Bx%40example\.com/);
   /* The shop's own photos, absolute and described, and links to the site. */
   const imgs = m.html.match(/<img [^>]*>/g);
@@ -186,7 +187,7 @@ test('every customer email carries the sign-up box until the new year', async ()
   const out = await f('Cat@Example.com', '<p>Your receipt</p>', new Date('2026-12-31T23:00:00-06:00'));
   assert.match(out, /^<p>Your receipt<\/p>/, 'after the email, never instead of it');
   assert.match(out, /texts\?src=receipt&amp;e=cat%40example\.com/);
-  assert.match(out, /Get 10% off/);
+  assert.match(out, /Get \$15 off your next order of \$50\+/);
   assert.strictEqual(await f('cat@example.com', '<p>x</p>', new Date('2027-01-01T00:00:00-06:00')), '<p>x</p>', 'fresh start in the new year');
 });
 
@@ -203,7 +204,7 @@ test('the emails that must stay plain opt out', () => {
   assert.match(src, /async function sendEmail\(\{ to, subject, html, replyTo, marketing = false, text, promo = true(, attachments = \[\])?(, urgent = false)?(, event = null)? \}\)/);
   assert.match(src, /is your June's Tees sign-in code`, promo: false/);
   assert.match(src, /to: partner\.email, promo: false/);
-  assert.match(src, /Your \$\{REINTRO\.PCT\}% off code: \$\{code\}`, promo: false/);
+  assert.match(src, /Your \$\{REINTRO\.OFFER\.short\} code: \$\{code\}`, promo: false/);
   assert.match(src, /html: m\.html, marketing: true, promo: false/, 'the hello email has its own, bigger offer');
 });
 

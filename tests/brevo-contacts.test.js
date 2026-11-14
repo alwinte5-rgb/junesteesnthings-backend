@@ -128,7 +128,7 @@ test('a phone-only contact is not retried without its phone — it would have no
 });
 
 test('the rule is on the client every contact write uses', () => {
-  assert.match(src, /const brevo = (keepFirstSource\()?keepContactsWhenPhoneFails\(/);
+  assert.match(src, /const brevo = (joinBusinessList\()?(keepFirstSource\()?keepContactsWhenPhoneFails\(/);
 });
 
 /* ── every enquiry reaches Brevo eventually ───────────────────────────────── */
@@ -258,7 +258,7 @@ function sourceSandbox({ known = {}, taken = [], status = null, getStatus = null
 }
 
 test('the live Brevo client carries the rule', () => {
-  assert.match(src, /const brevo = keepFirstSource\(keepContactsWhenPhoneFails\(/);
+  assert.match(src, /const brevo = (joinBusinessList\()?keepFirstSource\(keepContactsWhenPhoneFails\(/);
 });
 
 test('an enquiry names the form it came from, in one spelling per channel', () => {
