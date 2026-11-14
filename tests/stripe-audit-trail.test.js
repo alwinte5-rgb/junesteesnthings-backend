@@ -8,12 +8,17 @@
  * ledger, but the quote's history said nothing, and a delivery that FAILED and
  * was retried left no trace except a server log line.
  *
- *   1. bankStripeSession() snapshots the quote before banking, credited to
- *      "Stripe" (not "Owner"), and skips the snapshot when the session is
- *      already banked, so a Stripe retry adds no empty history line.
- *   2. Every webhook delivery writes one stripe_events row saying whether it
- *      was handled or failed, with the error. A retry is a second row.
- *   3. The log can never change the answer Stripe gets.
+ *   1. bankStripeSession() reads the quote before banking and writes that row
+ *      to its history only once this call has banked the money, credited to
+ *      "Stripe" (not "Owner") with the amount in the label: a retry, the
+ *      return-page race and a failed write leave no extra line, and nothing
+ *      ever deletes history.
+ *   2. Every webhook delivery for a quote writes one stripe_events row saying
+ *      whether it was handled or failed, with the error. A retry is a second
+ *      row with the same event id. Refunds and disputes find their quote by
+ *      payment intent.
+ *   3. The log is written after Stripe has its answer, so it can never delay
+ *      or change it.
  *
  * Run: node --test tests/stripe-audit-trail.test.js
  */
@@ -63,13 +68,14 @@ const session = (over = {}) => ({
 function desk() {
   const Q = { code: CODE, name: 'Pat Buyer', email: 'pat@example.com', phone: '', total: 200,
               tax: 0, status: 'sent', paid_amount: 0, cancelled_at: null };
-  const out = { ledger: [], snapshots: [] };
+  const out = { ledger: [], snapshots: [], failWrite: false };
+  let nextId = 1;
   const pool = {
     query(sql, args = []) {
       const s = sql.replace(/\s+/g, ' ').trim();
       if (/^SELECT \* FROM quotes WHERE code=\$1$/.test(s)) return Promise.resolve({ rows: [{ ...Q }] });
-      if (/^SELECT 1 FROM quote_payments WHERE ext_ref = \$1/.test(s)) {
-        return Promise.resolve({ rows: out.ledger.filter((r) => r.session === args[0]).map(() => ({ '?column?': 1 })) });
+      if (/^SELECT to_jsonb\(q\.\*\) AS row FROM quotes q WHERE code = \$1$/.test(s)) {
+        return Promise.resolve({ rows: [{ row: { ...Q } }] });
       }
       if (/^UPDATE quotes SET status='accepted'/.test(s)) { Q.status = 'accepted'; return Promise.resolve({ rows: [] }); }
       return Promise.reject(new Error('unexpected query: ' + s.slice(0, 120)));
@@ -82,8 +88,12 @@ function desk() {
     quoteLink: (code) => 'https://www.jtees.net/q/' + code,
     /* The real one takes the row before the change; here it records the call
        and the quote's paid amount at that moment. */
-    snapshotQuote: async (code, action) => { out.snapshots.push({ code, action, paidBefore: Q.paid_amount }); },
+    saveQuoteRevision: async (code, row, action) => {
+      out.snapshots.push({ id: nextId++, code, action, paidBefore: row.paid_amount });
+    },
     recordPayment: async (p) => {
+      await new Promise((r) => setImmediate(r));   // lets two callers interleave, as the real INSERT does
+      if (out.failWrite) throw new Error('connection terminated');
       if (out.ledger.some((r) => r.session === p.session)) return { ok: false, duplicate: true, paid: null };
       out.ledger.push({ ...p });
       Q.paid_amount = round2(out.ledger.reduce((s, r) => s + r.amount, 0));
@@ -107,7 +117,8 @@ test('a card payment snapshots the quote BEFORE the money lands, credited to Str
   assert.strictEqual(d.snapshots.length, 1, 'one history line for one payment');
   assert.strictEqual(d.snapshots[0].code, CODE);
   assert.match(d.snapshots[0].action, /^Stripe:/, 'the action names Stripe so the history does not say "Owner"');
-  assert.strictEqual(d.snapshots[0].paidBefore, 0, 'taken before recordPayment, so it is the row as it stood');
+  assert.match(d.snapshots[0].action, /\$104\.00/, 'and says how much, which the field diff cannot show');
+  assert.strictEqual(d.snapshots[0].paidBefore, 0, 'read before recordPayment, so it is the row as it stood');
 });
 
 test('a Stripe retry of a banked session adds no second history line', async () => {
@@ -117,6 +128,24 @@ test('a Stripe retry of a banked session adds no second history line', async () 
   assert.strictEqual(again.duplicate, true);
   assert.strictEqual(d.snapshots.length, 1, 'the retry is not a change');
   assert.strictEqual(d.ledger.length, 1);
+});
+
+test('the webhook and the return page racing on one session leave ONE line', async () => {
+  const d = desk();
+  const [a, b] = await Promise.all([d.bank(session()), d.bank(session())]);
+  assert.strictEqual([a, b].filter((r) => r.duplicate).length, 1, 'one of them loses at the ledger');
+  assert.strictEqual(d.ledger.length, 1);
+  assert.strictEqual(d.snapshots.length, 1, 'only the call that banked it writes the line');
+});
+
+test('a write that fails leaves no line, and still throws so Stripe retries', async () => {
+  const d = desk();
+  d.failWrite = true;
+  await assert.rejects(d.bank(session()), /connection terminated/);
+  assert.strictEqual(d.snapshots.length, 0);
+  d.failWrite = false;
+  await d.bank(session());
+  assert.strictEqual(d.snapshots.length, 1, 'the retry that lands is the one line');
 });
 
 test('a second, different payment is its own history line', async () => {
@@ -133,17 +162,33 @@ test('an unpaid or unlinked session snapshots nothing', async () => {
   assert.strictEqual(d.snapshots.length, 0);
 });
 
-test('without snapshotQuote in scope (other tests lift this alone) banking still works', () => {
-  assert.match(lift('bankStripeSession'), /typeof snapshotQuote === 'function'/);
+test('without saveQuoteRevision in scope (other tests lift this alone) banking still works', () => {
+  assert.match(lift('bankStripeSession'), /typeof saveQuoteRevision === 'function'/);
+});
+
+test('the line is written only after the ledger accepted the payment, and history is never deleted', () => {
+  const fn = lift('bankStripeSession');
+  const read = fn.indexOf('SELECT to_jsonb(q.*) AS row');
+  const bank = fn.indexOf('await recordPayment(');
+  const dup = fn.indexOf('if (res.duplicate) return');
+  const write = fn.indexOf('await saveQuoteRevision(');
+  assert.ok(read < bank && bank < dup && dup < write, 'read before, write after the duplicate check');
+  assert.doesNotMatch(src, /DELETE FROM quote_revisions/);
 });
 
 /* ── The delivery log ──────────────────────────────────────────────────── */
 
-function logger({ fail = false } = {}) {
+function logger({ fail = false, ledger = {} } = {}) {
   const rows = [];
   const sandbox = {
     console: { error() {} },
-    pool: { query: async (sql, args) => { if (fail) throw new Error('db down'); rows.push(args); return { rows: [] }; } },
+    pool: { query: async (sql, args) => {
+      if (fail) throw new Error('db down');
+      if (/FROM quote_payments WHERE stripe_pi/.test(sql)) {
+        return { rows: ledger[args[0]] ? [{ quote_code: ledger[args[0]] }] : [] };
+      }
+      rows.push(args); return { rows: [] };
+    } },
   };
   vm.createContext(sandbox);
   vm.runInContext([CODE_RE, lift('logStripeDelivery')].join('\n'), sandbox);
@@ -166,9 +211,20 @@ test('a failed delivery keeps the error, capped', async () => {
   assert.strictEqual(l.rows[0][4].length, 300);
 });
 
-test('money with no quote code is still logged, with no quote', async () => {
+test('a refund or dispute finds its quote by payment intent', async () => {
+  const l = logger({ ledger: { pi_deposit: CODE } });
+  await l.log({ id: 'evt_5', type: 'charge.dispute.created', data: { object: { payment_intent: 'pi_deposit' } } }, 'handled');
+  await l.log({ id: 'evt_6', type: 'charge.refunded', data: { object: { payment_intent: { id: 'pi_deposit' } } } }, 'handled');
+  assert.deepStrictEqual(l.rows.map((r) => r[2]), [CODE, CODE]);
+});
+
+test('a handled event with no quote is not kept; a failed one always is', async () => {
   const l = logger();
   await l.log({ id: 'evt_3', type: 'checkout.session.completed', data: { object: { client_reference_id: '10' } } }, 'handled');
+  await l.log({ id: 'evt_7', type: 'payout.paid', data: { object: {} } }, 'handled');
+  assert.strictEqual(l.rows.length, 0);
+  await l.log({ id: 'evt_8', type: 'payout.failed', data: { object: {} } }, 'failed', new Error('z'));
+  assert.strictEqual(l.rows.length, 1);
   assert.strictEqual(l.rows[0][2], null);
 });
 
@@ -178,7 +234,7 @@ test('the log never throws, so it can never turn a banked payment into a retry',
   await assert.doesNotReject(l.log(null, 'failed', new Error('y')));
 });
 
-test('the route logs AFTER the work, before each answer, and only once signed', () => {
+test('the route logs only once signed, and only AFTER Stripe has its answer', () => {
   const route = src.slice(src.indexOf("app.post('/webhooks/stripe'"), src.indexOf('async function logStripeDelivery'));
   const work = route.indexOf('await handleStripeEvent');
   const handled = route.indexOf("logStripeDelivery(req.body, 'handled')");
@@ -186,8 +242,9 @@ test('the route logs AFTER the work, before each answer, and only once signed', 
   const failed = route.indexOf("logStripeDelivery(req.body, 'failed', err)");
   const retry = route.indexOf('res.sendStatus(500)');
   assert.ok(route.indexOf('timingSafeEqual') < work, 'nothing logged for an unsigned request');
-  assert.ok(work < handled && handled < ok, 'handled is logged after the work, before the 200');
-  assert.ok(failed !== -1 && failed < retry, 'failed is logged before asking Stripe to retry');
+  assert.ok(work < ok && ok < handled, 'the 200 goes before the log write');
+  assert.ok(retry !== -1 && retry < failed, 'the 500 goes before the log write');
+  assert.doesNotMatch(route, /await logStripeDelivery/, 'the log is never awaited on the answer path');
 });
 
 test('stripe_events is created, and the History card lists deliveries', () => {
@@ -196,6 +253,23 @@ test('stripe_events is created, and the History card lists deliveries', () => {
   assert.match(card, /FROM stripe_events/);
   assert.match(card, /Stripe deliveries/);
   assert.match(card, /\/\^Stripe:\/\.test\(r\.action\) \? 'Stripe' : 'Owner'/);
-  assert.match(card, /if \(!rows\.length && !deliveries\.length\) return '';/,
+  assert.match(card, /if \(!rows\.length && !deliveries\.length && !deliveriesUnread\) return '';/,
     'a quote with deliveries but no revisions still shows the card');
+  assert.match(card, /owner && d\.error/, 'the raw error is the owner\'s to see, not a helper\'s');
+  assert.match(card, /openFailures \? ' open' : ''/, 'an unsettled failure opens the card');
+  assert.match(card, /Could not load the Stripe deliveries/, 'a failed read says so instead of looking empty');
+  assert.match(card, /settled\.has\(d\.event_id\)/, 'a failure is settled only by the same event id');
+});
+
+test('saveQuoteRevision stores the row it is given, credited to nobody, and never throws', async () => {
+  const calls = [];
+  const sandbox = { console: { error() {} }, reportError: async () => {},
+    pool: { query: async (sql, args) => { calls.push({ sql, args }); if (args[2] === 'boom') throw new Error('x'); return { rows: [] }; } } };
+  vm.createContext(sandbox);
+  vm.runInContext(lift('saveQuoteRevision'), sandbox);
+  await sandbox.saveQuoteRevision('ab12cd34ef', { code: CODE, total: 200 }, 'Stripe: card payment $104.00');
+  assert.match(calls[0].sql, /VALUES \(\$1, \$2::jsonb, \$3, NULL, NULL\)/);
+  assert.strictEqual(calls[0].args[0], CODE);
+  assert.deepStrictEqual(JSON.parse(calls[0].args[1]), { code: CODE, total: 200 });
+  await assert.doesNotReject(sandbox.saveQuoteRevision(CODE, {}, 'boom'));
 });

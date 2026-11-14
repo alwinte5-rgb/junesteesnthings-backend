@@ -191,12 +191,19 @@ Christmas ordering stays open)
 - [x] Audit trail gap found and fixed: card payments, refunds and disputes arriving from
   Stripe left no line in the quote's History, and a webhook delivery that failed and was
   retried left no trace except a server log. Now:
-  - `bankStripeSession` snapshots the quote before banking (`Stripe: card payment`,
-    shown as "Stripe", not "Owner"); a retry adds no second line.
-  - Every webhook delivery writes one `stripe_events` row (event id, type, quote,
-    handled/failed, error). It can never change the answer Stripe gets.
-  - The job page's History card lists the quote's Stripe deliveries, failures in red.
-  - Tests: `tests/stripe-audit-trail.test.js`.
+  - `bankStripeSession` reads the quote before banking and writes that row to its
+    History only once it has banked the money (`Stripe: card payment $104.00`, shown as
+    "Stripe", not "Owner"). The webhook/return-page race, a retry and a failed write leave
+    no extra line, and nothing deletes history.
+  - Every webhook delivery for a quote writes one `stripe_events` row (event id, type,
+    quote, handled/failed, error) after Stripe has its answer. Refunds and disputes find
+    their quote by payment intent. Failures are always kept; handled events for no quote
+    are not.
+  - The job page's History card lists the deliveries with their event ids. An unsettled
+    failure opens the card and is counted in its summary; one later handled with the same
+    event id reads "failed, then handled on retry". Only the owner sees error text.
+  - Tests: `tests/stripe-audit-trail.test.js` (17); real Postgres + server:
+    `~/.local/share/jtees-e2e/run-stripe-audit.cjs` (22 checks).
 - [ ] **New table `stripe_events` needs the owner's gate approval.**
 
 ## Workstream F: Codex coordination
