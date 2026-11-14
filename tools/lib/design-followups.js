@@ -60,7 +60,7 @@ function followupEmail(step, { name, product, link, preview, code, pct = 10 }) {
       subject: 'Your design is saved',
       heading: 'Your design is saved',
       inner: `<p>${hi}</p><p>Thanks for designing with us. We saved ${what} so you can pick up right where you left off.</p>${img}
-        ${btn('Open my design')}<p>Small orders are ready in 5–7 business days after you order, larger ones in 7–14.</p>${help}`,
+        ${btn('Open my design')}<p>Small orders are ready in 5–10 business days after you order, larger ones in 7–14.</p>${help}`,
     };
   }
   if (step === 2) {

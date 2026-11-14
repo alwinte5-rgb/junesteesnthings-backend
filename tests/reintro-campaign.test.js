@@ -156,7 +156,7 @@ test('no promises the shop cannot keep: no delivery; turnaround is the owner\'s 
     assert.doesNotMatch(text, /deliver/i, 'local delivery is paused until it is set up');
     // owner 2026-10-28: speed is back, never same-day, never a free or priced rush
     assert.doesNotMatch(text, /same[- ]day|free rush|rush[^.<]{0,40}\d+ ?%/i);
-    assert.match(text, /5.7 business days/);
+    assert.match(text, /5.10 business days/);
     assert.match(text, /Nov 24/);
   }
   assert.match(m, /Rush turnaround is available for a fee/);

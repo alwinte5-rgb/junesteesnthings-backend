@@ -46,24 +46,30 @@ function build(env) {
   return vm.runInThisContext(`(() => {
     const process = { env: ${JSON.stringify(env || {})} };
     const console = { error: () => {} };
+    const RUSH = globalThis.__JT_RUSH;
     ${RUSH_MAX}
     ${DEFAULT_TABLE}
     ${PARSER}
     ${lift('businessDaysUntil')}
     ${lift('rushPctFor')}
+    ${src.match(/const RUSH_RULE = [^;]*;/)[0]}
     return { RUSH_TIERS, rushPctFor, businessDaysUntil };
   })()`);
 }
+
+const RUSH = require('../tools/lib/rush');
+globalThis.__JT_RUSH = RUSH;
+const RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS };
 
 /* A Tuesday, so a four-business-day reach crosses a weekend. */
 const TUE = new Date('2026-09-01T12:00:00');
 
 /* ── the ladder the shop asked for ───────────────────────────────────────── */
 
-test('the ladder is 70 / 50 / 35 / 20 / 10 by business days out (owner, 2026-11-06)', () => {
+test('the ladder is 35 / 20 / 10 by business days out; no same-day or next-day orders (owner, 2026-11-14)', () => {
   const { rushPctFor } = build();
-  assert.strictEqual(rushPctFor('2026-09-01', TUE), 70, 'same day');
-  assert.strictEqual(rushPctFor('2026-09-02', TUE), 50, 'next business day');
+  assert.strictEqual(rushPctFor('2026-09-01', TUE), 0, 'same day: refused, no fee');
+  assert.strictEqual(rushPctFor('2026-09-02', TUE), 0, 'next business day: refused, no fee');
   assert.strictEqual(rushPctFor('2026-09-03', TUE), 35, 'two days');
   assert.strictEqual(rushPctFor('2026-09-04', TUE), 20, 'three days');
   assert.strictEqual(rushPctFor('2026-09-07', TUE), 10, 'four days, across the weekend');
@@ -79,12 +85,43 @@ test('the count is BUSINESS days, so a weekend is not lead time', () => {
   assert.strictEqual(businessDaysUntil('2026-09-05', FRI), 0, 'Fri -> Sat is no working time');
 });
 
-test('a date already past is the most urgent case, not the least', () => {
-  /* It must not wrap around to no rush — someone asking for yesterday is the
-     one job that certainly cannot be done at the normal rate. */
+test('a date already past is too soon, like today (owner, 2026-11-14)', () => {
   const { rushPctFor } = build();
-  assert.strictEqual(rushPctFor('2026-08-25', TUE), 70);
-  assert.strictEqual(rushPctFor('2026-09-01', TUE), 70, 'today counts as today');
+  assert.strictEqual(rushPctFor('2026-08-25', TUE), 0);
+  assert.strictEqual(RUSH.rushFor(0, [{ days: 2, pct: 35 }], false, RULE).tooSoon, true, 'past counts as today: too soon');
+  assert.strictEqual(RUSH.rushFor(1, [{ days: 2, pct: 35 }], false, RULE).tooSoon, true, 'next day: too soon');
+});
+
+test('embroidery and 50+ pieces: 10 / 30 / 50 / 70, never sooner than 3 business days (owner, 2026-11-14)', () => {
+  const { rushPctFor } = build();
+  const slow = true;
+  assert.strictEqual(rushPctFor('2026-09-03', TUE, slow), 0, '2 days: refused');
+  assert.strictEqual(rushPctFor('2026-09-04', TUE, slow), 70, '3 days');
+  assert.strictEqual(rushPctFor('2026-09-07', TUE, slow), 50, '4 days');
+  assert.strictEqual(rushPctFor('2026-09-08', TUE, slow), 30, '5 days');
+  assert.strictEqual(rushPctFor('2026-09-09', TUE, slow), 10, '6 days');
+  assert.strictEqual(rushPctFor('2026-09-10', TUE, slow), 0, '7 days is the usual time');
+  assert.strictEqual(RUSH.rushFor(2, [{ days: 2, pct: 35 }], true, RULE).tooSoon, true);
+  for (const t of RUSH.SLOW_TIERS) assert.strictEqual(RUSH.rushFor(t.days, [{ days: 2, pct: 35 }], true, RULE).pct, t.pct);
+  /* An empty ladder turns rush off for slow orders too (code review). */
+  assert.strictEqual(RUSH.rushFor(3, [], true, RULE).pct, 0);
+  const off = build({ JT_RUSH_TIERS: '[]' });
+  assert.strictEqual(off.rushPctFor('2026-09-04', TUE, true), 0, 'JT_RUSH_TIERS=[] stops the slow ladder too');
+});
+
+test('what makes an order slow: any embroidery, or 50+ pieces on the required lines', () => {
+  assert.strictEqual(RUSH.slowOrder([{ product: true, qty: 12, titles: ['Embroidery'] }]), true);
+  assert.strictEqual(RUSH.slowOrder([{ product: true, qty: 30, titles: ['DTF Printing'] }, { product: true, qty: 20, titles: ['DTF Printing'] }]), true);
+  assert.strictEqual(RUSH.slowOrder([{ product: true, qty: 49, titles: ['DTF Printing'] }]), false);
+  assert.strictEqual(RUSH.slowOrder([]), false);
+});
+
+test('DTF and embroidery can be rushed; screen printing and cutouts cannot (owner, 2026-11-14)', () => {
+  assert.strictEqual(RUSH.methodRushable('DTF Printing'), true);
+  assert.strictEqual(RUSH.methodRushable('Embroidery'), true);
+  assert.strictEqual(RUSH.methodRushable('Screen Printing'), false);
+  assert.strictEqual(RUSH.rushAllowed([{ product: true, titles: ['Embroidery'] }, { product: true, titles: ['DTF Printing'] }]), true);
+  assert.strictEqual(RUSH.rushAllowed([{ product: true, titles: ['Embroidery'] }, { product: true, titles: ['Screen Printing'] }]), false);
 });
 
 test('no date means no rush', () => {
@@ -98,7 +135,7 @@ test('no date means no rush', () => {
 
 test('the ladder can be adjusted without a deploy', () => {
   const { rushPctFor } = build({ JT_RUSH_TIERS: '[{"days":1,"pct":60},{"days":3,"pct":25}]' });
-  assert.strictEqual(rushPctFor('2026-09-02', TUE), 60, 'adjusted');
+  assert.strictEqual(rushPctFor('2026-09-02', TUE), 0, 'a 1-day rung cannot sell a next-day date');
   assert.strictEqual(rushPctFor('2026-09-03', TUE), 25, 'two days now falls in the 3-day rung');
   assert.strictEqual(rushPctFor('2026-09-07', TUE), 0, 'the 4-day rung was removed');
 });
@@ -115,7 +152,7 @@ test('an empty ladder turns rush off entirely', () => {
      rather than a broken table. */
   const { RUSH_TIERS, rushPctFor } = build({ JT_RUSH_TIERS: '[]' });
   assert.deepStrictEqual(RUSH_TIERS, []);
-  assert.strictEqual(rushPctFor('2026-09-02', TUE), 0);
+  assert.strictEqual(rushPctFor('2026-09-03', TUE), 0);
 });
 
 test('a broken ladder falls back to the table, never to charging nothing', () => {
@@ -123,21 +160,21 @@ test('a broken ladder falls back to the table, never to charging nothing', () =>
      not read as "no rush". */
   for (const bad of ['{', 'null', '"80"', '{"days":1}', '[{"days":"x","pct":"y"}]']) {
     const { rushPctFor } = build({ JT_RUSH_TIERS: bad });
-    assert.strictEqual(rushPctFor('2026-09-02', TUE), 50,
+    assert.strictEqual(rushPctFor('2026-09-03', TUE), 35,
       `JT_RUSH_TIERS=${bad} should fall back to the default ladder`);
   }
 });
 
 test('no rung can go above the 70% cap, even from JT_RUSH_TIERS', () => {
-  const { rushPctFor } = build({ JT_RUSH_TIERS: '[{"days":0,"pct":95},{"days":2,"pct":40}]' });
-  assert.strictEqual(rushPctFor('2026-09-01', TUE), 70, 'capped');
-  assert.strictEqual(rushPctFor('2026-09-03', TUE), 40, 'under the cap is kept');
+  const { rushPctFor } = build({ JT_RUSH_TIERS: '[{"days":2,"pct":95},{"days":3,"pct":40}]' });
+  assert.strictEqual(rushPctFor('2026-09-03', TUE), 70, 'capped');
+  assert.strictEqual(rushPctFor('2026-09-04', TUE), 40, 'under the cap is kept');
 });
 
 test('rungs are sorted, so the order they are written in does not matter', () => {
   const { rushPctFor } = build({
-    JT_RUSH_TIERS: '[{"days":4,"pct":10},{"days":1,"pct":60},{"days":2,"pct":50}]' });
-  assert.strictEqual(rushPctFor('2026-09-02', TUE), 60, 'the most urgent rung still wins');
+    JT_RUSH_TIERS: '[{"days":4,"pct":10},{"days":2,"pct":60},{"days":3,"pct":50}]' });
+  assert.strictEqual(rushPctFor('2026-09-03', TUE), 60, 'the most urgent rung still wins');
 });
 
 /* ── how it lands on the money ───────────────────────────────────────────── */

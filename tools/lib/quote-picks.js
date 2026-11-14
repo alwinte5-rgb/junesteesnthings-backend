@@ -51,7 +51,7 @@ function picksLine(picks) {
   return 'Items: ' + picks.map((p) => p.label + (p.qty ? ' (' + p.qty.toLocaleString('en-US') + ')' : '')).join(', ');
 }
 
-/* "Need it sooner?" (owner, 2026-10-28): small orders take 5–7 business
+/* "Need it sooner?" (owner, 2026-10-28): small orders take 5–10 business
    days, so anything sooner is a rush, quoted with a fee the owner sets. The
    box (rush_needed) and an optional date (rush_by, YYYY-MM-DD from the
    browser's date picker) put a RUSH line at the very top of the enquiry. A
