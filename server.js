@@ -789,6 +789,10 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  /* When the opt-out reached Brevo's blocklist (pushOptoutsToBrevo). NULL =
+     not yet, so every opt-out from before this column existed is sent too. */
+  await pool.query('ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS brevo_synced_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS brevo_attempts INTEGER NOT NULL DEFAULT 0');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS grad_orders (
       id             SERIAL PRIMARY KEY,
@@ -30136,6 +30140,52 @@ async function doUnsubscribe(email, source) {
     `INSERT INTO email_optouts (email, source) VALUES ($1, $2)
      ON CONFLICT (email) DO NOTHING`,
     [String(email).toLowerCase(), source || 'one-click']);
+  /* Straight to Brevo too; if that fails the hourly sweep sends it. Never
+     awaited: the unsubscribe itself is already saved and must not wait on
+     Brevo. */
+  pushOptoutsToBrevo(String(email).toLowerCase()).catch(() => {});
+}
+
+/* Opt-outs onto Brevo's blocklist (owner, 2026-11-14).
+
+   The app keeps its own opt-out list (email_optouts), and sendEmail honours
+   it. But campaigns are sent FROM Brevo, to Brevo's lists, and Brevo never saw
+   that table — so someone who unsubscribed from one of the app's emails still
+   got every Brevo campaign. Each opt-out is now pushed to Brevo as a
+   blocklisted contact (created if Brevo did not have them), and stamped once
+   Brevo has it. Unstamped rows — including every opt-out from before this —
+   go out from the hourly sweep, 100 at a time, until all have landed.
+
+   `only` limits it to one address (the unsubscribe itself). A 401 is Brevo
+   refusing the server, not the row: stop and try again next hour, uncounted.
+   Any other refusal is counted; after BREVO_CATCH_UP_TRIES the row is given
+   up on and reported once, so a few bad addresses cannot hold up the rest. */
+async function pushOptoutsToBrevo(only) {
+  if (!process.env.BREVO_API_KEY) return '';
+  const { rows } = only
+    ? await pool.query('SELECT email FROM email_optouts WHERE email = $1 AND brevo_synced_at IS NULL', [only])
+    : await pool.query(`SELECT email FROM email_optouts WHERE brevo_synced_at IS NULL AND brevo_attempts < $1
+                         ORDER BY created_at LIMIT 100`, [BREVO_CATCH_UP_TRIES]);
+  let sent = 0;
+  for (const { email } of rows) {
+    try {
+      await brevo.post('/contacts', { email, emailBlacklisted: true, updateEnabled: true });
+    } catch (err) {
+      if (err && err.response && err.response.status === 401) {
+        return `${sent} sent; Brevo is refusing the server (401), ${rows.length - sent} waiting`;
+      }
+      console.error('brevo opt-out push failed:', err.message);
+      const { rows: [r] } = await pool.query(
+        `UPDATE email_optouts SET brevo_attempts = brevo_attempts + 1 WHERE email = $1 RETURNING brevo_attempts`, [email]);
+      if (r && r.brevo_attempts >= BREVO_CATCH_UP_TRIES) {
+        reportError('brevo-optout', err, `opt-out ${email} not on Brevo's blocklist after ${BREVO_CATCH_UP_TRIES} tries; block it in Brevo by hand`).catch(() => {});
+      }
+      continue;
+    }
+    await pool.query('UPDATE email_optouts SET brevo_synced_at = NOW() WHERE email = $1', [email]);
+    sent++;
+  }
+  return sent ? `${sent} sent to Brevo` : '';
 }
 
 app.post('/api/unsubscribe', async (req, res) => {
@@ -33276,6 +33326,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('brevo catch-up', brevoCatchUp);
     await step('brevo quote catch-up', brevoQuoteCatchUp);
     await step('brevo quote re-sync', brevoQuoteResync);
+    await step('brevo opt-outs', () => pushOptoutsToBrevo());
     /* Cancelled quotes and refunded studio orders give their delivery seats
        back hourly, whether or not anyone opens the board (Codex #143). */
     await step('delivery reconcile', async () => {
