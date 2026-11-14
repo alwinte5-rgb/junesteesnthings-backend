@@ -962,6 +962,28 @@ async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_quote_idx ON stripe_disputes (quote_code)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS stripe_disputes_order_idx ON stripe_disputes (order_ref)`);
 
+  /* Every Stripe webhook delivery, handled or failed (see logStripeDelivery).
+     The ledger records money that landed; this records each attempt to land it,
+     so a delivery that failed and the retry that later succeeded both show, with
+     the error. One row per delivery: a retry is a second row for the same
+     event_id. Only deliveries for a quote are kept (a failure for no quote is
+     already in app_errors via reportError). object_id is the Stripe object (a
+     checkout session's id is its ledger ext_ref). Nothing here is a payment;
+     quote_payments stays the books. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stripe_events (
+      id           BIGSERIAL PRIMARY KEY,
+      event_id     TEXT,
+      type         TEXT NOT NULL,
+      object_id    TEXT,
+      quote_code   TEXT,
+      outcome      TEXT NOT NULL,
+      error        TEXT,
+      received_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stripe_events_quote_idx ON stripe_events (quote_code, id DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stripe_events_event_idx ON stripe_events (event_id)`);
+
   /* Payouts Stripe could not deliver to the bank (see reportFailedPayout).
      A payout moves no money in these books, since a sale counts when the
      customer pays, so this is not a ledger: one row per failed payout, written
@@ -4003,14 +4025,27 @@ async function repairSentAsDelivered() {
    snapshotQuote() keeps the row as it stood BEFORE a change, so the history
    shows what each change replaced. Never throws: losing a snapshot must not
    lose the change the person asked for, but it is reported. */
-async function snapshotQuote(code, action, ip = null) {
+async function snapshotQuote(code, action, ip = null, pre = null) {
   try {
     const actor = currentActor();
+    const params = [String(code).toUpperCase(), String(action).slice(0, 60),
+      actor && actor.kind === 'staff' ? actor.id : null, ip ? String(ip).slice(0, 64) : null];
+    /* pre = { row, lastRev }: the row was read (to_jsonb, same shape) before a
+       change whose outcome was not yet known; see bankStripeSession. Written
+       only if no other line was added since, so History stays in order: a line
+       out of order would credit someone else's edit to this change. */
+    if (pre) {
+      const { rowCount } = await pool.query(
+        `INSERT INTO quote_revisions (quote_code, row, action, staff_id, ip)
+         SELECT $1::text, $5::jsonb, $2::text, $3::int, $4::text
+          WHERE NOT EXISTS (SELECT 1 FROM quote_revisions WHERE quote_code = $1::text AND id > $6::bigint)`,
+        [...params, JSON.stringify(pre.row), Number(pre.lastRev) || 0]);
+      if (!rowCount) console.warn(`quote snapshot ${code} (${action}) skipped: another change was saved in between`);
+      return;
+    }
     await pool.query(
       `INSERT INTO quote_revisions (quote_code, row, action, staff_id, ip)
-       SELECT code, to_jsonb(q.*), $2, $3, $4 FROM quotes q WHERE code = $1`,
-      [String(code).toUpperCase(), String(action).slice(0, 60),
-       actor && actor.kind === 'staff' ? actor.id : null, ip ? String(ip).slice(0, 64) : null]);
+       SELECT code, to_jsonb(q.*), $2, $3, $4 FROM quotes q WHERE code = $1`, params);
   } catch (err) {
     console.error(`quote snapshot ${code} (${action}) failed:`, err.message);
     reportError('quote-snapshot', err, `${code} ${action}`).catch(() => {});
@@ -18469,6 +18504,28 @@ async function bankStripeSession(session) {
   const { rows } = await pool.query('SELECT * FROM quotes WHERE code=$1', [code]);
   if (!rows.length) return { ok: false, reason: 'unknown quote' };
 
+  /* The quote as it stood before the card payment goes into its history, as a
+     manual payment's does. It is READ here, before the money lands, and
+     WRITTEN only once this call has banked it (below), and only if no other
+     change was saved in between (snapshotQuote's pre). History is never
+     deleted, so it cannot be written first and taken back: the webhook and
+     the return page race on the same session, and a write that fails is
+     retried by Stripe, and either would leave a line for a payment that
+     landed once or not yet. */
+  let before = null;
+  if (typeof snapshotQuote === 'function') {
+    try {
+      const { rows: [b] } = await pool.query(
+        `SELECT to_jsonb(q.*) AS row,
+                (SELECT COALESCE(MAX(id), 0) FROM quote_revisions WHERE quote_code = q.code) AS last_rev
+           FROM quotes q WHERE code = $1`, [code]);
+      if (b) before = { row: b.row, lastRev: b.last_rev };
+    } catch (err) {
+      // The payment still banks; its History line is what is lost, so say so.
+      console.error(`quote snapshot ${code} (card payment) not read:`, err.message);
+      if (typeof reportError === 'function') reportError('quote-snapshot', err, `${code} card payment`).catch(() => {});
+    }
+  }
   const res = await recordPayment({
     code, amount: net, fee, method: 'card', source: 'stripe',
     session: session.id,
@@ -18479,6 +18536,9 @@ async function bankStripeSession(session) {
   });
 
   if (res.duplicate) return { ok: true, duplicate: true };
+  /* The amount is in the label: History diffs the quote's own fields, and a
+     balance paid on an accepted quote changes none of them. */
+  if (before) await snapshotQuote(code, `Stripe: card payment ${money(gross)}`, null, before);
   /* Called only when over: tests lift this function without its neighbours. */
   const overNote = Number(res.over) > 0 ? overpaidNote(Number(res.over)) : null;
 
@@ -19731,6 +19791,8 @@ app.post('/webhooks/stripe', async (req, res) => {
   try {
     await handleStripeEvent(req.body);
     res.sendStatus(200);
+    // After the answer: a slow log write must not make Stripe time out and retry.
+    if (typeof logStripeDelivery === 'function') logStripeDelivery(req.body, 'handled');
   } catch (err) {
     /* 500 so Stripe retries. It backs off over ~3 days, which is long enough
        for a database outage to end and the payment to land by itself. */
@@ -19740,8 +19802,40 @@ app.post('/webhooks/stripe', async (req, res) => {
        about three days. Somebody should know inside that window, not after it. */
     reportError('stripe-webhook', err).catch(() => {});
     if (!res.headersSent) res.sendStatus(500);
+    if (typeof logStripeDelivery === 'function') logStripeDelivery(req.body, 'failed', err);
   }
 });
+
+/* One row per webhook delivery in stripe_events, written after Stripe has its
+   answer, so it can never delay or change that answer. Never throws. The quote
+   is the checkout's client_reference_id, a charge's metadata.quote_code, or,
+   for a refund, dispute or charge, the quote whose ledger holds that payment
+   intent. Only deliveries for a quote are kept: nothing would ever show the
+   others, and a failure for no quote already reaches app_errors and the
+   digest through the route's reportError. */
+async function logStripeDelivery(event, outcome, err = null) {
+  try {
+    const obj = (event && event.data && event.data.object) || {};
+    let ref = String(obj.client_reference_id || (obj.metadata && obj.metadata.quote_code) || '').toUpperCase();
+    const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent
+      : (obj.payment_intent && typeof obj.payment_intent.id === 'string' ? obj.payment_intent.id : null);
+    if (!QUOTE_CODE_RE.test(ref) && pi) {
+      const { rows } = await pool.query(
+        'SELECT quote_code FROM quote_payments WHERE stripe_pi = $1 LIMIT 1', [pi.slice(0, 80)]);
+      if (rows[0] && rows[0].quote_code) ref = String(rows[0].quote_code).toUpperCase();
+    }
+    if (!QUOTE_CODE_RE.test(ref)) return;
+    await pool.query(
+      `INSERT INTO stripe_events (event_id, type, object_id, quote_code, outcome, error) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [event && event.id ? String(event.id).slice(0, 80) : null,
+       String((event && event.type) || 'unknown').slice(0, 80),
+       typeof obj.id === 'string' ? obj.id.slice(0, 120) : null,
+       ref, outcome,
+       err ? String(err.message || err).slice(0, 300) : null]);
+  } catch (e) {
+    console.error('stripe delivery log failed:', e.message);
+  }
+}
 
 /* The event handling itself, lifted out of the route so the route is only
    about signature checking and the answer. Throws on failure — that is the
@@ -36617,14 +36711,27 @@ async function jobUpsellCard(q) {
    customer's details back; money is changed through the quote form, where
    the price and the payment link are kept in step. */
 async function jobHistoryCard(q) {
-  const [{ rows }, roster, { rows: [now] }] = await Promise.all([
+  const [{ rows }, roster, { rows: [now] }, deliveryRead] = await Promise.all([
     pool.query(`SELECT id, row, action, staff_id, ip, created_at FROM quote_revisions
                  WHERE quote_code = $1 ORDER BY id DESC LIMIT 40`, [q.code]),
     staffRoster(),
     // The current row in the same JSON shape as the saved ones, so dates and numbers compare like for like.
     pool.query('SELECT to_jsonb(q.*) AS row FROM quotes q WHERE code = $1', [q.code]),
+    // Each Stripe webhook delivery for this quote (logStripeDelivery), failures and their retries included.
+    /* banked: the ledger holds this checkout session, which settles a failed
+       delivery of it even if the log of the retry that banked it was lost. */
+    pool.query(`SELECT e.id, e.event_id, e.type, e.outcome, e.error, e.received_at,
+                       EXISTS (SELECT 1 FROM quote_payments p WHERE p.ext_ref = e.object_id) AS banked
+                  FROM stripe_events e
+                 WHERE e.quote_code = $1 ORDER BY e.id DESC LIMIT 20`, [q.code]).catch((e) => {
+      // Said on the card: an empty list must never be what a failed read looks like.
+      console.error(`stripe deliveries for ${q.code} not read:`, e.message);
+      return { rows: [], unread: true };
+    }),
   ]);
-  if (!rows.length) return '';
+  const deliveries = deliveryRead.rows;
+  const deliveriesUnread = !!deliveryRead.unread;
+  if (!rows.length && !deliveries.length && !deliveriesUnread) return '';
   const current = (now && now.row) || q;
   const owner = isOwner();
   /* Each revision is the row BEFORE its change; what it became is the next
@@ -36633,7 +36740,7 @@ async function jobHistoryCard(q) {
     const after = i === 0 ? current : rows[i - 1].row;
     const diff = FRAUD.quoteDiff(r.row, after);
     const contact = diff.some((d) => d.kind === 'contact');
-    const who = r.staff_id == null ? 'Owner' : nameOf(roster, r.staff_id);
+    const who = r.staff_id == null ? (/^Stripe:/.test(r.action) ? 'Stripe' : 'Owner') : nameOf(roster, r.staff_id);
     const shown = (field, v) => (v !== '' && ['total', 'tax', 'deposit'].includes(field) ? money(v)
       : field === 'credited_to' && v !== '' ? (Number(v) === CREDIT_OWNER ? 'Owner' : nameOf(roster, Number(v))) : v);
     const lines = diff.map((d) => `<div style="font-size:12.5px${d.kind === 'contact' ? ';color:#b91c1c;font-weight:600' : ''}">${escEmail(d.label)}${
@@ -36648,9 +36755,32 @@ async function jobHistoryCard(q) {
       <span class="row-end muted">${escEmail(whenShort(r.created_at))}</span></div>`;
   }).join('');
   const flagged = rows.some((r, i) => FRAUD.quoteDiff(r.row, i === 0 ? current : rows[i - 1].row).some((d) => d.kind === 'contact'));
-  return `<details class="card" id="history" style="margin-top:14px"${flagged && owner ? ' open' : ''}>
-    <summary><b>History</b> <span class="muted">${rows.length} change${rows.length === 1 ? '' : 's'}${flagged ? ' &middot; <span style="color:#b91c1c">customer details changed</span>' : ''}</span></summary>
-    <div class="rows" style="margin-top:8px">${items}</div>
+  /* Failed deliveries are shown in red, and open the card. Stripe retries a
+     failure for about three days with the SAME event id, so a failed line is
+     settled only by a newer "handled" line with the same id; a different
+     payment of the same type does not settle it, and neither does a handled
+     row from BEFORE the failure. A checkout the ledger holds is settled
+     whatever the log says. The error text is the server's own, so only the
+     owner sees it. */
+  const settledBy = (d) => d.outcome === 'failed' && (d.banked || (d.event_id && deliveries.some(
+    (h) => h.outcome !== 'failed' && h.event_id === d.event_id && Number(h.id) > Number(d.id))));
+  const openFailures = deliveries.filter((d) => d.outcome === 'failed' && !settledBy(d)).length;
+  const stripeList = deliveries.length || deliveriesUnread ? `<div style="margin-top:10px"><b style="font-size:13px">Stripe deliveries</b>
+    ${deliveriesUnread ? '<div class="warn" style="font-size:12.5px;margin-top:4px">Could not load the Stripe deliveries for this quote.</div>' : ''}
+    <div class="rows" style="margin-top:4px">${deliveries.map((d) => {
+      const failed = d.outcome === 'failed';
+      const late = settledBy(d);
+      return `<div class="row-i"${failed && !late ? ' style="background:#fef2f2"' : ''}>
+      <span class="row-main" style="white-space:normal;font-size:12.5px">${escEmail(d.type)} &middot; ${failed
+        ? `<span style="color:${late ? '#6b7280' : '#b91c1c'};font-weight:600">failed${late ? ', then handled on retry' : ''}</span>${
+          owner && d.error ? ` <span class="muted">(${escEmail(d.error)})</span>` : ''}`
+        : 'handled'}${d.event_id ? ` <span class="muted" style="font-size:11.5px">${escEmail(d.event_id)}</span>` : ''}</span>
+      <span class="row-end muted">${escEmail(whenShort(d.received_at))}</span></div>`;
+    }).join('')}</div></div>` : '';
+  return `<details class="card" id="history" style="margin-top:14px"${(flagged && owner) || openFailures ? ' open' : ''}>
+    <summary><b>History</b> <span class="muted">${rows.length ? `${rows.length} change${rows.length === 1 ? '' : 's'}` : 'Stripe deliveries'}${flagged ? ' &middot; <span style="color:#b91c1c">customer details changed</span>' : ''}${
+      openFailures ? ` &middot; <span style="color:#b91c1c">${openFailures} Stripe deliver${openFailures === 1 ? 'y' : 'ies'} failed</span>` : ''}</span></summary>
+    ${rows.length ? `<div class="rows" style="margin-top:8px">${items}</div>` : ''}${stripeList}
     <p class="muted" style="font-size:12px;margin-top:6px">Kept for good. Nobody can delete history.</p></details>`;
 }
 
