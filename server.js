@@ -791,8 +791,9 @@ async function initDB() {
   `);
   /* When the opt-out reached Brevo's blocklist (pushOptoutsToBrevo). NULL =
      not yet, so every opt-out from before this column existed is sent too. */
-  await pool.query('ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS brevo_synced_at TIMESTAMPTZ');
-  await pool.query('ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS brevo_attempts INTEGER NOT NULL DEFAULT 0');
+  /* Not worth a failed boot: without them the push just fails and logs. */
+  await pool.query('ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS brevo_synced_at TIMESTAMPTZ').catch(() => {});
+  await pool.query('ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS brevo_attempts INTEGER NOT NULL DEFAULT 0').catch(() => {});
   await pool.query(`
     CREATE TABLE IF NOT EXISTS grad_orders (
       id             SERIAL PRIMARY KEY,
@@ -30163,20 +30164,23 @@ async function doUnsubscribe(email, source) {
 async function pushOptoutsToBrevo(only) {
   if (!process.env.BREVO_API_KEY) return '';
   const { rows } = only
-    ? await pool.query('SELECT email FROM email_optouts WHERE email = $1 AND brevo_synced_at IS NULL', [only])
+    ? await pool.query(`SELECT email FROM email_optouts WHERE email = $1 AND brevo_synced_at IS NULL
+                          AND brevo_attempts < $2`, [only, BREVO_CATCH_UP_TRIES])
     : await pool.query(`SELECT email FROM email_optouts WHERE brevo_synced_at IS NULL AND brevo_attempts < $1
                          ORDER BY created_at LIMIT 100`, [BREVO_CATCH_UP_TRIES]);
   let sent = 0;
   for (const { email } of rows) {
     try {
-      await brevo.post('/contacts', { email, emailBlacklisted: true, updateEnabled: true });
+      /* A timeout, so one hung call cannot stall the rest of the hourly sweep. */
+      await brevo.post('/contacts', { email, emailBlacklisted: true, updateEnabled: true }, { timeout: 10000 });
     } catch (err) {
       if (err && err.response && err.response.status === 401) {
         return `${sent} sent; Brevo is refusing the server (401), ${rows.length - sent} waiting`;
       }
       console.error('brevo opt-out push failed:', err.message);
       const { rows: [r] } = await pool.query(
-        `UPDATE email_optouts SET brevo_attempts = brevo_attempts + 1 WHERE email = $1 RETURNING brevo_attempts`, [email]);
+        `UPDATE email_optouts SET brevo_attempts = brevo_attempts + 1
+          WHERE email = $1 AND brevo_synced_at IS NULL RETURNING brevo_attempts`, [email]);
       if (r && r.brevo_attempts >= BREVO_CATCH_UP_TRIES) {
         reportError('brevo-optout', err, `opt-out ${email} not on Brevo's blocklist after ${BREVO_CATCH_UP_TRIES} tries; block it in Brevo by hand`).catch(() => {});
       }

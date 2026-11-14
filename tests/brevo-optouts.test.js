@@ -42,8 +42,9 @@ function fakePool(emails) {
     async query(sql, params = []) {
       queries.push({ sql, params });
       if (/^SELECT email FROM email_optouts/.test(sql)) {
-        const open = rows.filter((r) => !r.brevo_synced_at && (/email = \$1/.test(sql)
-          ? r.email === params[0] : r.brevo_attempts < params[0]));
+        const single = /email = \$1/.test(sql);
+        const cap = single ? params[1] : params[0];
+        const open = rows.filter((r) => !r.brevo_synced_at && r.brevo_attempts < cap && (!single || r.email === params[0]));
         return { rows: open.slice(0, 100).map(({ email }) => ({ email })) };
       }
       if (/^UPDATE email_optouts SET brevo_synced_at/.test(sql)) {
@@ -65,8 +66,8 @@ function fakeBrevo(fail = {}) {
   const calls = [];
   return {
     calls,
-    async post(url, body) {
-      calls.push({ url, body });
+    async post(url, body, opts) {
+      calls.push({ url, body, opts });
       const code = fail[body.email];
       if (code) { const e = new Error(`Brevo POST ${url} -> ${code}`); e.response = { status: code }; throw e; }
       return { data: {} };
@@ -92,6 +93,7 @@ test('every unsent opt-out goes to Brevo as a blocklisted contact, and is stampe
     { email: 'b@example.com', emailBlacklisted: true, updateEnabled: true },
   ]);
   assert.ok(brevo.calls.every((c) => c.url === '/contacts'));
+  assert.ok(brevo.calls.every((c) => c.opts && c.opts.timeout > 0), 'a hung call must not stall the sweep');
   assert.ok(pool.rows.every((r) => r.brevo_synced_at), 'both stamped');
   assert.strictEqual(said, '2 sent to Brevo');
 });
@@ -136,6 +138,16 @@ test('the unsubscribe itself sends only that one address', async () => {
   await run(pool, brevo, 'new@example.com');
   assert.deepStrictEqual(brevo.calls.map((c) => c.body.email), ['new@example.com']);
   assert.strictEqual(pool.rows[0].brevo_synced_at, null, 'the backlog is the sweep\'s job');
+});
+
+test('a given-up address is not retried or reported again when the link is clicked again', async () => {
+  reports.length = 0;
+  const pool = fakePool(['bad@example.com']);
+  for (let i = 0; i < 5; i++) await run(pool, fakeBrevo({ 'bad@example.com': 400 }));
+  const again = fakeBrevo({ 'bad@example.com': 400 });
+  await run(pool, again, 'bad@example.com');
+  assert.strictEqual(again.calls.length, 0);
+  assert.strictEqual(reports.length, 1);
 });
 
 test('with no Brevo key it does nothing', async () => {
