@@ -36,7 +36,7 @@ const RULES = [
     'Licensed stock or our own photos only. Customer names and faces only with their permission; otherwise crop or blur them.',
   ] },
   { head: 'Words', items: [
-    'Turnaround is 7 to 14 business days. Never rush, fast, same-day or 24 hours.',
+    'Turnaround is 5 to 7 business days, 7 for embroidery, and 7 to 14 for 50 or more pieces. Never promise fast, same-day or 24 hours; a rush is for a fee.',
     'No free shipping, anywhere. Free pickup by appointment is fine.',
     'Visits by appointment only. We are in Lakeview, Chicago.',
     'Phone (773) 900-4592, Instagram @jtees228, website jtees.net only.',
