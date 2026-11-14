@@ -281,10 +281,19 @@ test('the bar, homepage and service pages say small orders 5–7 days, larger 7�
   const home = read('index.html');
   assert.match(home, /Small orders take 5–7 business days and larger orders 7–14/);
   assert.match(home, /Need it in under 5 days\? Rush turnaround is available for a fee\./);
-  for (const rel of ['services/custom-tshirts-chicago.html', 'services/dtf-transfers.html', 'services/embroidery.html']) {
+  for (const rel of ['services/custom-tshirts-chicago.html', 'services/dtf-transfers.html']) {
     const body = read(rel);
     assert.doesNotMatch(body, /Most orders take 7–14/, rel);
     assert.match(body, /Small orders take 5–7 business days/, rel);
+  }
+  /* Owner, 2026-11-14: every item gets the same time frame unless noted;
+     embroidery is noted at 7 business days, and 50+ pieces at 7–14. */
+  const emb = read('services/embroidery.html');
+  assert.match(emb, /Embroidery is ready in 7 business days, and orders of 50 or more pieces in 7–14/);
+  assert.doesNotMatch(emb, /Small orders take 5–7 business days/);
+  for (const rel of ['services/custom-tshirts-chicago.html', 'areas/custom-tshirts-lakeview.html', 'services/sublimation.html',
+    'services/custom-glassware.html', 'blog/screen-printing-tips.html', 'occasions/halloween-shirts-chicago.html']) {
+    assert.doesNotMatch(read(rel), /(?<!\()7(–| to )14 business day(s)? (turnaround|after)|turnaround (for screen printing )?is 7(–| to )14/, rel);
   }
   for (const rel of ['services/dtf-transfers.html', 'services/embroidery.html', 'services/banners-signs.html']) {
     assert.match(read(rel), /<span class="hero-badge">⚡ Fast Turnaround<\/span>/, rel);

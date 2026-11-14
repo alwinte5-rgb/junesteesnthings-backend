@@ -15,7 +15,7 @@ MESSAGE:  No minimums! Order a single shirt or hundreds — DTF printing lets us
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: turnaround
-MESSAGE:  Most orders turn around in about 7 days, and many are faster. Have a deadline? Tell me the date and I'll confirm we can hit it.
+MESSAGE:  Most orders are ready in 5–7 business days; embroidery takes 7, and 50 or more pieces 7–14. Have a deadline? Tell me the date and I'll confirm we can hit it.
 
 ────────────────────────────────────────────────────────────
 SHORTCUT: design
