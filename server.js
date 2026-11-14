@@ -41,6 +41,8 @@ const SERVICES = require('./tools/lib/services');
 const LEADMAIL = require('./tools/lib/lead-email');
 const REINTRO = require('./tools/lib/reintro');
 const PARTNERS = require('./tools/lib/partners');
+/* Wholesale connector (docs/wholesale-api-v1.md): off until JT_WHOLESALE=on. */
+const WHOLESALE = require('./tools/lib/wholesale-routes');
 const PARTNERS_INVITE = require('./tools/lib/partners-invite');
 const PROGRESS = require('./tools/lib/order-progress');
 const BRAND = require('./tools/lib/brand-files');
@@ -789,6 +791,15 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  /* Each opt-out is also put on Brevo's blocklist (brevoOptoutSync), so a
+     campaign sent from Brevo itself cannot reach somebody who unsubscribed
+     here. NULL brevo_synced_at = not there yet; the hourly sweep retries,
+     which is also how every opt-out from before this column reaches Brevo. */
+  for (const col of ['brevo_synced_at TIMESTAMPTZ', 'brevo_attempts INT NOT NULL DEFAULT 0', 'brevo_error TEXT']) {
+    await pool.query(`ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS ${col}`);
+  }
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS email_optouts_brevo_pending ON email_optouts (created_at) WHERE brevo_synced_at IS NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS grad_orders (
       id             SERIAL PRIMARY KEY,
@@ -2170,6 +2181,9 @@ async function initStaffTables() {
       ship_to      JSONB,
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  /* Wholesale connector: partners, their production requests, the audit/event
+     log and the webhook outbox (tools/lib/wholesale-routes.js). */
+  await WHOLESALE.ensureTables(pool);
   await repairSentAsDelivered().catch((e) => console.error('sent-as-delivered repair failed:', e.message));
   /* After the server is listening: it calls Twilio and Cloudinary. */
   setTimeout(() => repairTextPictures().catch((e) => console.error('text picture repair failed:', e.message)), 30 * 1000).unref();
@@ -2811,6 +2825,21 @@ async function isUnsubscribed(email) {
   } catch { return false; }   // never block a send because the table is unreachable
 }
 
+/* The check a MARKETING send makes. Unlike isUnsubscribed it fails CLOSED: when
+   the opt-out list cannot be read, a promotion is held rather than risked on
+   somebody who asked to stop. Receipts, payment links and proofs never ask it,
+   so an outage cannot stop a customer hearing about their own order. */
+async function marketingBlocked(email) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM email_optouts WHERE email = $1 LIMIT 1', [String(email).toLowerCase()]);
+    return rows.length > 0;
+  } catch (e) {
+    console.error(`marketing email held for ${email}: opt-out list unreadable (${e.message})`);
+    return true;
+  }
+}
+
 /* Brevo answers a send with `201 Created` and a real messageId even when the
    account has zero send credits left, and then quietly discards the message.
    Nothing throws, so the Resend fallback below never fires and every caller
@@ -2927,8 +2956,8 @@ async function holdForShopDigest({ to, subject, html, replyTo, attachments, even
 
 async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [], urgent = false, event = null }) {
   if (!urgent && !marketing && await holdForShopDigest({ to, subject, html, replyTo, attachments, event })) return;
-  if (marketing && await isUnsubscribed(to)) {
-    console.log(`sendEmail: skipped ${to} (unsubscribed)`);
+  if (marketing && await marketingBlocked(to)) {
+    console.log(`sendEmail: skipped ${to} (unsubscribed, or the opt-out list was unreadable)`);
     return;
   }
   /* Marketing mail must carry an unsubscribe link that works. With no signing
@@ -8997,8 +9026,8 @@ async function logClientEmail(quote, kind, mail, status, error = null) {
  *  marketing email to someone who unsubscribed is not sent, and says so
  *  ('skipped') rather than reading as sent. */
 async function sendClientEmail({ quote, kind, ...mail }) {
-  if (mail.marketing && await isUnsubscribed(mail.to)) {
-    await logClientEmail(quote, kind, mail, 'skipped', 'unsubscribed from marketing email');
+  if (mail.marketing && await marketingBlocked(mail.to)) {
+    await logClientEmail(quote, kind, mail, 'skipped', 'unsubscribed from marketing email (or the opt-out list was unreadable)');
     return;
   }
   const { preview, ...email } = mail;   // for the record, not the customer
@@ -23222,6 +23251,15 @@ app.post('/admin/partners/action', requireAdmin, async (req, res) => {
   }
 });
 
+/* Wholesale connector: the partner API under /api/wholesale/v1 and the owner's
+   /admin/wholesale page. Off (404) until JT_WHOLESALE=on. */
+const wholesaleDeps = {
+  pool, quoteTotals, publicBase: PUBLIC_BASE_URL, alertShop, reportError, requireAdmin, isOwner,
+  adminPage, esc: escEmail, fmtDate, logActivity, actor: () => currentActor() || OWNER_ACTOR,
+  clientIp, quoteCodeRe: QUOTE_CODE_RE,
+};
+WHOLESALE.mount(app, wholesaleDeps);
+
 app.get('/admin/customers', requireAdmin, async (_req, res) => {
   try {
     const { people, studio } = await allCustomers();
@@ -30136,6 +30174,58 @@ async function doUnsubscribe(email, source) {
     `INSERT INTO email_optouts (email, source) VALUES ($1, $2)
      ON CONFLICT (email) DO NOTHING`,
     [String(email).toLowerCase(), source || 'one-click']);
+  /* Straight on to Brevo's blocklist too. Awaited but never thrown: the opt-out
+     is already saved here (the app's own sends honour it at once), and a Brevo
+     failure is retried by the hourly sweep. */
+  await pushOptoutToBrevo(String(email).toLowerCase());
+}
+
+/* Put one address on Brevo's marketing blocklist (emailBlacklisted). That stops
+   Brevo CAMPAIGNS; transactional sends (receipts, payment links, proofs) are
+   not affected, which is what an unsubscribe from promotions should mean.
+   updateEnabled makes it one call whether or not Brevo has the contact.
+   Returns true when Brevo took it; records the error otherwise. */
+const OPTOUT_BREVO_TRIES = 10;
+async function pushOptoutToBrevo(email) {
+  if (!process.env.BREVO_API_KEY) return false;
+  try {
+    await brevo.post('/contacts', { email, emailBlacklisted: true, updateEnabled: true }, { timeout: 8000 });
+    await pool.query(
+      `UPDATE email_optouts SET brevo_synced_at = NOW(), brevo_error = NULL, brevo_attempts = brevo_attempts + 1
+        WHERE email = $1`, [email]);
+    return true;
+  } catch (e) {
+    const why = String(e.response?.data?.message || e.message || e).slice(0, 300);
+    await pool.query(
+      `UPDATE email_optouts SET brevo_attempts = brevo_attempts + 1, brevo_error = $2 WHERE email = $1`, [email, why])
+      .catch(() => {});
+    console.error(`unsubscribe ${email} not yet on Brevo's blocklist: ${why}`);
+    return false;
+  }
+}
+
+/* Hourly: every opt-out Brevo has not confirmed, up to OPTOUT_BREVO_TRIES each.
+   One that runs out is reported, because from then on a Brevo campaign could
+   still reach that person. First run after deploy copies the whole existing
+   list (they are all unsynced), 200 an hour. */
+async function brevoOptoutSync() {
+  if (!process.env.BREVO_API_KEY) return '';
+  const { rows } = await pool.query(
+    `SELECT email, brevo_attempts FROM email_optouts
+      WHERE brevo_synced_at IS NULL AND brevo_attempts < $1 ORDER BY created_at LIMIT 200`, [OPTOUT_BREVO_TRIES]);
+  let ok = 0;
+  const gaveUp = [];
+  for (const r of rows) {
+    if (await pushOptoutToBrevo(r.email)) ok++;
+    else if (r.brevo_attempts + 1 >= OPTOUT_BREVO_TRIES) gaveUp.push(r.email);
+  }
+  if (gaveUp.length) {
+    await reportError('brevo-optout-sync', new Error(
+      `${gaveUp.length} unsubscribe(s) could not be put on Brevo's blocklist after ${OPTOUT_BREVO_TRIES} tries; ` +
+      'add them to the blocklist in Brevo by hand before the next Brevo campaign'), gaveUp.join(', ').slice(0, 500));
+  }
+  const left = rows.length - ok;
+  return rows.length ? `${ok} opt-out(s) sent to Brevo${left ? `, ${left} still pending` : ''}` : '';
 }
 
 app.post('/api/unsubscribe', async (req, res) => {
@@ -33274,6 +33364,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
+    await step('brevo opt-out sync', brevoOptoutSync);
     await step('brevo quote catch-up', brevoQuoteCatchUp);
     await step('brevo quote re-sync', brevoQuoteResync);
     /* Cancelled quotes and refunded studio orders give their delivery seats
@@ -33311,6 +33402,10 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
   /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
   setTimeout(() => step('notifications', notifySweep), 20 * 1000);
   setInterval(() => step('notifications', notifySweep), 2 * 60 * 1000);
+  /* Wholesale: statuses derived from quotes and payments, and webhooks out,
+     every 2 minutes. Does nothing while JT_WHOLESALE is off. */
+  setInterval(() => step('wholesale', () => WHOLESALE.sweep(wholesaleDeps)),
+    Math.max(5000, Number(process.env.JT_WHOLESALE_SWEEP_MS) || 2 * 60 * 1000));
   /* The task flow: everyone's routine and empty lanes, every 10 minutes. */
   setTimeout(() => step('task flow', taskFlowSweep), 40 * 1000);
   setInterval(() => step('task flow', taskFlowSweep), 10 * 60 * 1000);

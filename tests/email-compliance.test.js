@@ -56,8 +56,12 @@ test('marketing mail carries unsubscribe, an address, and one-click headers', ()
 });
 
 test('marketing mail is never sent to someone who opted out', () => {
-  assert.match(sendEmail, /if \(marketing && await isUnsubscribed\(to\)\)/,
+  assert.match(sendEmail, /if \(marketing && await marketingBlocked\(to\)\)/,
     'the opt-out is checked before the send, not after');
+  /* And it fails CLOSED: an unreadable opt-out list holds the promotion
+     rather than risking it on somebody who asked to stop (2026-11-14). */
+  const blocked = src.slice(src.indexOf('async function marketingBlocked'), src.indexOf('async function marketingBlocked') + 900);
+  assert.match(blocked, /catch \(e\) \{[\s\S]*?return true;/, 'marketingBlocked must return true when the query fails');
 });
 
 test('a promotional email is marked as one', () => {
