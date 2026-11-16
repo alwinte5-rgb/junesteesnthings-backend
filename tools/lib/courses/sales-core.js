@@ -54,7 +54,7 @@ const GLOSSARY = {
   'tax-exempt': 'A customer who does not pay Illinois sales tax, because of an exemption letter (E-number) or a resale certificate (CRT-61).',
   'E-number': 'The number on an Illinois tax-exemption letter. Schools, churches and charities usually have one.',
   'CRT-61': 'The Illinois resale certificate, for customers buying to resell.',
-  'rush': 'Faster turnaround for a fee, on DTF only: same day +70%, next day +50%, 2 days +35%, 3 days +20%, 4 days +10%. Never more than 70%. Only after checking with June.',
+  'rush': 'Faster turnaround for a fee, on DTF, embroidery, signs and cutouts (not screen printing or SinaLite items). Most orders: 4 days +10%, 3 days +20%, 2 days +35%; never same day or next day. Embroidery and 50+ pieces have their own steps and are never sooner than 3 days. Only after checking with June.',
   'turnaround': 'How many business days an order takes after the proof is approved and the deposit is paid.',
   'proof': 'The picture of the design on the garment that the customer approves in writing before anything is printed.',
   'lead': 'Anyone who has asked about an order, on any channel. Every lead lives on the Leads page.',
@@ -383,17 +383,35 @@ Giant printed heads of players, graduates or family members, for games, parties 
 
 **Rush**
 
-Only **DTF** can be rushed. Screen printing, embroidery and cutouts cannot be rushed at any price. So for a screen print, embroidery, cutouts, or a mix that includes any of them, the answer to "can you do it faster?" is "let me ask June", never a yes and never a price.
+These can be rushed: **DTF**, **embroidery**, **signs and banners** (from Signs365) and **cutouts**. Screen printing, Signs365 business cards and flyers, and SinaLite printed items (stickers, labels, pouches, calendars and the like) cannot be rushed at any price. So for any of those, or a mix that includes one, the answer to "can you do it faster?" is "let me ask June", never a yes and never a price.
 
-On DTF, for a fee, depending on what is already in the queue:
+We never take same-day or next-day orders: the soonest any order can be ready is 2 business days. Business days skip weekends and the shop's holidays (New Year's Day, Memorial Day, July 4, Labor Day, Thanksgiving and the day after, Christmas Eve, Christmas Day and New Year's Eve), and a deposit (or proof approval) that comes in at 3pm or later starts the clock the next business day.
 
-- Same day: +70% (the most rush ever costs)
-- Next business day: +50%
-- 2 business days: +35%
-- 3 business days: +20%
+**Rush fees**
+
+A rush counts from the soonest usual date: 5 business days for most orders (the start of the usual 5–10). For a fee, depending on what is already in the queue:
+
 - 4 business days: +10%
+- 3 business days: +20%
+- 2 business days: +35% (the soonest)
 
-The quote form sets the rush from the **Needed by** date you enter, and only when every item is DTF, so get the real date from the customer. Never promise a rush date before June confirms it can be done.
+Embroidery takes 7 business days and is never ready sooner than 3:
+
+- 6 business days: +10%
+- 5 business days: +20%
+- 4 business days: +35%
+- 3 business days: +50%
+
+Orders of 50 or more garment pieces take 7 business days and are never ready sooner than 3:
+
+- 6 business days: +10%
+- 5 business days: +30%
+- 4 business days: +50%
+- 3 business days: +70%
+
+An embroidered order of 50 or more pieces takes the 50+ steps.
+
+The quote form sets the rush from the **Needed by** date you enter, and only when every item can be rushed, so get the real date from the customer. Never promise a rush date before June confirms it can be done.
 
 **Getting the order to the customer**
 
@@ -429,7 +447,7 @@ Customers can also design and pay online at jtees.net. Those show on **Orders**.
           answer: 1, article: A.methods, why: 'Small text fills in and cannot be read. Never promise small text on caps.' },
         { id: 'rush', q: 'A DTF order needs a 2-business-day rush. What does it add to the price?',
           choices: ['+10%', '+20%', '+35%', '+70%'],
-          answer: 2, article: A.products, why: 'Same day +70%, next day +50%, 2 days +35%, 3 days +20%, 4 days +10%, on DTF only, and only after June confirms.' },
+          answer: 2, article: A.products, why: '4 days +10%, 3 days +20%, 2 days +35%. No same-day or next-day orders. Only after June confirms.' },
         { id: 'clock', q: 'When does the turnaround clock start?',
           choices: ['When the customer first writes', 'When you send the quote', 'When they pay the deposit, or approve the proof if we design it', 'When the blanks arrive'],
           answer: 2, article: A.products, why: 'Turnaround counts from the deposit, or the proof approval when we design it, so late artwork moves the date.' },
@@ -724,7 +742,7 @@ On the quote form, a blue **Upsell ideas** box appears when the system spots a b
 - **Schools and PTOs:** a second colour of shirt for staff, spirit-wear hoodies, a field-day banner
 - **Businesses:** embroidered polos or jackets for front-of-house staff, hats, yard signs or a banner for an opening, a reorder plan for new hires
 - **Events and reunions:** a back print with the date, matching cutouts or a banner for photos
-- **A DTF order with a tight date:** rush, offered honestly, only after checking with June. Nothing else can be rushed
+- **A tight date on DTF, embroidery, signs or cutouts:** rush, offered honestly, only after checking with June. Screen printing and SinaLite items cannot be rushed
 
 **When the timing is right**
 
@@ -1106,7 +1124,7 @@ const FINAL = {
       { id: 'f6', q: 'She asks if the digitizing fee is charged again when she reorders next year. Answer?',
         choices: ['Yes, every time', 'No, it is one-time: reorders reuse the stitch file', 'Only for caps', 'It depends on the season'], answer: 1, article: A.methods, why: 'Digitizing is a one-time fee per design.' },
       { id: 'f7', q: 'A customer needs screen-printed shirts in 3 business days. What do you say?',
-        choices: ['"Let me ask June and confirm today by [time]", with no price or promise', '+30%, guaranteed', '+70%, guaranteed', '+10%, no need to check'], answer: 0, article: A.products, why: 'Screen printing is made by our partner in 7 to 10 business days and cannot be rushed; only June can say yes to a date like that.' },
+        choices: ['"Let me ask June and confirm today by [time]", with no price or promise', '+30%, guaranteed', '+70%, guaranteed', '+10%, no need to check'], answer: 0, article: A.products, why: 'Screen printing cannot be rushed; only June can say yes to a date like that.' },
       { id: 'f8', q: 'A message says "price for hoodies?" and nothing else. You…',
         choices: ['Send the cheapest hoodie price', 'Thank them and ask the five details in one message', 'Ignore it until they send more', 'Send a catalogue'], answer: 1, article: A.leads, why: 'Ask for all five in one message (/quote).' },
       { id: 'f9', q: 'You replied to a chat but did not log it. On the board, the lead shows as…',

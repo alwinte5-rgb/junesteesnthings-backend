@@ -71,7 +71,15 @@ module.exports = {
     { from: 'Turnaround', checks: [
       q('When does the turnaround clock start?', ['At the first message', 'At the deposit, or the proof approval if we design it', 'When you send the quote'], 1, 'Late artwork or approval moves the date.'),
       q('How long does a small order take?', ['2 to 3 business days', '5 to 10 business days', '20 business days'], 1, 'Small orders 5–10 business days, larger ones 7–14.'),
-      q('Rush on DTF for next business day adds…', ['+10%', '+50%', '+70%'], 1, 'Same day +70%, next day +50%, 2 days +35%, 3 days +20%, 4 days +10%. Only DTF can be rushed.'),
+    ] },
+    /* 2026-11-16: the rush rules are a page of their own (owner's new rules). */
+    { from: 'Rush', checks: [
+      q('Which of these can NOT be rushed?', ['A yard sign from Signs365', 'Screen printing', 'Embroidery'], 1, 'Screen printing, business cards, flyers and SinaLite items cannot be rushed; DTF, embroidery, signs and cutouts can.'),
+      q('A customer pays the deposit at 4pm on Monday. When does the clock start?', ['Monday', 'Tuesday', 'Wednesday'], 1, 'From 3pm, the clock starts the next business day.'),
+    ] },
+    { from: 'Rush fees', checks: [
+      q('Rush on DTF for 2 business days adds…', ['+10%', '+35%', '+70%'], 1, '4 days +10%, 3 days +20%, 2 days +35%. No same-day or next-day orders.'),
+      q('Embroidered polos are needed in 2 business days. You…', ['Add +70%', 'Say it is too soon: embroidery is never sooner than 3 business days', 'Add +35%'], 1, 'Embroidery and 50+ pieces are never ready sooner than 3 business days.'),
     ] },
     { from: 'Getting the order to the customer', checks: [
       q('Which is NOT one of the ways an order reaches the customer?', ['Free pickup', 'Shipping or local delivery', 'Dropped at any address for free'], 2, 'Pickup, shipping, or local delivery to nearby ZIPs.'),

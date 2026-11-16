@@ -14734,8 +14734,9 @@ ${uploadStatusScript()}
           nb.dataset.rushBound = '1';
           nb.addEventListener('input',  function(){ rushSync(true); });
           nb.addEventListener('change', function(){ rushSync(true); });
-          /* So does the decoration (only DTF and embroidery can be rushed)
-             and the quantity (50+ pieces have their own steps). */
+          /* So does the decoration and the product (only DTF, embroidery,
+             Signs365 signs and cutouts can be rushed) and the quantity (50+
+             pieces have their own steps). */
           document.addEventListener('change', function (e) {
             var n = e.target && e.target.name || '';
             if (/^(method|pr_m_|qty[0-9]|product[0-9])/.test(n)) rushSync(true);
@@ -44794,7 +44795,7 @@ const KB_ADDED = [
     tags: 'rush, deadline, urgent, fast, by friday, need it soon, turnaround',
     body: `Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].\n\n` +
 `To keep it quick, could you send [the details still missing: quantity, sizes, artwork]?\n\n` +
-`(For you: never promise a date or a rush price before June confirms it. Only DTF can be rushed: screen printing, embroidery and cutouts cannot. Reply the same day either way.)` },
+`(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces); screen printing, business cards, flyers and SinaLite items cannot. Reply the same day either way.)` },
   { kind: 'faq', shortcut: 'checking', title: 'Let me check and get back to you', needsReview: true,
     tags: 'not sure, checking, question, unknown, get back, follow up',
     body: `Good question! Let me check with our production team so I give you the right answer. I'll get back to you by [time].\n\n` +
@@ -45131,7 +45132,13 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
      are rebuilt from the embroidery-only copy, which is itself kept in `was`. */
   const dtfOnly = '(For you: never promise a date or a rush price before June confirms it. Only DTF can be rushed: screen printing, embroidery and cutouts cannot. Reply the same day either way.)';
   const embroideryOnly = '(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)';
+  /* 2026-11-16: DTF, embroidery, signs and cutouts can be rushed (owner).
+     The DTF-only copy is rebuilt from the current one and kept in `was`, and
+     the older ones are rebuilt from that, as before. */
+  const signsToo = "(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces); screen printing, business cards, flyers and SinaLite items cannot. Reply the same day either way.)";
   const current = r ? r.body : '';
+  if (r) r.body = r.body.split(signsToo).join(dtfOnly);
+  if (r) r.was = [...(r.was || []), r.body];
   if (r) r.body = r.body.split(dtfOnly).join(embroideryOnly);
   if (r) r.was = [...(r.was || []), r.body.split("Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].").join("Hi [name], thanks! [Date] is tight but we may be able to rush it for an extra fee. Let me check what's on the press and I'll confirm today by [time], with the price for the rush.")
     .split('(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)').join('(For you: never promise a date before June confirms it. Reply the same day either way.)')];
