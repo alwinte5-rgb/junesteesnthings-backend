@@ -23,6 +23,7 @@
    existing alerts (team_chat_prefs), so they are not sent a second time
    here: `chatEmail` marks the kinds whose email switch is that one. */
 const KINDS = {
+  library: { label: 'Design library approvals', email: false, who: 'owner' },
   mail:     { label: 'Mailbox messages',             email: true,  chatEmail: true, who: 'any' },
   chat:     { label: 'Team chat messages',           email: true,  chatEmail: true, who: 'any' },
   approval: { label: 'Approvals waiting',            email: false, who: 'owner' },
