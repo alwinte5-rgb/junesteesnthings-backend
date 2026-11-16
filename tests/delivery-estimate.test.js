@@ -52,7 +52,9 @@ function liftConst(re, what) {
 
 /* The real functions, not a restatement — a change to the cut-off or the
    business-day walk runs these tests. */
+globalThis.__JT_SHOPDAYS = require('../tools/lib/shop-days');
 const W = vm.runInThisContext(`(function(){
+  const SHOPDAYS = globalThis.__JT_SHOPDAYS;
   const HOLIDAY_MODE = false;
   ${liftConst(/const HOLIDAY_EXTRA_DAYS = .*;/, 'HOLIDAY_EXTRA_DAYS')}
   ${liftConst(/const SHOP_TZ = .*;/, 'SHOP_TZ')}
@@ -60,6 +62,7 @@ const W = vm.runInThisContext(`(function(){
   ${liftConst(/const SHEET_PIECE_CEILING = .*;/, 'SHEET_PIECE_CEILING')}
   ${liftConst(/const DIGITIZING_DAYS = .*;/, 'DIGITIZING_DAYS')}
   ${lift('addBusinessDays')}
+  ${lift('localYmd')}
   ${lift('shopMinutes')}
   ${lift('productionStart')}
   ${lift('deliveryEstimate')}
@@ -87,7 +90,7 @@ test('the cut-off is read in the shop timezone, not the server one', () => {
 });
 
 test('a weekend order starts on Monday', () => {
-  const sat = W.productionStart(new Date('2026-09-05T15:00:00Z'));
+  const sat = W.productionStart(new Date('2026-10-10T15:00:00Z'));
   assert.strictEqual(sat.getDay(), 1, 'nothing is produced at the weekend');
 });
 

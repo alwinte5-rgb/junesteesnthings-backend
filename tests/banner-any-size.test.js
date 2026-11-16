@@ -132,6 +132,6 @@ test('grommets every 2-3 ft with corners, the delivery and the turnaround ride w
   }
   const t = s.bannerTable();
   assert.strictEqual(t.freight, 10);
-  assert.strictEqual(t.turnaround_days, 3);
+  assert.strictEqual(t.turnaround_days, 5, 'every sign is 5 days (owner, 2026-11-16)');
   assert.deepStrictEqual(t.grommets.map((g) => g.key), ['tb', 'all', 'corners']);
 });

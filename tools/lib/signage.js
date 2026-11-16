@@ -498,9 +498,10 @@ function grommetPositions(ft) {
   return Array.from({ length: gaps + 1 }, (_, i) => Math.round((ft * i / gaps) * 100) / 100);
 }
 
-/* Banners are promised in 3 business days (the owner, 2026-10-08): Signs365
-   prints in 24 hours and ships next day; the rest is our check and handover. */
-const BANNER_TURNAROUND_DAYS = 3;
+/* Signs and banners are ready in 5 business days, like everything else
+   (owner, 2026-11-16: "normal delivery for everything is 5 days"; it was 3
+   since 2026-10-08). A rush can bring them to 2 (tools/lib/rush.js). */
+const BANNER_TURNAROUND_DAYS = 5;
 
 /* The stock banner sizes the quote form sells (tools/add-signage.js makes a
    method per size). Inches, width x height as the method title reads them. */
