@@ -74,9 +74,12 @@ module.exports = {
     ] },
     /* 2026-11-16: the rush rules are a page of their own (owner's new rules). */
     { from: 'Rush', checks: [
+      q('Which of these can NOT be rushed?', ['A yard sign from Signs365', 'Screen printing', 'Embroidery'], 1, 'Screen printing, business cards, flyers and SinaLite items cannot be rushed; DTF, embroidery, signs and cutouts can.'),
+      q('A customer pays the deposit at 4pm on Monday. When does the clock start?', ['Monday', 'Tuesday', 'Wednesday'], 1, 'From 3pm, the clock starts the next business day.'),
+    ] },
+    { from: 'Rush fees', checks: [
       q('Rush on DTF for 2 business days adds…', ['+10%', '+35%', '+70%'], 1, '4 days +10%, 3 days +20%, 2 days +35%. No same-day or next-day orders.'),
-      q('Which of these can NOT be rushed?', ['A yard sign from Signs365', 'Screen printing', 'Embroidery'], 1, 'Screen printing and SinaLite items cannot be rushed; DTF, embroidery, signs and cutouts can.'),
-      q('A customer writes at 4pm on Monday. When does the clock start?', ['Monday', 'Tuesday', 'Wednesday'], 1, 'From 3pm, the order starts the next business day.'),
+      q('Embroidered polos are needed in 2 business days. You…', ['Add +70%', 'Say it is too soon: embroidery is never sooner than 3 business days', 'Add +35%'], 1, 'Embroidery and 50+ pieces are never ready sooner than 3 business days.'),
     ] },
     { from: 'Getting the order to the customer', checks: [
       q('Which is NOT one of the ways an order reaches the customer?', ['Free pickup', 'Shipping or local delivery', 'Dropped at any address for free'], 2, 'Pickup, shipping, or local delivery to nearby ZIPs.'),

@@ -383,11 +383,13 @@ Giant printed heads of players, graduates or family members, for games, parties 
 
 **Rush**
 
-These can be rushed: **DTF**, **embroidery**, **signs and banners** (from Signs365) and **cutouts**. Screen printing and SinaLite printed items (stickers, labels, pouches, calendars and the like) cannot be rushed at any price. So for a screen print, a SinaLite item, or a mix that includes either, the answer to "can you do it faster?" is "let me ask June", never a yes and never a price.
+These can be rushed: **DTF**, **embroidery**, **signs and banners** (from Signs365) and **cutouts**. Screen printing, Signs365 business cards and flyers, and SinaLite printed items (stickers, labels, pouches, calendars and the like) cannot be rushed at any price. So for any of those, or a mix that includes one, the answer to "can you do it faster?" is "let me ask June", never a yes and never a price.
 
-We never take same-day or next-day orders: the soonest any order can be ready is 2 business days. Business days skip weekends and the shop's holidays (New Year's Day, Memorial Day, July 4, Labor Day, Thanksgiving and the day after, Christmas Eve, Christmas Day and New Year's Eve), and an order that comes in at 3pm or later starts the next business day.
+We never take same-day or next-day orders: the soonest any order can be ready is 2 business days. Business days skip weekends and the shop's holidays (New Year's Day, Memorial Day, July 4, Labor Day, Thanksgiving and the day after, Christmas Eve, Christmas Day and New Year's Eve), and a deposit (or proof approval) that comes in at 3pm or later starts the clock the next business day.
 
-Most orders take 5 business days. For a fee, depending on what is already in the queue:
+**Rush fees**
+
+A rush counts from the soonest usual date: 5 business days for most orders (the start of the usual 5–10). For a fee, depending on what is already in the queue:
 
 - 4 business days: +10%
 - 3 business days: +20%
@@ -406,6 +408,8 @@ Orders of 50 or more garment pieces take 7 business days and are never ready soo
 - 5 business days: +30%
 - 4 business days: +50%
 - 3 business days: +70%
+
+An embroidered order of 50 or more pieces takes the 50+ steps.
 
 The quote form sets the rush from the **Needed by** date you enter, and only when every item can be rushed, so get the real date from the customer. Never promise a rush date before June confirms it can be done.
 

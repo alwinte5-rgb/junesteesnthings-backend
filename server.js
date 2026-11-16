@@ -44795,7 +44795,7 @@ const KB_ADDED = [
     tags: 'rush, deadline, urgent, fast, by friday, need it soon, turnaround',
     body: `Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].\n\n` +
 `To keep it quick, could you send [the details still missing: quantity, sizes, artwork]?\n\n` +
-`(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days; screen printing and SinaLite items cannot. Reply the same day either way.)` },
+`(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces); screen printing, business cards, flyers and SinaLite items cannot. Reply the same day either way.)` },
   { kind: 'faq', shortcut: 'checking', title: 'Let me check and get back to you', needsReview: true,
     tags: 'not sure, checking, question, unknown, get back, follow up',
     body: `Good question! Let me check with our production team so I give you the right answer. I'll get back to you by [time].\n\n` +
@@ -45135,7 +45135,7 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
   /* 2026-11-16: DTF, embroidery, signs and cutouts can be rushed (owner).
      The DTF-only copy is rebuilt from the current one and kept in `was`, and
      the older ones are rebuilt from that, as before. */
-  const signsToo = "(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days; screen printing and SinaLite items cannot. Reply the same day either way.)";
+  const signsToo = "(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces); screen printing, business cards, flyers and SinaLite items cannot. Reply the same day either way.)";
   const current = r ? r.body : '';
   if (r) r.body = r.body.split(signsToo).join(dtfOnly);
   if (r) r.was = [...(r.was || []), r.body];
