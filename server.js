@@ -9421,10 +9421,10 @@ function shopMinutes(at) {
    day one has not begun. A closed day (weekend or shop holiday,
    tools/lib/shop-days.js) is the same. Anchorfish's own sheet cut-off is
    3:30pm, so 3pm also leaves the handover time. */
-const CUTOFF_MIN = (() => {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(process.env.JT_CUTOFF || '15:00'));
-  return m ? Number(m[1]) * 60 + Number(m[2]) : 15 * 60;
-})();
+/* Fixed, not read from JT_CUTOFF: the designer counts the same 3pm
+   (jt-auth.php jt_shop_cutoff_min), and an old env value would make the two
+   sites quote different dates (code review). */
+const CUTOFF_MIN = 15 * 60;
 
 /** The day the clock actually starts.
  *
@@ -9433,8 +9433,13 @@ const CUTOFF_MIN = (() => {
  *  on the promise the customer actually reads. */
 function productionStart(from) {
   const d = new Date(from);
-  if (SHOPDAYS.shopClosed(localYmd(d)) || shopMinutes(d) >= CUTOFF_MIN) return addBusinessDays(d, 1);
-  return d;
+  const c = SHOPDAYS.shopClock(d, SHOP_TZ);
+  if (!SHOPDAYS.shopClosed(c.ymd) && c.min < CUTOFF_MIN) return d;
+  /* The next open day on the SHOP's calendar, at noon UTC so the server's own
+     day (getDay, as addBusinessDays reads it) is that date: read as a UTC date,
+     a Chicago evening is already tomorrow and the start landed a day late
+     (code review). */
+  return new Date(SHOPDAYS.shopStartDay(d, CUTOFF_MIN, SHOP_TZ) + 'T12:00:00Z');
 }
 
 /* Anchorfish quotes 7–10 business days on up to 2,400 prints and says over
@@ -9945,6 +9950,24 @@ function rushPctFor(neededBy, from, kind) {
 const RUSH_RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS,
   embroideryTiers: RUSH.EMBROIDERY_TIERS };
 
+/** Whether a sized kind is a SinaLite item or a Signs365 sign (deliveryEstimate's rule). */
+function rushSignOfKind(kind) {
+  return kind === 'banner' || SIGN_FAMILIES.FAMILIES[kind] ? 'signs365' : 'sinalite';
+}
+
+/** A catalogue product's sign supplier for the rush: 'sinalite', 'signs365',
+ *  or undefined for anything that is not a sign. A product is a sign only when
+ *  it is filed under the sized groups by name and is not an S&S garment:
+ *  signKindOf alone matches loose words, so "Acrylic Knit Beanie" read as an
+ *  acrylic sign (code review). */
+function rushSignOf(prod) {
+  if (!prod) return undefined;
+  if (prod.supplier === 'sinalite') return 'sinalite';
+  if (/^ssa/.test(String(prod.supplier || '')) || !SIZED_BY_NAME_RE.test(String(prod.name || ''))) return undefined;
+  const kind = sizedKindOf(prod);
+  return kind ? rushSignOfKind(kind) : undefined;
+}
+
 /** A quote line as tools/lib/rush.js reads it: whether it has a product, its
  *  pieces, its method titles, and whether it is a Signs365 sign ('signs365')
  *  or a SinaLite item ('sinalite'). One place for the save, the form's saved
@@ -9953,10 +9976,7 @@ function rushLineOf(it, catalog) {
   const methods = (catalog && catalog.methods) || [];
   const mt = (id) => (methods.find((m) => String(m.id) === String(id)) || {}).title || '';
   const prod = it.product_id ? ((catalog && catalog.products) || []).find((p) => String(p.id) === String(it.product_id)) : null;
-  const kind = (it.sign && it.sign.kind) || (prod ? sizedKindOf(prod) : null);
-  let sign;
-  if ((prod && prod.supplier === 'sinalite') || (kind && kind !== 'banner' && !SIGN_FAMILIES.FAMILIES[kind])) sign = 'sinalite';
-  else if (kind) sign = 'signs365';
+  const sign = it.sign && it.sign.kind ? rushSignOfKind(it.sign.kind) : rushSignOf(prod);
   return {
     product: !!it.product_id,
     qty: parseInt(it.qty, 10) || 0,
@@ -12396,7 +12416,8 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
   if (exam && !(await examOpenFor(currentActor() || OWNER_ACTOR))) {
     return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
   }
-  const examDate = exam ? addBusinessDays(new Date(), exam.businessDays).toISOString().slice(0, 10) : '';
+  /* On the shop's calendar, as the rush counts it (3pm cutoff, holidays). */
+  const examDate = exam ? SHOPDAYS.shopDateAfter(exam.businessDays, new Date(), CUTOFF_MIN, SHOP_TZ) : '';
   const canDraft = (!isEdit || isDraft) && !exam;
   /* Upsells change the items, which a helper cannot do once the job is agreed
      or paid; they still see the ideas, without the Apply button. */
@@ -13340,6 +13361,7 @@ function productGroupOf(name) {
          backslashes. */
       var RUSHABLE = new RegExp(${JSON.stringify(RUSH.RUSHABLE.source)}, 'i');
       var EMBROIDERY = new RegExp(${JSON.stringify(RUSH.EMBROIDERY.source)}, 'i');
+      var CUTOUT = new RegExp(${JSON.stringify(RUSH.CUTOUT.source)}, 'i');
       var LARGE_QTY = ${RUSH.LARGE_QTY};
       ${RUSH.methodRushable.toString()}
       ${RUSH.lineRushable.toString()}
@@ -13349,7 +13371,7 @@ function productGroupOf(name) {
       /* Each catalogue product that is a sign: 'signs365' (can be rushed) or
          'sinalite' (cannot), as rushLineOf() reads it on the server. */
       var RUSH_SIGN = ${JSON.stringify(Object.fromEntries((catalog.products || [])
-        .map((p) => [String(p.id), rushLineOf({ product_id: p.id }, catalog).sign]).filter((x) => x[1])))};
+        .map((p) => [String(p.id), rushSignOf(p)]).filter((x) => x[1])))};
 
       /* Show the row only when a date has been asked for, and say WHY the
          number is what it is — "2 business days" is checkable, a bare 50% is
@@ -14716,7 +14738,7 @@ ${uploadStatusScript()}
              and the quantity (50+ pieces have their own steps). */
           document.addEventListener('change', function (e) {
             var n = e.target && e.target.name || '';
-            if (/^(method|pr_m_|qty[0-9])/.test(n)) rushSync(true);
+            if (/^(method|pr_m_|qty[0-9]|product[0-9])/.test(n)) rushSync(true);
           });
         }
         /* Remove clears the fee AND remembers that it was cleared, so editing
@@ -42643,7 +42665,7 @@ async function examOpenFor(actor) {
 async function finishExamAttempt(res, sc, { items, total, rushPct, catalog, neededBy }) {
   const actor = currentActor() || OWNER_ACTOR;
   if (!(await examOpenFor(actor))) return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
-  const r = QEXAM.grade(sc, items, rushPct, catalog, { chosen: neededBy, expected: addBusinessDays(new Date(), sc.businessDays).toISOString().slice(0, 10) });
+  const r = QEXAM.grade(sc, items, rushPct, catalog, { chosen: neededBy, expected: SHOPDAYS.shopDateAfter(sc.businessDays, new Date(), CUTOFF_MIN, SHOP_TZ) });
   if (actor.kind === 'staff') {
     await pool.query(
       `INSERT INTO staff_exam_attempts (staff_id, exam_key, scenario, passed, checks, items, total)

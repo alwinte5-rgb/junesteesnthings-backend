@@ -85,4 +85,16 @@ function shopDaysUntil(end, at, cutoffMin, tz) {
   return n;
 }
 
-module.exports = { shopHolidays, shopClosed, shopAddDays, shopClock, shopStartDay, shopDaysUntil };
+/** The 'YYYY-MM-DD' that is n open days after an order taken at `at`: the
+ *  date shopDaysUntil() counts as n. */
+function shopDateAfter(n, at, cutoffMin, tz) {
+  var d = shopStartDay(at, cutoffMin, tz);
+  var left = n;
+  while (left > 0) {
+    d = shopAddDays(d, 1);
+    if (!shopClosed(d)) left--;
+  }
+  return d;
+}
+
+module.exports = { shopHolidays, shopClosed, shopAddDays, shopClock, shopStartDay, shopDaysUntil, shopDateAfter };

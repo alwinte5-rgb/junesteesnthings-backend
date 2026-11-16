@@ -18,6 +18,8 @@
    not signs. */
 const RUSHABLE = /\bDTF\b|embroider|big head cutout|full body cutout|vinyl banner|retractable banner stand|\bposter|window graphic|wall graphic|vehicle graphic|vehicle magnet|acrylic panel|canvas print/i;
 const EMBROIDERY = /embroider/i;
+/* Cutouts are not garments: their pieces do not count toward 50. */
+const CUTOUT = /big head cutout|full body cutout/i;
 
 /* Owner, 2026-11-14 and 2026-11-16: no same-day and no next-day orders, so
    the earliest any order can be ready is 2 business days out. Everything is
@@ -78,12 +80,13 @@ function rushAllowed(lines) {
 
 /**
  * Which rush rule an order takes: 'large' (50 or more garment pieces),
- * 'embroidery' (any embroidery), or '' (the usual ladder). Sign pieces do not
- * count toward 50, as on the designer.
+ * 'embroidery' (any embroidery), or '' (the usual ladder). Sign and cutout
+ * pieces do not count toward 50, as on the designer.
  */
 function rushKind(lines) {
   var real = (lines || []).filter((l) => l && (l.product || l.sign || (l.titles || []).length));
-  var pieces = real.filter((l) => !l.sign).reduce((n, l) => n + (parseInt(l.qty, 10) || 0), 0);
+  var pieces = real.filter((l) => !l.sign && !(l.titles || []).some((t) => CUTOUT.test(String(t || ''))))
+    .reduce((n, l) => n + (parseInt(l.qty, 10) || 0), 0);
   if (pieces >= LARGE_QTY) return 'large';
   return real.some((l) => (l.titles || []).some((t) => EMBROIDERY.test(String(t || '')))) ? 'embroidery' : '';
 }
@@ -110,6 +113,6 @@ function rushFor(days, tiers, kind, rule) {
 }
 
 module.exports = {
-  RUSHABLE, EMBROIDERY, EARLIEST_DAYS, SLOW_EARLIEST_DAYS, LARGE_QTY, SLOW_TIERS, EMBROIDERY_TIERS,
+  RUSHABLE, EMBROIDERY, CUTOUT, EARLIEST_DAYS, SLOW_EARLIEST_DAYS, LARGE_QTY, SLOW_TIERS, EMBROIDERY_TIERS,
   methodRushable, lineRushable, rushAllowed, rushKind, rushFor,
 };
