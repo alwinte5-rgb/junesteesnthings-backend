@@ -45,10 +45,9 @@ Two briefs make up this plan:
   portal app and no per-business API.
 - [x] Pricing source: quote builder + `quoteTotals()` (rush → discount → tax → delivery/shipping).
   `/api/pricing-rules` publishes the curve to the designer. The connector re-prices nothing.
-- [ ] **Preorders / Mark Kelty work.** Nothing found in the backend (no `preorder` or
-  `kelty`). The designer repo has not been searched yet; that search was stopped
-  this session. Closest existing piece: the team size link (`/s/:token`, `size_collections`),
-  which gathers sizes from many people into one quote.
+- [x] **Preorders / Mark Kelty work.** No code in either repo (searched 2026-11-14). The
+  Kelty batches are a manual spreadsheet + Shippo bulk-CSV process. See
+  `docs/wholesale-audit.md` §3 for the gaps (deposit is always 50%; one label per job).
 - [~] Integrations that touch live orders: Stripe (checkout + webhook + refunds/disputes),
   Brevo (send + CRM deals + contacts), Twilio, Cloudinary, the designer (internal key),
   SinaLite/Signs365, Shippo (designer), Clover (rarely used). Still to write up in full.
@@ -184,12 +183,30 @@ Christmas ordering stays open)
 
 ## Workstream E: Payments and reliability
 
-- [ ] Reproduce each reported issue before fixing it, with a regression test each:
-  payment handoff failures · orders without verified payment · quote form losing
-  changes · quotes that can't be resumed · missing quote notes · duplicate orders ·
-  missing notifications · unreconciled Stripe webhooks · failed background sync.
-- [ ] Audit trail for critical transitions outside the connector. `quote_revisions` and
-  `staff_activity` exist; check what's missing.
+- [x] Each reported issue checked against current main (2026-11-14). Every one already
+  has a fix and targeted regression tests from earlier work, and they pass (386 payment
+  tests across 19 files; full map in `docs/wholesale-audit.md` §11). None reproduces in
+  code. Production incidents (Railway logs, Stripe dashboard) could not be checked:
+  Railway's CLI login has expired and Stripe needs sign-in.
+- [x] Audit trail gap found and fixed: card payments, refunds and disputes arriving from
+  Stripe left no line in the quote's History, and a webhook delivery that failed and was
+  retried left no trace except a server log. Now:
+  - `bankStripeSession` reads the quote before banking and writes that row to its
+    History only once it has banked the money (`Stripe: card payment $104.00`, shown as
+    "Stripe", not "Owner"), and only if no other change was saved in between, so History
+    stays in order. The webhook/return-page race, a retry and a failed write leave no extra
+    line, and nothing deletes history.
+  - Every webhook delivery for a quote writes one `stripe_events` row (event id, type,
+    Stripe object id, quote, handled/failed, error) after Stripe has its answer. Refunds and
+    disputes find their quote by payment intent. Deliveries for no quote are not kept; their
+    failures already reach `app_errors` and the digest.
+  - The job page's History card lists the deliveries with their event ids. An unsettled
+    failure opens the card and is counted in its summary. It is settled by a LATER handled
+    row with the same event id, or by the ledger holding that checkout session (so a lost
+    log row cannot leave a false alarm). Only the owner sees error text.
+  - Tests: `tests/stripe-audit-trail.test.js` (19); real Postgres + server:
+    `~/.local/share/jtees-e2e/run-stripe-audit.cjs` (23 checks).
+- [ ] **New table `stripe_events` needs the owner's gate approval.**
 
 ## Workstream F: Codex coordination
 
