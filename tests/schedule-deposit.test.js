@@ -23,9 +23,10 @@ function lift(name) {
 }
 
 /* The risk rules, with deadline alerts switched on (see the test below for off). */
-const ctx = { process: { env: {} }, Date, Math, Number, String, parseInt, DEADLINE_ALERTS: true };
+const SHOPDAYS = require('../tools/lib/shop-days');
+const ctx = { process: { env: {} }, Date, Math, Number, String, parseInt, DEADLINE_ALERTS: true, SHOPDAYS };
 vm.createContext(ctx);
-vm.runInContext(['addBusinessDays', 'quoteSchedule'].map(lift).join('\n'), ctx);
+vm.runInContext(['addBusinessDays', 'localYmd', 'quoteSchedule'].map(lift).join('\n'), ctx);
 const daysAgo = (n) => new Date(Date.now() - n * 86400e3);
 
 test('a quote nobody has paid on is never behind, however old its date', () => {
@@ -39,9 +40,9 @@ test('a quote nobody has paid on is never behind, however old its date', () => {
 });
 
 test('deadline alerts are off: a paid job past its dates is never behind, and the dates still show (owner, 2026-11-05)', () => {
-  const off = { process: { env: {} }, Date, Math, Number, String, parseInt, DEADLINE_ALERTS: false };
+  const off = { process: { env: {} }, Date, Math, Number, String, parseInt, DEADLINE_ALERTS: false, SHOPDAYS };
   vm.createContext(off);
-  vm.runInContext(['addBusinessDays', 'quoteSchedule'].map(lift).join('\n'), off);
+  vm.runInContext(['addBusinessDays', 'localYmd', 'quoteSchedule'].map(lift).join('\n'), off);
   // Paid today with a ready date a week out: start-by is already behind it.
   const fresh = off.quoteSchedule({ target_date: new Date(Date.now() + 7 * 86400e3), paid_amount: 50, accepted_at: new Date() });
   assert.strictEqual(fresh.risks.length, 0, 'a job that just arrived is not late');
@@ -82,9 +83,9 @@ test('the first deposit fills an empty working date, once, and never a date some
 
 test('the working date is counted on the shop calendar: an evening deposit is not a Sunday', () => {
   const c = { process: { env: {} }, Date, Math, Number, String, parseInt, Intl, SHOP_TZ: 'America/Chicago', CUTOFF_MIN: 14 * 60,
-    DELIV: require('../tools/lib/delivery'), deliveryEstimate: () => ({ production_days: [7, 10] }) };
+    DELIV: require('../tools/lib/delivery'), SHOPDAYS, deliveryEstimate: () => ({ production_days: [7, 10] }) };
   vm.createContext(c);
-  vm.runInContext(['addBusinessDays', 'shopMinutes', 'depositWorkingDate'].map(lift).join('\n'), c);
+  vm.runInContext(['addBusinessDays', 'localYmd', 'shopMinutes', 'depositWorkingDate'].map(lift).join('\n'), c);
   // Thu Oct 15 20:30 Chicago is already Friday in UTC: starts Fri Oct 16, ten business days on is Fri Oct 30.
   assert.strictEqual(c.depositWorkingDate({ deposit_at: '2026-10-16T01:30:00Z' }), '2026-10-30');
   // Tue Oct 13 10:00 Chicago, before the cutoff: starts that day, ready Tue Oct 27.

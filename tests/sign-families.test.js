@@ -115,7 +115,7 @@ test('every family publishes its own turnaround; canvas waits on its bars (sign 
   const t = F.signsTable().families;
   for (const [k, f] of Object.entries(t)) assert.ok(Number.isInteger(f.turnaround_days) && f.turnaround_days >= 1, k);
   assert.strictEqual(t.yard_sign.turnaround_days, sg.BANNER_TURNAROUND_DAYS);
-  assert.ok(t.stretched_canvas.turnaround_days > sg.BANNER_TURNAROUND_DAYS, 'bars are bought per job');
+  assert.strictEqual(t.stretched_canvas.turnaround_days, 5, 'every sign is 5 days, canvas too (owner, 2026-11-16)');
 });
 
 test('magnets print at 200 DPI, as planned (sign launch, 2026-10-20)', () => {

@@ -100,12 +100,15 @@ test('a tap emails only when the owner said yes', () => {
 });
 
 test('no delivery method means pickup: the job is ready on the needed date', () => {
+  globalThis.__JT_SHOPDAYS = require('../tools/lib/shop-days');
   /* Shipping time is extra, taken off only once the job is set to ship. A
      quote with no method read as shipped and told the owner (and the
      customer) a date two business days early. */
   const { quoteSchedule } = vm.runInThisContext(`(function () {
     const DEADLINE_ALERTS = false;
+    const SHOPDAYS = globalThis.__JT_SHOPDAYS;
     ${extractFn('addBusinessDays')}
+    ${extractFn('localYmd')}
     ${extractFn('quoteSchedule')}
     return { quoteSchedule };
   })`)();

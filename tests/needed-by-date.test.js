@@ -56,10 +56,7 @@ test('both needed-by boxes are filled through it', () => {
 function rushPage({ saved = '2026-11-20', value = saved, rush = '25', readOnly = true, dtf = true, wasRushable = '1' } = {}) {
   const at = src.indexOf('      function rushSync(fill) {');
   let body = src.slice(at, src.indexOf('\n      }\n', at) + 8);
-  body = body.replace('${JSON.stringify(RUSH.RUSHABLE.source)}', JSON.stringify(require('../tools/lib/rush').RUSHABLE.source));
-  body = body.replace('${JSON.stringify(RUSH.EMBROIDERY.source)}', JSON.stringify(require('../tools/lib/rush').EMBROIDERY.source));
-  body = body.replace('${RUSH.LARGE_QTY}', String(require('../tools/lib/rush').LARGE_QTY));
-  assert.ok(!body.includes('${'), 'only the one server value is filled in');
+  assert.ok(!body.includes('${'), 'no server value inside rushSync: the rules come in beside it');
   const els = {
     rushrow: { style: {} }, rushwhy: { textContent: '' },
     rushpct: { value: rush, readOnly, dataset: { saved: rush, wasRushable } },
@@ -71,8 +68,10 @@ function rushPage({ saved = '2026-11-20', value = saved, rush = '25', readOnly =
     getElementById: (id) => els[id] || null,
     querySelectorAll: () => [select],
   };
-  const fn = new Function('document', 'RUSH_TIERS', 'RUSH_RULE', 'rushFor', 'rushDaysUntil', 'calc',
-    body + '\nreturn rushSync;')(document, [], {}, () => ({ pct: 50, tooSoon: false }), (v) => (v ? 2 : null), () => {});
+  const R = require('../tools/lib/rush');
+  const fn = new Function('document', 'RUSH_TIERS', 'RUSH_RULE', 'rushFor', 'rushDaysUntil', 'calc', 'rushAllowed', 'rushKind', 'RUSH_SIGN',
+    body + '\nreturn rushSync;')(document, [], {}, () => ({ pct: 50, tooSoon: false }), (v) => (v ? 2 : null), () => {},
+    R.rushAllowed, R.rushKind, {});
   return { fn, box: els.rushpct, date };
 }
 

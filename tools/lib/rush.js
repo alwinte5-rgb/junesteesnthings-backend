@@ -1,21 +1,36 @@
 'use strict';
 
-/* Which orders can be rushed. DTF since the owner's 2026-10-12 rule ("Rush is
-   offered on DTF only"), and embroidery again since 2026-11-14 ("embroidery
-   can be rushed"); screen printing and cutouts still cannot. One line that
-   cannot be rushed sets the date for the whole order, since the customer gets
-   one parcel, and a line whose method is unknown counts as one that cannot
-   (fail closed). Used by the quote save (a helper's rush is 0 when this says
-   no), the quote form's suggestion, and the quote exam's scenarios. */
+/* Which orders can be rushed, and what a rush costs.
 
-const RUSHABLE = /\bDTF\b|embroider/i;
+   Rushable (owner): DTF (2026-10-12), embroidery (2026-11-14), and since
+   2026-11-16 Signs365 signs and banners and Signs365 cutouts. Not screen
+   printing, and nothing from SinaLite: its own lead time cannot be shortened.
+   One line that cannot be rushed sets the date for the whole order, since the
+   customer gets one parcel, and a line whose method is unknown counts as one
+   that cannot (fail closed). Used by the quote save (a helper's rush is 0 when
+   this says no), the quote form's suggestion (which runs this same source,
+   toString, so keep it ES5 apart from the arrows already here), and the quote
+   exam's scenarios. */
+
+/* Decoration methods (and Signs365 items picked as a method) that can be
+   rushed: DTF, embroidery, and the Signs365 products in server.js
+   SUPPLIER_PRODUCT_RE apart from business cards and flyers, which are print,
+   not signs. */
+const RUSHABLE = /\bDTF\b|embroider|big head cutout|full body cutout|vinyl banner|retractable banner stand|\bposter|window graphic|wall graphic|vehicle graphic|vehicle magnet|acrylic panel|canvas print/i;
 const EMBROIDERY = /embroider/i;
+/* Cutouts are not garments: their pieces do not count toward 50. */
+const CUTOUT = /big head cutout|full body cutout/i;
 
-/* Owner, 2026-11-14: no same-day and no next-day orders, so the earliest any
-   order can be ready is 2 business days out. Embroidery and orders of 50 or
-   more pieces take 7 business days and are never ready sooner than 3; their
-   rush is spread over those 4 days (6 days out 10%, 5 30%, 4 50%, 3 70%), the
-   same steps the designer's checkout charges (jt_rush_pct with 4 steps). */
+/* Owner, 2026-11-14 and 2026-11-16: no same-day and no next-day orders, so
+   the earliest any order can be ready is 2 business days out. Everything is
+   normally 5 business days, signs included.
+   Embroidery takes 7 business days and is never ready sooner than 3; its rush
+   uses the same steps as everything else, by days early: 6 days out 10%,
+   5 20%, 4 35%, 3 50% (owner, 2026-11-16).
+   Orders of 50 or more garment pieces take 7 business days, are never ready
+   sooner than 3, and keep their own steps: 6 days 10%, 5 30%, 4 50%, 3 70%
+   (owner, 2026-11-16: "keep 50+ as it is"). An order that is both is a 50+
+   order. These match the designer's checkout (jt-holiday-rush.php). */
 const EARLIEST_DAYS = 2;
 const SLOW_EARLIEST_DAYS = 3;
 const LARGE_QTY = 50;
@@ -25,6 +40,12 @@ const SLOW_TIERS = [
   { days: 5, pct: 30 },
   { days: 6, pct: 10 },
 ];
+const EMBROIDERY_TIERS = [
+  { days: 3, pct: 50 },
+  { days: 4, pct: 35 },
+  { days: 5, pct: 20 },
+  { days: 6, pct: 10 },
+];
 
 /** May a decoration method with this title be rushed? */
 function methodRushable(title) {
@@ -32,49 +53,66 @@ function methodRushable(title) {
 }
 
 /**
+ * May this one line be rushed?
+ * @param l  { product: boolean, titles: [method titles], qty, sign }
+ *           sign: 'signs365' for a Signs365 sign or banner, 'sinalite' for a
+ *           SinaLite item, absent otherwise.
+ * A Signs365 sign needs no method; any method on it must be rushable too. A
+ * garment needs a method, and every method rushable.
+ */
+function lineRushable(l) {
+  if (l.sign === 'sinalite') return false;
+  var titles = l.titles || [];
+  if (l.sign === 'signs365') return titles.every(methodRushable);
+  return titles.length > 0 && titles.every(methodRushable);
+}
+
+/**
  * May an order be rushed?
- * @param lines  the required lines, each { product: boolean, titles: [method titles] }
- *               (optional lines are left out by the caller: they may never be bought).
- * A line with no product and no method (a fee typed by hand) is ignored; a
- * garment with no method, or a method that cannot be rushed, says no.
+ * @param lines  the required lines, as lineRushable takes them (optional
+ *               lines are left out by the caller: they may never be bought).
+ * A line with no product, no method and no sign (a fee typed by hand) is ignored.
  */
 function rushAllowed(lines) {
-  const real = (lines || []).filter((l) => l && (l.product || (l.titles || []).length));
-  return real.length > 0 && real.every((l) => (l.titles || []).length > 0 && l.titles.every(methodRushable));
+  var real = (lines || []).filter((l) => l && (l.product || l.sign || (l.titles || []).length));
+  return real.length > 0 && real.every(lineRushable);
 }
 
 /**
- * Is this the slower kind of order: any embroidery, or 50 or more pieces?
- * @param lines  as rushAllowed, each may also carry qty (pieces on the line).
+ * Which rush rule an order takes: 'large' (50 or more garment pieces),
+ * 'embroidery' (any embroidery), or '' (the usual ladder). Sign and cutout
+ * pieces do not count toward 50, as on the designer.
  */
-function slowOrder(lines) {
-  const real = (lines || []).filter((l) => l && (l.product || (l.titles || []).length));
-  const pieces = real.reduce((n, l) => n + (parseInt(l.qty, 10) || 0), 0);
-  return pieces >= LARGE_QTY || real.some((l) => (l.titles || []).some((t) => EMBROIDERY.test(String(t || ''))));
+function rushKind(lines) {
+  var real = (lines || []).filter((l) => l && (l.product || l.sign || (l.titles || []).length));
+  var pieces = real.filter((l) => !l.sign && !(l.titles || []).some((t) => CUTOUT.test(String(t || ''))))
+    .reduce((n, l) => n + (parseInt(l.qty, 10) || 0), 0);
+  if (pieces >= LARGE_QTY) return 'large';
+  return real.some((l) => (l.titles || []).some((t) => EMBROIDERY.test(String(t || '')))) ? 'embroidery' : '';
 }
 
 /**
- * The rush a needed-by date earns, `days` business days from today.
+ * The rush a needed-by date earns, `days` open business days away
+ * (tools/lib/shop-days.js shopDaysUntil).
  *   tiers  the usual ladder (RUSH_TIERS on the server: the first band whose
  *          days the date falls at or under wins). An empty ladder turns rush
- *          off for every order, slow ones too;
- *   slow   slowOrder(): its own steps and floor;
- *   rule   { earliest, slowEarliest, slowTiers } (EARLIEST_DAYS,
- *          SLOW_EARLIEST_DAYS, SLOW_TIERS): passed in so the quote form can
- *          run this same source (toString) with the server's figures.
- * Returns { pct, tooSoon }: tooSoon is a date no rush can buy (same day or
- * next day; under 3 days for a slow order), and then pct is 0.
+ *          off for every order;
+ *   kind   rushKind(): 'large' and 'embroidery' have their own steps and the
+ *          3-day floor;
+ *   rule   { earliest, slowEarliest, slowTiers, embroideryTiers }: passed in
+ *          so the quote form can run this same source with the server's figures.
+ * Returns { pct, tooSoon }: tooSoon is a date no rush can buy, and then pct is 0.
  */
-function rushFor(days, tiers, slow, rule) {
+function rushFor(days, tiers, kind, rule) {
   if (days === null || days === undefined) return { pct: 0, tooSoon: false };
-  if (days < (slow ? rule.slowEarliest : rule.earliest)) return { pct: 0, tooSoon: true };
+  if (days < (kind ? rule.slowEarliest : rule.earliest)) return { pct: 0, tooSoon: true };
   if (!tiers || !tiers.length) return { pct: 0, tooSoon: false };
-  var t = slow ? rule.slowTiers : tiers;
+  var t = kind === 'large' ? rule.slowTiers : kind === 'embroidery' ? rule.embroideryTiers : tiers;
   for (var i = 0; i < t.length; i++) if (days <= t[i].days) return { pct: t[i].pct, tooSoon: false };
   return { pct: 0, tooSoon: false };
 }
 
 module.exports = {
-  RUSHABLE, EMBROIDERY, EARLIEST_DAYS, SLOW_EARLIEST_DAYS, LARGE_QTY, SLOW_TIERS,
-  methodRushable, rushAllowed, slowOrder, rushFor,
+  RUSHABLE, EMBROIDERY, CUTOUT, EARLIEST_DAYS, SLOW_EARLIEST_DAYS, LARGE_QTY, SLOW_TIERS, EMBROIDERY_TIERS,
+  methodRushable, lineRushable, rushAllowed, rushKind, rushFor,
 };

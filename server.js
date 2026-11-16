@@ -36,6 +36,7 @@ const DESIGN_FU = require('./tools/lib/design-followups');
 const SIGNAGE = require('./tools/lib/signage');
 const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
+const SHOPDAYS = require('./tools/lib/shop-days');
 const SINALITE = require('./tools/lib/sinalite');
 const SERVICES = require('./tools/lib/services');
 const LEADMAIL = require('./tools/lib/lead-email');
@@ -2547,8 +2548,7 @@ function depositWorkingDate(q) {
   const est = deliveryEstimate(at, { items, pickup });
   const transit = pickup ? 0 : parseInt(process.env.JT_SHIP_MAX || '5', 10);
   let start = new Date(DELIV.toYmd(at) + 'T12:00:00Z');
-  const dow = start.getUTCDay();
-  if (dow === 0 || dow === 6 || shopMinutes(at) >= CUTOFF_MIN) start = addBusinessDays(start, 1);
+  if (SHOPDAYS.shopClosed(DELIV.toYmd(at)) || shopMinutes(at) >= CUTOFF_MIN) start = addBusinessDays(start, 1);
   return addBusinessDays(start, est.production_days[1] + transit).toISOString().slice(0, 10);
 }
 
@@ -9380,16 +9380,22 @@ function cardFee(amount) { return round2(Number(amount) * CARD_FEE); }
 /* Negative days walk BACKWARDS, which is what backwards-scheduling a deadline
    needs. Without this the loop simply never ran and every computed "start by"
    date silently equalled the deadline itself. */
+/* Closed days (weekends and the shop's holidays, tools/lib/shop-days.js) are
+   skipped, read from the date's own day as getDay() reads it. */
 function addBusinessDays(from, days) {
   const d = new Date(from);
   const step = days < 0 ? -1 : 1;
   let left = Math.abs(days);
   while (left > 0) {
     d.setDate(d.getDate() + step);
-    const dow = d.getDay();
-    if (dow !== 0 && dow !== 6) left--;
+    if (!SHOPDAYS.shopClosed(localYmd(d))) left--;
   }
   return d;
+}
+
+/** 'YYYY-MM-DD' of a Date's own (server-local) day, the day getDay() reads. */
+function localYmd(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
 /** Estimated ready/delivery window, same env knobs the designer uses. */
@@ -9410,13 +9416,15 @@ function shopMinutes(at) {
   return (get('hour') % 24) * 60 + get('minute');
 }
 
-/* Anchorfish states a 3:30pm CST business-day cut-off on both 2026 sheets:
-   work handed over after it is received the next business day, so day one has
-   not begun. A weekend is the same problem — nothing is produced on one. */
-const CUTOFF_MIN = (() => {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(process.env.JT_CUTOFF || '15:30'));
-  return m ? Number(m[1]) * 60 + Number(m[2]) : 15 * 60 + 30;
-})();
+/* The shop's cut-off (owner, 2026-11-16: "after 3pm that day doesn't
+   count"): an order taken at 3pm Chicago or later starts the next open day, so
+   day one has not begun. A closed day (weekend or shop holiday,
+   tools/lib/shop-days.js) is the same. Anchorfish's own sheet cut-off is
+   3:30pm, so 3pm also leaves the handover time. */
+/* Fixed, not read from JT_CUTOFF: the designer counts the same 3pm
+   (jt-auth.php jt_shop_cutoff_min), and an old env value would make the two
+   sites quote different dates (code review). */
+const CUTOFF_MIN = 15 * 60;
 
 /** The day the clock actually starts.
  *
@@ -9425,9 +9433,13 @@ const CUTOFF_MIN = (() => {
  *  on the promise the customer actually reads. */
 function productionStart(from) {
   const d = new Date(from);
-  const dow = d.getDay();
-  if (dow === 0 || dow === 6 || shopMinutes(d) >= CUTOFF_MIN) return addBusinessDays(d, 1);
-  return d;
+  const c = SHOPDAYS.shopClock(d, SHOP_TZ);
+  if (!SHOPDAYS.shopClosed(c.ymd) && c.min < CUTOFF_MIN) return d;
+  /* The next open day on the SHOP's calendar, at noon UTC so the server's own
+     day (getDay, as addBusinessDays reads it) is that date: read as a UTC date,
+     a Chicago evening is already tomorrow and the start landed a day late
+     (code review). */
+  return new Date(SHOPDAYS.shopStartDay(d, CUTOFF_MIN, SHOP_TZ) + 'T12:00:00Z');
 }
 
 /* Anchorfish quotes 7–10 business days on up to 2,400 prints and says over
@@ -9904,36 +9916,74 @@ const RUSH_TIERS = (() => {
   }
 })();
 
-/** Business days from `from` to `to`, counting neither endpoint twice. Returns
- *  null when there is no date to measure to. Past dates count as 0 — someone
- *  asking for yesterday is the most urgent case there is, not the least. */
+/** Open business days from an order taken at `from` (now when absent) to
+ *  the date `to`, on the shop's calendar (tools/lib/shop-days.js, owner
+ *  2026-11-16): weekends and the shop's holidays do not count, and an order
+ *  taken on a closed day or at the 3pm cutoff or later starts the next open
+ *  day. Null when there is no date to measure to. A date on or before the
+ *  start day counts as 0: someone asking for yesterday is the most urgent
+ *  case there is, not the least. */
 function businessDaysUntil(to, from) {
   if (!to) return null;
-  const end = new Date(to.length <= 10 ? to + 'T12:00:00' : to);
-  if (isNaN(end.getTime())) return null;
-  const start = from ? new Date(from) : new Date();
-  start.setHours(12, 0, 0, 0);
-  if (end <= start) return 0;
-  let n = 0;
-  const d = new Date(start);
-  while (d < end) {
-    d.setDate(d.getDate() + 1);
-    const wd = d.getDay();
-    if (wd !== 0 && wd !== 6) n++;
+  const at = from ? new Date(from) : new Date();
+  if (isNaN(at.getTime())) return null;
+  let end = String(to);
+  if (end.length > 10) {
+    const t = new Date(end);
+    if (isNaN(t.getTime())) return null;
+    end = SHOPDAYS.shopClock(t, SHOP_TZ).ymd;
   }
-  return n;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end) || isNaN(new Date(end + 'T00:00:00Z').getTime())) return null;
+  return SHOPDAYS.shopDaysUntil(end, at, CUTOFF_MIN, SHOP_TZ);
 }
 
 /** The rush percentage a requested date earns, before anyone overrides it.
- *  slow: RUSH.slowOrder() (embroidery or 50+ pieces). A date no rush can buy
- *  (same day, next day; under 3 days for a slow order) earns 0. */
-function rushPctFor(neededBy, from, slow) {
-  return RUSH.rushFor(businessDaysUntil(neededBy, from), RUSH_TIERS, !!slow, RUSH_RULE).pct;
+ *  kind: RUSH.rushKind() ('large', 'embroidery' or ''). A date no rush can
+ *  buy (same day, next day; under 3 days for embroidery or 50+ pieces) earns 0. */
+function rushPctFor(neededBy, from, kind) {
+  return RUSH.rushFor(businessDaysUntil(neededBy, from), RUSH_TIERS, kind || '', RUSH_RULE).pct;
 }
 
-/* The floors and the slow ladder, from tools/lib/rush.js, for rushFor here
-   and on the quote form (which gets them as JSON, as it gets RUSH_TIERS). */
-const RUSH_RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS };
+/* The floors and the 50+ and embroidery steps, from tools/lib/rush.js, for
+   rushFor here and on the quote form (which gets them as JSON, as it gets
+   RUSH_TIERS). */
+const RUSH_RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS,
+  embroideryTiers: RUSH.EMBROIDERY_TIERS };
+
+/** Whether a sized kind is a SinaLite item or a Signs365 sign (deliveryEstimate's rule). */
+function rushSignOfKind(kind) {
+  return kind === 'banner' || SIGN_FAMILIES.FAMILIES[kind] ? 'signs365' : 'sinalite';
+}
+
+/** A catalogue product's sign supplier for the rush: 'sinalite', 'signs365',
+ *  or undefined for anything that is not a sign. A product is a sign only when
+ *  it is filed under the sized groups by name and is not an S&S garment:
+ *  signKindOf alone matches loose words, so "Acrylic Knit Beanie" read as an
+ *  acrylic sign (code review). */
+function rushSignOf(prod) {
+  if (!prod) return undefined;
+  if (prod.supplier === 'sinalite') return 'sinalite';
+  if (/^ssa/.test(String(prod.supplier || '')) || !SIZED_BY_NAME_RE.test(String(prod.name || ''))) return undefined;
+  const kind = sizedKindOf(prod);
+  return kind ? rushSignOfKind(kind) : undefined;
+}
+
+/** A quote line as tools/lib/rush.js reads it: whether it has a product, its
+ *  pieces, its method titles, and whether it is a Signs365 sign ('signs365')
+ *  or a SinaLite item ('sinalite'). One place for the save, the form's saved
+ *  state and the helper's lock, so the three cannot read a line differently. */
+function rushLineOf(it, catalog) {
+  const methods = (catalog && catalog.methods) || [];
+  const mt = (id) => (methods.find((m) => String(m.id) === String(id)) || {}).title || '';
+  const prod = it.product_id ? ((catalog && catalog.products) || []).find((p) => String(p.id) === String(it.product_id)) : null;
+  const sign = it.sign && it.sign.kind ? rushSignOfKind(it.sign.kind) : rushSignOf(prod);
+  return {
+    product: !!it.product_id,
+    qty: parseInt(it.qty, 10) || 0,
+    titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
+    ...(sign ? { sign } : {}),
+  };
+}
 
 /* Holiday mode: everything takes HOLIDAY_EXTRA_DAYS longer. One switch rather
    than a setting per stage, so the busy season cannot be half on. The failure
@@ -12366,7 +12416,8 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
   if (exam && !(await examOpenFor(currentActor() || OWNER_ACTOR))) {
     return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
   }
-  const examDate = exam ? addBusinessDays(new Date(), exam.businessDays).toISOString().slice(0, 10) : '';
+  /* On the shop's calendar, as the rush counts it (3pm cutoff, holidays). */
+  const examDate = exam ? SHOPDAYS.shopDateAfter(exam.businessDays, new Date(), CUTOFF_MIN, SHOP_TZ) : '';
   const canDraft = (!isEdit || isDraft) && !exam;
   /* Upsells change the items, which a helper cannot do once the job is agreed
      or paid; they still see the ideas, without the Apply button. */
@@ -12880,26 +12931,18 @@ function productGroupOf(name) {
               <input name="rush_pct" id="rushpct" type="number" step="0.01" min="0" max="${RUSH_MAX_PCT}"
                      inputmode="decimal" value="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}"${
                      canPrice ? '' : ' readonly title="Set from the needed-by date. Only the owner can change it."'}
-                     data-saved="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}" data-was-rushable="${(() => {
+                     data-saved="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}" data-was-rushable="${
                        /* What the save route reads for a helper: the saved rush stands
-                          while the date is unchanged, unless they took a rushable
-                          order off DTF. The box shows the same, so the total on
-                          screen is the total saved. */
-                       const mt = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
-                       return RUSH.rushAllowed((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional).map((it) => ({
-                         product: !!it.product_id,
-                         titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
-                       }))) ? '1' : '';
-                     })()}" data-was-slow="${(() => {
-                       /* Whether the saved order was embroidery or 50+ pieces: the
-                          save keeps a rush only while that is unchanged too. */
-                       const mt = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
-                       return RUSH.slowOrder((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional).map((it) => ({
-                         product: !!it.product_id,
-                         qty: parseInt(it.qty, 10) || 0,
-                         titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
-                       }))) ? '1' : '';
-                     })()}"
+                          while the date is unchanged, unless they made a rushable
+                          order one that cannot be rushed. The box shows the same, so
+                          the total on screen is the total saved. */
+                       RUSH.rushAllowed((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional)
+                         .map((it) => rushLineOf(it, catalog))) ? '1' : ''}" data-was-kind="${
+                       /* Which rush rule the saved order took (50+, embroidery or
+                          the usual): the save keeps a rush only while that is
+                          unchanged too. */
+                       RUSH.rushKind((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional)
+                         .map((it) => rushLineOf(it, catalog)))}"
                      style="width:80px;padding:5px 6px;font-size:13px" placeholder="0">
               <span style="font-size:13px;color:#6b7280">% &middot;</span>
               <span id="rushwhy" style="font-size:12px;color:#b45309"></span>
@@ -13295,27 +13338,40 @@ function productGroupOf(name) {
       var RUSH_TIERS = ${JSON.stringify(RUSH_TIERS)};
       var RUSH_RULE = ${JSON.stringify(RUSH_RULE)};
 
-      /* Business days between today and the requested date, the same count
-         rushPctFor() makes on the server. A date in the past counts as zero,
-         like today: too soon to take (owner, 2026-11-14). */
+      /* Open business days between now and the requested date, the same
+         count rushPctFor() makes on the server: the shop's calendar
+         (tools/lib/shop-days.js, shipped by its source), weekends and holidays
+         skipped, and from 3pm Chicago today no longer counts. A date in the
+         past counts as zero, like today: too soon to take (owner, 2026-11-14). */
+      var SHOP_TZ = ${JSON.stringify(SHOP_TZ)}, CUTOFF_MIN = ${CUTOFF_MIN};
+      ${SHOPDAYS.shopHolidays.toString()}
+      ${SHOPDAYS.shopClosed.toString()}
+      ${SHOPDAYS.shopAddDays.toString()}
+      ${SHOPDAYS.shopClock.toString()}
+      ${SHOPDAYS.shopStartDay.toString()}
+      ${SHOPDAYS.shopDaysUntil.toString()}
       function rushDaysUntil(v) {
-        if (!v) return null;
-        var end = new Date(v + 'T12:00:00');
-        if (isNaN(end.getTime())) return null;
-        var d = new Date(); d.setHours(12,0,0,0);
-        if (end <= d) return 0;
-        var n = 0;
-        while (d < end) {
-          d.setDate(d.getDate() + 1);
-          var wd = d.getDay();
-          if (wd !== 0 && wd !== 6) n++;
-        }
-        return n;
+        if (!v || isNaN(new Date(v + 'T00:00:00Z').getTime())) return null;
+        return shopDaysUntil(v, new Date(), CUTOFF_MIN, SHOP_TZ);
       }
 
-      /* The rule itself, shipped by its source (tools/lib/rush.js) so the
-         form and the save cannot part. */
+      /* The rules themselves, shipped by their source (tools/lib/rush.js) so
+         the form and the save cannot part. The patterns come from the server
+         as strings: a regex literal in this template would lose its
+         backslashes. */
+      var RUSHABLE = new RegExp(${JSON.stringify(RUSH.RUSHABLE.source)}, 'i');
+      var EMBROIDERY = new RegExp(${JSON.stringify(RUSH.EMBROIDERY.source)}, 'i');
+      var CUTOUT = new RegExp(${JSON.stringify(RUSH.CUTOUT.source)}, 'i');
+      var LARGE_QTY = ${RUSH.LARGE_QTY};
+      ${RUSH.methodRushable.toString()}
+      ${RUSH.lineRushable.toString()}
+      ${RUSH.rushAllowed.toString()}
+      ${RUSH.rushKind.toString()}
       ${RUSH.rushFor.toString()}
+      /* Each catalogue product that is a sign: 'signs365' (can be rushed) or
+         'sinalite' (cannot), as rushLineOf() reads it on the server. */
+      var RUSH_SIGN = ${JSON.stringify(Object.fromEntries((catalog.products || [])
+        .map((p) => [String(p.id), rushSignOf(p)]).filter((x) => x[1])))};
 
       /* Show the row only when a date has been asked for, and say WHY the
          number is what it is — "2 business days" is checkable, a bare 50% is
@@ -13328,42 +13384,29 @@ function productGroupOf(name) {
         if (!dateEl || !row || !box) return;
 
         var days = rushDaysUntil(dateEl.value);
-        /* Only DTF and embroidery can be rushed (tools/lib/rush.js): every
-           decoration picked on the form has to be one of them, and something
-           has to be picked. The save route makes a helper's rush 0 otherwise;
-           the owner may type one. */
-        /* Line by line, like the save (tools/lib/rush.js): every required line
-           with a garment or a method needs a method, and every method is DTF.
-           The pattern comes from the server as a string: a regex literal in
-           this template would lose its backslashes. */
-        var rushable = new RegExp(${JSON.stringify(RUSH.RUSHABLE.source)}, 'i');
+        /* Line by line, like the save (tools/lib/rush.js): only DTF,
+           embroidery, Signs365 signs and cutouts can be rushed. The save route
+           makes a helper's rush 0 otherwise; the owner may type one. */
         var lines = {};
         Array.prototype.forEach.call(document.querySelectorAll('select[name], input[name^="product"], input[name^="qty"]'), function (el) {
           var m = /^(?:product|qty|method2?|pr_m_[a-z]+?)([0-9]+)$/.exec(el.name || '');
           if (!m) return;
           var i = m[1], L = lines[i] || (lines[i] = { product: false, titles: [], qty: 0 });
-          if (/^product/.test(el.name)) { if (el.value) L.product = true; return; }
+          if (/^product/.test(el.name)) { if (el.value) { L.product = true; if (RUSH_SIGN[el.value]) L.sign = RUSH_SIGN[el.value]; } return; }
           if (/^qty/.test(el.name)) { L.qty = parseInt(el.value, 10) || 0; return; }
           if (el.value && el.selectedIndex >= 0) L.titles.push(el.options[el.selectedIndex].text);
         });
         var real = Object.keys(lines).filter(function (i) {
           var opt = document.querySelector('[name="optional' + i + '"]');
-          return !(opt && opt.checked) && (lines[i].product || lines[i].titles.length);
-        });
-        var dtfOnly = real.length > 0 && real.every(function (i) {
-          return lines[i].titles.length > 0 && lines[i].titles.every(function (t) { return rushable.test(t); });
-        });
-        /* Embroidery or 50+ pieces on the required lines: 7 days, never
-           sooner than 3 (owner, 2026-11-14), as RUSH.slowOrder counts it. */
-        var embroidery = new RegExp(${JSON.stringify(RUSH.EMBROIDERY.source)}, 'i');
-        var pieces = 0, slow = false;
-        real.forEach(function (i) {
-          pieces += lines[i].qty || 0;
-          if (lines[i].titles.some(function (t) { return embroidery.test(t); })) slow = true;
-        });
-        if (pieces >= ${RUSH.LARGE_QTY}) slow = true;
-        var r = rushFor(days, RUSH_TIERS, slow, RUSH_RULE);
-        var pct = dtfOnly ? r.pct : 0;
+          return !(opt && opt.checked);
+        }).map(function (i) { return lines[i]; });
+        var rushOk = rushAllowed(real);
+        /* 50+ garment pieces or embroidery: 7 days, never sooner than 3, their
+           own steps (owner, 2026-11-16). */
+        var kind = rushKind(real);
+        var r = rushFor(days, RUSH_TIERS, kind, RUSH_RULE);
+        var pct = rushOk ? r.pct : 0;
+        var kindWords = kind === 'large' ? ' (50+ pieces)' : kind === 'embroidery' ? ' (embroidery)' : '';
 
         row.style.display = days === null ? 'none' : '';
         if (days === null) { box.value = ''; if (why) why.textContent = ''; calc(); return; }
@@ -13377,20 +13420,20 @@ function productGroupOf(name) {
            enforces it); the owner's box keeps whatever they typed. */
         if (fill && box.readOnly) {
           /* The save keeps the saved rush while the date is unchanged (unless a
-             rushable order was taken off DTF), so the box does too; otherwise
+             rushable order became one that cannot be rushed), so the box does too; otherwise
              the ladder's figure. Without this the screen showed the ladder and
              the save kept the owner's figure: two prices for one quote. */
           var keep = dateEl.dataset.saved !== undefined && dateEl.value === dateEl.dataset.saved
-            && (dtfOnly || box.dataset.wasRushable !== '1')
-            && (box.dataset.wasSlow === undefined || (box.dataset.wasSlow === '1') === slow);
+            && (rushOk || box.dataset.wasRushable !== '1')
+            && (box.dataset.wasKind === undefined || box.dataset.wasKind === kind);
           box.value = keep ? (box.dataset.saved || '') : (pct > 0 ? String(pct) : '');
         }
 
         if (why) {
           why.textContent = pct > 0
-            ? days + ' business days' + (slow ? ' (embroidery or 50+ pieces)' : '') + ' — ladder suggests ' + pct + '%'
-            : r.tooSoon ? 'too soon: no same-day or next-day orders' + (slow ? ', and embroidery or 50+ pieces need 3 business days' : '') + ': ask June about the date'
-            : !dtfOnly && r.pct > 0 ? 'only DTF and embroidery can be rushed: ask June about the date'
+            ? days + ' business days' + kindWords + ' — ladder suggests ' + pct + '%'
+            : r.tooSoon ? 'too soon: no same-day or next-day orders' + (kind ? ', and embroidery or 50+ pieces need 3 business days' : '') + ': ask June about the date'
+            : !rushOk && r.pct > 0 ? 'only DTF, embroidery, Signs365 signs and cutouts can be rushed: ask June about the date'
             : days + ' business days — no rush at this lead time';
         }
         calc();
@@ -14695,7 +14738,7 @@ ${uploadStatusScript()}
              and the quantity (50+ pieces have their own steps). */
           document.addEventListener('change', function (e) {
             var n = e.target && e.target.name || '';
-            if (/^(method|pr_m_|qty[0-9])/.test(n)) rushSync(true);
+            if (/^(method|pr_m_|qty[0-9]|product[0-9])/.test(n)) rushSync(true);
           });
         }
         /* Remove clears the fee AND remembers that it was cleared, so editing
@@ -15764,18 +15807,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     let rushPct = Number(one(b.rush_pct));
     if (!Number.isFinite(rushPct) || rushPct < 0) rushPct = 0;
     rushPct = Math.min(rushPct, RUSH_MAX_PCT);
-    /* Only DTF and embroidery can be rushed (tools/lib/rush.js). The owner may
-       still type a rush on anything; a helper's is 0 unless every required
-       line can be rushed. */
-    const methodTitle = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
-    const rushLines = items.filter((it) => !it.optional).map((it) => ({
-      product: !!it.product_id,
-      qty: parseInt(it.qty, 10) || 0,
-      titles: [...new Set([...(it.prints || []).map((p) => p.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
-    }));
+    /* Only DTF, embroidery, Signs365 signs and cutouts can be rushed
+       (tools/lib/rush.js). The owner may still type a rush on anything; a
+       helper's is 0 unless every required line can be rushed. */
+    const rushLines = items.filter((it) => !it.optional).map((it) => rushLineOf(it, catalog));
     const rushOk = RUSH.rushAllowed(rushLines);
-    /* Embroidery or 50+ pieces: 7 days, never sooner than 3 (owner, 2026-11-14). */
-    const rushSlow = RUSH.slowOrder(rushLines);
+    /* 50+ pieces or embroidery: 7 days, never sooner than 3, their own steps. */
+    const rushKind = RUSH.rushKind(rushLines);
     /* RUSH IS LOCKED FOR HELPERS (owner, 2026-10-08: "lock rush. keep open for
        me to override"). Without quotes.price a helper's rush is what the
        needed-by date earns on the ladder; whatever was typed is replaced, not
@@ -15793,30 +15831,27 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         /* A rush kept from before is dropped when this helper took the order
            off DTF since: it was rushable then and is not now. An owner's
            figure on an order that was never rushable stays. */
-        const wasLines = was ? (Array.isArray(was.items) ? was.items : []).filter((it) => it && !it.optional).map((it) => ({
-          product: !!it.product_id,
-          qty: parseInt(it.qty, 10) || 0,
-          titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
-        })) : [];
+        const wasLines = was ? (Array.isArray(was.items) ? was.items : []).filter((it) => it && !it.optional)
+          .map((it) => rushLineOf(it, catalog)) : [];
         const wasRushOk = was ? RUSH.rushAllowed(wasLines) : false;
         /* Embroidery added or the order crossing 50 pieces (or back) changes
            its ladder, so a kept rush would be the wrong one (code review). */
-        const wasSlow = was ? RUSH.slowOrder(wasLines) : false;
+        const wasKind = was ? RUSH.rushKind(wasLines) : '';
         /* Owner, 2026-11-14: no same-day or next-day orders (3 days for
            embroidery or 50+ pieces). A helper cannot quote such a date; the
            owner still can, since rush is the owner's call. */
-        if (wantDate && RUSH.rushFor(businessDaysUntil(wantDate), RUSH_TIERS, rushSlow, RUSH_RULE).tooSoon
+        if (wantDate && RUSH.rushFor(businessDaysUntil(wantDate), RUSH_TIERS, rushKind, RUSH_RULE).tooSoon
             && !(was && wasDate === wantDate)) {
           return res.status(400).send(quotePage('That date is too soon', `
         <div class="card">
-          <div class="warn">Nothing was saved — we do not take same-day or next-day orders${rushSlow ? ', and embroidery or orders of 50 or more pieces need at least 3 business days' : ''}.</div>
+          <div class="warn">Nothing was saved — we do not take same-day or next-day orders${rushKind ? ', and embroidery or orders of 50 or more pieces need at least 3 business days' : ''}.</div>
           <p class="muted" style="margin-top:8px">Pick a later needed-by date, or ask June about this one.</p>
           <p style="margin-top:12px"><a class="btn" href="${backTo}">Go back</a></p>
         </div>`));
         }
-        rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk) && rushSlow === wasSlow)
+        rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk) && rushKind === wasKind)
           ? Math.max(0, Number(was.rush_pct || 0))
-          : (wantDate && rushOk ? rushPctFor(wantDate, undefined, rushSlow) : 0);
+          : (wantDate && rushOk ? rushPctFor(wantDate, undefined, rushKind) : 0);
       }
     }
     const rush = round2(subtotal * rushPct / 100);
@@ -42630,7 +42665,7 @@ async function examOpenFor(actor) {
 async function finishExamAttempt(res, sc, { items, total, rushPct, catalog, neededBy }) {
   const actor = currentActor() || OWNER_ACTOR;
   if (!(await examOpenFor(actor))) return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
-  const r = QEXAM.grade(sc, items, rushPct, catalog, { chosen: neededBy, expected: addBusinessDays(new Date(), sc.businessDays).toISOString().slice(0, 10) });
+  const r = QEXAM.grade(sc, items, rushPct, catalog, { chosen: neededBy, expected: SHOPDAYS.shopDateAfter(sc.businessDays, new Date(), CUTOFF_MIN, SHOP_TZ) });
   if (actor.kind === 'staff') {
     await pool.query(
       `INSERT INTO staff_exam_attempts (staff_id, exam_key, scenario, passed, checks, items, total)
