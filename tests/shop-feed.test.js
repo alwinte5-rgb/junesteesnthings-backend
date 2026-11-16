@@ -130,6 +130,7 @@ function runPageScript(feed, attrs = {}, extra = {}) {
   /* Enough of an element for the dots: attributes, classes, closest(), and the
      events the colour swap listens for (2026-10-19). */
   const el = (o) => Object.assign(o, {
+    addEventListener() {},
     getAttribute(k) { return this[k] === undefined ? null : this[k]; }, setAttribute(k, v) { this[k] = String(v); },
     removeAttribute(k) { delete this[k]; },
     classList: { on: new Set(), toggle(c, v) { if (v) this.on.add(c); else this.on.delete(c); } },
@@ -160,7 +161,7 @@ function runPageScript(feed, attrs = {}, extra = {}) {
   const store = { jt_shop_feed6: JSON.stringify({ at: Date.now(), d: feed }) };
   const on = {};
   vm.runInNewContext(src, {
-    window: { fetch: () => { throw new Error('should use the cached feed'); } },
+    window: { fetch: (url) => { assert.strictEqual(url, '/api/design-library'); const sync = v => ({ then(fn) { return sync(fn(v)); }, catch() { return this; } }); return sync({ ok: true, json: () => ({ok:true, items: (extra.designs || feed.readymades || []).map(r => ({kind:'readymade',...r}))}) }); } },
     document: { querySelectorAll: () => cards,
       getElementById: (id) => (extra.byId || {})[id] || null,
       querySelector: (q) => (extra.query || {})[q] || null,
@@ -181,12 +182,12 @@ function runPageScript(feed, attrs = {}, extra = {}) {
 
 test('the "Ready-made designs" link shows only while the designer lists one', () => {
   const link = { hidden: true };
-  runPageScript({ categories: [{ name: 'Ready-Made Designs', image: 'https://x/y.jpg', link: D + 'ready-made.php' }], best: [], products: [] }, {}, { byId: { 'jt-rm-link': link } });
+  runPageScript({ categories: [{ name: 'Ready-Made Designs', image: 'https://x/y.jpg', link: D + 'ready-made.php' }], best: [], products: [] }, {}, { byId: { 'jt-rm-link': link }, designs: [{kind:'readymade',name:'Design',image:'https://x/a.png',link:D+'editor.php?product_base=12&readymade=7'}] });
   assert.strictEqual(link.hidden, false);
   runPageScript({ categories: [{ name: 'T-Shirts', image: 'https://x/y.jpg', link: D + 'products.php?category_id=52' }], best: [], products: [] }, {}, { byId: { 'jt-rm-link': link } });
   assert.strictEqual(link.hidden, true, 'gone again once none is live');
   const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  assert.match(html, /id="jt-rm-link" href="https:\/\/design\.jtees\.net\/ready-made\.php"[^>]* hidden>/, 'starts hidden in the page');
+  assert.match(html, /id="jt-rm-link" href="\/shop-designs"[^>]* hidden>/, 'starts hidden in the page');
   assert.strictEqual(cleanShopFeed({ ok: true, best: [], categories: [{ name: 'Ready-Made Designs', image: 'https://x/y.jpg', link: D + 'ready-made.php', from_price: 20 }] })
     .categories[0].link, D + 'ready-made.php', 'the server keeps the card');
 });

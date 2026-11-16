@@ -11623,6 +11623,7 @@ const ADMIN_NAV = [
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
   { key: 'myschedule', href: '/admin/work-schedule', label: 'My schedule', icon: 'clock', staffOnly: true },
+  { key: 'design-library', href: '/admin/design-library', label: 'Design library', icon: 'layers' },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
   { key: 'tasks',      href: '/admin/tasks',         label: 'Tasks',      icon: 'check' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
@@ -22736,6 +22737,13 @@ const studioFetch = (url, init) => fetch(url, Object.assign({}, init, {
   ),
   signal: AbortSignal.timeout((init && init.timeoutMs) || 8000),
 }));
+
+require('./tools/lib/design-library').registerDesignLibrary(app, {
+  requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
+  requireInternalKey, notifyAdd, sendEmail, NOTIFY_EMAIL, pool, rawBody: express.raw,
+  invalidate: () => { _shopCache.at = 0; },
+});
+app.get('/shop-designs', (_req, res) => res.sendFile(require('path').join(__dirname, 'public', 'shop-designs.html')));
 
 async function fetchPromoCodes() {
   if (!process.env.JT_INTERNAL_KEY) return { codes: [], error: 'JT_INTERNAL_KEY not set' };
