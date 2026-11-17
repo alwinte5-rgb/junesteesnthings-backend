@@ -12,7 +12,7 @@ AI controls expose pause/resume, aggregate daily usage and a site attempt cap. T
 
 `/admin/design-requests` consolidates unquoted change requests and existing quote/art/proof states. It links to the existing assignment, files, messages, proofs and payment controls. It does not create duplicate job records or release work around the existing approval/payment gate. Library approval email respects notification preferences and shares the sweep's atomic email claim.
 
-Validation includes authorization/refusal cases, query validation, upstream failure/conflict handling, exact cents, pagination across the full inventory, categorization, private storage and AI limits. Existing print-area regressions cover source preservation, scaled colorways, conflict refusal and idempotence. Actual font import in Affinity, unsupported decoration calculation types, and creating entirely new product structures remain manual/original-editor operations. Existing ready-made templates still need artwork-only previews before publication.
+Validation includes authorization/refusal cases, query validation, upstream failure/conflict handling, exact cents, pagination across the full inventory, categorization, private storage and AI limits. Existing print-area regressions cover source preservation, scaled colorways, conflict refusal and idempotence. Andrea confirmed the editable PDF works in Affinity on November 17. Unsupported specialized decoration calculations and new full product structures use explicitly linked original-editor tools; routine management remains in jtees admin. Existing ready-made templates still need artwork-only previews before publication.
 
 Implementation follows the existing Lumise category/reference tables and authenticated backend proxy. A search of GitHub and Reddit found compatible category-based Lumise integrations, but no suitable drop-in management extension for this standalone PHP installation. No new runtime dependencies or schema migrations were introduced.
 
@@ -23,7 +23,7 @@ Both services reached successful deployments. The live organizer sorted 4,281 cl
 
 Checked the 520-product management list, the Gildan 5000 sizes and front/chest/back print areas, decoration pricing, the empty custom-font state, five-request AI screen, design-request queue, and gallery collection filtering. A School & Teachers graphic opened directly on its exact default product in the designer without automatic onboarding/popups. Design-approval email was enabled and its saved state verified. No customer order, payment or sample design request was submitted during these checks.
 
-The old Design Ideas URL resolves to the customer gallery. Ready-made templates remain subject to artwork-preview preparation and owner publication. Affinity PDF import/font matching still needs an actual production-file check.
+The old Design Ideas URL resolves to the customer gallery. Ready-made templates remain subject to artwork-preview preparation and owner publication. Andrea confirmed Affinity editable PDF import works.
 
 ![Verified customer collection gallery](verification/sorted-clipart-gallery.jpg)
 
@@ -46,3 +46,24 @@ Created implementation files in this workspace:
 - /workspace/scratch/d5107195d3b6/designer/jt-controls.php
 - /workspace/scratch/d5107195d3b6/designer/tests/controls.test.php
 - /workspace/scratch/d5107195d3b6/designer/tests/controls-mysql.test.php
+
+
+## Artwork workspace and navigation completion
+
+`/admin/artwork` uses the existing `art.work` staff permission. It shows company library artwork and direct links to assigned jobs, the designer, template/ready-made/clipart filters, name review and missing previews. Eleazr’s live staff profile already has `art.work` and `jobs.design` enabled; no staff permission changes or owner credentials are needed. Pricing, publication, AI settings and full product setup remain owner-only. Staff source/name/preview writes are draft-only and the proxy enforces that restriction independently of the browser. Private notes, submitter emails, prices and master-file metadata are excluded from the workspace feed.
+
+The owner menu now includes a Designs & studio section with direct links to Artwork workspace, Design Library, Design requests, Designer controls, Products & print areas, Decoration pricing, Fonts, Collections & clipart, AI usage and Upload artwork. Library filters and the advanced existing product/pricing/font tools are visible links too.
+
+Missing previews can be prepared sequentially without paid AI calls. It uses the existing Fabric renderer, validates source paths and PNGs, preserves saved screenshots and prices, and reports blank/corrupt/unsupported artwork for attention. It does not automatically approve a draft.
+
+Validation: 145 selected backend checks pass, including route registration, staff roles, redaction, draft enforcement, conflicts, navigation and gallery rules. Nineteen bridge checks exercise the real PHP endpoint in isolated child processes, including missing keys, traversal, live-art refusal, populated-side selection and legacy encoding. Full designer CI and its MySQL integration passed.
+
+Delivery branch `radar/design-navigation-access`: backend PR https://github.com/alwinte5-rgb/junesteesnthings-backend/pull/558 and designer PR https://github.com/alwinte5-rgb/lumise-designer/pull/264, both merged.
+
+Additional created files:
+
+- /workspace/scratch/d5107195d3b6/backend/tools/lib/artwork-workspace.js
+- /workspace/scratch/d5107195d3b6/backend/public/assets/js/artwork-workspace.js
+- /workspace/scratch/d5107195d3b6/backend/tests/artwork-workspace.test.js
+- /workspace/scratch/d5107195d3b6/designer/jt-artwork.php
+- /workspace/scratch/d5107195d3b6/designer/tests/artwork-bridge.test.php

@@ -1,6 +1,7 @@
 (function(){
  'use strict';
  const root=document.getElementById('aw-content'),status=document.getElementById('aw-status'),owner=root.dataset.owner==='1',query=new URLSearchParams(location.search);
+ root.replaceChildren();
  let items=[],limit=24,batching=false,stopped=false;
  function el(tag,text,parent){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(parent)parent.appendChild(n);return n;}
  function link(parent,text,url){const a=el('a',text,parent);a.href=url;return a;}
@@ -22,7 +23,8 @@
  }
  async function renderArt(data,base){
   if(!window.fabric)throw Error('The designer renderer did not load. Reload and retry.');
-  const objects=objectList(data),z=data.limit_zone||{};
+  window.jtArtworkCompat.install(fabric);
+  const objects=window.jtArtworkCompat.objects(data),z=data.limit_zone||{};
   if(!objects.length||!(Number(z.width)>0)||!(Number(z.height)>0))throw Error('No artwork in this saved print area.');
   if(objects.some(o=>!fabric.util.getKlass(o.type)))throw Error('This design uses an object that needs the original designer.');
   // Match the existing editor renderer; never substitute a font silently.
