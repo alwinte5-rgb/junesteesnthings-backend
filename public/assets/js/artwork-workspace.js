@@ -1,6 +1,7 @@
 (function(){
  'use strict';
  const root=document.getElementById('aw-content'),status=document.getElementById('aw-status'),owner=root.dataset.owner==='1',query=new URLSearchParams(location.search);
+ root.replaceChildren();
  let items=[],limit=24,batching=false,stopped=false;
  function el(tag,text,parent){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(parent)parent.appendChild(n);return n;}
  function link(parent,text,url){const a=el('a',text,parent);a.href=url;return a;}
