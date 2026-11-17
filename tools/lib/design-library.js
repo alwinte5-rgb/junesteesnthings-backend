@@ -118,7 +118,7 @@ function registerDesignLibrary(app, d) {
       const data = await r.json(); if (!r.ok || !data.ok) return res.status(400).send(adminPage('Design settings', `<div class="card"><p>${esc(data.error || 'Could not save this design.')}</p><a href="/admin/design-library">Back to library</a></div>`, 'design-library'));
       cache=null; at=0; invalidate();
       if (b.action !== 'save') await pool.query("UPDATE notifications SET read_at=NOW() WHERE recipient='owner' AND kind='library' AND ref LIKE $1",[b.kind+'-'+b.id+':%']);
-      res.redirect(303,'/admin/design-library?saved=1#'+data.item.kind+'-'+b.id);
+      res.redirect(303,'/admin/design-library?saved=1&item='+encodeURIComponent(data.item.kind+'-'+b.id));
     } catch(e) { console.error('library save:',e.message); res.status(503).send('Could not confirm the save. Reload the design library to check before retrying.'); }
   });
   const masterEndpoint = 'https://design.jtees.net/jt-library-master.php';
@@ -164,3 +164,4 @@ function registerDesignLibrary(app, d) {
   });
 }
 module.exports = { cleanDesignCard, libraryPage, registerDesignLibrary };
+
