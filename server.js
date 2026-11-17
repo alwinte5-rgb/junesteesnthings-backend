@@ -5112,22 +5112,25 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   if (pick.badNumber) return sendOwnerSms('Not sent: that does not look like a full 10-digit number. Start with the number, e.g. 312 555 0199 then your message.');
   if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
   let to = pick.to;
-  if (pick.typed) {
+  if (pick.byNumber) {
     /* A number the owner typed (owner, 2026-11-17: "I want to be able to
-       contact who I want"). The same guards as CALL: never the shop or the
-       owner, never a premium or overseas line. Filed on their latest job when
-       they have one, so the job page shows it. */
+       contact who I want"). The same guards as CALL, for every typed number:
+       never the shop or the owner, never a premium or overseas line. */
     const shop = normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || '');
-    if (to.phone === normalizeUsPhone(process.env.TWILIO_TO_NUMBER || '') || to.phone === shop) {
+    const typed = normalizeUsPhone(to.phone);
+    if (typed === normalizeUsPhone(process.env.TWILIO_TO_NUMBER || '') || typed === shop) {
       return sendOwnerSms('Not sent: that is your own number.');
     }
-    if (!VOICE.callable(to.phone)) return sendOwnerSms(`Not sent: ${VOICE.pretty(to.phone)} is a premium-rate or overseas number. Text them from your phone if you mean to.`);
+    if (!VOICE.callable(typed)) return sendOwnerSms(`Not sent: ${VOICE.pretty(typed)} is a premium-rate or overseas number. Text them from your phone if you mean to.`);
+  }
+  if (pick.typed) {
+    /* Nobody on file from their texts: filed on their latest job when they
+       have one, so the job page shows it. */
     const job = await pool.query(
-      `SELECT code, name FROM quotes
-        WHERE length(regexp_replace(COALESCE(phone,''), '\\D', '', 'g')) >= 10
-          AND right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = right($1, 10)
-        ORDER BY created_at DESC LIMIT 1`, [to.phone.replace(/\D/g, '')])
-      .then((r) => r.rows[0] || null).catch(() => null);
+      `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`,
+      [to.phone.replace(/\D/g, '').slice(-10)])
+      .then((r) => r.rows[0] || null)
+      .catch((e) => { console.error('typed number job lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
     if (job) to = { ...to, quote_code: job.code, name: job.name || '' };
   }
   const code = RELAY.codeOf(to);

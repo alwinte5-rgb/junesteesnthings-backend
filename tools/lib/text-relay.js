@@ -46,10 +46,15 @@ function parseNumber(text) {
   const rest = t.slice(lead.length);
   const run = /^[+(]?\d[\d\s().+-]*/.exec(rest);
   if (!run) return null;
-  const digits = run[0].replace(/\D/g, '');
-  if (digits.length < 7) return null;
   const m = /^(?:\+?1[\s.-]?)?\(?([2-9]\d{2})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})(?!\d)[\s:,.-]*([\s\S]*)$/.exec(rest);
-  if (!m) return { bad: true };
+  if (!m) {
+    /* Shaped like a phone number with a digit short or extra (312 555 012):
+       refused, never sent to the last texter. Counts, prices and dates are
+       not that shape ("450.00 - 50.00 deposit", "2026-11-20 works") and stay
+       messages. */
+    const nearMiss = /^(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{2,5}$/.test(run[0].trim());
+    return nearMiss ? { bad: true } : null;
+  }
   return { phone: '+1' + m[1] + m[2] + m[3], body: m[4].trim() };
 }
 
@@ -63,7 +68,7 @@ const last10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
  * stay a word). A leading phone number wins over everything: it goes to
  * that number, with the customer's forward when they have one, else
  * { phone } alone (typed: true).
- * Returns { to, body, typed? } | { badNumber: true } | { ask: [forward, ...] } | { none: true }.
+ * Returns { to, body, byNumber?, typed? } | { badNumber: true } | { ask: [forward, ...] } | { none: true }.
  */
 function pickTarget(forwards, text, codeRe, now = Date.now()) {
   const all = forwards || [];
@@ -71,7 +76,9 @@ function pickTarget(forwards, text, codeRe, now = Date.now()) {
   if (num && num.bad) return { badNumber: true };
   if (num) {
     const known = all.find((f) => last10(f.phone) === last10(num.phone));
-    return { to: known || { phone: num.phone, quote_code: null, lead_id: null, name: '' }, body: num.body, typed: !known };
+    /* byNumber: the server checks every typed number (not the shop, not the
+       owner, not premium), known or not. typed: nobody on file yet. */
+    return { to: known || { phone: num.phone, quote_code: null, lead_id: null, name: '' }, body: num.body, byNumber: true, typed: !known };
   }
   const { code, body } = parseReply(text, codeRe);
   if (code) {

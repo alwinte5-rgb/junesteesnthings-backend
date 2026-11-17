@@ -294,7 +294,7 @@ test('server: callbacks only from the owner, once per text; text-back respects c
 });
 
 test('server: CALL dials any US number, never premium or Caribbean ones', () => {
-  for (const n of ['+13125550199', '+17875550199', '+14165550199']) assert.equal(V.callable(n), true, n);
+  for (const n of ['+13125550199', '+15305550142', '+17875550199', '+14165550199']) assert.equal(V.callable(n), true, n);
   for (const n of ['+19005550199', '+18765550199', '+17005550123', '+15335550123', '+14565550123', '+18095550199', '+13129765555', '+1312555019', '+442071234567', '']) {
     assert.equal(V.callable(n), false, n);
   }

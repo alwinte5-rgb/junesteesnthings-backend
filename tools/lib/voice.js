@@ -249,10 +249,11 @@ function parseBlockCommand(text) {
 /* Area codes on the +1 plan that are not the US or Canada (the Caribbean and
    Bermuda: one-ring scam territory, billed like overseas calls), 900 premium
    lines, and the non-geographic codes (5XX personal numbers, 456, 700) that
-   can be billed by the carrier; 976 is a premium exchange in any area code. */
+   can be billed by the carrier; 976 is a premium exchange in any area code.
+   Not 530: that is Northern California, a real area code (code review). */
 const NOT_US = new Set(['242', '246', '264', '268', '284', '345', '441', '473', '649', '658', '664', '721',
   '758', '767', '784', '809', '829', '849', '868', '869', '876', '900', '456', '500', '700',
-  '521', '522', '523', '524', '525', '526', '527', '528', '529', '530', '531', '532', '533', '544', '566', '577', '588']);
+  '521', '522', '523', '524', '525', '526', '527', '528', '529', '531', '532', '533', '544', '566', '577', '588']);
 
 /* Whether the shop number may dial `to` (+1XXXXXXXXXX) for the owner. */
 function callable(to) {
