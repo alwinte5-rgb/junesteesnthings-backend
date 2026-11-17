@@ -19,7 +19,7 @@ Implementation follows the existing Lumise category/reference tables and authent
 
 ## Verified live on November 17, 2026
 
-Both services reached successful deployments. The live organizer sorted 4,281 clipart records; 4,279 remain publicly active. The complete admin inventory contains 4,466 designs and cliparts. There are 28 collections, with 1,683 generic/unclear names flagged for review; 97 sit in Other Clipart. Original memberships, source files, and existing visibility are retained.
+Both services reached successful deployments. The live organizer sorted 4,281 clipart records; 4,279 remain publicly active. The complete admin inventory contains 4,466 designs and cliparts. Collection filters are available throughout the gallery and admin library; 1,683 generic/unclear names are flagged for review, and 97 records sit in Other Clipart. Original memberships, source files, and existing visibility are retained.
 
 Checked the 520-product management list, the Gildan 5000 sizes and front/chest/back print areas, decoration pricing, the empty custom-font state, five-request AI screen, design-request queue, and gallery collection filtering. A School & Teachers graphic opened directly on its exact default product in the designer without automatic onboarding/popups. Design-approval email was enabled and its saved state verified. No customer order, payment or sample design request was submitted during these checks.
 
