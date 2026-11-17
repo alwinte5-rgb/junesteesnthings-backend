@@ -5108,10 +5108,33 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
     `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
       WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC LIMIT 50`);
   const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE);
-  if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. To answer an older one, start with their code, e.g. AB12CD then your message, or use the job page.');
+  if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. Start with their number or code, e.g. 312 555 0199 or AB12CD, then your message.');
+  if (pick.badNumber) return sendOwnerSms('Not sent: that does not look like a full 10-digit number. Start with the number, e.g. 312 555 0199 then your message.');
   if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
-  const to = pick.to;
-  const label = `${to.name || 'the ' + String(to.phone).slice(-4) + ' number'} (${RELAY.codeOf(to)})`;
+  let to = pick.to;
+  if (pick.byNumber) {
+    /* A number the owner typed (owner, 2026-11-17: "I want to be able to
+       contact who I want"). The same guards as CALL, for every typed number:
+       never the shop or the owner, never a premium or overseas line. */
+    const shop = normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || '');
+    const typed = normalizeUsPhone(to.phone);
+    if (typed === normalizeUsPhone(process.env.TWILIO_TO_NUMBER || '') || typed === shop) {
+      return sendOwnerSms('Not sent: that is your own number.');
+    }
+    if (!VOICE.callable(typed)) return sendOwnerSms(`Not sent: ${VOICE.pretty(typed)} is a premium-rate or overseas number. Text them from your phone if you mean to.`);
+  }
+  if (pick.typed) {
+    /* Nobody on file from their texts: filed on their latest job when they
+       have one, so the job page shows it. */
+    const job = await pool.query(
+      `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`,
+      [to.phone.replace(/\D/g, '').slice(-10)])
+      .then((r) => r.rows[0] || null)
+      .catch((e) => { console.error('typed number job lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
+    if (job) to = { ...to, quote_code: job.code, name: job.name || '' };
+  }
+  const code = RELAY.codeOf(to);
+  const label = `${to.name || VOICE.pretty(normalizeUsPhone(to.phone) || to.phone)}${code ? ` (${code})` : ''}`;
   const words = smsPlain(String(pick.body).replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 600);
   if (!words && !ownerMedia.length) return sendOwnerSms(`Not sent to ${label}: the message was empty.`);
   const pics = ownerMedia.length ? await saveTextMedia(ownerMedia, to.quote_code || null) : [];
@@ -5128,7 +5151,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
     await pool.query(`UPDATE sms_messages SET status = 'sent', twilio_sid = $2 WHERE id = $1`, [row.id, tsid]);
   } catch (err) {
     await pool.query(`UPDATE sms_messages SET status = 'failed', error = $2 WHERE id = $1`, [row.id, String(err.message).slice(0, 300)]);
-    console.error(`owner reply to ${RELAY.codeOf(to)} failed:`, err.message);
+    console.error(`owner reply to ${code || 'a typed number'} failed:`, err.message);
     return sendOwnerSms(`Not sent to ${label}: ${err.twilioCode === 21610 ? 'they have texted STOP' : 'the text service refused it'}. Try the job page or call them.`);
   }
   if (to.lead_id) {
@@ -5136,7 +5159,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
       [to.lead_id, `You replied: ${words}`]).catch(() => {});
     await markLeadResponded(to.lead_id, null);
   }
-  console.log(`owner reply sent to ${RELAY.codeOf(to)}`);
+  console.log(`owner reply sent to ${code || 'a typed number'}`);
   return sendOwnerSms(`Sent to ${label}.`);
 }
 
@@ -9950,6 +9973,59 @@ function rushPctFor(neededBy, from, kind) {
 const RUSH_RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS,
   embroideryTiers: RUSH.EMBROIDERY_TIERS };
 
+/* Top level, not inside the quote form handler: rushSignOf() below reads
+   SIZED_BY_NAME_RE, and while it was declared inside that handler every
+   quote form load threw "SIZED_BY_NAME_RE is not defined" and hung (#551). */
+/* The product list is 180-odd rows and was one flat alphabetical run, so
+   finding a hoodie meant scrolling past every cap in the catalogue. Grouped
+   into <optgroup>s by what the thing IS, which the browser renders as headed
+   sections and keyboard search still walks normally.
+
+   Matched on the NAME, in order, first hit wins — so the order below is the
+   rule, not just a display preference. "Long-Sleeve Twill Shirt" has to reach
+   Woven Shirts rather than Long Sleeve, and an infant bodysuit has to reach
+   Youth before anything else claims it. The supplier's own naming is all
+   there is to go on; the catalogue carries no category field. */
+const PRODUCT_GROUPS = [
+  /* No bare "canvas" here, and no bare "sign". Both looked obvious and both
+     were wrong: "canvas" swept in the whole Bella+Canvas range and every
+     canvas tote — thirteen shirts filed under Signs — because a brand name
+     and a material share a word. Match on what only a sign is called. */
+  /* Things BOUGHT PRINTED (Signs365, SinaLite) come first, split four ways
+     (owner, 2026-10-15) so the Category picker on a quote line keeps the
+     product list short. A group marked 'sized' is one whose NAMES are only ever
+     bought-printed goods, so the quote form gives them the sizer by name
+     (SIZED_BY_NAME_RE). Labels and drinkware are not: the shop decorates its
+     own mugs and stickers, so a SinaLite one is recognised by its exact
+     catalogue name instead (quote-signs.js signKindOf). No bare "label": tee
+     names carry "Tear Away Label"; no bare "pouch" or "bottle": hoodies have a
+     "Pouch Pocket" and bags a "Bottle Pocket". */
+  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i, 'sized'],
+  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i, 'sized'],
+  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?![\s-]*pocket)/i],
+  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?![\s-]*(?:pocket|holder|sleeve))/i],
+  ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
+  ['Scrubs',                  /scrub/i],
+  /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
+     "Legend Pullover" is a sweatshirt — the zip is what decides, so it has to
+     be asked about first. */
+  ['Quarter-Zips',            /quarter[-\s]?zip|1\/4[-\s]?zip/i],
+  ['Hoodies & Sweatshirts',   /hood|sweatshirt|fleece|crewneck|pullover/i],
+  ['Polos',                   /polo/i],
+  ['Woven Shirts',            /twill|oxford|broadcloth|flannel|work shirt|button[-\s]?down|utility shirt|shoreline|dress shirt/i],
+  ['Tanks',                   /tank/i],
+  ['Long Sleeve',             /long[-\s]?sleeve/i],
+  ['T-Shirts',                /tee\b|t-shirt|tshirt/i],
+  ['Hats & Beanies',          /\bcap\b|\bhat\b|beanie|trucker|visor/i],
+  ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
+];
+
+/** One pattern for "this name is a sized, bought-printed item", from the
+ *  groups marked SIZED — a flag, not a position, so reordering the list
+ *  cannot turn youth tees into signs. */
+const SIZED_BY_NAME_RE = new RegExp(PRODUCT_GROUPS.filter((g) => g[2] === 'sized')
+  .map(([, re]) => '(?:' + re.source + ')').join('|'), 'i');
+
 /** Whether a sized kind is a SinaLite item or a Signs365 sign (deliveryEstimate's rule). */
 function rushSignOfKind(kind) {
   return kind === 'banner' || SIGN_FAMILIES.FAMILIES[kind] ? 'signs365' : 'sinalite';
@@ -12436,55 +12512,6 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
      `method_id` were being saved correctly the whole time; they were simply
      never read back. Everything downstream then priced from a line with no
      product and no method, which is why the totals collapsed to nothing. */
-/* The product list is 180-odd rows and was one flat alphabetical run, so
-   finding a hoodie meant scrolling past every cap in the catalogue. Grouped
-   into <optgroup>s by what the thing IS, which the browser renders as headed
-   sections and keyboard search still walks normally.
-
-   Matched on the NAME, in order, first hit wins — so the order below is the
-   rule, not just a display preference. "Long-Sleeve Twill Shirt" has to reach
-   Woven Shirts rather than Long Sleeve, and an infant bodysuit has to reach
-   Youth before anything else claims it. The supplier's own naming is all
-   there is to go on; the catalogue carries no category field. */
-const PRODUCT_GROUPS = [
-  /* No bare "canvas" here, and no bare "sign". Both looked obvious and both
-     were wrong: "canvas" swept in the whole Bella+Canvas range and every
-     canvas tote — thirteen shirts filed under Signs — because a brand name
-     and a material share a word. Match on what only a sign is called. */
-  /* Things BOUGHT PRINTED (Signs365, SinaLite) come first, split four ways
-     (owner, 2026-10-15) so the Category picker on a quote line keeps the
-     product list short. A group marked 'sized' is one whose NAMES are only ever
-     bought-printed goods, so the quote form gives them the sizer by name
-     (SIZED_BY_NAME_RE). Labels and drinkware are not: the shop decorates its
-     own mugs and stickers, so a SinaLite one is recognised by its exact
-     catalogue name instead (quote-signs.js signKindOf). No bare "label": tee
-     names carry "Tear Away Label"; no bare "pouch" or "bottle": hoodies have a
-     "Pouch Pocket" and bags a "Bottle Pocket". */
-  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i, 'sized'],
-  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i, 'sized'],
-  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?![\s-]*pocket)/i],
-  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?![\s-]*(?:pocket|holder|sleeve))/i],
-  ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
-  ['Scrubs',                  /scrub/i],
-  /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
-     "Legend Pullover" is a sweatshirt — the zip is what decides, so it has to
-     be asked about first. */
-  ['Quarter-Zips',            /quarter[-\s]?zip|1\/4[-\s]?zip/i],
-  ['Hoodies & Sweatshirts',   /hood|sweatshirt|fleece|crewneck|pullover/i],
-  ['Polos',                   /polo/i],
-  ['Woven Shirts',            /twill|oxford|broadcloth|flannel|work shirt|button[-\s]?down|utility shirt|shoreline|dress shirt/i],
-  ['Tanks',                   /tank/i],
-  ['Long Sleeve',             /long[-\s]?sleeve/i],
-  ['T-Shirts',                /tee\b|t-shirt|tshirt/i],
-  ['Hats & Beanies',          /\bcap\b|\bhat\b|beanie|trucker|visor/i],
-  ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
-];
-
-/** One pattern for "this name is a sized, bought-printed item", from the
- *  groups marked SIZED — a flag, not a position, so reordering the list
- *  cannot turn youth tees into signs. */
-const SIZED_BY_NAME_RE = new RegExp(PRODUCT_GROUPS.filter((g) => g[2] === 'sized')
-  .map(([, re]) => '(?:' + re.source + ')').join('|'), 'i');
 
 /** Staff-only services: design fees, folding. Never shown in the shop. */
 const SERVICE_GROUP = 'Services (not in shop)';
