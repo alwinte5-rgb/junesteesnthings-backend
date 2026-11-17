@@ -11700,6 +11700,13 @@ const ADMIN_NAV = [
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
   { key: 'myschedule', href: '/admin/work-schedule', label: 'My schedule', icon: 'clock', staffOnly: true },
   { key: 'studio-controls', href: '/admin/studio-controls', label: 'Designer controls', icon: 'edit' },
+  { key: 'artwork', href: '/admin/artwork', label: 'Artwork workspace', icon: 'edit' },
+  { key: 'studio-products', href: '/admin/studio-controls?tab=products', label: 'Products & print areas', icon: 'edit', ownerOnly: true },
+  { key: 'studio-pricing', href: '/admin/studio-controls?tab=pricing', label: 'Decoration pricing', icon: 'edit', ownerOnly: true },
+  { key: 'studio-fonts', href: '/admin/studio-controls?tab=fonts', label: 'Fonts', icon: 'edit', ownerOnly: true },
+  { key: 'studio-collections', href: '/admin/studio-controls?tab=collections', label: 'Collections & clipart', icon: 'edit', ownerOnly: true },
+  { key: 'studio-ai', href: '/admin/studio-controls?tab=ai', label: 'AI usage', icon: 'edit', ownerOnly: true },
+  { key: 'studio-uploads', href: '/admin/studio-controls?tab=uploads', label: 'Upload artwork', icon: 'edit', ownerOnly: true },
   { key: 'design-requests', href: '/admin/design-requests', label: 'Design requests', icon: 'layers' },
   { key: 'design-library', href: '/admin/design-library', label: 'Design library', icon: 'layers' },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
@@ -11752,7 +11759,8 @@ const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
   { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'notifications', 'tasks', 'mailbox', 'chat'] },
   { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers', 'softleads'] },
-  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','design-requests','design-library','studio-controls','orders','shipping','delivery','deliveryset'] },
+  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','orders','shipping','delivery','deliveryset'] },
+  { key: 'designs', label: 'Designs & studio', icon: 'edit', items: ['artwork','design-library','design-requests','studio-controls','studio-products','studio-pricing','studio-fonts','studio-collections','studio-ai','studio-uploads'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
   { key: 'team',      label: 'Team',      icon: 'team',   items: ['team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'agreement', 'hiring'] },
@@ -12118,7 +12126,7 @@ function navItemsFor(actor) {
   const staff = actor && actor.kind === 'staff' ? actor : null;
   return ADMIN_NAV.filter((n) => (!n.when || n.when()) && (staff
     /* Schedule is the no-prices view; whoever has the Production board uses that. */
-    ? !n.ownerOnly && STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
+    ? !n.ownerOnly && STAFF.mayUseRoute(staff, 'GET', n.href.split('?')[0]) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
     : !n.staffOnly));
 }
 
@@ -22767,6 +22775,7 @@ const studioFetch = (url, init) => fetch(url, Object.assign({}, init, {
   signal: AbortSignal.timeout((init && init.timeoutMs) || 8000),
 }));
 
+require('./tools/lib/artwork-workspace').registerArtworkWorkspace(app,{requireAdmin,isOwner,actorLevel,adminPage,pageHeader,esc:escEmail,studioFetch,rawBody:express.raw,invalidate:()=>{_shopCache.at=0;}});
 require('./tools/lib/studio-controls').registerStudioControls(app,{requireAdmin,isOwner,adminPage,pageHeader,esc:escEmail,studioFetch,rawBody:express.raw,pool,invalidate:()=>{_catCache.at=0;_shopCache.at=0;}});
 require('./tools/lib/design-library').registerDesignLibrary(app, {
   requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
