@@ -23,7 +23,8 @@
  }
  async function renderArt(data,base){
   if(!window.fabric)throw Error('The designer renderer did not load. Reload and retry.');
-  const objects=objectList(data),z=data.limit_zone||{};
+  window.jtArtworkCompat.install(fabric);
+  const objects=window.jtArtworkCompat.objects(data),z=data.limit_zone||{};
   if(!objects.length||!(Number(z.width)>0)||!(Number(z.height)>0))throw Error('No artwork in this saved print area.');
   if(objects.some(o=>!fabric.util.getKlass(o.type)))throw Error('This design uses an object that needs the original designer.');
   // Match the existing editor renderer; never substitute a font silently.
