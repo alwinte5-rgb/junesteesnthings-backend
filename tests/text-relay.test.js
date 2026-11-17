@@ -29,3 +29,27 @@ test('an unknown leading word is part of the message, and old forwards need a co
   assert.ok(R.pickTarget([old], 'ok', RE, NOW).none);
   assert.deepStrictEqual(R.pickTarget([old], 'AB12CD ok', RE, NOW), { to: old, body: 'ok' });
 });
+
+test('a leading phone number sends to that number, not the last texter (owner, 2026-11-17)', () => {
+  const sam = { phone: '+17735550199', quote_code: 'ZZ99ZZ', name: 'Sam', created_at: at(60 * 24 * 5) };
+  // Not anyone who texted: a typed number on its own.
+  assert.deepStrictEqual(R.pickTarget([kim], '312 555 0123 your shirts are ready', RE, NOW),
+    { to: { phone: '+13125550123', quote_code: null, lead_id: null, name: '' }, body: 'your shirts are ready', typed: true });
+  // Someone who texted before, even days ago: their forward, so it lands on their job.
+  assert.deepStrictEqual(R.pickTarget([kim, sam], 'To: (773) 555-0199 - ok', RE, NOW), { to: sam, body: 'ok', typed: false });
+  // Wins over the ten-minute clash, which would otherwise ask.
+  const close = { ...lead, created_at: at(8) };
+  assert.strictEqual(R.pickTarget([kim, close], 'text +1 312.555.0123: hi', RE, NOW).to.phone, '+13125550123');
+  // And works with nobody having texted at all.
+  assert.strictEqual(R.pickTarget([], '3125550123 hi', RE, NOW).to.phone, '+13125550123');
+});
+
+test('a number with a digit missing is refused, never sent to the last texter', () => {
+  assert.deepStrictEqual(R.pickTarget([kim], '312 555 012 hi', RE, NOW), { badNumber: true });
+  assert.deepStrictEqual(R.pickTarget([kim], '312-555-01234 hi', RE, NOW), { badNumber: true });
+});
+
+test('ordinary messages that start with a count are still messages', () => {
+  assert.deepStrictEqual(R.pickTarget([kim], '100 shirts are ready', RE, NOW), { to: kim, body: '100 shirts are ready' });
+  assert.deepStrictEqual(R.pickTarget([kim], 'Text me when you get here', RE, NOW), { to: kim, body: 'Text me when you get here' });
+});

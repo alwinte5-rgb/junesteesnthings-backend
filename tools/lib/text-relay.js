@@ -5,6 +5,10 @@
  * Every customer text is forwarded to the owner's phone from the shop number.
  * When the owner replies to it, the reply arrives at the shop number from the
  * owner's phone; this decides which customer it was meant for:
+ *   - a reply that starts with a phone number (773 555 0199, To: (773) 555-0199)
+ *     goes to that number, customer or not (owner, 2026-11-17: texts went to
+ *     the last texter although a number was given). A number with a digit
+ *     missing is refused, never guessed at;
  *   - a reply that starts with a job code (AB12CD...) or a lead code (L7) goes
  *     to that customer;
  *   - otherwise it goes to the customer whose text was forwarded last, within
@@ -32,15 +36,43 @@ function parseReply(text, codeRe) {
   return { code: '', body: t };
 }
 
+/** A leading US phone number, optionally after "to" or "text":
+ *  { phone: '+1XXXXXXXXXX', body } | { bad: true } for something that starts
+ *  like a number but is not a whole one | null when the text does not start
+ *  with a number ("100 shirts are ready" is a message). */
+function parseNumber(text) {
+  const t = String(text || '').trim();
+  const lead = /^(?:(?:to|text)\b[\s:,-]*)?/i.exec(t)[0];
+  const rest = t.slice(lead.length);
+  const run = /^[+(]?\d[\d\s().+-]*/.exec(rest);
+  if (!run) return null;
+  const digits = run[0].replace(/\D/g, '');
+  if (digits.length < 7) return null;
+  const m = /^(?:\+?1[\s.-]?)?\(?([2-9]\d{2})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})(?!\d)[\s:,.-]*([\s\S]*)$/.exec(rest);
+  if (!m) return { bad: true };
+  return { phone: '+1' + m[1] + m[2] + m[3], body: m[4].trim() };
+}
+
+const last10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
+
 /**
  * Who the owner's reply goes to, and what it says. `forwards` are forwards
  * from the last month, newest first: [{phone, quote_code, lead_id, name,
  * created_at}]. A leading word counts as a code only when it is the code of
  * one of those customers (job codes can be all letters, so "Thanks" must
- * stay a word). Returns { to, body } | { ask: [forward, ...] } | { none: true }.
+ * stay a word). A leading phone number wins over everything: it goes to
+ * that number, with the customer's forward when they have one, else
+ * { phone } alone (typed: true).
+ * Returns { to, body, typed? } | { badNumber: true } | { ask: [forward, ...] } | { none: true }.
  */
 function pickTarget(forwards, text, codeRe, now = Date.now()) {
   const all = forwards || [];
+  const num = parseNumber(text);
+  if (num && num.bad) return { badNumber: true };
+  if (num) {
+    const known = all.find((f) => last10(f.phone) === last10(num.phone));
+    return { to: known || { phone: num.phone, quote_code: null, lead_id: null, name: '' }, body: num.body, typed: !known };
+  }
   const { code, body } = parseReply(text, codeRe);
   if (code) {
     const hit = all.find((f) => codeOf(f) === code);
@@ -67,4 +99,4 @@ function askText(list) {
     list.map((f) => `${codeOf(f)} for ${f.name || 'the ' + String(f.phone).slice(-4) + ' number'}`).join(', ') + '.';
 }
 
-module.exports = { WINDOW_MS, CLASH_MS, codeOf, parseReply, pickTarget, askText };
+module.exports = { WINDOW_MS, CLASH_MS, codeOf, parseReply, parseNumber, pickTarget, askText };
