@@ -15,3 +15,34 @@ AI controls expose pause/resume, aggregate daily usage and a site attempt cap. T
 Validation includes authorization/refusal cases, query validation, upstream failure/conflict handling, exact cents, pagination across the full inventory, categorization, private storage and AI limits. Existing print-area regressions cover source preservation, scaled colorways, conflict refusal and idempotence. Actual font import in Affinity, unsupported decoration calculation types, and creating entirely new product structures remain manual/original-editor operations. Existing ready-made templates still need artwork-only previews before publication.
 
 Implementation follows the existing Lumise category/reference tables and authenticated backend proxy. A search of GitHub and Reddit found compatible category-based Lumise integrations, but no suitable drop-in management extension for this standalone PHP installation. No new runtime dependencies or schema migrations were introduced.
+
+
+## Verified live on November 17, 2026
+
+Both services reached successful deployments. The live organizer sorted 4,281 clipart records; 4,279 remain publicly active. The complete admin inventory contains 4,466 designs and cliparts. There are 28 collections, with 1,683 generic/unclear names flagged for review; 97 sit in Other Clipart. Original memberships, source files, and existing visibility are retained.
+
+Checked the 520-product management list, the Gildan 5000 sizes and front/chest/back print areas, decoration pricing, the empty custom-font state, five-request AI screen, design-request queue, and gallery collection filtering. A School & Teachers graphic opened directly on its exact default product in the designer without automatic onboarding/popups. Design-approval email was enabled and its saved state verified. No customer order, payment or sample design request was submitted during these checks.
+
+The old Design Ideas URL resolves to the customer gallery. Ready-made templates remain subject to artwork-preview preparation and owner publication. Affinity PDF import/font matching still needs an actual production-file check.
+
+![Verified customer collection gallery](verification/sorted-clipart-gallery.jpg)
+
+Merged delivery branches:
+
+- `radar/studio-admin-controls`: https://github.com/alwinte5-rgb/junesteesnthings-backend/pull/555 and https://github.com/alwinte5-rgb/lumise-designer/pull/262
+- `radar/full-library-inventory`: https://github.com/alwinte5-rgb/lumise-designer/pull/263
+- `radar/library-save-context`: https://github.com/alwinte5-rgb/junesteesnthings-backend/pull/556
+
+Created implementation files in this workspace:
+
+- /workspace/scratch/d5107195d3b6/backend/tools/lib/studio-controls.js
+- /workspace/scratch/d5107195d3b6/backend/public/assets/js/studio-controls.js
+- /workspace/scratch/d5107195d3b6/backend/public/assets/css/studio-controls.css
+- /workspace/scratch/d5107195d3b6/backend/tests/studio-controls.test.js
+- /workspace/scratch/d5107195d3b6/backend/docs/studio-admin-controls.md
+- /workspace/scratch/d5107195d3b6/backend/docs/verification/sorted-clipart-gallery.jpg
+- /workspace/scratch/d5107195d3b6/designer/jt-controls-settings.php
+- /workspace/scratch/d5107195d3b6/designer/jt-controls-lib.php
+- /workspace/scratch/d5107195d3b6/designer/jt-controls.php
+- /workspace/scratch/d5107195d3b6/designer/tests/controls.test.php
+- /workspace/scratch/d5107195d3b6/designer/tests/controls-mysql.test.php
