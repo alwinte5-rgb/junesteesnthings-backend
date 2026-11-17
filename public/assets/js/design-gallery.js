@@ -1,7 +1,8 @@
 (function(){
   'use strict';
   var grid=document.getElementById('dg-grid'),status=document.getElementById('dg-status'),search=document.getElementById('dg-search'),collection=document.getElementById('dg-collection');
-  var kind='design',items=[],stops=[];
+  var kind='design',items=[],stops=[],limit=48;
+  var more=document.createElement('button');more.type='button';more.className='dg-cta';more.textContent='Show more artwork';grid.parentNode.insertBefore(more,grid.nextSibling);more.onclick=function(){limit+=48;draw();};
   function el(tag,cls,text){var n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;}
   function card(r){
     var box=el('article','dg-card'),a=el('a','dg-art'),im=el('img');a.href=r.link;im.src=r.image;im.alt=r.name;im.loading='lazy';a.appendChild(im);box.appendChild(a);
@@ -23,10 +24,10 @@
   }
   function draw(){stops.forEach(function(s){s();});stops=[];grid.replaceChildren();var q=search.value.toLowerCase().trim(),c=collection.value;
     var list=items.filter(function(r){return(kind==='clipart'?r.kind==='clipart':r.kind!=='clipart')&&(!c||r.collection===c)&&(!q||(r.name+' '+r.collection).toLowerCase().indexOf(q)>-1);});
-    list.sort(function(a,b){return Number(b.featured)-Number(a.featured);});list.forEach(function(r){grid.appendChild(card(r));});
+    list.sort(function(a,b){return Number(b.featured)-Number(a.featured)||a.name.localeCompare(b.name,'en',{numeric:true});});more.hidden=limit>=list.length;list.slice(0,limit).forEach(function(r){grid.appendChild(card(r));});
     status.textContent=list.length?list.length+' '+(kind==='clipart'?'graphics':'designs'):'No matching designs yet. Try another search or ask us to create yours.';
   }
-  document.querySelectorAll('[data-kind]').forEach(function(b){b.onclick=function(){kind=b.dataset.kind;document.querySelectorAll('[data-kind]').forEach(function(t){t.setAttribute('aria-pressed',String(t===b));});draw();};});search.oninput=draw;collection.onchange=draw;
+  document.querySelectorAll('[data-kind]').forEach(function(b){b.onclick=function(){kind=b.dataset.kind;limit=48;document.querySelectorAll('[data-kind]').forEach(function(t){t.setAttribute('aria-pressed',String(t===b));});draw();};});search.oninput=function(){limit=48;draw();};collection.onchange=function(){limit=48;draw();};
   fetch('/api/design-library').then(function(r){if(!r.ok)throw Error();return r.json();}).then(function(d){if(!d.ok||!Array.isArray(d.items))throw Error();items=d.items;
     Array.from(new Set(items.map(function(r){return r.collection;}).filter(Boolean))).sort().forEach(function(c){var o=el('option',null,c);o.value=c;collection.appendChild(o);});draw();
   }).catch(function(){status.textContent='We couldn’t load the designs. Please refresh to try again, or contact us for help.';});

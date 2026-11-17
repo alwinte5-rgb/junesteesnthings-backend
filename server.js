@@ -296,8 +296,8 @@ app.use((req, res, next) => {
 
 // Grad season pages are retired — redirect old links home.
 app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
-// Design Ideas is replaced by the online Design Studio — permanent redirect.
-app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/products.php'));
+// One customer gallery for current links and old Design Ideas bookmarks.
+app.get(['/design-ideas.html','/design-ideas'], (_req,res)=>res.redirect(301,'/shop-designs'));
 /* A garment's page in the designer, on a jtees.net address: lead replies link
    garments this way because customers only ever see jtees.net (owner,
    2026-10-05). Whole numbers only, to a fixed host. */
