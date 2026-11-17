@@ -84,7 +84,7 @@ function registerDesignLibrary(app, d) {
         ${req.query.saved === '1' ? '<div class="ok">Saved and verified.</div>' : ''}
         <div class="card"><strong>${pending} awaiting approval</strong> · ${items.length} designs and cliparts
         <p>Existing screenshots are kept as mockups. Open a design and use “Prepare artwork preview” before publishing.</p>
-        <p><a href="/admin/studio-controls">Designer controls</a> · <a href="/admin/design-requests">Design requests and proofs</a> · <a href="/admin/notifications/settings">Notifications</a></p>
+        <nav class="sc-tabs" aria-label="Design library sections"><a href="/admin/artwork">Artwork workspace & batch previews</a><a href="/admin/design-library?kind=template">Templates</a><a href="/admin/design-library?kind=readymade">Ready-made designs & prices</a><a href="/admin/design-library?kind=clipart">Clipart</a><a href="/admin/design-library?status=submitted">Awaiting approval</a><a href="/admin/design-library?kind=clipart&amp;review=1">Clipart name review</a></nav><p><a href="/admin/studio-controls">Designer controls</a> · <a href="/admin/design-requests">Design requests and proofs</a> · <a href="/admin/notifications/settings">Notifications</a></p>
         <form method="get" action="/admin/design-library">${view.review?'<input type="hidden" name="review" value="1">':''}
         <label>Search artwork<input name="q" type="search" value="${esc(view.q)}" maxlength="100"></label>
         <label>Artwork type<select name="kind"><option value="">All artwork</option>${['template','readymade','clipart'].map(k=>`<option value="${k}"${view.kind===k?' selected':''}>${k}</option>`).join('')}</select></label>

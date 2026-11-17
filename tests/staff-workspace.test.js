@@ -33,7 +33,9 @@ function adminRoutes() {
   const out = [];
   const re = /app\.(get|post|put|patch|delete)\(\s*(\[[^\]]+\]|'[^']+'|FINANCES_PATH)\s*,\s*requireAdmin\b/g;
   let m;
-  while ((m = re.exec(src))) {
+  const modules=[...src.matchAll(/require\('(.\/tools\/lib\/[^']+)'\)\.register\w+\(app/g)].map(m=>fs.readFileSync(path.join(__dirname,'..',m[1]+'.js'),'utf8'));
+  const registered=[src,...modules].join('\n');
+  while ((m = re.exec(registered))) {
     let p = m[2];
     if (p === 'FINANCES_PATH') p = '/admin/finances';
     else if (p.startsWith('[')) p = p.slice(1, -1).split(',').map((x) => x.trim().replace(/^'|'$/g, '')).join('|');
@@ -309,7 +311,9 @@ test('a page reached around Cloudflare is sent to the guarded address, never to 
 test('every staff route lives under /admin, where Cloudflare guards it', () => {
   const re = /app\.(get|post|put|patch|delete)\(\s*(\[[^\]]+\]|'[^']+'|FINANCES_PATH)\s*,\s*requireAdmin\b/g;
   let m, n = 0;
-  while ((m = re.exec(src))) {
+  const modules=[...src.matchAll(/require\('(.\/tools\/lib\/[^']+)'\)\.register\w+\(app/g)].map(m=>fs.readFileSync(path.join(__dirname,'..',m[1]+'.js'),'utf8'));
+  const registered=[src,...modules].join('\n');
+  while ((m = re.exec(registered))) {
     const paths = m[2] === 'FINANCES_PATH' ? ['/admin/finances'] : m[2].replace(/[[\]']/g, '').split(',').map((x) => x.trim());
     for (const p of paths) { n++; assert.ok(p === '/admin' || p.startsWith('/admin/'), `${m[1]} ${p} is outside /admin`); }
   }
