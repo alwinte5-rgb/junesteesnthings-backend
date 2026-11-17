@@ -11623,6 +11623,8 @@ const ADMIN_NAV = [
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
   { key: 'myschedule', href: '/admin/work-schedule', label: 'My schedule', icon: 'clock', staffOnly: true },
+  { key: 'studio-controls', href: '/admin/studio-controls', label: 'Designer controls', icon: 'edit' },
+  { key: 'design-requests', href: '/admin/design-requests', label: 'Design requests', icon: 'layers' },
   { key: 'design-library', href: '/admin/design-library', label: 'Design library', icon: 'layers' },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
   { key: 'tasks',      href: '/admin/tasks',         label: 'Tasks',      icon: 'check' },
@@ -11674,7 +11676,7 @@ const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
   { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'notifications', 'tasks', 'mailbox', 'chat'] },
   { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers', 'softleads'] },
-  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
+  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','design-requests','design-library','studio-controls','orders','shipping','delivery','deliveryset'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
   { key: 'team',      label: 'Team',      icon: 'team',   items: ['team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'agreement', 'hiring'] },
@@ -22738,6 +22740,7 @@ const studioFetch = (url, init) => fetch(url, Object.assign({}, init, {
   signal: AbortSignal.timeout((init && init.timeoutMs) || 8000),
 }));
 
+require('./tools/lib/studio-controls').registerStudioControls(app,{requireAdmin,isOwner,adminPage,pageHeader,esc:escEmail,studioFetch,rawBody:express.raw,pool,invalidate:()=>{_catCache.at=0;_shopCache.at=0;}});
 require('./tools/lib/design-library').registerDesignLibrary(app, {
   requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
   requireInternalKey, notifyAdd, sendEmail, NOTIFY_EMAIL, pool, rawBody: express.raw,
