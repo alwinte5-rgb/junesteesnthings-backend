@@ -39,9 +39,11 @@ function registerDesignLibrary(app, d) {
     if (!data.ok || !Array.isArray(data.items)) throw new Error('Invalid design library response');
     return data.items;
   }
+  async function publicRead(){if(!cache||Date.now()-at>60000){cache=(await read(true)).map(cleanDesignCard).filter(Boolean);at=Date.now();}return cache;}
+  require('./public-design-gallery').registerPublicGallery(app,{read:publicRead});
   app.get('/api/design-library', async (_req, res) => {
     try {
-      if (!cache || Date.now() - at > 60000) { cache = (await read(true)).map(cleanDesignCard).filter(Boolean); at = Date.now(); }
+      cache=await publicRead();
       res.set('Cache-Control', 'public, max-age=30').json({ ok: true, items: cache });
     } catch (e) { console.error('design-library feed:', e.message); res.status(503).json({ error: 'Designs could not be loaded. Please try again.' }); }
   });

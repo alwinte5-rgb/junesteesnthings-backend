@@ -94,6 +94,23 @@
       ]
     },
     {
+      "label": "Designs",
+      "items": [
+        {
+          "label": "Ready-Made Designs",
+          "href": "/shop-designs"
+        },
+        {
+          "label": "Clipart Library",
+          "href": "/clipart"
+        },
+        {
+          "label": "Featured Seasonal Designs",
+          "href": "/seasonal-designs"
+        }
+      ]
+    },
+    {
       "label": "Groups & Events",
       "items": [
         {
