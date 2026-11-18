@@ -8,7 +8,6 @@ function requestStage(q){if(!q.accepted_at)return 'Quote review';if(!(Number(q.p
 function registerStudioControls(app,d){
  const {requireAdmin,isOwner,adminPage,pageHeader,esc,studioFetch,rawBody,invalidate,pool}=d,endpoint='https://design.jtees.net/jt-controls.php';
  const stock=require('./supplier-stock').stockController({invalidate});
- if(d.startStockOnBoot!==false&&process.env.SSA_ACCOUNT&&process.env.SSA_API_KEY)setImmediate(()=>stock.start());
  const owner=res=>{if(isOwner())return true;res.status(403).json({error:'Only the owner can manage designer settings.'});return false;};
  async function reply(r,res){let b;try{b=await r.json();}catch{throw Error('Invalid designer response');}if(!r.ok||!b.ok)return res.status([400,404,409].includes(r.status)?r.status:503).json({error:b.error||'Designer settings unavailable.'});res.set('Cache-Control','no-store').json(b);}
  app.get('/admin/studio-controls/stock',requireAdmin,(req,res)=>{if(!owner(res))return;res.set('Cache-Control','no-store').json({ok:true,data:stock.get()});});
