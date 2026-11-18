@@ -33,16 +33,25 @@ test('every row kind is a bell kind the owner gets, and none of them emails by d
   assert.equal(NOTIFY.emailOn('library', { library: true }), true);
 });
 
-test('forgot to clock out: a shift still running past 10 hours or past midnight', () => {
+test('forgot to clock out: a shift still running past 10 hours or past midnight, on the helper\'s own clock', () => {
   const running = (startedAgoH, id = 1) => ({ id, started_at: new Date(NOW - startedAgoH * H).toISOString(), ended_at: null });
-  const fresh = A.hoursAlerts({ staff, thisWeek: week({ week: '2026-11-16', shifts: [running(2)] }), now: NOW });
-  assert.deepEqual(fresh, []);
-  const long = A.hoursAlerts({ staff, thisWeek: week({ week: '2026-11-16', shifts: [running(11, 5)] }), now: NOW });
+  assert.deepEqual(A.hoursAlerts({ staff, openShifts: [running(2)], now: NOW }), []);
+  const long = A.hoursAlerts({ staff, openShifts: [running(11, 5)], now: NOW });
   assert.deepEqual(refs(long), ['open:5']);
   assert.match(long[0].title, /Myra may have forgotten to clock out/);
   assert.equal(long[0].href, '/admin/timeclock?staff=7&week=2026-11-16');
-  const overnight = A.hoursAlerts({ staff, thisWeek: week({ week: '2026-11-16', shifts: [running(14, 6)] }), now: NOW });
+  const overnight = A.hoursAlerts({ staff, openShifts: [running(14, 6)], now: NOW });
   assert.match(overnight[0].sub, /past midnight/);
+  // Weeks old, outside both weeks the Hours page reads: still caught, and linked to its own week.
+  const ancient = A.hoursAlerts({ staff, openShifts: [{ id: 8, started_at: '2026-11-01T15:00:00Z' }], now: NOW });
+  assert.deepEqual(refs(ancient), ['open:8']);
+  assert.match(ancient[0].href, /week=2026-10-26$/);
+  // A helper in Manila 6 hours into a normal shift crosses Chicago's midnight, not their own.
+  const manila = { ...staff, time_zone: 'Asia/Manila' };
+  const at1amChicago = Date.parse('2026-11-18T07:00:00Z');
+  const started = new Date(at1amChicago - 6 * H).toISOString(); // 9am Manila
+  assert.deepEqual(A.hoursAlerts({ staff: manila, openShifts: [{ id: 9, started_at: started }], now: at1amChicago }), []);
+  assert.equal(A.hoursAlerts({ staff, openShifts: [{ id: 9, started_at: started }], now: at1amChicago }).length, 1, 'a Chicago helper is past midnight');
 });
 
 test('last week: not approved, approval out of date, TimeProof missing', () => {
@@ -67,8 +76,8 @@ test('last week: not approved, approval out of date, TimeProof missing', () => {
 
 test('TimeProof off, idle and off-clock: one counted row each, dropped once the week is approved', () => {
   const flags = [
-    { kind: 'idle', text: '45m on the clock with no activity' },
-    { kind: 'idle', text: '1h 10m on the clock with no activity' },
+    { kind: 'idle', minutes: 45, text: '45m on the clock with no activity' },
+    { kind: 'idle', minutes: 70, text: '1h 10m on the clock with no activity' },
     { kind: 'off-clock', text: '20m of work on 2026-11-17 while clocked out' },
     { kind: 'timeproof', text: 'The clock says 6h, TimeProof says 4h' },
     { kind: 'new-ip', text: 'ignored' },
@@ -146,6 +155,7 @@ test('notes and follow-ups name who sent them', () => {
     [{ id: 2, title: 'Call the school back', quote_code: null }], [staff]);
   assert.deepEqual(refs(rows), ['note:3', 'followup:2']);
   assert.match(rows[0].title, /^Myra left you a note on AB12/);
+  assert.equal(rows[0].href, '/admin/production/AB12#notes');
 });
 
 test('badge counts and dashboard groups come from the same rows', () => {
@@ -161,9 +171,15 @@ test('server: every source is read on its own and the bell clears a kind only wh
   for (const name of ['hours', 'training', 'agreements', 'tasks', 'job notes', 'art', 'design library', 'customers']) {
     assert.ok(SRC.includes(`part('${name}'`), name);
   }
-  assert.match(SRC, /if \(sources\.some\(\(s\) => alerts\.failed\.includes\(s\)\)\) continue;/);
+  assert.match(SRC, /if \(sources\.some\(\(s\) => alerts\.failed\.includes\(s\) \|\| \(alerts\.skipped \|\| \[\]\)\.includes\(s\)\)\) continue;/);
   // Staff approvals no longer wait on the art read.
   assert.ok(!SRC.includes('if (appr && art)'));
+  // No roster is "could not check", never "no hour problems".
+  assert.match(SRC, /if \(failed\.includes\('team'\)\) failed\.push\('hours', 'training'\);/);
+  // A forgotten shift is found however old it is.
+  assert.match(SRC, /SELECT id, staff_id, started_at FROM staff_shifts WHERE ended_at IS NULL/);
+  // Webhook and poll library rows clear by design, not by ref spelling.
+  assert.match(SRC, /regexp_replace\(regexp_replace\(ref, '\^poll:', ''\), ':\.\*\$', ''\) = ANY/);
   // A failing sweep part reaches the error digest.
   assert.match(SRC, /reportError\('notifications', e, `notification part: \$\{name\}`\)/);
   // Menu badges for Hours, Training and Team.

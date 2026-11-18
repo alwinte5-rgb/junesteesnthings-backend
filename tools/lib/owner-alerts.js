@@ -18,6 +18,7 @@
      href   a back-office path */
 
 const TC = require('./timeclock');
+const { weekOf } = require('./team-metrics');
 
 const GROUPS = {
   approvals: { label: 'Approvals', empty: 'Nothing is waiting for your approval.' },
@@ -34,6 +35,12 @@ const fmt = (m) => {
 };
 const ms = (d) => (d instanceof Date ? d.getTime() : new Date(d).getTime());
 const one = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+/* The week an open shift belongs to on the Hours page: the week read that
+   holds it, or the shop week it started in. */
+const shiftWeek = (startedAt, thisWeek, lastWeek) => {
+  for (const w of [thisWeek, lastWeek]) if (w && (w.shifts || []).some((sh) => ms(sh.started_at) === ms(startedAt))) return w.week;
+  return weekOf(new Date(startedAt));
+};
 const clip = (s, n = 90) => {
   const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
@@ -58,23 +65,23 @@ function weekApproved(w) {
  * The owner's four (2026-11-18): forgot to clock out, week not approved,
  * TimeProof missing or off, idle or off-clock work.
  */
-function hoursAlerts({ staff, thisWeek = null, lastWeek = null, unapproved = [], now = Date.now() }) {
+function hoursAlerts({ staff, thisWeek = null, lastWeek = null, unapproved = [], openShifts = [], now = Date.now() }) {
   const out = [];
   const name = staff.name || `Helper #${staff.id}`;
   const page = (week) => `/admin/timeclock?staff=${Number(staff.id)}&week=${week}`;
   /* Forgot to clock out: a shift still running past the long-shift mark, or
-     past midnight. One row per shift, so a new one is a new alert. */
-  for (const w of [lastWeek, thisWeek]) {
-    if (!w) continue;
-    for (const sh of w.shifts || []) {
-      if (sh.ended_at) continue;
-      const len = Math.max(0, Math.round((ms(now) - ms(sh.started_at)) / 60000));
-      const overnight = TC.dayOf(sh.started_at) !== TC.dayOf(now);
-      if (len <= TC.LONG_SHIFT_HOURS * 60 && !overnight) continue;
-      out.push({ group: 'hours', kind: 'hours', ref: `open:${Number(sh.id)}`, tone: 'red', icon: 'clock',
-        title: `${name} may have forgotten to clock out`,
-        sub: `clocked in ${fmt(len)} ago and still running${overnight ? ', past midnight' : ''}`, href: page(w.week) });
-    }
+     past midnight on the helper's own clock (a helper in Manila works
+     through Chicago's midnight every day). `openShifts` is every shift still
+     running, however old. One row per shift, so a new one is a new alert. */
+  const tz = staff.time_zone || TC.TZ;
+  for (const sh of openShifts) {
+    const len = Math.max(0, Math.round((ms(now) - ms(sh.started_at)) / 60000));
+    let overnight;
+    try { overnight = TC.dayOf(sh.started_at, tz) !== TC.dayOf(now, tz); } catch { overnight = TC.dayOf(sh.started_at) !== TC.dayOf(now); }
+    if (len <= TC.LONG_SHIFT_HOURS * 60 && !overnight) continue;
+    out.push({ group: 'hours', kind: 'hours', ref: `open:${Number(sh.id)}`, tone: 'red', icon: 'clock',
+      title: `${name} may have forgotten to clock out`,
+      sub: `clocked in ${fmt(len)} ago and still running${overnight ? ', past midnight' : ''}`, href: page(shiftWeek(sh.started_at, thisWeek, lastWeek)) });
   }
   /* Last week, finished: approve it, type its TimeProof, check what the
      clock flagged. Once the week is approved, idle and off-clock time on it
@@ -114,7 +121,7 @@ function weekFlagRows(staff, w, href, when) {
   }
   const idle = flags.filter((f) => f.kind === 'idle');
   if (idle.length) {
-    const total = idle.reduce((n, f) => n + (Number((/(\d+)h/.exec(f.text) || [0, 0])[1]) * 60 + Number((/(\d+)m/.exec(f.text) || [0, 0])[1])), 0);
+    const total = idle.reduce((n, f) => n + (Number(f.minutes) || 0), 0);
     out.push({ group: 'hours', kind: 'hours', ref: `idle:${Number(staff.id)}:${w.week}`, tone: 'amber', icon: 'clock',
       title: `${name} was idle on the clock ${when}`, sub: `${one(idle.length, 'gap')} of 30+ minutes with no activity${total ? `, ${fmt(total)} in all` : ''}`, href });
   }
@@ -188,7 +195,7 @@ function noteAlerts(notes, followups, roster) {
   return [
     ...(notes || []).map((n) => ({ group: 'team', kind: 'team', ref: `note:${Number(n.id)}`, tone: 'blue', icon: 'mail',
       title: `${nameOf(n.author)} left you a note on ${n.quote_code}`, sub: `"${clip(n.body)}"`,
-      href: `/admin/production/${encodeURIComponent(n.quote_code)}#job-notes` })),
+      href: `/admin/production/${encodeURIComponent(n.quote_code)}#notes` })),
     ...(followups || []).map((f) => ({ group: 'team', kind: 'team', ref: `followup:${Number(f.id)}`, tone: 'amber', icon: 'alert',
       title: clip(f.title, 110), sub: f.quote_code ? `follow-up on ${f.quote_code}` : 'follow-up for you', href: '/admin/approvals#followups' })),
   ];

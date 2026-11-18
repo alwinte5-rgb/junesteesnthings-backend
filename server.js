@@ -22781,7 +22781,9 @@ require('./tools/lib/studio-controls').registerStudioControls(app,{requireAdmin,
 require('./tools/lib/design-library').registerDesignLibrary(app, {
   requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
   requireInternalKey, notifyAdd, sendEmail, NOTIFY_EMAIL, pool, rawBody: express.raw,
-  invalidate: () => { _shopCache.at = 0; },
+  /* A design decided here leaves the owner's alert list at once, not on the
+     next 5-minute library read. */
+  invalidate: () => { _shopCache.at = 0; libraryWaitingCache.at = 0; ownerAlertsCache = null; },
 });
 app.get('/shop-designs', (_req, res) => res.sendFile(require('path').join(__dirname, 'public', 'shop-designs.html')));
 
@@ -28769,12 +28771,15 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
     /* Approvals: staff requests, plus art, designer questions and library
        designs from the owner's alert list (the sweep's reading, never waited
        on here); the same list gives the Hours, Training and Team badges. */
-    isOwner() ? pool.query(`SELECT COUNT(*)::int AS n FROM staff_approvals WHERE status = 'pending'`)
+    /* Approvals counts what the Approvals page shows: staff requests and art
+       to approve, read live. Hours, Training and Team come from the owner's
+       alert list (the sweep's reading, never waited on here). */
+    isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
+                                 + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+                                     WHERE a.status = 'submitted' AND q.cancelled_at IS NULL) AS n`)
       .then(({ rows }) => {
-        const c = ownerAlertsCache;
-        const g = c ? OWNER_ALERTS.byGroup(c.rows) : null;
-        out.approvals = Number(rows[0].n) + (g ? g.approvals.length : 0);
-        if (c) Object.assign(out, OWNER_ALERTS.counts(c.rows.filter((r) => !r.ref.startsWith('note:'))));
+        out.approvals = Number(rows[0].n);
+        if (ownerAlertsCache) Object.assign(out, OWNER_ALERTS.counts(ownerAlertsCache.rows.filter((r) => !r.ref.startsWith('note:'))));
       }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
@@ -29078,7 +29083,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
     owner ? safe(howWeAreDoing(), null, 'how we are doing') : Promise.resolve(undefined),
     /* Hours, training, team, art and library (owner-alerts.js): the same list
        the bell and the menu badges are made from. */
-    owner ? safe(ownerAlerts(), null, 'team alerts') : Promise.resolve(null),
+    owner ? safe(ownerAlerts({ stale: true }), null, 'team alerts') : Promise.resolve(null),
   ]);
   /* No studio key here (a local copy) is the studio being off, not a fault. */
   if (studioFeed.error && studioFeed.error !== 'JT_INTERNAL_KEY not set') failed.push('studio orders');
@@ -41482,13 +41487,13 @@ async function libraryWaiting() {
     if (libraryWaitingCache.items) return libraryWaitingCache.items;
     /* A studio that just failed is asked again in 5 minutes, not every
        sweep; until then the section still says it could not be checked. */
-    if (libraryWaitingCache.error) throw new Error(libraryWaitingCache.error);
+    if (libraryWaitingCache.error) throw Object.assign(new Error(libraryWaitingCache.error), { quiet: true });
   }
   if (!process.env.JT_INTERNAL_KEY) return [];
   const fail = (msg) => { libraryWaitingCache = { at: Date.now(), items: null, error: msg }; throw new Error(msg); };
   let r, data;
   try {
-    r = await studioFetch('https://design.jtees.net/jt-library-admin.php', { timeoutMs: 15000 });
+    r = await studioFetch(`${STUDIO_BASE}/jt-library-admin.php`, { timeoutMs: 15000 });
     data = r.ok ? await r.json() : null;
   } catch (e) { fail(`design library could not be read: ${e.message}`); }
   if (!r.ok) fail(`design library answered HTTP ${r.status}`);
@@ -41503,7 +41508,8 @@ async function libraryWaiting() {
 async function readOwnerAlerts() {
   const failed = [];
   const part = (name, p, fallback) => p.catch((e) => {
-    console.error(`owner alerts (${name}) failed:`, e.message);
+    /* `quiet`: the same failure, remembered, was logged when it happened. */
+    if (!e.quiet) console.error(`owner alerts (${name}) failed:`, e.message);
     failed.push(name);
     return fallback;
   });
@@ -41517,25 +41523,28 @@ async function readOwnerAlerts() {
   /* Hours: the two weeks the owner works on, read the way the Hours page
      reads them, for helpers who clocked in; and older weeks never approved. */
   const hoursP = (async () => {
-    const { rows: clocked } = await pool.query(
-      `SELECT DISTINCT staff_id FROM staff_shifts WHERE started_at >= $1 OR ended_at IS NULL`, [TEAM.localMidnight(lastWeek)]);
+    const [{ rows: clocked }, { rows: open }, { rows: old }] = await Promise.all([
+      pool.query(`SELECT DISTINCT staff_id FROM staff_shifts WHERE started_at >= $1`, [TEAM.localMidnight(lastWeek)]),
+      /* Every shift still running, however long ago it started: a clock left
+         on for weeks is the worst case, and it is outside both weeks read. */
+      pool.query(`SELECT id, staff_id, started_at FROM staff_shifts WHERE ended_at IS NULL`),
+      pool.query(
+        `SELECT s.staff_id, to_char(date_trunc('week', s.started_at AT TIME ZONE $3::text), 'YYYY-MM-DD') AS week
+           FROM staff_shifts s
+          WHERE s.started_at >= $1 AND s.started_at < $2 AND s.ended_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM staff_clock_approvals a WHERE a.staff_id = s.staff_id
+                              AND a.week_of = date_trunc('week', s.started_at AT TIME ZONE $3::text)::date)
+          GROUP BY 1, 2`,
+        [TEAM.localMidnight(weekShift(lastWeek, -28)), TEAM.localMidnight(lastWeek), SHOP_TZ])]);
     const ids = new Set(clocked.map((r) => r.staff_id));
-    const { rows: old } = await pool.query(
-      `SELECT s.staff_id, to_char(date_trunc('week', s.started_at AT TIME ZONE $3::text), 'YYYY-MM-DD') AS week
-         FROM staff_shifts s
-        WHERE s.started_at >= $1 AND s.started_at < $2 AND s.ended_at IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM staff_clock_approvals a WHERE a.staff_id = s.staff_id
-                            AND a.week_of = date_trunc('week', s.started_at AT TIME ZONE $3::text)::date)
-        GROUP BY 1, 2`,
-      [TEAM.localMidnight(weekShift(lastWeek, -28)), TEAM.localMidnight(lastWeek), SHOP_TZ]);
-    const out = [];
-    for (const s of team) {
+    const lists = await Promise.all(team.map(async (s) => {
       const unapproved = old.filter((o) => o.staff_id === s.id).map((o) => o.week).sort();
-      if (!ids.has(s.id) && !unapproved.length) continue;
+      const openShifts = open.filter((o) => o.staff_id === s.id);
+      if (!ids.has(s.id) && !unapproved.length && !openShifts.length) return [];
       const [tw, lw] = ids.has(s.id) ? await Promise.all([clockWeek(s.id, thisWeek), clockWeek(s.id, lastWeek)]) : [null, null];
-      out.push(...OWNER_ALERTS.hoursAlerts({ staff: s, thisWeek: tw, lastWeek: lw, unapproved }));
-    }
-    return out;
+      return OWNER_ALERTS.hoursAlerts({ staff: s, thisWeek: tw, lastWeek: lw, unapproved, openShifts });
+    }));
+    return lists.flat();
   })();
 
   /* Training: a sign-off due from the owner, and a helper finished but not
@@ -41560,7 +41569,8 @@ async function readOwnerAlerts() {
     .then((r) => OWNER_ALERTS.taskAlerts(r.rows, roster, { today: TIMECLOCK.dayOf(new Date()) }));
 
   const notesP = Promise.all([
-    pool.query(`SELECT id, quote_code, author, body FROM job_notes WHERE recipient = 'owner' AND addressed_at IS NULL ORDER BY id DESC LIMIT 50`),
+    pool.query(`SELECT n.id, n.quote_code, n.author, n.body FROM job_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.recipient = 'owner' AND n.addressed_at IS NULL AND q.cancelled_at IS NULL ORDER BY n.id DESC LIMIT 50`),
     pool.query(`SELECT id, title, quote_code FROM owner_followups WHERE done_at IS NULL ORDER BY created_at DESC LIMIT 50`),
   ]).then(([n, f]) => OWNER_ALERTS.noteAlerts(n.rows, f.rows, roster));
 
@@ -41570,6 +41580,9 @@ async function readOwnerAlerts() {
     pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
                  WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL`),
   ]).then(([s, q]) => OWNER_ALERTS.artAlerts({ submitted: s.rows, questions: q.rows }));
+  /* No studio key (a local copy): the studio is off, so its notifications
+     are neither made nor cleared, and the page does not call it a failure. */
+  const skipped = process.env.JT_INTERNAL_KEY ? [] : ['design library'];
   const libraryP = libraryWaiting().then((library) => OWNER_ALERTS.artAlerts({ library }));
 
   const customersP = Promise.all([
@@ -41581,31 +41594,39 @@ async function readOwnerAlerts() {
                  WHERE n.kind = 'customer_note' AND n.created_at > $1`, [new Date(since)]),
     pool.query(`SELECT code, name, change_request FROM quotes
                  WHERE NULLIF(btrim(change_request), '') IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_amount,0) = 0`),
-    pool.query(`SELECT id, quote_code FROM stripe_disputes
-                 WHERE status IN ('warning_needs_response','warning_under_review','needs_response','under_review')`),
+    pool.query(`SELECT id, quote_code FROM stripe_disputes WHERE status = ANY($1::text[])`, [[...DISPUTE_OPEN]]),
   ]).then(([replies, proofOk, proofChanges, notes, changes, disputes]) => OWNER_ALERTS.customerAlerts({
     replies: replies.rows, proofOk: proofOk.rows, proofChanges: proofChanges.rows, notes: notes.rows,
     changes: changes.rows, disputes: disputes.rows }));
 
+  /* No roster is no helpers to check, not "no problems": their sections
+     say they could not be checked, and the bell clears nothing of theirs. */
+  if (failed.includes('team')) failed.push('hours', 'training');
   const parts = await Promise.all([
     part('hours', hoursP, null), part('training', trainingP, null), part('agreements', agreementsP, null),
     part('tasks', tasksP, null), part('job notes', notesP, null), part('art', artP, null),
     part('design library', libraryP, null), part('customers', customersP, null)]);
   for (const p of parts) if (p) rows.push(...p);
-  return { rows, failed, at: Date.now() };
+  return { rows, failed, skipped, at: Date.now() };
 }
 
 /** What needs the owner now: { rows, failed, at }. The sweep reads it fresh
  *  every 2 minutes; a page takes that reading while it is under 2½ minutes
  *  old. Callers at the same moment share one read. */
-async function ownerAlerts({ fresh = false } = {}) {
+async function ownerAlerts({ fresh = false, stale = false } = {}) {
+  const read = () => {
+    if (!ownerAlertsRunning) {
+      ownerAlertsRunning = readOwnerAlerts()
+        .then((r) => { ownerAlertsCache = r; return r; })
+        .finally(() => { ownerAlertsRunning = null; });
+    }
+    return ownerAlertsRunning;
+  };
   if (!fresh && ownerAlertsCache && Date.now() - ownerAlertsCache.at < 150 * 1000) return ownerAlertsCache;
-  if (!ownerAlertsRunning) {
-    ownerAlertsRunning = readOwnerAlerts()
-      .then((r) => { ownerAlertsCache = r; return r; })
-      .finally(() => { ownerAlertsRunning = null; });
-  }
-  return ownerAlertsRunning;
+  /* `stale`: a page shows the last reading at once and asks for a new one
+     behind it, rather than waiting on the studio and every helper's clock. */
+  if (stale && ownerAlertsCache) { read().catch(() => {}); return ownerAlertsCache; }
+  return read();
 }
 
 /** The owner's notifications from the shop's records, and the ones dealt with
@@ -41645,14 +41666,29 @@ async function ownerNotices(roster, leads) {
   if (alerts) {
     const ALERT_SOURCES = { approval: ['art'], art: ['art'], library: ['design library'], hours: ['hours'],
       training: ['training'], team: ['agreements', 'tasks', 'job notes'], customer: ['customers'] };
+    const { rows: hooked } = await pool.query(
+      `SELECT DISTINCT regexp_replace(ref, ':.*$', '') AS key FROM notifications
+        WHERE recipient = 'owner' AND kind = 'library' AND ref NOT LIKE 'poll:%'`).catch(() => ({ rows: [] }));
+    const told = new Set(hooked.map((h) => h.key));
     for (const r of alerts.rows) {
+      if (r.kind === 'library' && told.has(r.ref.replace(/^poll:/, ''))) continue;
       out.push({ recipient: 'owner', kind: r.kind, ref: r.ref, link: r.href, title: r.title });
     }
     for (const [kind, sources] of Object.entries(ALERT_SOURCES)) {
-      if (sources.some((s) => alerts.failed.includes(s))) continue;
+      if (sources.some((s) => alerts.failed.includes(s) || (alerts.skipped || []).includes(s))) continue;
       if (kind === 'approval' && !appr) continue;
       const live = alerts.rows.filter((r) => r.kind === kind).map((r) => r.ref);
       if (kind === 'approval') live.push(...appr.rows.map((a) => String(a.id)));
+      if (kind === 'library') {
+        /* The studio's webhook keys a design 'kind-id:revision' and the poll
+           'poll:kind-id': both are cleared by the design, so a design still
+           waiting keeps its webhook row and a decided one clears both. */
+        const keys = live.map((ref) => ref.replace(/^poll:/, ''));
+        await pool.query(
+          `UPDATE notifications SET read_at = NOW() WHERE recipient = 'owner' AND kind = 'library' AND read_at IS NULL
+              AND NOT (regexp_replace(regexp_replace(ref, '^poll:', ''), ':.*$', '') = ANY($1::text[]))`, [keys]);
+        continue;
+      }
       await notifyClearResolved('owner', kind, live);
     }
   } else if (appr) {

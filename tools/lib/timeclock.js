@@ -103,7 +103,7 @@ function flags({ shifts = [], pings = [], lessons = [], timeproofMinutes = null,
       seen.add(s.start_ip);
     }
     for (const g of idleGaps(s, pings, { now })) {
-      out.push({ kind: 'idle', tone: 'amber', at: g.from, text: `${fmt(g.minutes)} on the clock with no activity` });
+      out.push({ kind: 'idle', tone: 'amber', at: g.from, minutes: g.minutes, text: `${fmt(g.minutes)} on the clock with no activity` });
     }
   }
   // `coveringShifts`: shifts from the week before still running into this one.
