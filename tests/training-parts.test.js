@@ -109,7 +109,7 @@ test('both combined paths move up to a trained preset once signed off', () => {
 
 test('changing a helper\'s path also sets that path\'s permissions unless June unticks it', () => {
   assert.match(SRC, /name="apply_preset" value="1" checked/);
-  assert.match(SRC, /const presetName = b\.apply_preset === '1' \? STAFF\.presetForTrack\(track\) : null;/);
+  assert.match(SRC, /b\.apply_preset === '1' && track !== TRAINING\.trackOf\(s\.training_track\)/);
   assert.match(SRC, /UPDATE staff SET training_track = \$2, perms = \$3 WHERE id = \$1/);
   assert.equal(STAFF.presetForTrack('sales-software'), 'dual-sales');
 });

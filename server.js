@@ -34296,7 +34296,9 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            permissions stayed, so a helper given apparel sales could not
            draft a quote, or could send one without June's OK. Their training
            ticks are kept either way. */
-        const presetName = b.apply_preset === '1' ? STAFF.presetForTrack(track) : null;
+        /* Only on a real change of path: saving the same path never resets a
+           trained helper's permissions (code review). */
+        const presetName = b.apply_preset === '1' && track !== TRAINING.trackOf(s.training_track) ? STAFF.presetForTrack(track) : null;
         const p = presetName ? STAFF.presetPerms(presetName) : null;
         if (p) {
           await pool.query('UPDATE staff SET training_track = $2, perms = $3 WHERE id = $1', [id, track, JSON.stringify(p)]);
