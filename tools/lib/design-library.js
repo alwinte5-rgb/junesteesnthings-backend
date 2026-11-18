@@ -120,7 +120,7 @@ function registerDesignLibrary(app, d) {
       const r = await studioFetch(endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(payload).toString()});
       const data = await r.json(); if (!r.ok || !data.ok) return res.status(400).send(adminPage('Design settings', `<div class="card"><p>${esc(data.error || 'Could not save this design.')}</p><a href="/admin/design-library">Back to library</a></div>`, 'design-library'));
       cache=null; at=0; invalidate();
-      if (b.action !== 'save') await pool.query("UPDATE notifications SET read_at=NOW() WHERE recipient='owner' AND kind='library' AND ref LIKE $1",[b.kind+'-'+b.id+':%']);
+      if (b.action !== 'save') await pool.query("UPDATE notifications SET read_at=NOW() WHERE recipient='owner' AND kind='library' AND (ref LIKE $1 OR ref=$2)",[b.kind+'-'+b.id+':%','poll:'+b.kind+'-'+b.id]);
       res.redirect(303,'/admin/design-library?saved=1&item='+encodeURIComponent(data.item.kind+'-'+b.id));
     } catch(e) { console.error('library save:',e.message); res.status(503).send('Could not confirm the save. Reload the design library to check before retrying.'); }
   });
@@ -155,7 +155,7 @@ function registerDesignLibrary(app, d) {
       const {rows:[n]}=await pool.query("SELECT id,emailed_at FROM notifications WHERE recipient='owner' AND kind='library' AND ref=$1",[ref]);
       if (!n) throw new Error('Notification was not saved');
       const {rows:prefs}=await pool.query("SELECT email FROM notification_prefs WHERE reader='owner' AND kind='library'");
-      if (!n.emailed_at && (!prefs.length || prefs[0].email)) {
+      if (!n.emailed_at && require('./notifications').emailOn('library', prefs.length ? { library: prefs[0].email } : {})) {
         const {rows:claimed}=await pool.query('UPDATE notifications SET emailed_at=NOW() WHERE id=$1 AND emailed_at IS NULL RETURNING id',[n.id]);
         if(claimed.length)try {
         await sendEmail({to:NOTIFY_EMAIL,promo:false,urgent:true,subject:'Design awaiting approval: '+b.name,

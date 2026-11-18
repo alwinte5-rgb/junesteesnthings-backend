@@ -123,6 +123,7 @@ const CHAN = require('./tools/lib/team-channels');
 const MB = require('./tools/lib/mailbox');
 const CLOCKNOTE = require('./tools/lib/clockin-note');
 const NOTIFY = require('./tools/lib/notifications');
+const OWNER_ALERTS = require('./tools/lib/owner-alerts');
 const FLOW = require('./tools/lib/task-flow');
 const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
 const CHATFILES = require('./tools/lib/team-chat-files');
@@ -11735,14 +11736,14 @@ const ADMIN_NAV = [
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'resources',  href: '/admin/resources',     label: 'Resources',  icon: 'key' },
-  { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
+  { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn', badge: 'training' },
   { key: 'paths',      href: '/admin/training/paths', label: 'Training paths', icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
-  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team' },
+  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team', badge: 'team' },
   { key: 'approvals',  href: '/admin/approvals',     label: 'Approvals',  icon: 'check',  badge: 'approvals' },
   { key: 'activity',   href: '/admin/activity',      label: 'Activity',   icon: 'clock' },
   { key: 'staff',      href: '/admin/staff',         label: 'Staff and permissions', icon: 'key' },
-  { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
+  { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock', badge: 'hours' },
   { key: 'workschedule', href: '/admin/work-schedule', label: 'Work schedule', icon: 'clock', ownerOnly: true },
   { key: 'agreement',  href: '/admin/agreement',     label: 'Agreements', icon: 'file',   ownerOnly: true },
 ];
@@ -22780,7 +22781,9 @@ require('./tools/lib/studio-controls').registerStudioControls(app,{requireAdmin,
 require('./tools/lib/design-library').registerDesignLibrary(app, {
   requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
   requireInternalKey, notifyAdd, sendEmail, NOTIFY_EMAIL, pool, rawBody: express.raw,
-  invalidate: () => { _shopCache.at = 0; },
+  /* A design decided here leaves the owner's alert list at once, not on the
+     next 5-minute library read. */
+  invalidate: () => { _shopCache.at = 0; libraryWaitingCache.at = 0; ownerAlertsCache = null; },
 });
 app.get('/shop-designs', (_req, res) => res.sendFile(require('path').join(__dirname, 'public', 'shop-designs.html')));
 
@@ -28765,10 +28768,19 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
+    /* Approvals: staff requests, plus art, designer questions and library
+       designs from the owner's alert list (the sweep's reading, never waited
+       on here); the same list gives the Hours, Training and Team badges. */
+    /* Approvals counts what the Approvals page shows: staff requests and art
+       to approve, read live. Hours, Training and Team come from the owner's
+       alert list (the sweep's reading, never waited on here). */
     isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
                                  + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
                                      WHERE a.status = 'submitted' AND q.cancelled_at IS NULL) AS n`)
-      .then(({ rows }) => { out.approvals = Number(rows[0].n); }).catch(() => {}) : Promise.resolve(),
+      .then(({ rows }) => {
+        out.approvals = Number(rows[0].n);
+        if (ownerAlertsCache) Object.assign(out, OWNER_ALERTS.counts(ownerAlertsCache.rows.filter((r) => !r.ref.startsWith('note:'))));
+      }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
     }).catch(() => {}),
@@ -29059,7 +29071,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
     ]);
   const owner = isOwner();
   /* The rest of what the page needs, read side by side. */
-  const [studioFeed, hidden, approvals, money2, doing] = await Promise.all([
+  const [studioFeed, hidden, approvals, money2, doing, alerts] = await Promise.all([
     safe(fetchStudioOrders(), { orders: [], abandoned: [], error: null }, 'studio orders'),
     hiddenStudio(),
     /* The same list as /admin/approvals: pending, and any interrupted by a
@@ -29069,6 +29081,9 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
                    ORDER BY created_at LIMIT 20`, 'team approvals') : Promise.resolve([]),
     owner ? safe(moneyThisAndLast(), null, 'money in and out') : Promise.resolve(undefined),
     owner ? safe(howWeAreDoing(), null, 'how we are doing') : Promise.resolve(undefined),
+    /* Hours, training, team, art and library (owner-alerts.js): the same list
+       the bell and the menu badges are made from. */
+    owner ? safe(ownerAlerts({ stale: true }), null, 'team alerts') : Promise.resolve(null),
   ]);
   /* No studio key here (a local copy) is the studio being off, not a fault. */
   if (studioFeed.error && studioFeed.error !== 'JT_INTERNAL_KEY not set') failed.push('studio orders');
@@ -29210,6 +29225,34 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       <span class="row-end">${pill(`${Number(t.unread)} new`, 'red')}</span></a>`),
   ];
 
+  /* The rest of what needs the owner (owner-alerts.js), each in its section.
+     Customer rows the list above already has are left out, and so are job
+     notes, which the pin card at the top already shows. */
+  const alertGroups = OWNER_ALERTS.byGroup(alerts ? alerts.rows : []);
+  const alertFailed = alerts ? alerts.failed : (owner ? ['team alerts'] : []);
+  const alertRow = (r) => row({ tone: r.tone, icon: r.icon, title: escEmail(r.title), sub: escEmail(r.sub), href: escEmail(r.href) });
+  const NEW_CUSTOMER_REFS = /^(proof-ok|proof-chg|cnote):/;
+  const custExtra = alertGroups.customers.filter((r) => NEW_CUSTOMER_REFS.test(r.ref)).map(alertRow);
+  const fromTeamExtra = alertGroups.approvals.map(alertRow);
+  const SECTION_SOURCES = { hours: ['hours'], training: ['training'], team: ['agreements', 'tasks', 'job notes', 'team'] };
+  const alertSection = (g, list) => {
+    const why = alertFailed.filter((f) => SECTION_SOURCES[g].includes(f) || f === 'team alerts');
+    const shown = list.map(alertRow);
+    return `<h3 class="dgroup" style="margin:14px 0 6px" id="needs-${g}">${escEmail(OWNER_ALERTS.GROUPS[g].label)} <span class="muted">${shown.length || ''}</span></h3>
+      ${why.length ? couldNot(why) : ''}
+      ${shown.length ? `<div class="rows">${shown.slice(0, 8).join('')}</div>${shown.length > 8
+        ? `<details style="margin-top:6px"><summary class="muted">${shown.length - 8} more</summary><div class="rows">${shown.slice(8).join('')}</div></details>` : ''}`
+        : why.length ? '' : emptyState(OWNER_ALERTS.GROUPS[g].empty)}`;
+  };
+  const ownerSections = owner ? [
+    alertSection('hours', alertGroups.hours),
+    alertSection('training', alertGroups.training),
+    alertSection('team', alertGroups.team.filter((r) => !r.ref.startsWith('note:'))),
+  ].join('') : '';
+  const ownerExtraCount = owner ? alertGroups.hours.length + alertGroups.training.length
+    + alertGroups.team.filter((r) => !r.ref.startsWith('note:')).length : 0;
+  const artFailed = alertFailed.filter((f) => ['art', 'design library', 'team alerts'].includes(f));
+
   /* Money in and out, this month and last, from the same reading as Finances. */
   const moneyCol = (m) => `<div style="flex:1 1 240px;min-width:0">
     <div style="font-weight:700;margin-bottom:6px">${escEmail(m.label)}</div>
@@ -29256,24 +29299,26 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       Numbers below may be incomplete. Refresh to try again.</div>` : ''}
     ${flash(req.query)}
     ${notesPin ? PIN_CSS + notesPin : ''}
+    <div class="card" id="needs">
+      <h2 class="card-title">Needs you now <span class="muted">${attention.length + custExtra.length + teamRows.length + fromTeamExtra.length + ownerExtraCount || ''}</span></h2>
+      <h3 class="dgroup" style="margin:6px 0">Customers <span class="muted">${attention.length + custExtra.length || ''}</span></h3>
+      ${customersFailed.length ? couldNot(customersFailed) : ''}
+      ${attention.length + custExtra.length ? `<div class="rows">${[...attention.map(row), ...custExtra].slice(0, 12).join('')}</div>${attention.length + custExtra.length > 12
+        ? `<details style="margin-top:6px"><summary class="muted">${attention.length + custExtra.length - 12} more</summary><div class="rows">${[...attention.map(row), ...custExtra].slice(12).join('')}</div></details>` : ''}`
+        : customersFailed.length ? '' : emptyState('All clear. No customer is waiting on you.')}
+      <h3 class="dgroup" style="margin:14px 0 6px" id="team">${owner ? 'Approvals and messages from your team' : 'From your team'} <span class="muted">${teamRows.length + fromTeamExtra.length || ''}</span></h3>
+      ${teamFailed.length ? couldNot(teamFailed) : ''}
+      ${owner && artFailed.length ? couldNot(artFailed.map((f) => (f === 'team alerts' ? 'art and library approvals' : f))) : ''}
+      ${teamRows.length + fromTeamExtra.length ? `<div class="rows">${teamRows.join('')}${fromTeamExtra.join('')}</div>`
+        : teamFailed.length ? '' : emptyState(owner ? 'Nothing from the team is waiting on you.' : 'No new messages from the team.')}
+      ${ownerSections}
+    </div>
+
     <form method="get" action="/admin/find" class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px">
       <label for="findq" style="margin:0;white-space:nowrap">Find an order</label>
       <input id="findq" name="q" maxlength="120" placeholder="Quote code, name, phone or email" style="flex:1 1 220px;min-width:0" required>
       <button type="submit">Open</button>
     </form>
-
-    <div class="card" id="needs">
-      <h2 class="card-title">Needs you now <span class="muted">${attention.length + teamRows.length || ''}</span></h2>
-      <h3 class="dgroup" style="margin:6px 0">Customers <span class="muted">${attention.length || ''}</span></h3>
-      ${customersFailed.length ? couldNot(customersFailed) : ''}
-      ${attention.length ? `<div class="rows">${attention.slice(0, 12).map(row).join('')}</div>${attention.length > 12
-        ? `<details style="margin-top:6px"><summary class="muted">${attention.length - 12} more</summary><div class="rows">${attention.slice(12).map(row).join('')}</div></details>` : ''}`
-        : customersFailed.length ? '' : emptyState('All clear. No customer is waiting on you.')}
-      <h3 class="dgroup" style="margin:14px 0 6px" id="team">From your team <span class="muted">${teamRows.length || ''}</span></h3>
-      ${teamFailed.length ? couldNot(teamFailed) : ''}
-      ${teamRows.length ? `<div class="rows">${teamRows.join('')}</div>`
-        : teamFailed.length ? '' : emptyState(owner ? 'Nothing from the team is waiting on you.' : 'No new messages from the team.')}
-    </div>
 
     ${statTiles([
       { label: 'Money in this month', tone: 'green', href: FINANCES_PATH,
@@ -41418,17 +41463,182 @@ async function notifyEmails(roster) {
 
 /** Each source on its own: one that fails is logged and skipped, and the
  *  others still count. */
-const notifyPart = (name, p) => p.catch((e) => { console.error(`notifications (${name}) failed:`, e.message); return null; });
+const notifyPart = (name, p) => p.catch((e) => {
+  console.error(`notifications (${name}) failed:`, e.message);
+  /* Logged alone, a part that fails on every sweep was a bell that silently
+     never rang (owner, 2026-11-18): the error digest now hears of it. */
+  reportError('notifications', e, `notification part: ${name}`).catch(() => {});
+  return null;
+});
+
+/* ── What needs the owner (tools/lib/owner-alerts.js) ──────────────────────
+   One list for the home dashboard, the bell and the menu badges, so the three
+   never disagree. The sweep reads it and the pages share that reading; each source fails on its own and is named in `failed`, so an
+   empty section is never what a failed read looks like. */
+let ownerAlertsCache = null;
+let ownerAlertsRunning = null;
+let libraryWaitingCache = { at: 0, items: null, error: '' };
+
+/** Library designs submitted on the studio and waiting for the owner. The
+ *  studio's webhook tells the bell too, but nothing on our side ever looked,
+ *  so a missed webhook was a design waiting forever. Read every 5 minutes. */
+async function libraryWaiting({ studioOff = false } = {}) {
+  if (Date.now() - libraryWaitingCache.at < 5 * 60 * 1000) {
+    if (libraryWaitingCache.items) return libraryWaitingCache.items;
+    /* A studio that just failed is asked again in 5 minutes, not every
+       sweep; until then the section still says it could not be checked. */
+    if (libraryWaitingCache.error) throw Object.assign(new Error(libraryWaitingCache.error), { quiet: true });
+  }
+  if (studioOff) return [];
+  const fail = (msg) => { libraryWaitingCache = { at: Date.now(), items: null, error: msg }; throw new Error(msg); };
+  let r, data;
+  try {
+    r = await studioFetch(`${STUDIO_BASE}/jt-library-admin.php`, { timeoutMs: 15000 });
+    data = r.ok ? await r.json() : null;
+  } catch (e) { fail(`design library could not be read: ${e.message}`); }
+  if (!r.ok) fail(`design library answered HTTP ${r.status}`);
+  if (!data || !data.ok || !Array.isArray(data.items)) fail('design library sent an unreadable list');
+  const items = data.items.filter((x) => x && x.status === 'submitted' && Number.isSafeInteger(x.id))
+    .map((x) => ({ kind: String(x.kind || ''), id: x.id, name: String(x.name || ''),
+      submitted_by: x.settings && x.settings.submitted_by ? String(x.settings.submitted_by).slice(0, 80) : '' }));
+  libraryWaitingCache = { at: Date.now(), items, error: '' };
+  return items;
+}
+
+async function readOwnerAlerts() {
+  const failed = [];
+  const part = (name, p, fallback) => p.catch((e) => {
+    /* `quiet`: the same failure, remembered, was logged when it happened. */
+    if (!e.quiet) console.error(`owner alerts (${name}) failed:`, e.message);
+    failed.push(name);
+    return fallback;
+  });
+  const roster = await part('team', staffRoster({ activeOnly: true }), []);
+  const team = roster.filter((r) => r.active && !r.archived_at);
+  const thisWeek = TEAM.weekOf(new Date());
+  const lastWeek = weekShift(thisWeek, -7);
+  const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
+  const rows = [];
+
+  /* Hours: the two weeks the owner works on, read the way the Hours page
+     reads them, for helpers who clocked in; and older weeks never approved. */
+  const hoursP = (async () => {
+    const [{ rows: clocked }, { rows: open }, { rows: old }] = await Promise.all([
+      pool.query(`SELECT DISTINCT staff_id FROM staff_shifts WHERE started_at >= $1`, [TEAM.localMidnight(lastWeek)]),
+      /* Every shift still running, however long ago it started: a clock left
+         on for weeks is the worst case, and it is outside both weeks read. */
+      pool.query(`SELECT id, staff_id, started_at FROM staff_shifts WHERE ended_at IS NULL`),
+      pool.query(
+        `SELECT s.staff_id, to_char(date_trunc('week', s.started_at AT TIME ZONE $3::text), 'YYYY-MM-DD') AS week
+           FROM staff_shifts s
+          WHERE s.started_at >= $1 AND s.started_at < $2 AND s.ended_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM staff_clock_approvals a WHERE a.staff_id = s.staff_id
+                              AND a.week_of = date_trunc('week', s.started_at AT TIME ZONE $3::text)::date)
+          GROUP BY 1, 2`,
+        [TEAM.localMidnight(weekShift(lastWeek, -28)), TEAM.localMidnight(lastWeek), SHOP_TZ])]);
+    const ids = new Set(clocked.map((r) => r.staff_id));
+    const lists = await Promise.all(team.map(async (s) => {
+      const unapproved = old.filter((o) => o.staff_id === s.id).map((o) => o.week).sort();
+      const openShifts = open.filter((o) => o.staff_id === s.id);
+      if (!ids.has(s.id) && !unapproved.length && !openShifts.length) return [];
+      const [tw, lw] = ids.has(s.id) ? await Promise.all([clockWeek(s.id, thisWeek), clockWeek(s.id, lastWeek)]) : [null, null];
+      return OWNER_ALERTS.hoursAlerts({ staff: s, thisWeek: tw, lastWeek: lw, unapproved, openShifts });
+    }));
+    return lists.flat();
+  })();
+
+  /* Training: a sign-off due from the owner, and a helper finished but not
+     moved up. */
+  const trainingP = Promise.all(team.map(async (s) => {
+    const t = await trainingFor(s.id);
+    const ready = t.steps.find((x) => x.key === t.readyKey);
+    const next = nextPresetFor(s);
+    return OWNER_ALERTS.trainingAlerts({ staff: s, progress: t, readyDone: !!(ready && ready.done), nextPreset: next,
+      nextLabel: next && STAFF.PRESETS[next] ? STAFF.PRESETS[next].label : '' });
+  })).then((l) => l.flat());
+
+  const agreementsP = pool.query(
+    `SELECT id, name FROM staff s WHERE s.active AND s.archived_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $1) ORDER BY name`,
+    [AGREEMENT.VERSION]).then((r) => r.rows.map(OWNER_ALERTS.agreementAlert));
+
+  const tasksP = pool.query(
+    `SELECT id, title, due_on, assigned_to, started_at, created_at FROM staff_tasks
+      WHERE done_at IS NULL AND COALESCE(lane, '') <> $1 AND ${TASK_STEP_NOW}
+      ORDER BY due_on NULLS LAST, created_at LIMIT 200`, [FLOW.DAILY])
+    .then((r) => OWNER_ALERTS.taskAlerts(r.rows, roster, { today: TIMECLOCK.dayOf(new Date()) }));
+
+  const notesP = Promise.all([
+    pool.query(`SELECT n.id, n.quote_code, n.author, n.body FROM job_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.recipient = 'owner' AND n.addressed_at IS NULL AND q.cancelled_at IS NULL ORDER BY n.id DESC LIMIT 50`),
+    pool.query(`SELECT id, title, quote_code FROM owner_followups WHERE done_at IS NULL ORDER BY created_at DESC LIMIT 50`),
+  ]).then(([n, f]) => OWNER_ALERTS.noteAlerts(n.rows, f.rows, roster));
+
+  const artP = Promise.all([
+    pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+                 WHERE a.status = 'submitted' AND q.cancelled_at IS NULL`),
+    pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+                 WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL`),
+  ]).then(([s, q]) => OWNER_ALERTS.artAlerts({ submitted: s.rows, questions: q.rows }));
+  /* No studio key (a local copy): the studio is off, so its notifications
+     are neither made nor cleared, and the page does not call it a failure. */
+  /* Asked of the studio feed (read every sweep anyway), which knows whether
+     a studio key is set. */
+  const studioOff = await fetchStudioOrders().then((f) => f.error === 'JT_INTERNAL_KEY not set').catch(() => false);
+  const skipped = studioOff ? ['design library'] : [];
+  const libraryP = libraryWaiting({ studioOff }).then((library) => OWNER_ALERTS.artAlerts({ library }));
+
+  const customersP = Promise.all([
+    pool.query(UNANSWERED_REPLIES_SQL),
+    pool.query(`SELECT code, name, proof_ok_at FROM quotes WHERE proof_ok_at > $1 AND cancelled_at IS NULL`, [new Date(since)]),
+    pool.query(`SELECT n.id, n.quote_code, n.body, q.name FROM lead_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.kind = 'note' AND n.body LIKE 'Proof changes requested on the quote page:%' AND n.created_at > $1`, [new Date(since)]),
+    pool.query(`SELECT n.id, n.quote_code, n.body, q.name FROM lead_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.kind = 'customer_note' AND n.created_at > $1`, [new Date(since)]),
+    pool.query(`SELECT code, name, change_request FROM quotes
+                 WHERE NULLIF(btrim(change_request), '') IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_amount,0) = 0`),
+    pool.query(`SELECT id, quote_code FROM stripe_disputes WHERE status = ANY($1::text[])`, [[...DISPUTE_OPEN]]),
+  ]).then(([replies, proofOk, proofChanges, notes, changes, disputes]) => OWNER_ALERTS.customerAlerts({
+    replies: replies.rows, proofOk: proofOk.rows, proofChanges: proofChanges.rows, notes: notes.rows,
+    changes: changes.rows, disputes: disputes.rows }));
+
+  /* No roster is no helpers to check, not "no problems": their sections
+     say they could not be checked, and the bell clears nothing of theirs. */
+  if (failed.includes('team')) failed.push('hours', 'training');
+  const parts = await Promise.all([
+    part('hours', hoursP, null), part('training', trainingP, null), part('agreements', agreementsP, null),
+    part('tasks', tasksP, null), part('job notes', notesP, null), part('art', artP, null),
+    part('design library', libraryP, null), part('customers', customersP, null)]);
+  for (const p of parts) if (p) rows.push(...p);
+  return { rows, failed, skipped, at: Date.now() };
+}
+
+/** What needs the owner now: { rows, failed, at }. The sweep reads it fresh
+ *  every 2 minutes; a page takes that reading while it is under 2½ minutes
+ *  old. Callers at the same moment share one read. */
+async function ownerAlerts({ fresh = false, stale = false } = {}) {
+  const read = () => {
+    if (!ownerAlertsRunning) {
+      ownerAlertsRunning = readOwnerAlerts()
+        .then((r) => { ownerAlertsCache = r; return r; })
+        .finally(() => { ownerAlertsRunning = null; });
+    }
+    return ownerAlertsRunning;
+  };
+  if (!fresh && ownerAlertsCache && Date.now() - ownerAlertsCache.at < 150 * 1000) return ownerAlertsCache;
+  /* `stale`: a page shows the last reading at once and asks for a new one
+     behind it, rather than waiting on the studio and every helper's clock. */
+  if (stale && ownerAlertsCache) { read().catch(() => {}); return ownerAlertsCache; }
+  return read();
+}
 
 /** The owner's notifications from the shop's records, and the ones dealt with
  *  since cleared. `leads` is unansweredLeads(), read once per sweep. */
 async function ownerNotices(roster, leads) {
   const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
-  const [appr, art, revs, pays] = await Promise.all([
+  const [appr, alerts, revs, pays] = await Promise.all([
     notifyPart('approvals', pool.query(`SELECT id, kind, requested_by FROM staff_approvals WHERE status = 'pending' ORDER BY id DESC`)),
-    notifyPart('art', pool.query(
-      `SELECT a.quote_code, a.updated_at FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-        WHERE a.status = 'submitted' AND q.cancelled_at IS NULL`)),
+    notifyPart('owner alerts', ownerAlerts({ fresh: true })),
     notifyPart('reviews', pool.query(
       `SELECT id, name, rating, submitted_at FROM reviews
         WHERE submitted_at IS NOT NULL AND deleted_at IS NULL AND moderated_at IS NULL AND approved IS NOT TRUE`)),
@@ -41445,16 +41655,51 @@ async function ownerNotices(roster, leads) {
     }
     await notifyClearResolved('owner', 'lead', leads.map((l) => String(l.id)));
   }
-  if (appr && art) {
+  /* Staff approvals stand on their own: they used to wait on the art read
+     too, so a failed art query silently dropped every approval. */
+  if (appr) {
     for (const a of appr.rows) {
       out.push({ recipient: 'owner', kind: 'approval', ref: String(a.id), link: '/admin/approvals',
         title: `Approval waiting: ${APPROVAL_WORDS[a.kind] || 'a request'} from ${nameOf(roster, a.requested_by)}` });
     }
-    const artRef = (a) => `art:${a.quote_code}:${new Date(a.updated_at).getTime()}`;
-    for (const a of art.rows) {
-      out.push({ recipient: 'owner', kind: 'approval', ref: artRef(a), link: '/admin/approvals', title: `Art to approve on ${a.quote_code}` });
+  }
+  /* Everything else that needs the owner (owner-alerts.js): art, library,
+     hours, training, team and customers. A kind is cleared only when every
+     source behind it was read, so a failed read never reads as "dealt with". */
+  if (alerts) {
+    const ALERT_SOURCES = { approval: ['art'], art: ['art'], library: ['design library'], hours: ['hours'],
+      training: ['training'], team: ['agreements', 'tasks', 'job notes'], customer: ['customers'] };
+    const { rows: hooked } = await pool.query(
+      `SELECT DISTINCT regexp_replace(ref, ':.*$', '') AS key FROM notifications
+        WHERE recipient = 'owner' AND kind = 'library' AND ref NOT LIKE 'poll:%'`).catch(() => ({ rows: [] }));
+    const told = new Set(hooked.map((h) => h.key));
+    for (const r of alerts.rows) {
+      if (r.kind === 'library' && told.has(r.ref.replace(/^poll:/, ''))) continue;
+      out.push({ recipient: 'owner', kind: r.kind, ref: r.ref, link: r.href, title: r.title });
     }
-    await notifyClearResolved('owner', 'approval', [...appr.rows.map((a) => String(a.id)), ...art.rows.map(artRef)]);
+    for (const [kind, sources] of Object.entries(ALERT_SOURCES)) {
+      if (sources.some((s) => alerts.failed.includes(s) || (alerts.skipped || []).includes(s))) continue;
+      if (kind === 'approval' && !appr) continue;
+      const live = alerts.rows.filter((r) => r.kind === kind).map((r) => r.ref);
+      if (kind === 'approval') live.push(...appr.rows.map((a) => String(a.id)));
+      if (kind === 'library') {
+        /* The studio's webhook keys a design 'kind-id:revision' and the poll
+           'poll:kind-id': both are cleared by the design, so a design still
+           waiting keeps its webhook row and a decided one clears both. */
+        const keys = live.map((ref) => ref.replace(/^poll:/, ''));
+        await pool.query(
+          `UPDATE notifications SET read_at = NOW() WHERE recipient = 'owner' AND kind = 'library' AND read_at IS NULL
+              AND NOT (regexp_replace(regexp_replace(ref, '^poll:', ''), ':.*$', '') = ANY($1::text[]))`, [keys]);
+        continue;
+      }
+      await notifyClearResolved('owner', kind, live);
+    }
+  } else if (appr) {
+    /* The alert list failed: clear only plain staff approvals decided since,
+       leaving art refs alone. */
+    await pool.query(
+      `UPDATE notifications SET read_at = NOW() WHERE recipient = 'owner' AND kind = 'approval' AND read_at IS NULL
+          AND ref NOT LIKE 'art:%' AND NOT (ref = ANY($1::text[]))`, [appr.rows.map((a) => String(a.id))]);
   }
   if (revs) {
     for (const r of revs.rows) {
