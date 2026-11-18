@@ -1685,6 +1685,9 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS team_channel_messages_idx ON team_channel_messages (channel_id, id)');
+  /* A direct chat between two helpers is a channel with the audience
+     'pair:<lower id>:<higher id>' (team-channels.js): one per two people. */
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS team_channels_pair_idx ON team_channels (audience) WHERE audience LIKE 'pair:%'`);
   /* A file sent with a message (tools/lib/team-chat-files.js): its Cloudinary
      address and the name it had on the sender's computer. body is '' when a
      file goes on its own. */
@@ -28472,7 +28475,9 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                 loses the only number that says the shop is leaving money on the
                 table, and it is untrue about the customer. */ ''}
           ${l.email ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>` : ''}
+             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>`
+            : mayAddLeadEmail(l) ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('ae-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Add their email</button>` : ''}
           ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="var f=document.getElementById('tx-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Text them</button>` : ''}
           <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
@@ -28489,7 +28494,14 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                  style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
           <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
         </form>
-        ${l.email ? leadEmailBox(l, backField) : ''}
+        ${l.email ? leadEmailBox(l, backField) : mayAddLeadEmail(l) ? `
+        <form id="ae-${l.id}" method="POST" action="/admin/lead/${l.id}/contact-email"
+              style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">Found their email (on their website's contact page, say)? Add it here and the Email them button appears. Use a public business email, never a private one.</p>
+          <input name="email" type="email" maxlength="254" required placeholder="name@their-site.org" autocomplete="off"
+                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
+          <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Save email</button>
+        </form>` : ''}
         ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? leadTextBox(l, backField) : ''}`}
       </div>`;
 }
@@ -36420,6 +36432,61 @@ app.post('/admin/lead/:id/text', requireAdmin, async (req, res) => {
   }
 });
 
+/** May whoever is signed in add an email to this lead? Only when it has none,
+ *  and for a helper only on a lead that is theirs or nobody's (the route
+ *  checks the same again). */
+function mayAddLeadEmail(l) {
+  if (!l || String(l.email || '').trim()) return false;
+  const a = currentActor();
+  return !a || a.kind !== 'staff' || l.assigned_to == null || Number(l.assigned_to) === a.id;
+}
+
+/* Add an email to a lead that has none (owner, 2026-11-18: "add email to the
+   leads that are found with ai. Right now we cant send them emails"). The AI
+   finder often finds a website but no email; once one is added here the
+   lead's Email them button works. Only fills an empty email, never changes
+   one. A lead registered as a helper's own is checked again, as when it was
+   added: an email the shop already has makes it a shop lead, so an email
+   cannot be used to claim an existing customer. */
+app.post('/admin/lead/:id/contact-email', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const backTo = safeAdminPath(b.back, '/admin/leads');
+  if (!id) return res.redirect(backTo);
+  const email = String(b.email || '').trim().toLowerCase();
+  if (!email || email.length > 254 || !STAFF.EMAIL_RE.test(email)) return back(res, backTo, 'err', 'That email does not look right.');
+  const actor = currentActor();
+  const isStaff = !!(actor && actor.kind === 'staff');
+  try {
+    const { rows: [l] } = await pool.query(
+      `UPDATE submissions SET email = $2
+        WHERE id = $1 AND (email IS NULL OR btrim(email) = '')
+          AND ($3::int IS NULL OR assigned_to IS NULL OR assigned_to = $3)
+        RETURNING id, sale_type, rep_id`, [id, email, isStaff ? actor.id : null]);
+    if (!l) {
+      const { rows: [x] } = await pool.query('SELECT email, assigned_to FROM submissions WHERE id = $1', [id]);
+      return back(res, backTo, 'err', !x ? 'No such lead.'
+        : String(x.email || '').trim() ? 'That lead already has an email.'
+        : 'That lead is someone else\'s. Ask the owner to add it.');
+    }
+    let msg = 'Email saved. Use Email them to write to them.';
+    if (l.sale_type === 'rep' || l.sale_type === 'pending') {
+      const reason = CREDIT.knownReason(await seenCustomer({ email }, { excludeLead: id }), fmtDate);
+      if (reason) {
+        await pool.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
+        msg = `Email saved. It is now a shop lead: ${reason}.`;
+      }
+      logActivity(actor, reason ? 'lead email added: already known' : 'lead email added', { type: 'lead', id }, reason ? { reason } : {});
+    } else {
+      logActivity(actor, 'lead email added', { type: 'lead', id }, {});
+    }
+    return back(res, `${backTo}#lead-${id}`, 'ok', msg);
+  } catch (err) {
+    console.error('lead email add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save the email.');
+  }
+});
+
 app.post('/admin/lead/:id/assign', requireAdmin, async (req, res) => {
   const id = intIn(req.params.id);
   const to = req.body && req.body.to === 'me' && currentActor() && currentActor().kind === 'staff'
@@ -39897,11 +39964,41 @@ async function teamChannels({ withArchived = false } = {}) {
   return rows;
 }
 
-/** The channels this person may use: all of them for the owner, their
- *  track's (and everyone's) for a helper. */
+/** The channels this person is in, whose messages count as unread for them:
+ *  every group channel for the owner; their track's, everyone's and their own
+ *  direct chats with teammates for a helper. A direct chat between two helpers
+ *  is not the owner's: she may open it (chatChannelFor) but is never pinged. */
 function channelsFor(actor, channels, roster) {
   const me = actor.kind === 'staff' ? roster.find((r) => r.id === actor.id) : null;
-  return channels.filter((c) => CHAN.mayUse(actor, c, me, TRAINING.trackOf));
+  return channels.filter((c) => CHAN.isIn(actor, c, me, TRAINING.trackOf));
+}
+
+/** A channel's name on screen, from this person's side: "# Everyone", the
+ *  teammate's name in a helper's direct chat, "Ana & Ben" for the owner. */
+function channelLabel(c, actor, roster) {
+  const pair = CHAN.pairOf(c);
+  if (!pair) return `# ${c.name}`;
+  const other = actor.kind === 'staff' ? CHAN.pairOther(c, actor.id) : null;
+  return other ? nameOf(roster, other) : `${nameOf(roster, pair[0])} & ${nameOf(roster, pair[1])}`;
+}
+
+/** The direct chat between helpers a and b, made the first time either opens
+ *  it. Both must be on the roster; the caller checks who may. */
+async function pairChannel(a, b) {
+  const audience = CHAN.pairAudience(a, b);
+  if (!audience) return null;
+  await pool.query(`INSERT INTO team_channels (name, audience) VALUES ('Direct', $1)
+                    ON CONFLICT (audience) WHERE audience LIKE 'pair:%' DO NOTHING`, [audience]);
+  const { rows: [c] } = await pool.query('SELECT id, name, audience, archived_at FROM team_channels WHERE audience = $1', [audience]);
+  return c || null;
+}
+
+/** A teammate this helper can start a direct chat with: on the roster,
+ *  working, not archived, not themselves. */
+function chatTeammate(actor, raw, roster) {
+  const id = intIn(raw);
+  if (!id || actor.kind !== 'staff' || id === actor.id) return null;
+  return roster.find((r) => r.id === id && r.active && !r.archived_at) || null;
 }
 
 /** Unread channel messages per channel for this reader: newer than what they
@@ -39944,12 +40041,25 @@ function chatThreadFor(raw, roster) {
   return id && roster.some((r) => r.id === id) ? id : null;
 }
 
-/** The channel a request is about, if this person may use it. */
+/** The channel a request is about, if this person may open it. The owner
+ *  may open a direct chat between two helpers to read it. */
 function chatChannelFor(raw, channels, roster) {
   const id = intIn(raw);
   if (!id) return null;
   const c = channels.find((x) => x.id === id);
-  return c && channelsFor(currentActor() || OWNER_ACTOR, [c], roster).length ? c : null;
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = actor.kind === 'staff' ? roster.find((r) => r.id === actor.id) : null;
+  return c && CHAN.mayUse(actor, c, me, TRAINING.trackOf) ? c : null;
+}
+
+/** May this person post in the channel? Not the owner in two helpers' direct
+ *  chat, and nobody once the other helper is disabled. Returns '' or why not. */
+function channelPostBlock(c, actor, roster) {
+  const pair = CHAN.pairOf(c);
+  if (!pair) return '';
+  if (actor.kind !== 'staff') return 'This is a chat between two helpers. You can read it, but not post in it.';
+  const other = roster.find((r) => r.id === CHAN.pairOther(c, actor.id));
+  return other && other.active && !other.archived_at ? '' : `${other ? other.name : 'That helper'} is disabled, so this chat is read-only.`;
 }
 
 async function chatLines(staffId, after = 0) {
@@ -39977,9 +40087,12 @@ function chatMarkRead(staffId) {
 }
 
 /** A channel is read up to the newest message this person has had on screen. */
-async function channelMarkRead(channelId, upTo) {
+async function channelMarkRead(channelId, upTo, channel = null) {
   if (!upTo) return;
   const actor = currentActor() || OWNER_ACTOR;
+  /* The owner reading two helpers' direct chat is not one of them reading it:
+     no "Seen by June" on their lines. */
+  if (channel && actor.kind !== 'staff' && CHAN.pairOf(channel)) return;
   const reader = CHAN.readerKey(actor);
   try {
     /* The time each newly read message was seen: those after what this
@@ -40133,14 +40246,40 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     const actor = currentActor() || OWNER_ACTOR;
     const owner = actor.kind !== 'staff';
     const [roster, allChannels] = await Promise.all([staffRoster(), teamChannels()]);
+    /* A helper opening a teammate's name (?with=<id>): their direct chat,
+       made the first time, then opened by its own address. */
+    if (req.query.with != null) {
+      const mate = chatTeammate(actor, req.query.with, roster);
+      const c = mate && await pairChannel(actor.id, mate.id);
+      return c ? res.redirect(`/admin/team-chat?channel=${c.id}`) : back(res, '/admin/team-chat', 'err', 'That teammate is not on the team.');
+    }
     const channels = channelsFor(actor, allChannels, roster);
     const unreadCh = await channelUnread(actor, channels.map((c) => c.id));
     const channel = chatChannelFor(req.query.channel, allChannels, roster);
     let staffId = channel ? null : chatThreadFor(req.query.staff, roster);
-    const chanChips = channels.map((c) => ({ label: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}`,
+    const chanChips = channels.filter((c) => !CHAN.pairOf(c)).map((c) => ({ label: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}`,
       on: !!channel && channel.id === c.id, count: unreadCh.get(c.id) || null }));
     let people = [];
     let dmChips = [];
+    /* Direct chats between helpers: a helper's own, one per working teammate
+       (and any older one with someone since disabled); for the owner, every
+       one that has a message in it, to read. */
+    let mateChips = [];
+    if (owner) {
+      const { rows: used } = await pool.query('SELECT DISTINCT channel_id FROM team_channel_messages WHERE channel_id = ANY($1)',
+        [allChannels.filter((c) => CHAN.pairOf(c)).map((c) => c.id)]);
+      const has = new Set(used.map((u) => Number(u.channel_id)));
+      mateChips = allChannels.filter((c) => CHAN.pairOf(c) && (has.has(c.id) || (channel && channel.id === c.id)))
+        .map((c) => ({ label: channelLabel(c, actor, roster), href: `/admin/team-chat?channel=${c.id}`, on: !!channel && channel.id === c.id }));
+    } else {
+      const mine = new Map(channels.filter((c) => CHAN.pairOf(c)).map((c) => [CHAN.pairOther(c, actor.id), c]));
+      const mates = roster.filter((r) => r.id !== actor.id && !r.archived_at && (r.active || mine.has(r.id)));
+      mateChips = mates.map((r) => {
+        const c = mine.get(r.id);
+        return { label: r.name + (r.active ? '' : ' (disabled)'), href: c ? `/admin/team-chat?channel=${c.id}` : `/admin/team-chat?with=${r.id}`,
+          on: !!(c && channel && channel.id === c.id), count: (c && unreadCh.get(c.id)) || null };
+      });
+    }
     if (owner) {
       const { rows: counts } = await pool.query(
         `SELECT staff_id, COUNT(*) FILTER (WHERE NOT from_owner AND read_at IS NULL)::int AS unread,
@@ -40178,15 +40317,22 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     let lines, lineHtml, canWrite, intro, placeholder, hidden, pollQuery;
     let seen = {};
     let open = new Set();
+    let readOnly = 'This helper is disabled, so the conversation is read-only.';
     if (channel) {
       lines = await channelLines(channel.id);
       const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
-      await channelMarkRead(channel.id, last);
+      await channelMarkRead(channel.id, last, channel);
       seen = await chatSeen({ channelId: channel.id }, roster).catch(() => ({}));
       lineHtml = (m) => chatLineHtml(channelLineJson(m, roster, open), seen);
-      canWrite = true;
-      intro = `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`;
-      placeholder = `Message # ${channel.name}`;
+      const block = channelPostBlock(channel, actor, roster);
+      canWrite = !block;
+      if (block) readOnly = block;
+      const label = channelLabel(channel, actor, roster);
+      intro = !CHAN.pairOf(channel)
+        ? `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`
+        : owner ? `Between ${escEmail(label.replace(' & ', ' and '))}. You can read it; it is their chat, so you do not post here.`
+        : `Just you and ${escEmail(label)}. June can read it too. Customers never see this.`;
+      placeholder = CHAN.pairOf(channel) ? `Message ${label}` : `Message # ${channel.name}`;
       hidden = `<input type="hidden" name="channel" value="${channel.id}">`;
       pollQuery = `channel=${channel.id}`;
     } else {
@@ -40216,6 +40362,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       <div class="tc-tabs" data-tctabs>
       <div class="muted" style="font-size:12px;margin:4px 0">Channels</div>${filterChips(chanChips)}
       <div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Direct' : 'Direct with June'}</div>${filterChips(dmChips)}
+      ${mateChips.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Between helpers (you can read these)' : 'Direct with a teammate'}</div>${filterChips(mateChips)}` : ''}
       </div>
       <div class="card">
         <div class="tc-log" data-tclog data-after="${last}" data-since="${escEmail(since)}">${lines.length ? lines.map(lineHtml).join('')
@@ -40229,7 +40376,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
           <textarea name="body" rows="3" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
           <button type="submit" class="btn" data-tcsend>Send</button>
         </form>
-        <div class="tc-filestat muted" data-tcfilestat hidden></div>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
+        <div class="tc-filestat muted" data-tcfilestat hidden></div>` : `<p class="muted">${escEmail(readOnly)}</p>`}
       </div>
       <details class="card" id="alerts"><summary><b>Email alerts</b> <span class="muted">${alertsOn ? 'on' : 'off'}</span></summary>
         <p class="muted">When a message waits ${CHAN.ALERT_AFTER_MIN} minutes without you reading it, you get an email listing what is waiting: at most ${CHAT_ALERTS_PER_DAY} emails a day. A conversation is not emailed again until you have read it. The ding and pop-ups are under <a href="/admin/notifications/settings">Notification settings</a>.</p>
@@ -40237,7 +40384,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
           <input type="hidden" name="on" value="${alertsOn ? '0' : '1'}">
           <button type="submit" class="btn btn-ghost">${alertsOn ? 'Turn email alerts off' : 'Turn email alerts on'}</button></form></details>
       ${owner ? `<details class="card"><summary><b>Channels</b> <span class="muted">add or archive</span></summary>
-        ${allChannels.map((c) => `<div class="row-i"><span class="row-main"><b># ${escEmail(c.name)}</b>
+        ${allChannels.filter((c) => !CHAN.pairOf(c)).map((c) => `<div class="row-i"><span class="row-main"><b># ${escEmail(c.name)}</b>
           <div class="row-sub">${escEmail(CHAN.AUDIENCES[c.audience] || c.audience)}</div></span>
           <span class="row-end"><form method="post" action="/admin/team-chat/channels" style="margin:0">
             <input type="hidden" name="action" value="archive"><input type="hidden" name="id" value="${c.id}">
@@ -40396,6 +40543,8 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
       const ch = chatChannelFor(b.channel, channels, roster);
       if (!ch) return back(res, '/admin/team-chat', 'err', 'That channel is not one of yours.');
       const backTo = `/admin/team-chat?channel=${ch.id}`;
+      const block = channelPostBlock(ch, actor, roster);
+      if (block) return back(res, backTo, 'err', block);
       if (badFile) return back(res, backTo, 'err', FILE_ERR);
       if (!body && !fileUrl) return back(res, backTo, 'err', 'Write something or pick a file first.');
       if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
@@ -40640,7 +40789,7 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
       const ch = chatChannelFor(req.query.channel, allChannels, roster);
       if (!ch) return res.status(404).json({ lines: [] });
       const lines = await channelLines(ch.id, after);
-      if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id));
+      if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id), ch);
       const seen = await chatSeen({ channelId: ch.id }, roster).catch(() => ({}));
       const open = await openableTags(lines);
       return res.json({ lines: lines.map((m) => channelLineJson(m, roster, open)), seen, tabs: await counts(), now,
@@ -40941,12 +41090,12 @@ async function mailNewPage(res, actor, v, status = 200) {
   const fileUrl = v.fileUrl && CHATFILES.fileUrlOk(v.fileUrl, QPHOTOS.cloudName()) ? v.fileUrl : '';
   res.status(status).set('Cache-Control', 'no-store');
   res.send(adminPage('New conversation', `${MAIL_CSS}
-    ${pageHeader('New conversation', staff ? 'It goes to June. Add a teammate if they should see it too.' : 'Pick who it is for. Each one you start is its own conversation.')}
+    ${pageHeader('New conversation', staff ? 'Tick the teammates it is for. June is always in it too.' : 'Pick who it is for. Each one you start is its own conversation.')}
     ${v.err ? `<div class="warn">${escEmail(v.err)}</div>` : ''}
     ${codeRaw && !code && !v.err ? `<div class="warn">There is no order ${escEmail(codeRaw)} you can open, so it is not attached.</div>` : ''}
     <form method="post" action="/admin/mailbox" class="card" data-mailform${staff ? '' : ' data-needto'}>
       <label>To</label>
-      ${staff ? '<p style="margin:4px 0 8px"><b>June</b></p>' : ''}
+      ${staff ? `<p style="margin:4px 0 8px"><b>June</b>${helpers.length ? ' <span class="muted">and any teammates you tick:</span>' : ''}</p>` : ''}
       ${helpers.length ? `<div class="row" style="gap:6px 14px;flex-wrap:wrap;margin:4px 0 12px">${helpers.map((r) => `
         <label style="text-transform:none;letter-spacing:0;font-weight:600;margin:0"><input type="checkbox" name="to" value="${r.id}"${picked.has(r.id) ? ' checked' : ''} style="width:auto;margin:0 6px 0 0">${escEmail(r.name)}</label>`).join('')}</div>`
         : staff ? '' : '<p class="muted">No helpers yet. Add one on Staff and permissions.</p>'}
@@ -41259,7 +41408,7 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
       href: rd.actor.kind === 'staff' ? '/admin/team-chat' : `/admin/team-chat?staff=${d.staff_id}` });
   }
   /* Channels. */
-  const mine = channels.filter((c) => (rd.actor.kind === 'staff' ? CHAN.isMember(c, rd.row, TRAINING.trackOf) : true));
+  const mine = channels.filter((c) => (rd.actor.kind === 'staff' ? CHAN.isMember(c, rd.row, TRAINING.trackOf) : !CHAN.pairOf(c)));
   for (const c of mine) {
     const st = state.get(`${reader}|ch:${c.id}`);
     const { rows: [u] } = await pool.query(
@@ -41267,7 +41416,8 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
         WHERE channel_id = $1 AND id > $2 AND staff_id IS DISTINCT FROM $3
           AND created_at < NOW() - make_interval(mins => $4)`,
       [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, minAge]);
-    if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n, where: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
+    if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n,
+      where: CHAN.pairOf(c) ? `your chat with ${channelLabel(c, rd.actor, roster)}` : `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
   }
   /* Mailbox conversations with something this reader has not seen, Done or
      not: someone else marking it Done does not mean this reader read it. */

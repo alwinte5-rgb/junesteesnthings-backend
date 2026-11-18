@@ -68,7 +68,9 @@ signs they post for several brands or clients (a client list, a services
 page, job posts for social media help). Prefer ones with a public way to
 contact them: a business email, a contact page or an active business
 profile. Use their own website or official page as the source wherever you
-can.
+can. Look for a public email address on their contact, about or team page
+and put it in email whenever one is listed: the agent reaches new customers
+by email first, so a lead with an email is worth more than one without.
 
 Rules:
 - Only real businesses you found in the search results. Never invent a
@@ -99,7 +101,9 @@ that are likely to need custom shirts or merch soon (an upcoming season,
 event, reunion date, opening, fundraiser). Prefer ones with a public way to
 contact them: an email, a phone number, a contact page or an active social
 profile. Use their own website or official page as the source wherever you
-can.
+can. Look for a public email address on their contact, about or staff page
+and put it in email whenever one is listed: the shop reaches new customers by
+email first, so a lead with an email is worth more than one without.
 
 Rules:
 - Only real organisations you found in the search results. Never invent a
