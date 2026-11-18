@@ -31,6 +31,7 @@ function registerDesignLibrary(app, d) {
   const { requireAdmin, isOwner, adminPage, pageHeader, esc, studioFetch, getCatalog, requireInternalKey,
     notifyAdd, sendEmail, NOTIFY_EMAIL, pool, invalidate, rawBody } = d;
   const endpoint = 'https://design.jtees.net/jt-library-admin.php';
+  require('./artwork-handoff').queueArtworkHandoff(pool);
   let cache = null, at = 0;
   async function read(publicOnly = false) {
     const r = await studioFetch(endpoint + (publicOnly ? '?view=public' : ''), { timeoutMs: 25000 });

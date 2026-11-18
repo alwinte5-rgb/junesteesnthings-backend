@@ -543,6 +543,7 @@ const ROUTES = {
   'GET /admin/artwork': 'art.work',
   'GET /admin/artwork/data': 'art.work',
   'GET /admin/artwork/source': 'art.work',
+  'GET /admin/artwork/file': 'art.work',
   'POST /admin/artwork/preview': 'art.work',
   'POST /admin/artwork/save': 'art.work',
   'GET /admin/studio-controls/stock': 'owner',
