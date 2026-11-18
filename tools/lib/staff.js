@@ -519,6 +519,8 @@ const ROUTES = {
   'GET /admin/team-chat': 'any',
   'POST /admin/team-chat': 'any',
   'POST /admin/team-chat/edit': 'any',
+  /* A helper opens a direct chat with a teammate (2026-11-18). */
+  'POST /admin/team-chat/start': 'any',
   'GET /admin/api/team-chat': 'any',
   'POST /admin/api/chat-file-signature': 'any',
   'GET /admin/team-chat/file/:kind/:id': 'any',

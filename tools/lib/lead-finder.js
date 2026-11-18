@@ -70,7 +70,8 @@ contact them: a business email, a contact page or an active business
 profile. Use their own website or official page as the source wherever you
 can. Look for a public email address on their contact, about or team page
 and put it in email whenever one is listed: the agent reaches new customers
-by email first, so a lead with an email is worth more than one without.
+by email first, so a lead with an email is worth more than one without. Only an
+email you saw written on a page: never guess one from the domain (info@...).
 
 Rules:
 - Only real businesses you found in the search results. Never invent a
@@ -103,7 +104,8 @@ contact them: an email, a phone number, a contact page or an active social
 profile. Use their own website or official page as the source wherever you
 can. Look for a public email address on their contact, about or staff page
 and put it in email whenever one is listed: the shop reaches new customers by
-email first, so a lead with an email is worth more than one without.
+email first, so a lead with an email is worth more than one without. Only an
+email you saw written on a page: never guess one from the domain (info@...).
 
 Rules:
 - Only real organisations you found in the search results. Never invent a

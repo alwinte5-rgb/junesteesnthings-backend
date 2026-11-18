@@ -36438,7 +36438,9 @@ app.post('/admin/lead/:id/text', requireAdmin, async (req, res) => {
 function mayAddLeadEmail(l) {
   if (!l || String(l.email || '').trim()) return false;
   const a = currentActor();
-  return !a || a.kind !== 'staff' || l.assigned_to == null || Number(l.assigned_to) === a.id;
+  if (!a || a.kind !== 'staff') return true;
+  /* Never another helper's: by who has it, or by whose credit it carries. */
+  return (l.assigned_to == null || Number(l.assigned_to) === a.id) && (l.rep_id == null || Number(l.rep_id) === a.id);
 }
 
 /* Add an email to a lead that has none (owner, 2026-11-18: "add email to the
@@ -36457,34 +36459,38 @@ app.post('/admin/lead/:id/contact-email', requireAdmin, async (req, res) => {
   if (!email || email.length > 254 || !STAFF.EMAIL_RE.test(email)) return back(res, backTo, 'err', 'That email does not look right.');
   const actor = currentActor();
   const isStaff = !!(actor && actor.kind === 'staff');
+  const toLead = `${backTo.split('#')[0]}#lead-${id}`;
+  /* The email and the "already a customer?" check land together or not at
+     all: a saved email that skipped the check would keep a helper's credit
+     for a customer the shop already has. */
+  const client = await pool.connect();
   try {
-    const { rows: [l] } = await pool.query(
+    await client.query('BEGIN');
+    const { rows: [l] } = await client.query(
       `UPDATE submissions SET email = $2
         WHERE id = $1 AND (email IS NULL OR btrim(email) = '')
-          AND ($3::int IS NULL OR assigned_to IS NULL OR assigned_to = $3)
+          AND ($3::int IS NULL OR ((assigned_to IS NULL OR assigned_to = $3) AND (rep_id IS NULL OR rep_id = $3)))
         RETURNING id, sale_type, rep_id`, [id, email, isStaff ? actor.id : null]);
     if (!l) {
-      const { rows: [x] } = await pool.query('SELECT email, assigned_to FROM submissions WHERE id = $1', [id]);
+      await client.query('ROLLBACK');
+      const { rows: [x] } = await pool.query('SELECT email FROM submissions WHERE id = $1', [id]);
       return back(res, backTo, 'err', !x ? 'No such lead.'
         : String(x.email || '').trim() ? 'That lead already has an email.'
         : 'That lead is someone else\'s. Ask the owner to add it.');
     }
-    let msg = 'Email saved. Use Email them to write to them.';
+    let reason = '';
     if (l.sale_type === 'rep' || l.sale_type === 'pending') {
-      const reason = CREDIT.knownReason(await seenCustomer({ email }, { excludeLead: id }), fmtDate);
-      if (reason) {
-        await pool.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
-        msg = `Email saved. It is now a shop lead: ${reason}.`;
-      }
-      logActivity(actor, reason ? 'lead email added: already known' : 'lead email added', { type: 'lead', id }, reason ? { reason } : {});
-    } else {
-      logActivity(actor, 'lead email added', { type: 'lead', id }, {});
+      reason = CREDIT.knownReason(await seenCustomer({ email }, { excludeLead: id }), fmtDate);
+      if (reason) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
     }
-    return back(res, `${backTo}#lead-${id}`, 'ok', msg);
+    await client.query('COMMIT');
+    logActivity(actor, reason ? 'lead email added: already known' : 'lead email added', { type: 'lead', id }, reason ? { reason } : {});
+    return back(res, toLead, 'ok', reason ? `Email saved. It is now a shop lead: ${reason}.` : 'Email saved. Use Email them to write to them.');
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('lead email add failed:', err.message);
-    return back(res, backTo, 'err', 'Could not save the email.');
-  }
+    return back(res, backTo, 'err', 'Could not save the email. Nothing was changed; try again.');
+  } finally { client.release(); }
 });
 
 app.post('/admin/lead/:id/assign', requireAdmin, async (req, res) => {
@@ -40246,13 +40252,6 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     const actor = currentActor() || OWNER_ACTOR;
     const owner = actor.kind !== 'staff';
     const [roster, allChannels] = await Promise.all([staffRoster(), teamChannels()]);
-    /* A helper opening a teammate's name (?with=<id>): their direct chat,
-       made the first time, then opened by its own address. */
-    if (req.query.with != null) {
-      const mate = chatTeammate(actor, req.query.with, roster);
-      const c = mate && await pairChannel(actor.id, mate.id);
-      return c ? res.redirect(`/admin/team-chat?channel=${c.id}`) : back(res, '/admin/team-chat', 'err', 'That teammate is not on the team.');
-    }
     const channels = channelsFor(actor, allChannels, roster);
     const unreadCh = await channelUnread(actor, channels.map((c) => c.id));
     const channel = chatChannelFor(req.query.channel, allChannels, roster);
@@ -40265,6 +40264,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
        (and any older one with someone since disabled); for the owner, every
        one that has a message in it, to read. */
     let mateChips = [];
+    let mateStart = [];
     if (owner) {
       const { rows: used } = await pool.query('SELECT DISTINCT channel_id FROM team_channel_messages WHERE channel_id = ANY($1)',
         [allChannels.filter((c) => CHAN.pairOf(c)).map((c) => c.id)]);
@@ -40274,11 +40274,14 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     } else {
       const mine = new Map(channels.filter((c) => CHAN.pairOf(c)).map((c) => [CHAN.pairOther(c, actor.id), c]));
       const mates = roster.filter((r) => r.id !== actor.id && !r.archived_at && (r.active || mine.has(r.id)));
-      mateChips = mates.map((r) => {
+      mateChips = mates.filter((r) => mine.has(r.id)).map((r) => {
         const c = mine.get(r.id);
-        return { label: r.name + (r.active ? '' : ' (disabled)'), href: c ? `/admin/team-chat?channel=${c.id}` : `/admin/team-chat?with=${r.id}`,
-          on: !!(c && channel && channel.id === c.id), count: (c && unreadCh.get(c.id)) || null };
+        return { label: r.name + (r.active ? '' : ' (disabled)'), href: `/admin/team-chat?channel=${c.id}`,
+          on: !!(channel && channel.id === c.id), count: unreadCh.get(c.id) || null };
       });
+      /* Teammates with no chat yet: a button each, which makes it (a POST, so
+         a prefetched or planted link never does). */
+      mateStart = mates.filter((r) => r.active && !mine.has(r.id));
     }
     if (owner) {
       const { rows: counts } = await pool.query(
@@ -40330,7 +40333,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       const label = channelLabel(channel, actor, roster);
       intro = !CHAN.pairOf(channel)
         ? `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`
-        : owner ? `Between ${escEmail(label.replace(' & ', ' and '))}. You can read it; it is their chat, so you do not post here.`
+        : owner ? `Between ${escEmail(CHAN.pairOf(channel).map((id) => nameOf(roster, id)).join(' and '))}. You can read it; it is their chat, so you do not post here.`
         : `Just you and ${escEmail(label)}. June can read it too. Customers never see this.`;
       placeholder = CHAN.pairOf(channel) ? `Message ${label}` : `Message # ${channel.name}`;
       hidden = `<input type="hidden" name="channel" value="${channel.id}">`;
@@ -40362,7 +40365,9 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       <div class="tc-tabs" data-tctabs>
       <div class="muted" style="font-size:12px;margin:4px 0">Channels</div>${filterChips(chanChips)}
       <div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Direct' : 'Direct with June'}</div>${filterChips(dmChips)}
-      ${mateChips.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Between helpers (you can read these)' : 'Direct with a teammate'}</div>${filterChips(mateChips)}` : ''}
+      ${mateChips.length || mateStart.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Between helpers (you can read these)' : 'Direct with a teammate'}</div>${mateChips.length ? filterChips(mateChips) : ''}` : ''}
+      ${mateStart.length ? `<form method="post" action="/admin/team-chat/start" class="chips" style="margin-top:4px">${mateStart.map((r) =>
+        `<button type="submit" name="with" value="${r.id}" class="chip-f" style="cursor:pointer">+ ${escEmail(r.name)}</button>`).join('')}</form>` : ''}
       </div>
       <div class="card">
         <div class="tc-log" data-tclog data-after="${last}" data-since="${escEmail(since)}">${lines.length ? lines.map(lineHtml).join('')
@@ -40580,6 +40585,20 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
   }
 });
 
+/* A helper starts (or reopens) their direct chat with a teammate. */
+app.post('/admin/team-chat/start', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const mate = chatTeammate(actor, (req.body || {}).with, await staffRoster());
+    const c = mate && await pairChannel(actor.id, mate.id);
+    if (!c || c.archived_at) return back(res, '/admin/team-chat', 'err', 'That teammate is not on the team.');
+    return res.redirect(303, `/admin/team-chat?channel=${c.id}`);
+  } catch (err) {
+    console.error('team chat start failed:', err.message);
+    return back(res, '/admin/team-chat', 'err', 'Could not open that chat. Try again.');
+  }
+});
+
 /* The author rewords their own message (owner, 2026-10-14: "add an edit
    feature on the messages"). Only the author: a helper their own lines, the
    owner hers; in a channel still open to them. The first wording is kept
@@ -40598,6 +40617,8 @@ app.post('/admin/team-chat/edit', requireAdmin, async (req, res) => {
       const ch = m && chatChannelFor(m.channel_id, channels, roster);
       if (!m || !ch || m.staff_id !== staff) return back(res, '/admin/team-chat', 'err', 'You can edit only your own messages.');
       const to = `/admin/team-chat?channel=${ch.id}`;
+      const block = channelPostBlock(ch, actor, roster);
+      if (block) return back(res, to, 'err', block);
       if (!body && !m.file_url) return back(res, to, 'err', 'A message needs words. Leave it as it was, or write something.');
       if (body.length > TEAM_CHAT_MAX) return back(res, to, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
       const { rowCount } = await pool.query(
@@ -40644,7 +40665,9 @@ app.post('/admin/team-chat/channels', requireAdmin, async (req, res) => {
     if (b.action === 'archive') {
       const id = intIn(b.id);
       if (!id) return back(res, '/admin/team-chat', 'err', 'No such channel.');
-      const { rowCount } = await pool.query('UPDATE team_channels SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL', [id]);
+      /* A direct chat between two helpers is theirs, never archived: one per
+         pair, so an archived one could never be opened again. */
+      const { rowCount } = await pool.query(`UPDATE team_channels SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL AND audience NOT LIKE 'pair:%'`, [id]);
       return back(res, '/admin/team-chat', rowCount ? 'ok' : 'err', rowCount ? 'Channel archived.' : 'No such channel.');
     }
     const name = CHAN.cleanName(b.name);
@@ -41391,7 +41414,7 @@ async function chatReadState() {
  *  least `minAge` minutes old: [{ convo, first, last, n, where, href, mail }].
  *  The chat alert emails and the notifications bell both read this, so they
  *  cannot disagree about what is unread. */
-async function unreadConversations(rd, roster, channels, state, minAge) {
+async function unreadConversations(rd, roster, channels, state, minAge, names = roster) {
   const reader = CHAN.readerKey(rd.actor);
   const due = [];
   /* Direct conversations. */
@@ -41417,7 +41440,7 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
           AND created_at < NOW() - make_interval(mins => $4)`,
       [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, minAge]);
     if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n,
-      where: CHAN.pairOf(c) ? `your chat with ${channelLabel(c, rd.actor, roster)}` : `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
+      where: CHAN.pairOf(c) ? `your chat with ${channelLabel(c, rd.actor, names)}` : `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
   }
   /* Mailbox conversations with something this reader has not seen, Done or
      not: someone else marking it Done does not mean this reader read it. */
@@ -41439,7 +41462,8 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
    claimed, so a conversation still unread tomorrow is in tomorrow's first. */
 const CHAT_ALERTS_PER_DAY = 2;
 async function sendChatAlerts() {
-  const [roster, channels] = await Promise.all([staffRoster({ activeOnly: true }), teamChannels()]);
+  /* names: everyone, so a chat with a since-disabled teammate still says who. */
+  const [roster, channels, names] = await Promise.all([staffRoster({ activeOnly: true }), teamChannels(), staffRoster()]);
   const { rows: prefs } = await pool.query('SELECT reader, email_alerts FROM team_chat_prefs');
   const off = new Set(prefs.filter((p) => !p.email_alerts).map((p) => p.reader));
   const state = await chatReadState();
@@ -41448,7 +41472,7 @@ async function sendChatAlerts() {
   for (const rd of chatReaders(roster).filter((r) => r.to)) {
     const reader = CHAN.readerKey(rd.actor);
     if (off.has(reader)) continue;
-    const due = (await unreadConversations(rd, roster, channels, state, CHAN.ALERT_AFTER_MIN)).filter((d) => {
+    const due = (await unreadConversations(rd, roster, channels, state, CHAN.ALERT_AFTER_MIN, names)).filter((d) => {
       const st = state.get(`${reader}|${d.convo}`);
       return CHAN.alertDue(d.first, st && st.alerted_id);
     });
@@ -41755,11 +41779,11 @@ async function taskNotices(roster) {
  *  marked read, so the bell clears itself. A reader whose read fails is
  *  skipped, never cleared, and the next reader still runs. */
 async function messageNotices(roster) {
-  const [channels, state] = await Promise.all([teamChannels(), chatReadState()]);
+  const [channels, state, names] = await Promise.all([teamChannels(), chatReadState(), staffRoster()]);
   for (const rd of chatReaders(roster)) {
     const reader = CHAN.readerKey(rd.actor);
     try {
-      const due = await unreadConversations(rd, roster, channels, state, 0);
+      const due = await unreadConversations(rd, roster, channels, state, 0, names);
       const now = due.map((d) => ({ kind: d.mail ? 'mail' : 'chat', ref: NOTIFY.messageRef(d.convo, d.first), title: NOTIFY.messageTitle(d.n, d.where), link: d.href }));
       if (now.length) {
         await pool.query(

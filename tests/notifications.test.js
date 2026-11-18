@@ -96,10 +96,10 @@ test('a helper hears about their own requests and their own leads only, and not 
 
 test('message notifications read what the chat alerts read, and clear once the conversation is read', () => {
   const msgs = fn('async function messageNotices(');
-  assert.match(msgs, /unreadConversations\(rd, roster, channels, state, 0\)/);
+  assert.match(msgs, /unreadConversations\(rd, roster, channels, state, 0, names\)/);
   assert.match(msgs, /DO UPDATE SET title = EXCLUDED\.title WHERE notifications\.read_at IS NULL/);
   assert.match(msgs, /SET read_at = NOW\(\)[\s\S]*kind = ANY\(\$3::text\[\]\)[\s\S]*NOT \(ref = ANY\(\$2::text\[\]\)\)/);
-  assert.match(fn('async function sendChatAlerts('), /unreadConversations\(rd, roster, channels, state, CHAN\.ALERT_AFTER_MIN\)/);
+  assert.match(fn('async function sendChatAlerts('), /unreadConversations\(rd, roster, channels, state, CHAN\.ALERT_AFTER_MIN, names\)/);
 });
 
 test('emails are claimed before sending, and messages are never emailed twice', () => {
