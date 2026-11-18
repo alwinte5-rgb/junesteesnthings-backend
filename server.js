@@ -34049,7 +34049,9 @@ async function renderStaffPage(req, res, extra = '') {
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
         <input type="hidden" name="action" value="track">
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
-          `<option value="${k}"${TRAINING.trackOf(s.training_track) === k ? ' selected' : ''}>${escEmail(t.label)}</option>`).join('')}</select></label>
+          `<option value="${k}"${TRAINING.trackOf(s.training_track) === k ? ' selected' : ''}>${escEmail(t.label)} (starts on ${escEmail((STAFF.PRESETS[STAFF.presetForTrack(k)] || {}).label || 'Training')})</option>`).join('')}</select></label>
+        <label style="display:flex;gap:6px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600;margin:0">
+          <input type="checkbox" name="apply_preset" value="1" checked style="width:auto;margin:0"> and set their permissions to what that path starts with</label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
@@ -34289,8 +34291,21 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         return back(res, '/admin/staff', 'ok', `${s.name} can sign in again.`);
       case 'track': {
         const track = TRAINING.trackOf(b.training_track);
-        await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
-        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path.`);
+        /* A new path changes the job, so by default it changes what they may
+           do too (owner, 2026-11-18): before, the path moved and the
+           permissions stayed, so a helper given apparel sales could not
+           draft a quote, or could send one without June's OK. Their training
+           ticks are kept either way. */
+        const presetName = b.apply_preset === '1' ? STAFF.presetForTrack(track) : null;
+        const p = presetName ? STAFF.presetPerms(presetName) : null;
+        if (p) {
+          await pool.query('UPDATE staff SET training_track = $2, perms = $3 WHERE id = $1', [id, track, JSON.stringify(p)]);
+        } else {
+          await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
+        }
+        const lost = p && lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path${
+          p ? `, with ${STAFF.PRESETS[presetName].label} permissions` : ''}.${lost}`);
       }
       case 'zone': {
         const z = String(b.time_zone || '');
@@ -34905,7 +34920,9 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
           <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}${
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
-            trainings[i] && trainings[i].complete && nextPresetFor(s)
+            /* Ready is the path's ready sign-off (a combined path's apparel one),
+               not every step of both duties: the owner's alert says the same. */
+            trainings[i] && (trainings[i].complete || trainings[i].steps.some((x) => x.key === trainings[i].readyKey && x.done)) && nextPresetFor(s)
               ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[nextPresetFor(s)].label} →`, 'green')}</a>` : ''}</div></span>
           <span class="row-end" style="display:flex;flex-wrap:wrap;gap:6px;white-space:normal"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
             <a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>

@@ -189,6 +189,30 @@ const PRESETS = {
       'customers.view': 'on', 'customers.message': 'approval', 'kb.edit': 'approval',
     },
   },
+  /* Where the two combined roles move up to once their training is signed
+     off (tracks.js `trained`; owner, 2026-11-18): the apparel side becomes
+     Supervised, and the design side sends proofs and messages itself, as a
+     Designer does. Everything else in the role stays as it was. */
+  'dual-sales-trained': {
+    label: 'June’s Tees + COS sales (trained)',
+    note: 'Apparel training signed off: sends quotes up to $500 and messages customers; discounts still come to you. Own software leads.',
+    perms: {
+      'leads.view': 'on', 'leads.dismiss': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
+      'quotes.send': { level: 'on', maxTotal: 500 }, 'quotes.discount': 'approval',
+      'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
+      'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
+      'kb.edit': 'approval', 'jobs.schedule': 'on', 'software.leads': 'on',
+    },
+  },
+  'design-marketing-trained': {
+    label: 'Design + marketing & light sales (trained)',
+    note: 'Training signed off: sends proofs and messages to customers itself. Quotes still come to you before they go.',
+    perms: {
+      'jobs.design': 'on', 'jobs.schedule': 'on', 'proofs.upload': 'on', 'art.work': 'on',
+      'leads.view': 'on', 'quotes.view': 'on', 'quotes.draft': 'on', 'quotes.send': 'approval',
+      'customers.view': 'on', 'customers.message': 'on', 'kb.edit': 'approval',
+    },
+  },
   /* The Team preset plus read-only Finances: what a bookkeeper needs to
      close a month, and nothing that changes the books. */
   books: {
