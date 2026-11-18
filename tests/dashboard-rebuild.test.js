@@ -41,7 +41,7 @@ test('the page runs: needs you now, money, how we are doing, production, to-do, 
 
 test('needs you now has a customers group and a "from your team" group', () => {
   assert.match(DASH, /Customers <span class="muted">/);
-  assert.match(DASH, /id="team">From your team/);
+  assert.match(DASH, /id="team">\$\{owner \? 'Approvals and messages from your team' : 'From your team'\}/);
   assert.match(DASH, /owner \? many\(`SELECT \*, \(status = 'processing'\) AS interrupted FROM staff_approvals\s+WHERE status = 'pending' OR \(status = 'processing' AND COALESCE\(claimed_at, created_at\) < NOW\(\) - INTERVAL '10 minutes'\)/,
     'the owner\'s, and the same list as /admin/approvals, interrupted ones included');
   assert.match(DASH, /mail && mail\.unreadThreads/, 'a team conversation with something new is its own row');

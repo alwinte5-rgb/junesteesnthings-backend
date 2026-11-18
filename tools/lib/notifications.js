@@ -1,7 +1,8 @@
 'use strict';
 
 /* Notifications (owner, 2026-10-18 back-office plan, PR 4): a bell in the menu
-   for messages, approvals, leads, late jobs, payments, reviews and tasks.
+   for messages, approvals, leads, late jobs, payments, reviews and tasks,
+   and (2026-11-18) art, hours, training, team and customers.
 
    Every notification is DERIVED from records the shop already keeps (leads,
    approvals, payments, reviews, the job schedule, chat and the mailbox) by a
@@ -23,7 +24,9 @@
    existing alerts (team_chat_prefs), so they are not sent a second time
    here: `chatEmail` marks the kinds whose email switch is that one. */
 const KINDS = {
-  library: { label: 'Design library approvals', email: true, who: 'owner' },
+  /* Off by default (owner, 2026-11-18: "I don't need an email for approvals if I
+     receive a notification on the dashboard"). */
+  library: { label: 'Design library approvals', email: false, who: 'owner' },
   mail:     { label: 'Mailbox messages',             email: true,  chatEmail: true, who: 'any' },
   chat:     { label: 'Team chat messages',           email: true,  chatEmail: true, who: 'any' },
   approval: { label: 'Approvals waiting',            email: false, who: 'owner' },
@@ -36,6 +39,12 @@ const KINDS = {
   backlog:  { label: 'Backlog running low',          email: false, who: 'owner' },
   studio_order:    { label: 'New studio orders',        email: false, who: 'owner' },
   studio_checkout: { label: 'Studio checkouts left unpaid', email: false, who: 'owner' },
+  /* What needs the owner (tools/lib/owner-alerts.js, 2026-11-18). */
+  art:      { label: 'Designer questions on jobs',   email: false, who: 'owner' },
+  hours:    { label: 'Hour problems (clock, approvals, TimeProof)', email: false, who: 'owner' },
+  training: { label: 'Training waiting on you',      email: false, who: 'owner' },
+  team:     { label: 'Team: agreements, late tasks, notes and follow-ups', email: false, who: 'owner' },
+  customer: { label: 'Customers: replies, proofs, notes and changes', email: false, who: 'owner' },
 };
 
 /* The ding and the browser pop-up (owner, 2026-10-21: "the notifications

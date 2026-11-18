@@ -155,7 +155,7 @@ function registerDesignLibrary(app, d) {
       const {rows:[n]}=await pool.query("SELECT id,emailed_at FROM notifications WHERE recipient='owner' AND kind='library' AND ref=$1",[ref]);
       if (!n) throw new Error('Notification was not saved');
       const {rows:prefs}=await pool.query("SELECT email FROM notification_prefs WHERE reader='owner' AND kind='library'");
-      if (!n.emailed_at && (!prefs.length || prefs[0].email)) {
+      if (!n.emailed_at && require('./notifications').emailOn('library', prefs.length ? { library: prefs[0].email } : {})) {
         const {rows:claimed}=await pool.query('UPDATE notifications SET emailed_at=NOW() WHERE id=$1 AND emailed_at IS NULL RETURNING id',[n.id]);
         if(claimed.length)try {
         await sendEmail({to:NOTIFY_EMAIL,promo:false,urgent:true,subject:'Design awaiting approval: '+b.name,
