@@ -67,3 +67,21 @@ Additional created files:
 - /workspace/scratch/d5107195d3b6/backend/tests/artwork-workspace.test.js
 - /workspace/scratch/d5107195d3b6/designer/jt-artwork.php
 - /workspace/scratch/d5107195d3b6/designer/tests/artwork-bridge.test.php
+
+
+## Stock availability and missing artwork sources
+
+Owner route: /admin/studio-controls?tab=stock. Check stock now starts a stock-only S&S check; Refresh progress reads the result. Confirmed zero stock deactivates primary-S&S products, preserving source products, screenshots and prices. It counts all supplied sizes and warehouses independently of prices. Invalid quantities, supplier failures and Bella+Canvas with possible SanMar supply remain available for review. More than ten zero-stock products in one refresh are held for review. Existing selected-size checkout checks and the daily supplier sync remain unchanged. There is no automatic startup stock scan.
+
+Missing local artwork sources are excluded from the public library feed, retained privately, and linked at /admin/artwork?missing=1. Files intentionally removed by the existing entrypoint are not restored. The native designer clipart picker is outside this change.
+
+Validation: 93 selected Node checks passed. Designer PHP CI, MySQL integration and the repository gate passed for PR265. No authenticated production stock scan has been run in this session; no actual product deactivation count is claimed. Ten of 185 artwork previews still require the owner to rerun Prepare missing previews after the SVG/curved-text renderer fix. The previous run saved 175 previews.
+
+Delivery: backend PR https://github.com/alwinte5-rgb/junesteesnthings-backend/pull/561 (radar/supplier-stock-availability); designer PR https://github.com/alwinte5-rgb/lumise-designer/pull/265 (radar/library-missing-sources).
+
+Additional implementation files:
+
+- /workspace/scratch/d5107195d3b6/backend/tools/lib/supplier-stock.js
+- /workspace/scratch/d5107195d3b6/backend/tests/supplier-stock.test.js
+- /workspace/scratch/d5107195d3b6/designer/jt-library-assets.php
+- /workspace/scratch/d5107195d3b6/designer/tests/library-assets.test.php
