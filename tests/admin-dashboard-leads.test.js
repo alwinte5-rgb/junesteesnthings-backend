@@ -171,7 +171,7 @@ test('dismissing a lead returns to the page it came from, and nowhere else', () 
 
 test('the lead card posts its way back with each dismiss', () => {
   const card = lift('leadCardHtml');
-  assert.strictEqual((card.match(/\$\{backField\}/g) || []).length, 2, 'Too late and Not a job both carry it');
+  assert.strictEqual((card.match(/\$\{backField\}/g) || []).length, 3, 'Too late, Not a job and Add their email all carry it');
   assert.match(card, /value="Too late — past the date they needed it"/);
 });
 
@@ -224,7 +224,7 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
-    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('leadCardHtml'),
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('leadCardHtml'),
   ].join('\n'), sandbox);
   const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
   const base = { id: 7, created_at: new Date().toISOString(), description: 'hi', phone: '' };
@@ -237,6 +237,18 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
 
   const phoneOnly = contactLine(sandbox.leadCardHtml({ ...base, source: 'form', name: 'Lee', email: '', phone: '3125550123' }));
   assert.strictEqual(phoneOnly, '<a href="tel:3125550123">3125550123</a>', 'a form lead with only a phone');
+
+  /* A lead with no email (often one the AI finder found) offers "Add their email" instead of Email them (2026-11-18). */
+  const noEmail = sandbox.leadCardHtml({ ...base, source: 'manual', name: 'Lakeview LL', email: '' });
+  assert.match(noEmail, /action="\/admin\/lead\/7\/contact-email"/);
+  assert.match(noEmail, />Add their email</);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'coach@ll.org' }), /contact-email/);
+  /* A helper is offered it only on a lead that is theirs or nobody's. */
+  sandbox.currentActor = () => ({ kind: 'staff', id: 3 });
+  assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: null }), /contact-email/);
+  assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: 3 }), /contact-email/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: 4 }), /contact-email/);
+  sandbox.currentActor = () => null;
 });
 
 test("tawk's placeholder name is not a name", () => {
