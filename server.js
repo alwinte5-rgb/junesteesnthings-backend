@@ -41482,14 +41482,14 @@ let libraryWaitingCache = { at: 0, items: null, error: '' };
 /** Library designs submitted on the studio and waiting for the owner. The
  *  studio's webhook tells the bell too, but nothing on our side ever looked,
  *  so a missed webhook was a design waiting forever. Read every 5 minutes. */
-async function libraryWaiting() {
+async function libraryWaiting({ studioOff = false } = {}) {
   if (Date.now() - libraryWaitingCache.at < 5 * 60 * 1000) {
     if (libraryWaitingCache.items) return libraryWaitingCache.items;
     /* A studio that just failed is asked again in 5 minutes, not every
        sweep; until then the section still says it could not be checked. */
     if (libraryWaitingCache.error) throw Object.assign(new Error(libraryWaitingCache.error), { quiet: true });
   }
-  if (!process.env.JT_INTERNAL_KEY) return [];
+  if (studioOff) return [];
   const fail = (msg) => { libraryWaitingCache = { at: Date.now(), items: null, error: msg }; throw new Error(msg); };
   let r, data;
   try {
@@ -41582,8 +41582,11 @@ async function readOwnerAlerts() {
   ]).then(([s, q]) => OWNER_ALERTS.artAlerts({ submitted: s.rows, questions: q.rows }));
   /* No studio key (a local copy): the studio is off, so its notifications
      are neither made nor cleared, and the page does not call it a failure. */
-  const skipped = process.env.JT_INTERNAL_KEY ? [] : ['design library'];
-  const libraryP = libraryWaiting().then((library) => OWNER_ALERTS.artAlerts({ library }));
+  /* Asked of the studio feed (read every sweep anyway), which knows whether
+     a studio key is set. */
+  const studioOff = await fetchStudioOrders().then((f) => f.error === 'JT_INTERNAL_KEY not set').catch(() => false);
+  const skipped = studioOff ? ['design library'] : [];
+  const libraryP = libraryWaiting({ studioOff }).then((library) => OWNER_ALERTS.artAlerts({ library }));
 
   const customersP = Promise.all([
     pool.query(UNANSWERED_REPLIES_SQL),
