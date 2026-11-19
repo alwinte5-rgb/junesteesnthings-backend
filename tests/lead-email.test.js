@@ -103,9 +103,14 @@ test('the lead text route: staff need full messaging and leads, only body/back a
   assert.ok(textRoute.indexOf("if (status !== 'sent')") < textRoute.indexOf("INSERT INTO lead_notes"));
 });
 
-test('the lead card offers Text them only for a usable phone, with a box that posts to the route', () => {
-  assert.match(src, /\$\{normalizeUsPhone\(l\.phone\) && canTextLeads\(currentActor\(\)\) \? `<button[^`]*>Text them<\/button>` : ''\}/);
-  assert.match(src, /\$\{normalizeUsPhone\(l\.phone\) && canTextLeads\(currentActor\(\)\) \? leadTextBox\(l, backField\) : ''\}/);
+test('every open lead card has Text them; the text box only for a usable phone, else why not', () => {
+  /* The same buttons on every card (owner, 2026-11-19); leadTextArea decides what the box holds. */
+  assert.match(src, /onclick="var f=document\.getElementById\('tx-\$\{l\.id\}'\);[^"]*">Text them<\/button>\n/);
+  assert.match(src, /\$\{leadTextArea\(l, backField\)\}/);
+  const fn = src.slice(src.indexOf('function leadTextArea('), src.indexOf('\n}\n', src.indexOf('function leadTextArea(')));
+  assert.match(fn, /if \(!canTextLeads\(currentActor\(\)\)\) return why\(/);
+  assert.match(fn, /if \(normalizeUsPhone\(l\.phone\)\) return leadTextBox\(l, backField\);/);
+  assert.match(fn, /if \(isFoundLead\(l\)\) return why\('<b>No phone on file\.<\/b> We never text or call a number found online/);
   // A failed send is put back only into this lead's box.
   assert.match(src, /p\.get\('err'\)&&location\.hash==='#lead-\$\{l\.id\}'/);
 });
@@ -169,4 +174,37 @@ test('the lead text box renders the templates escaped, asks before replacing, ne
   const select = html.slice(html.indexOf('<select'), html.indexOf('>', html.indexOf('<select')));
   assert.ok(!/\sname=/.test(select), 'the picker has no name, so the route never sees it');
   assert.match(select, /confirm\('Replace what you have typed/);
+});
+
+/* The Email them box (owner, 2026-11-19): it opens plain, and a template menu
+   fills it for the situation, as the text box's does. */
+test('email templates: plain start, greeting and sign-off on each, no prices, within the limits', () => {
+  const b = M.blankEmail({ name: 'symia johnson' }, { signer: 'June', shop: "June's Tees" });
+  assert.strictEqual(b.body, "Hi Symia,\n\n\n\nThank you,\nJune\nJune's Tees");
+  assert.doesNotMatch(b.body, /quote|sizes|enquiry/i, 'nothing assumed');
+  const list = M.emailTemplates({ name: 'Symia' }, { signer: 'June', shop: "June's Tees" });
+  assert.ok(list.length >= 6);
+  const keys = new Set();
+  for (const t of list) {
+    assert.ok(!keys.has(t.key)); keys.add(t.key);
+    assert.match(t.body, /^Hi Symia,\n\n/); assert.match(t.body, /\n\nThank you,\nJune\nJune's Tees$/);
+    assert.ok(!/\$\d/.test(t.body + t.subject), t.key + ' carries no price');
+    const c = M.cleanEmail({ subject: t.subject, body: t.body });
+    assert.ok(!c.error, t.key + ': ' + c.error);
+  }
+  for (const k of ['details', 'working', 'artwork', 'missed_call', 'intro', 'check_in']) assert.ok(keys.has(k), k);
+  assert.match(M.emailTemplates({})[0].body, /^Hi,\n\n/, 'no name: plain Hi');
+});
+
+test('the untouched plain email is refused, however the sign-off is worded', () => {
+  for (const shop of ["June's Tees", "June's Tees & Things"]) {
+    const b = M.blankEmail({ name: 'Sam Lee' }, { signer: 'June', shop });
+    assert.match(M.cleanEmail({ subject: 'Hi', body: b.body }).error, /Write the message first/);
+  }
+  assert.match(M.cleanEmail({ subject: 'Hi', body: 'Hi,\n\nThanks,\nJune' }).error, /Write the message first/);
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam,\n\nYour shirts are ready.\n\nThank you,\nJune' }).error);
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Thanks for the order!' }).error, 'a one-line thank-you is a message');
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam, your shirts are ready.' }).error, 'words on the greeting line count');
+  /* "Thanks!" above a real sentence is a message, not a sign-off (code review, 2026-11-19). */
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam,\nThanks!\nYour shirts are ready Friday.\nJune' }).error);
 });

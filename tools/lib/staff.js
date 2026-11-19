@@ -447,6 +447,8 @@ const ROUTES = {
   'POST /admin/lead/:id/assign': 'leads.view',
   /* Add an email to a lead that has none (2026-11-18). */
   'POST /admin/lead/:id/contact-email': 'leads.view',
+  /* Add a phone to a lead that has none (2026-11-19). */
+  'POST /admin/lead/:id/contact-phone': 'leads.view',
   'POST /admin/lead/:id/outcome': 'leads.view',
   'POST /admin/leads/add': 'leads.view',
   /* The AI lead finder (tools/lib/lead-finder.js): capped per helper per day. */

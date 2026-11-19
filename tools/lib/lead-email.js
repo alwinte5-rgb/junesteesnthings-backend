@@ -80,7 +80,22 @@ function cleanEmail(body) {
   if (text.length > LIMITS.body) return { error: `The message is too long (${LIMITS.body} characters at most).` };
   /* Claude marks what it could not know; none of it may reach a customer. */
   if (FILL_IN.test(`${subject}\n${text}`)) return { error: 'Fill in the [June to fill in] parts first.' };
+  /* The box opens with only a greeting and a sign-off (blankEmail): never
+     sent like that, however the sign-off is worded. */
+  if (!middleOf(text)) return { error: 'Write the message first, or pick a template.' };
   return { subject, text };
+}
+
+/** What is written between the greeting ("Hi Sam,") and the sign-off
+ *  ("Thank you," and the lines under it), trimmed. */
+function middleOf(text) {
+  const lines = String(text || '').split('\n');
+  if (lines.length && /^\s*(hi|hello|hey|dear)\b[^,.!?\n]{0,30},?\s*$/i.test(lines[0])) lines.shift();
+  /* A sign-off is "Thank you," with only a name or two under it: short lines
+     with no sentence in them. "Thanks!" above a real sentence is a message. */
+  const end = lines.findIndex((l, i) => /^\s*(thank you|thanks|best|regards)[,.!]?\s*$/i.test(l)
+    && lines.length - 1 - i <= 2 && lines.slice(i + 1).every((x) => x.trim().length <= 40 && !/[.!?]\s*$/.test(x.trim())));
+  return (end >= 0 ? lines.slice(0, end) : lines).join('\n').trim();
 }
 
 /** The message as the customer sees it: each paragraph escaped, line breaks kept. */
@@ -149,4 +164,65 @@ function textTemplates(lead) {
     .map((t) => ({ key: t.key, label: t.label, text: t.text(hi, l) }));
 }
 
-module.exports = { firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates };
+/* The Email them box starts plain: a greeting and a sign-off, nothing assumed
+ * (owner, 2026-11-19: "It has too many assumptions to start"). A template
+ * menu, like the text box's, fills it for the situation at hand. No prices:
+ * those belong on the quote. Each body is the middle of the email; the
+ * greeting and sign-off are put around it. */
+const EMAIL_TEMPLATES = [
+  { key: 'details', label: 'They asked for a quote: ask for the details',
+    subject: (o) => `Your quote with ${o.shop}`,
+    body: () => `Thank you for reaching out! To put your quote together, could you tell me a little more:
+
+1. How many pieces, and the sizes you need
+2. The item and color (for example a black t-shirt or a navy hoodie)
+3. Where the design goes (front, back, sleeve) and how many colors it has
+4. Your logo or artwork file, if you have one
+5. The date you need them by
+
+Just reply to this email and I'll get your quote over to you.` },
+  { key: 'working', label: 'They asked for a quote: we are working on it',
+    subject: (o) => `Your quote with ${o.shop}`,
+    body: () => `Thank you for your request! I'm putting your quote together now and will send it over shortly. If anything changes in the meantime (quantities, sizes, colors or your date), just reply and let me know.` },
+  { key: 'artwork', label: 'Ask for their design',
+    subject: (o) => `Your design for ${o.shop}`,
+    body: () => `Could you send your logo or design? Just attach it to a reply. A large, clear file works best: a PDF, PNG or AI file if you have one, or a good photo if not. If you don't have a design yet, tell me what you have in mind and we can help.` },
+  { key: 'missed_call', label: 'Missed their call',
+    subject: (o) => `Sorry we missed your call | ${o.shop}`,
+    body: () => `Sorry we missed your call! How can we help? Reply with what you'd like made, or a good time to call you back, and I'll get right back to you.` },
+  { key: 'intro', label: "Introduce the shop (a lead we found)",
+    subject: (o) => `Custom shirts and more from ${o.shop}`,
+    body: (o) => `I'm reaching out from ${o.shop}, a custom apparel and printing shop in Chicago. We print and embroider shirts, hoodies, hats, banners and signs for schools, teams, churches, businesses and events, with pickup in Lakeview, local delivery or shipping.
+
+If you have anything coming up that needs shirts or merch, I'd be glad to put a free quote together. Just reply with what you have in mind.` },
+  { key: 'next_week', label: 'Booked this week, next week OK',
+    subject: (o) => `About your order with ${o.shop}`,
+    body: () => `Our printer is booked for the rest of this week, but we can print yours next week. Does that still work for the date you need them by?` },
+  { key: 'no_trademarks', label: "Can't print brand logos",
+    subject: (o) => `About your design | ${o.shop}`,
+    body: () => `We can't print brand, team or character logos we don't have permission to use. We'd be happy to print your own original design, or help you create one.` },
+  { key: 'check_in', label: 'Checking in (no reply yet)',
+    subject: (o) => `Following up | ${o.shop}`,
+    body: () => `I wanted to follow up on your request. Are you still looking to get this made? If so, just reply with anything you have so far and I'll take it from there. If your plans have changed, no problem at all.` },
+];
+
+/** The greeting and sign-off around a middle. */
+function wrapEmail(lead, middle, { signer = 'June', shop = "June's Tees" } = {}) {
+  const first = firstName((lead || {}).name);
+  return `Hi${first ? ' ' + first : ''},\n\n${middle}\n\nThank you,\n${signer}\n${shop}`;
+}
+
+/** The box as it opens: a greeting, room to write, a sign-off. */
+function blankEmail(lead, opts = {}) {
+  const o = { signer: 'June', shop: "June's Tees", ...opts };
+  return { subject: `Hello from ${o.shop}`, body: wrapEmail(lead, '', o) };
+}
+
+/** The email templates for one lead: [{ key, label, subject, body }]. */
+function emailTemplates(lead, opts = {}) {
+  const o = { signer: 'June', shop: "June's Tees", ...opts };
+  return EMAIL_TEMPLATES.map((t) => ({ key: t.key, label: t.label, subject: t.subject(o).slice(0, LIMITS.subject), body: wrapEmail(lead, t.body(o), o) }));
+}
+
+module.exports = { firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates,
+  EMAIL_TEMPLATES, blankEmail, emailTemplates, middleOf };

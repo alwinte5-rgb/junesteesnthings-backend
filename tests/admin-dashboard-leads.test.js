@@ -224,7 +224,7 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
-    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('leadCardHtml'),
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('mayEditLeadContact'), lift('mayCorrectLeadContact'), lift('isFoundLead'), lift('mayAddLeadPhone'), lift('leadTextArea'), lift('leadCardHtml'),
   ].join('\n'), sandbox);
   const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
   const base = { id: 7, created_at: new Date().toISOString(), description: 'hi', phone: '' };
@@ -233,21 +233,46 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   assert.match(anon, /^<a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>No email left — answer in tawk\.to<\/a>$/);
 
   const named = contactLine(sandbox.leadCardHtml({ ...base, source: 'chat', name: 'Dana', email: 'dana@example.com' }));
-  assert.match(named, /^<a href="mailto:dana@example\.com">dana@example\.com<\/a> &middot; <a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>answer in tawk\.to<\/a>$/);
+  assert.match(named, /^<a href="mailto:dana@example\.com">dana@example\.com<\/a> &middot; <a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>answer in tawk\.to<\/a> &middot; <a href="#"[^>]*>Edit contact<\/a>$/);
 
   const phoneOnly = contactLine(sandbox.leadCardHtml({ ...base, source: 'form', name: 'Lee', email: '', phone: '3125550123' }));
-  assert.strictEqual(phoneOnly, '<a href="tel:3125550123">3125550123</a>', 'a form lead with only a phone');
+  assert.match(phoneOnly, /^<a href="tel:3125550123">3125550123<\/a> &middot; <a href="#"[^>]*>Edit contact<\/a>$/, 'a form lead with only a phone');
 
   /* A lead with no email (often one the AI finder found) offers "Add their email" instead of Email them (2026-11-18). */
   const noEmail = sandbox.leadCardHtml({ ...base, source: 'manual', name: 'Lakeview LL', email: '' });
   assert.match(noEmail, /action="\/admin\/lead\/7\/contact-email"/);
-  assert.match(noEmail, />Add their email</);
-  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'coach@ll.org' }), /contact-email/);
+  assert.match(noEmail, /No email on file/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'coach@ll.org' }), /No email on file/);
   /* A helper is offered it only on a lead that is theirs or nobody's. */
   sandbox.currentActor = () => ({ kind: 'staff', id: 3 });
   assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: null }), /contact-email/);
   assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: 3 }), /contact-email/);
   assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: 4 }), /contact-email/);
+  sandbox.currentActor = () => null;
+
+  /* Every open card has both buttons (owner, 2026-11-19), and a box that says why not. */
+  const chatOnly = sandbox.leadCardHtml({ ...base, source: 'chat', name: 'Sy', email: 'sy@x.org', phone: '' });
+  assert.match(chatOnly, />Email them</); assert.match(chatOnly, />Text them</);
+  assert.match(chatOnly, /id="tx-7"/);
+  assert.match(chatOnly, /go through June/, 'texting off for this person: says so');
+  sandbox.canTextLeads = () => true;
+  assert.match(sandbox.leadCardHtml({ ...base, source: 'chat', email: 'sy@x.org', phone: '' }), /action="\/admin\/lead\/7\/contact-phone"/, 'a shop lead: add their phone');
+  const found = sandbox.leadCardHtml({ ...base, source: 'manual', email: '', phone: '', finder_run_id: 3 });
+  assert.match(found, /never text or call a number found online/);
+  assert.doesNotMatch(found, /contact-phone/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', phone: '', sale_type_reason: 'Found by the salesperson and registered before anyone else' }), /contact-phone/);
+  sandbox.canTextLeads = () => false;
+
+  /* A wrong email or phone can be corrected (owner, 2026-11-19), not on someone else's lead. */
+  const withMail = sandbox.leadCardHtml({ ...base, source: 'form', email: 'wrong@x.org', phone: '3125550123' });
+  assert.match(withMail, /id="ce-7"/); assert.match(withMail, /value="wrong@x\.org"/); assert.match(withMail, /contact-phone/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'c@x.org', phone: '', finder_run_id: 2 }).split('id="ce-7"')[1].split('</div>')[0], /contact-phone/, 'no phone on a found lead');
+  sandbox.currentActor = () => ({ kind: 'staff', id: 3 });
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'form', email: 'a@x.org', assigned_to: 4 }), /id="ce-7"/);
+  /* A helper corrects only their own credited lead: changing a shop lead's contact would hide the customer (security review). */
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'form', email: 'a@x.org', assigned_to: null }), /id="ce-7"/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'form', email: 'a@x.org', assigned_to: 3 }), /id="ce-7"/);
+  assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'a@x.org', assigned_to: 3, rep_id: 3 }), /id="ce-7"/);
   sandbox.currentActor = () => null;
 });
 
@@ -301,7 +326,7 @@ test("a long message is never cut off on the lead card", () => {
      (Yazmin, 2026-10-20) stopped mid-word and the rest could not be read. */
   const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '',
     /* The text box is tested in lead-email.test.js. */
-    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '' };
+    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '', leadTextArea: () => '', mayEditLeadContact: () => false, mayCorrectLeadContact: () => false };
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
