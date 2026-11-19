@@ -11,6 +11,11 @@
  *     missing is refused, never guessed at;
  *   - a reply that starts with a job code (AB12CD...) or a lead code (L7) goes
  *     to that customer;
+ *   - a text that is only a link (a phone sends a link as a text of its
+ *     own, beside the words) is never guessed at: it goes with the owner's own
+ *     number- or code-addressed text from the last FOLLOW_MS, or is refused
+ *     (owner, 2026-11-19: the link bubbles beside "Text (843) ..." went to
+ *     the last texter, a different customer);
  *   - otherwise it goes to the customer whose text was forwarded last, within
  *     a day, unless two different customers were forwarded within ten minutes
  *     of each other at the end - then nobody is guessed at, and the owner is
@@ -19,6 +24,17 @@
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 const CLASH_MS = 10 * 60 * 1000;
+/* How long a link on its own follows the owner's last addressed text. */
+const FOLLOW_MS = 2 * 60 * 1000;
+
+/** Is this text nothing but one or more links (http(s) or a bare domain
+ *  with a path)? */
+function isLinkOnly(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  return t.split(/\s+/).every((w) => /^(?:https?:\/\/\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?)$/i.test(w))
+    && /[./]/.test(t);
+}
 
 /** The code a forwarded text carries for this customer. */
 function codeOf(f) {
@@ -68,9 +84,12 @@ const last10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
  * stay a word). A leading phone number wins over everything: it goes to
  * that number, with the customer's forward when they have one, else
  * { phone } alone (typed: true).
- * Returns { to, body, byNumber?, typed? } | { badNumber: true } | { ask: [forward, ...] } | { none: true }.
+ * `addressed` is the owner's last text that named its person (by number or
+ * code): { phone, quote_code, lead_id, name, at } or null.
+ * Returns { to, body, byNumber?, typed?, coded?, followed? } | { badNumber: true } | { linkOnly: true }
+ *   | { ask: [forward, ...] } | { none: true }.
  */
-function pickTarget(forwards, text, codeRe, now = Date.now()) {
+function pickTarget(forwards, text, codeRe, now = Date.now(), addressed = null) {
   const all = forwards || [];
   const num = parseNumber(text);
   if (num && num.bad) return { badNumber: true };
@@ -83,9 +102,16 @@ function pickTarget(forwards, text, codeRe, now = Date.now()) {
   const { code, body } = parseReply(text, codeRe);
   if (code) {
     const hit = all.find((f) => codeOf(f) === code);
-    if (hit) return { to: hit, body };
+    if (hit) return { to: hit, body, coded: true };
   }
   const whole = String(text || '').trim();
+  if (isLinkOnly(whole)) {
+    const fresh = addressed && now - new Date(addressed.at).getTime() <= FOLLOW_MS && now >= new Date(addressed.at).getTime() - 5000;
+    if (!fresh) return { linkOnly: true };
+    const known = all.find((f) => last10(f.phone) === last10(addressed.phone));
+    return { to: known || { phone: addressed.phone, quote_code: addressed.quote_code || null, lead_id: addressed.lead_id || null, name: addressed.name || '' },
+      body: whole, byNumber: true, followed: true };
+  }
   const recent = all.filter((f) => now - new Date(f.created_at).getTime() <= WINDOW_MS);
   if (!recent.length) return { none: true };
   const latest = recent[0];
@@ -106,4 +132,4 @@ function askText(list) {
     list.map((f) => `${codeOf(f)} for ${f.name || 'the ' + String(f.phone).slice(-4) + ' number'}`).join(', ') + '.';
 }
 
-module.exports = { WINDOW_MS, CLASH_MS, codeOf, parseReply, parseNumber, pickTarget, askText };
+module.exports = { WINDOW_MS, CLASH_MS, FOLLOW_MS, codeOf, parseReply, parseNumber, isLinkOnly, pickTarget, askText };

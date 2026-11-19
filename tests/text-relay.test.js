@@ -11,8 +11,8 @@ const kim = { phone: '+1', quote_code: 'AB12CD', name: 'Kim', created_at: at(5) 
 const lead = { phone: '+2', lead_id: 7, name: '', created_at: at(30) };
 
 test('a leading code picks the customer; a lead code is L and its number', () => {
-  assert.deepStrictEqual(R.pickTarget([kim, lead], 'l7 hi there', RE, NOW), { to: lead, body: 'hi there' });
-  assert.deepStrictEqual(R.pickTarget([kim, lead], 'AB12CD - ok', RE, NOW), { to: kim, body: 'ok' });
+  assert.deepStrictEqual(R.pickTarget([kim, lead], 'l7 hi there', RE, NOW), { to: lead, body: 'hi there', coded: true });
+  assert.deepStrictEqual(R.pickTarget([kim, lead], 'AB12CD - ok', RE, NOW), { to: kim, body: 'ok', coded: true });
 });
 
 test('without a code it goes to the latest customer, unless another wrote within ten minutes of them', () => {
@@ -27,7 +27,7 @@ test('an unknown leading word is part of the message, and old forwards need a co
   assert.deepStrictEqual(R.pickTarget([kim], 'THANKS a lot', RE, NOW), { to: kim, body: 'THANKS a lot' });
   const old = { ...kim, created_at: at(60 * 30) };
   assert.ok(R.pickTarget([old], 'ok', RE, NOW).none);
-  assert.deepStrictEqual(R.pickTarget([old], 'AB12CD ok', RE, NOW), { to: old, body: 'ok' });
+  assert.deepStrictEqual(R.pickTarget([old], 'AB12CD ok', RE, NOW), { to: old, body: 'ok', coded: true });
 });
 
 test('a leading phone number sends to that number, not the last texter (owner, 2026-11-17)', () => {
@@ -56,4 +56,30 @@ test('ordinary messages that start with a count are still messages', () => {
   for (const t of ['450.00 - 50.00 deposit = 400 due', '2026-11-20 pickup works', '12/20/2026 is fine']) {
     assert.deepStrictEqual(R.pickTarget([kim], t, RE, NOW), { to: kim, body: t });
   }
+});
+
+/* Owner, 2026-11-19: the link bubbles a phone sends beside "Text (843) ..."
+   went to the last texter, a different customer. */
+test('a link on its own is never sent to the last texter', () => {
+  for (const t of ['https://www.jtees.net/admin/leads#lead-328', 'jtees.net', 'www.jtees.net/shop', 'https://a.com https://b.com']) {
+    assert.ok(R.isLinkOnly(t), t);
+    assert.deepStrictEqual(R.pickTarget([kim], t, RE, NOW), { linkOnly: true }, t);
+  }
+  for (const t of ['450.00', '1.5', 'Ok.', 'see https://x.com', 'Thanks!', '']) assert.ok(!R.isLinkOnly(t), JSON.stringify(t));
+  /* With words, it is a message like any other. */
+  assert.deepStrictEqual(R.pickTarget([kim], 'see https://x.com', RE, NOW), { to: kim, body: 'see https://x.com' });
+});
+
+test('a link on its own follows the owner\'s own addressed text from the last two minutes', () => {
+  const addressed = { phone: '+18432452427', quote_code: null, at: new Date(NOW - 30e3).toISOString() };
+  const p = R.pickTarget([kim], 'https://www.jtees.net/x', RE, NOW, addressed);
+  assert.strictEqual(p.to.phone, '+18432452427');
+  assert.ok(p.followed && p.byNumber, 'checked like a typed number');
+  /* A known customer at that number is used, so it is filed on them. */
+  const known = { phone: '+18432452427', lead_id: 9, name: 'Dee', created_at: at(60) };
+  assert.strictEqual(R.pickTarget([kim, known], 'jtees.net/x', RE, NOW, addressed).to, known);
+  /* Too old: refused. */
+  assert.deepStrictEqual(R.pickTarget([kim], 'jtees.net/x', RE, NOW, { ...addressed, at: new Date(NOW - 3 * 60e3).toISOString() }), { linkOnly: true });
+  /* A number or code in front still wins. */
+  assert.strictEqual(R.pickTarget([kim], 'AB12CD https://x.com', RE, NOW, addressed).to, kim);
 });
