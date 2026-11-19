@@ -28488,18 +28488,18 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
              chat ? `<a href="https://dashboard.tawk.to/" target="_blank" rel="noopener">${
                l.email || l.phone ? 'answer in tawk.to' : 'No email left — answer in tawk.to'}</a>` : '',
              /* Correct a wrong email or phone (owner, 2026-11-19). */
-             (l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayEditLeadContact(l)
+             (l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayCorrectLeadContact(l)
                ? `<a href="#" onclick="var f=document.getElementById('ce-${l.id}');f.style.display=f.style.display==='block'?'none':'block';return false">Edit contact</a>` : '',
             ].filter(Boolean).join(' &middot; ')}
         </div>
-        ${(l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayEditLeadContact(l) ? `
+        ${(l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayCorrectLeadContact(l) ? `
         <div id="ce-${l.id}" style="display:none;margin-top:8px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
-          <p class="muted" style="margin:0 0 8px;font-size:12.5px">Fix a wrong email or phone. The old one is kept in a note on this lead.</p>
-          <form method="POST" action="/admin/lead/${l.id}/contact-email" style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px">
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">Fix a wrong email or phone. The old one is kept in a note on this lead.${!l.email || !l.phone ? ' To add a missing one, use Email them or Text them.' : ''}</p>
+          ${l.email ? `<form method="POST" action="/admin/lead/${l.id}/contact-email" style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px">
             <input name="email" type="email" maxlength="254" required value="${escEmail(l.email || '')}" placeholder="Their email" aria-label="Their email" style="flex:1 1 200px;padding:7px;font-size:13px">
             <input type="hidden" name="back" value="${escEmail(back)}">
-            <button type="submit" class="btn" style="padding:7px 14px;font-size:13px">Save email</button></form>
-          ${isFoundLead(l) ? '' : `<form method="POST" action="/admin/lead/${l.id}/contact-phone" style="display:flex;gap:6px;flex-wrap:wrap;margin:0">
+            <button type="submit" class="btn" style="padding:7px 14px;font-size:13px">Save email</button></form>` : ''}
+          ${isFoundLead(l) || !l.phone ? '' : `<form method="POST" action="/admin/lead/${l.id}/contact-phone" style="display:flex;gap:6px;flex-wrap:wrap;margin:0">
             <input name="phone" type="tel" maxlength="40" required value="${escEmail(l.phone || '')}" placeholder="Their phone" aria-label="Their phone" style="flex:1 1 200px;padding:7px;font-size:13px">
             <input type="hidden" name="back" value="${escEmail(back)}">
             <button type="submit" class="btn" style="padding:7px 14px;font-size:13px">Save phone</button></form>`}
@@ -28632,9 +28632,11 @@ function leadTextBox(l, backField) {
       <script>/* A send that fails comes back to an empty box; the text typed is kept in this tab and put back,
          only when the error is this lead's (the route answers with #lead-<id>). */
       (function(){var k='jt-lead-text-${l.id}',box=document.getElementById('tx-${l.id}'),f=box&&box.querySelector('form');if(!f)return;
-      try{var p=new URLSearchParams(location.search),d=sessionStorage.getItem(k);
-        if(d&&p.get('err')&&location.hash==='#lead-${l.id}'){f.body.value=d;box.style.display='block';}else if(p.get('ok'))sessionStorage.removeItem(k);}catch(e){}
-      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,f.body.value);}catch(e){}});})();</script>
+      try{var p=new URLSearchParams(location.search),d=JSON.parse(sessionStorage.getItem(k)||'null');
+        /* Only the answer to this box's own send, a moment ago: not a later error about the lead's contact details. */
+        if(d&&d.v&&Date.now()-d.at<60000&&p.get('err')&&location.hash==='#lead-${l.id}'){f.body.value=d.v;box.style.display='block';}
+        sessionStorage.removeItem(k);}catch(e){}
+      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,JSON.stringify({v:f.body.value,at:Date.now()}));}catch(e){}});})();</script>
     </div>`;
 }
 
@@ -28659,7 +28661,7 @@ function leadEmailBox(l, backField) {
         <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. ${held ? 'June checks it first and it is sent when she approves it. ' : ''}Their reply comes to the shop's email.</p>
         ${/* Picking a template fills the subject and the message to edit; it has no name, so it is never posted. */ ''}
         <select aria-label="Start from a template" style="width:100%;padding:6px;font-size:13px;margin-bottom:8px"
-                onchange="var i=this.value,f=this.form,t=${escEmail(JSON.stringify(tpls.map((x) => ({ s: x.subject, b: x.body }))))}[i];this.selectedIndex=0;if(!t)return;if(f.body.value.trim()&&f.body.value!==f.body.defaultValue&&f.body.value!==t.b&&!confirm('Replace what you have typed with this template?'))return;f.subject.value=t.s;f.body.value=t.b;f.body.focus()">
+                onchange="var i=this.value,f=this.form,t=${escEmail(JSON.stringify(tpls.map((x) => ({ s: x.subject, b: x.body }))))}[i];this.selectedIndex=0;if(!t)return;var lb=f.dataset.tb||f.body.defaultValue,ls=f.dataset.ts||f.subject.defaultValue;if(f.body.value!==lb&&f.body.value.trim()&&!confirm('Replace what you have typed with this template?'))return;if(f.subject.value===ls)f.subject.value=t.s;f.body.value=t.b;f.dataset.tb=t.b;f.dataset.ts=f.subject.value;f.body.focus()">
           <option value="">Start from a template...</option>
           ${tpls.map((t, i) => `<option value="${i}">${escEmail(t.label)}</option>`).join('')}
         </select>
@@ -36648,11 +36650,21 @@ function mayAddLeadEmail(l) {
 /** May whoever is signed in add or correct this lead's email or phone? The
  *  owner always; a helper on a lead that is theirs or nobody's, and never
  *  one carrying another helper's credit (the routes check the same again). */
-function mayEditLeadContact(l) {
+function mayEditLeadContact(l, a = currentActor()) {
   if (!l) return false;
-  const a = currentActor();
   if (!a || a.kind !== 'staff') return true;
   return (l.assigned_to == null || Number(l.assigned_to) === a.id) && (l.rep_id == null || Number(l.rep_id) === a.id);
+}
+
+/** May whoever is signed in change an email or phone already on this lead?
+ *  The owner always; a helper only on a lead credited to them (their own
+ *  find). Changing a shop lead's contact would hide the customer from the
+ *  "already a customer?" check, so a helper could re-add them as their own
+ *  find and take the credit (security review, 2026-11-19). */
+function mayCorrectLeadContact(l, a = currentActor()) {
+  if (!l) return false;
+  if (!a || a.kind !== 'staff') return true;
+  return l.rep_id != null && Number(l.rep_id) === a.id;
 }
 
 /** Save a lead's email or phone, new or corrected (owner, 2026-11-19: "I
@@ -36664,6 +36676,13 @@ function mayEditLeadContact(l) {
 async function saveLeadContact(id, field, value, actor) {
   const isStaff = !!(actor && actor.kind === 'staff');
   const word = field === 'email' ? 'email' : 'phone';
+  const same = (x, y) => (field === 'email' ? String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase()
+    : normalizeUsPhone(x) === normalizeUsPhone(y));
+  /* The "already a customer?" check may ask the studio over the network, so
+     it runs before the row is locked, and only for a credited lead. */
+  const { rows: [peek] } = await pool.query('SELECT sale_type FROM submissions WHERE id = $1', [id]);
+  const reason = peek && (peek.sale_type === 'rep' || peek.sale_type === 'pending')
+    ? CREDIT.knownReason(await seenCustomer(field === 'email' ? { email: value } : { phone: value }, { excludeLead: id }), fmtDate) : '';
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -36671,27 +36690,26 @@ async function saveLeadContact(id, field, value, actor) {
       'SELECT id, email, phone, sale_type, rep_id, assigned_to, finder_run_id, sale_type_reason FROM submissions WHERE id = $1 FOR UPDATE', [id]);
     const stop = (err) => client.query('ROLLBACK').then(() => ({ err }));
     if (!l) return await stop('No such lead.');
-    if (isStaff && !((l.assigned_to == null || l.assigned_to === actor.id) && (l.rep_id == null || l.rep_id === actor.id))) {
-      return await stop(`That lead is someone else's. Ask the owner to change it.`);
-    }
+    if (!mayEditLeadContact(l, actor)) return await stop(`That lead is someone else's. Ask the owner to change it.`);
     if (field === 'phone' && isFoundLead(l)) return await stop('We never text or call a number found online. Email them instead.');
     const before = String(l[field] || '').trim();
-    if (before === value) return await stop(`That is already their ${word}.`);
-    await client.query(`UPDATE submissions SET ${field === 'email' ? 'email' : 'phone'} = $2 WHERE id = $1`, [id, value]);
-    let reason = '';
-    if (l.sale_type === 'rep' || l.sale_type === 'pending') {
-      reason = CREDIT.knownReason(await seenCustomer(field === 'email' ? { email: value } : { phone: value }, { excludeLead: id }), fmtDate);
-      if (reason) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
+    if (before && same(before, value)) return await stop(`That is already their ${word}.`);
+    if (before && !mayCorrectLeadContact(l, actor)) {
+      return await stop(`Only June can change a ${word} that is already on a lead. Write the right one in a note and she will fix it.`);
     }
+    await client.query(`UPDATE submissions SET ${field === 'email' ? 'email' : 'phone'} = $2 WHERE id = $1`, [id, value]);
+    const known = reason && (l.sale_type === 'rep' || l.sale_type === 'pending') ? reason : '';
+    if (known) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, known]);
     if (before) {
       await client.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'note', $2, $3)`,
         [id, `Changed their ${word} from ${before} to ${value}.`, isStaff ? actor.id : null]);
     }
     await client.query('COMMIT');
-    logActivity(actor, `lead ${word} ${before ? 'changed' : 'added'}${reason ? ': already known' : ''}`, { type: 'lead', id },
-      { ...(before ? { from: before, to: value } : {}), ...(reason ? { reason } : {}) });
+    logActivity(actor, `lead ${word} ${before ? 'changed' : 'added'}${known ? ': already known' : ''}`, { type: 'lead', id },
+      { ...(before ? { from: before, to: value } : {}), ...(known ? { reason: known } : {}) });
     const done = `${word[0].toUpperCase()}${word.slice(1)} ${before ? 'changed' : 'saved'}.`;
-    return { ok: true, msg: reason ? `${done} It is now a shop lead: ${reason}.` : `${done} Use ${word === 'email' ? 'Email' : 'Text'} them to write to them.` };
+    const next = word === 'email' ? ' Use Email them to write to them.' : canTextLeads(actor) ? ' Use Text them to write to them.' : '';
+    return { ok: true, msg: known ? `${done} It is now a shop lead: ${known}.` : `${done}${next}` };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -36734,6 +36752,7 @@ app.post('/admin/lead/:id/contact-phone', requireAdmin, async (req, res) => {
   if (!id) return res.redirect(backTo);
   const phone = normalizeUsPhone(String(b.phone || '').trim().slice(0, 40));
   if (!phone) return back(res, backTo, 'err', 'That does not look like a US phone number. Type all 10 digits.');
+  if (!VOICE.callable(phone)) return back(res, backTo, 'err', `${VOICE.pretty(phone)} is a premium-rate or overseas number. The shop does not text those.`);
   const toLead = `${backTo.split('#')[0]}#lead-${id}`;
   try {
     const r = await saveLeadContact(id, 'phone', VOICE.pretty(phone), currentActor());

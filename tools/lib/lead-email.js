@@ -91,7 +91,10 @@ function cleanEmail(body) {
 function middleOf(text) {
   const lines = String(text || '').split('\n');
   if (lines.length && /^\s*(hi|hello|hey|dear)\b[^,.!?\n]{0,30},?\s*$/i.test(lines[0])) lines.shift();
-  const end = lines.findIndex((l, i) => i >= lines.length - 4 && /^\s*(thank you|thanks|best|regards)[,.!]?\s*$/i.test(l));
+  /* A sign-off is "Thank you," with only a name or two under it: short lines
+     with no sentence in them. "Thanks!" above a real sentence is a message. */
+  const end = lines.findIndex((l, i) => /^\s*(thank you|thanks|best|regards)[,.!]?\s*$/i.test(l)
+    && lines.length - 1 - i <= 2 && lines.slice(i + 1).every((x) => x.trim().length <= 40 && !/[.!?]\s*$/.test(x.trim())));
   return (end >= 0 ? lines.slice(0, end) : lines).join('\n').trim();
 }
 

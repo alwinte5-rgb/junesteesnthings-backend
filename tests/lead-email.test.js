@@ -205,4 +205,6 @@ test('the untouched plain email is refused, however the sign-off is worded', () 
   assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam,\n\nYour shirts are ready.\n\nThank you,\nJune' }).error);
   assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Thanks for the order!' }).error, 'a one-line thank-you is a message');
   assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam, your shirts are ready.' }).error, 'words on the greeting line count');
+  /* "Thanks!" above a real sentence is a message, not a sign-off (code review, 2026-11-19). */
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam,\nThanks!\nYour shirts are ready Friday.\nJune' }).error);
 });

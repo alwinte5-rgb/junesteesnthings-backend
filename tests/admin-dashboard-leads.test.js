@@ -224,7 +224,7 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
-    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('mayEditLeadContact'), lift('isFoundLead'), lift('mayAddLeadPhone'), lift('leadTextArea'), lift('leadCardHtml'),
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('mayEditLeadContact'), lift('mayCorrectLeadContact'), lift('isFoundLead'), lift('mayAddLeadPhone'), lift('leadTextArea'), lift('leadCardHtml'),
   ].join('\n'), sandbox);
   const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
   const base = { id: 7, created_at: new Date().toISOString(), description: 'hi', phone: '' };
@@ -269,6 +269,10 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'c@x.org', phone: '', finder_run_id: 2 }).split('id="ce-7"')[1].split('</div>')[0], /contact-phone/, 'no phone on a found lead');
   sandbox.currentActor = () => ({ kind: 'staff', id: 3 });
   assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'form', email: 'a@x.org', assigned_to: 4 }), /id="ce-7"/);
+  /* A helper corrects only their own credited lead: changing a shop lead's contact would hide the customer (security review). */
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'form', email: 'a@x.org', assigned_to: null }), /id="ce-7"/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'form', email: 'a@x.org', assigned_to: 3 }), /id="ce-7"/);
+  assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'a@x.org', assigned_to: 3, rep_id: 3 }), /id="ce-7"/);
   sandbox.currentActor = () => null;
 });
 
@@ -322,7 +326,7 @@ test("a long message is never cut off on the lead card", () => {
      (Yazmin, 2026-10-20) stopped mid-word and the rest could not be read. */
   const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '',
     /* The text box is tested in lead-email.test.js. */
-    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '', leadTextArea: () => '', mayEditLeadContact: () => false };
+    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '', leadTextArea: () => '', mayEditLeadContact: () => false, mayCorrectLeadContact: () => false };
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
