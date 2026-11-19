@@ -583,6 +583,7 @@ const ROUTES = {
   'GET /admin/artwork/file': 'art.work',
   'POST /admin/artwork/preview': 'art.work',
   'POST /admin/artwork/save': 'art.work',
+  'POST /admin/artwork/submit': 'art.work',
   'GET /admin/studio-controls/stock': 'owner',
   'POST /admin/studio-controls/stock': 'owner',
   'GET /admin/studio-controls': 'owner',
