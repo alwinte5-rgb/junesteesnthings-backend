@@ -100,6 +100,44 @@ function readyKeyFor(track = DEFAULT_TRACK, role = null) {
   readyKeys.set(memo, key);
   return key;
 }
+/* Older "ready" sign-offs that still end training on a path whose ready
+   key moved. Always: a Sales ready from before role courses had their own
+   (LEGACY_READY_BEFORE). And per track (tracks.js `readyFrom`): June's Tees +
+   COS Sales ended at the software ready until it got its own apparel
+   sign-off, so a ready given on it before then still ends training and
+   keeps commission (code review, 2026-11-18). */
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const KEY = /^signoff:[a-z-]+$/;
+function legacyReadyFor(readyKey) {
+  const out = [{ key: READY_KEY, before: LEGACY_READY_BEFORE }];
+  for (const t of Object.values(TRACKS)) if (t.ready && t.ready === readyKey && t.readyFrom) out.push({ key: READY_KEY, before: t.readyFrom });
+  return out;
+}
+/** Did this sign-off (key, given at doneAt) end training on a path whose
+ *  ready key is readyKey? The one rule for JS; readyRowSql is the same in SQL. */
+function endsTraining(readyKey, key, doneAt) {
+  if (key === readyKey) return true;
+  if (!doneAt) return false;
+  const at = new Date(doneAt).getTime();
+  return legacyReadyFor(readyKey).some((l) => l.key === key && at < new Date(l.before).getTime());
+}
+/** SQL for "this staff_training row ended training", where `param` holds the
+ *  path's ready key. Only checked constants are written into the text. */
+function readyRowSql(alias, param) {
+  const or = [`${alias}.step_key = ${param}`,
+    `(${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz)`];
+  for (const t of Object.values(TRACKS)) {
+    if (!t.ready || !t.readyFrom) continue;
+    if (!KEY.test(t.ready) || !ISO.test(t.readyFrom)) throw new Error(`tracks.js: bad ready/readyFrom on ${t.label}`);
+    or.push(`(${param}::text = '${t.ready}' AND ${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${t.readyFrom}'::timestamptz)`);
+  }
+  return `(${or.join(' OR ')})`;
+}
+/** Has this progress (trainingFor: steps + readyKey) reached its ready? */
+function readyGiven(p) {
+  return !!p && p.steps.some((s) => s.done && endsTraining(p.readyKey, s.key, s.doneAt));
+}
+
 function readyKeyOfPath(track, role) {
   const t = TRACKS[trackOf(track)];
   if (t && t.ready && visibleSteps(undefined, track, role).some((s) => s.key === t.ready)) return t.ready;
@@ -207,6 +245,7 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
   /* The lessons a closing sign-off waits for: its course's, and in a part,
      that part's (Team basics count for every part). */
   const samePart = (s, x) => !s.part || !x.part || x.part === s.part;
+  const pathReady = readyKeyFor(track, role);
   /* A course's closing sign-offs (ready starts commission and ends training)
      share the final module with the final exam, so the module gate never
      held them. They wait for that exam and for every lesson in the course.
@@ -221,9 +260,17 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
       return n ? `${n} lesson${n === 1 ? '' : 's'}` : '';
     }
     if (s.type !== 'signoff' || !s.course || (s.module !== `${s.course}:final` && !s.partReady)) return '';
+    /* The sign-off that ends a combined path's training, when it is the
+       course's closing one (Design + Marketing), waits for every duty: all
+       the course's lessons and each half's own sign-off. Otherwise a
+       designer could be signed trained on the sales half alone (code
+       review). A half's own ready (the apparel one) waits for its half. */
+    const whole = s.key === pathReady && !s.partReady;
     const exam = raw.find((x) => x.module === s.module && x.gate);
-    const lessons = raw.filter((x) => x.course === s.course && x.type === 'lesson' && !x.done && samePart(s, x)).length;
-    return [exam && !exam.done ? (s.partReady ? 'the practical assessment' : 'the final exam') : '', lessons ? `${lessons} lesson${lessons === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+    const lessons = raw.filter((x) => x.course === s.course && x.type === 'lesson' && !x.done && (whole || samePart(s, x))).length;
+    const halves = whole ? raw.filter((x) => x.course === s.course && x.partReady && !x.done).map((x) => x.short || x.title) : [];
+    return [exam && !exam.done ? (s.partReady ? 'the practical assessment' : 'the final exam') : '', lessons ? `${lessons} lesson${lessons === 1 ? '' : 's'}` : '',
+      ...halves].filter(Boolean).join(' and ');
   };
   const steps = raw.map((s) => {
     if (!s.module) return { ...s, locked: false };
@@ -587,7 +634,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

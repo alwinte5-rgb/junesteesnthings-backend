@@ -3883,17 +3883,17 @@ function attributedStaffId() {
 async function staffByEmail(email) {
   /* `flags`: the page tips they dismissed and their ready sign-offs, so
      adminPage() can show tips without a query of its own. Training is over
-     at the path's own ready (TRAINING.readyKeyFor), or a Sales ready given
-     before role courses had one (TRAINING.LEGACY_READY_BEFORE). */
+     at the path's own ready (TRAINING.readyKeyFor), or an older ready that
+     still counts on it (TRAINING.endsTraining). */
   const { rows } = await pool.query(
     `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track, s.sales_role, s.time_zone,
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
                        WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
-            EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = s.id AND t.step_key = $2
-                     AND t.done_at < $3::timestamptz) AS legacy_ready,
+            COALESCE((SELECT json_agg(json_build_object('key', t.step_key, 'at', t.done_at)) FROM staff_training t
+                       WHERE t.staff_id = s.id AND t.step_key LIKE 'signoff:%ready'), '[]'::json) AS ready_rows,
             (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock,
-            EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $4) AS agreement_signed
-       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE, AGREEMENT.VERSION]);
+            EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $2) AS agreement_signed
+       FROM staff s WHERE lower(s.email) = $1`, [email, AGREEMENT.VERSION]);
   const s = rows[0];
   if (!s || !s.active) return null;
   pool.query(`UPDATE staff SET last_seen_at = NOW()
@@ -3901,7 +3901,8 @@ async function staffByEmail(email) {
     .catch(() => {});
   const flags = s.flags || [];
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
-           inTraining: !(s.legacy_ready || flags.includes(TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)))),
+           inTraining: !(s.ready_rows || []).some((r) => TRAINING.endsTraining(
+             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), r.key, r.at)),
            track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
@@ -34296,9 +34297,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            permissions stayed, so a helper given apparel sales could not
            draft a quote, or could send one without June's OK. Their training
            ticks are kept either way. */
-        /* Only on a real change of path: saving the same path never resets a
-           trained helper's permissions (code review). */
-        const presetName = b.apply_preset === '1' && track !== TRAINING.trackOf(s.training_track) ? STAFF.presetForTrack(track) : null;
+        const presetName = STAFF.presetOnPathChange(TRAINING.trackOf(s.training_track), track, b.apply_preset === '1');
         const p = presetName ? STAFF.presetPerms(presetName) : null;
         if (p) {
           await pool.query('UPDATE staff SET training_track = $2, perms = $3 WHERE id = $1', [id, track, JSON.stringify(p)]);
@@ -34922,9 +34921,9 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
           <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}${
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
-            /* Ready is the path's ready sign-off (a combined path's apparel one),
-               not every step of both duties: the owner's alert says the same. */
-            trainings[i] && (trainings[i].complete || trainings[i].steps.some((x) => x.key === trainings[i].readyKey && x.done)) && nextPresetFor(s)
+            /* Ready is the path's ready sign-off (TRAINING.readyGiven), not
+               every step of both duties: the owner's alert says the same. */
+            trainings[i] && (trainings[i].complete || TRAINING.readyGiven(trainings[i])) && nextPresetFor(s)
               ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[nextPresetFor(s)].label} →`, 'green')}</a>` : ''}</div></span>
           <span class="row-end" style="display:flex;flex-wrap:wrap;gap:6px;white-space:normal"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
             <a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
@@ -41744,9 +41743,8 @@ async function readOwnerAlerts() {
      moved up. */
   const trainingP = Promise.all(team.map(async (s) => {
     const t = await trainingFor(s.id);
-    const ready = t.steps.find((x) => x.key === t.readyKey);
     const next = nextPresetFor(s);
-    return OWNER_ALERTS.trainingAlerts({ staff: s, progress: t, readyDone: !!(ready && ready.done), nextPreset: next,
+    return OWNER_ALERTS.trainingAlerts({ staff: s, progress: t, readyDone: TRAINING.readyGiven(t), nextPreset: next,
       nextLabel: next && STAFF.PRESETS[next] ? STAFF.PRESETS[next].label : '' });
   })).then((l) => l.flat());
 
@@ -42615,11 +42613,9 @@ async function readyKeyOf(staffId) {
 }
 
 /* SQL for "this staff_training row ended training": the path's ready key
-   (the parameter named) or a Sales ready from before role courses had their
-   own. Only constants are written into the text. */
-function readyRow(alias, param) {
-  return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${TRAINING.READY_KEY}' AND ${alias}.done_at < '${TRAINING.LEGACY_READY_BEFORE}'::timestamptz))`;
-}
+   (the parameter named) or an older ready that still counts on it
+   (TRAINING.readyRowSql, the same rule as TRAINING.endsTraining). */
+const readyRow = (alias, param) => TRAINING.readyRowSql(alias, param);
 
 async function trainingFor(staffId) {
   const [ticks, facts, path, times] = await Promise.all([
@@ -42787,8 +42783,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
     /* The sign-off whose Undo can keep the commission window: this path's
        ready, or a Sales ready from before role courses had their own. */
-    const endsTraining = (s) => s.key === p.readyKey
-      || (s.key === TRAINING.READY_KEY && s.doneAt && new Date(s.doneAt) < new Date(TRAINING.LEGACY_READY_BEFORE));
+    const endsTraining = (s) => TRAINING.endsTraining(p.readyKey, s.key, s.doneAt);
     const stepRow = (s) => {
       const lessonHref = s.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(s.key.slice('lesson:'.length))}` : '';
       const link = s.locked && !owner ? escEmail(s.title)

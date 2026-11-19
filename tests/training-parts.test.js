@@ -108,10 +108,56 @@ test('both combined paths move up to a trained preset once signed off', () => {
 });
 
 test('changing a helper\'s path also sets that path\'s permissions unless June unticks it', () => {
-  assert.match(SRC, /name="apply_preset" value="1" checked/);
-  assert.match(SRC, /b\.apply_preset === '1' && track !== TRAINING\.trackOf\(s\.training_track\)/);
-  assert.match(SRC, /UPDATE staff SET training_track = \$2, perms = \$3 WHERE id = \$1/);
-  assert.equal(STAFF.presetForTrack('sales-software'), 'dual-sales');
+  assert.match(SRC, /name="apply_preset" value="1" checked/, 'the box is ticked by default');
+  assert.match(SRC, /STAFF\.presetOnPathChange\(/, 'the Staff page save uses the one rule');
+  assert.equal(STAFF.presetOnPathChange('design', 'sales-software', true), 'dual-sales', 'a new path sets its permissions');
+  assert.equal(STAFF.presetOnPathChange('sales-software', 'sales-software', true), null, 'saving the same path never resets anyone');
+  assert.equal(STAFF.presetOnPathChange('design', 'sales-software', false), null, 'unticked: permissions stay');
+});
+
+test('nobody already trained on June\'s Tees + COS loses ready or commission', () => {
+  const rk = T.readyKeyFor('sales-software');
+  const from = TRACKS['sales-software'].readyFrom;
+  const before = new Date(new Date(from).getTime() - 86400000).toISOString();
+  const after = new Date(new Date(from).getTime() + 86400000).toISOString();
+  assert.equal(T.endsTraining(rk, 'signoff:ready', before), true, 'a software ready given before the change still ends training');
+  assert.equal(T.endsTraining(rk, 'signoff:ready', after), false, 'one given after it does not: apparel commission waits for apparel');
+  assert.equal(T.endsTraining(rk, 'signoff:apparel-ready', after), true);
+  // Other paths: unchanged.
+  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', after), false);
+  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', '2026-10-01T00:00:00Z'), true);
+  // The Team page and the owner's alert read it the same way.
+  const steps = T.progress(new Map([['signoff:ready', { done_at: before }]]), {}, undefined, 'sales-software').steps;
+  assert.equal(T.readyGiven({ steps, readyKey: rk }), true);
+  // And SQL says the same as JS.
+  const sql = T.readyRowSql('t', '$2');
+  assert.ok(sql.includes(`$2::text = 'signoff:apparel-ready' AND t.step_key = 'signoff:ready' AND t.done_at < '${from}'::timestamptz`), sql);
+  assert.match(SRC, /const readyRow = \(alias, param\) => TRAINING\.readyRowSql/);
+  assert.match(SRC, /inTraining: !\(s\.ready_rows/, 'sign-in reads ready through the same rule');
+});
+
+test('Design + Marketing is not trained until both halves are signed off', () => {
+  const track = 'design-marketing';
+  const steps = T.visibleSteps(undefined, track);
+  const rk = T.readyKeyFor(track);
+  const quizzes = passAll(steps, () => true);
+  const exams = examsAll(steps, () => true);
+  // Sales half finished, design lessons not read and no design sign-off: the final ready stays shut.
+  let p = T.progress(lessonsDone(steps, (s) => s.part !== 'design'), { quizzes, exams }, undefined, track);
+  let row = p.steps.find((s) => s.key === rk);
+  assert.ok(row.locked && /lesson/.test(row.waiting) && /Design sign-off/.test(row.waiting), row.waiting);
+  // Every lesson read, design sign-off still missing: shut, and it says why.
+  p = T.progress(lessonsDone(steps, () => true), { quizzes, exams }, undefined, track);
+  row = p.steps.find((s) => s.key === rk);
+  assert.ok(row.locked && row.waiting === 'the Design sign-off', row.waiting);
+  // Design sign-off given: open.
+  const ticks = lessonsDone(steps, () => true);
+  ticks.set('signoff:design-ready', { done_at: new Date() });
+  p = T.progress(ticks, { quizzes, exams }, undefined, track);
+  assert.ok(!p.steps.find((s) => s.key === rk).locked);
+  // The design sign-off itself waits only for the design half.
+  p = T.progress(lessonsDone(steps, (s) => s.part !== 'sales'), { quizzes, exams }, undefined, track);
+  assert.ok(!p.steps.find((s) => s.key === 'signoff:design-ready').locked);
 });
 
 test('the Artwork workspace is taught in the design course', () => {

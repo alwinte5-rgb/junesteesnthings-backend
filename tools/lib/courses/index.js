@@ -324,14 +324,16 @@ function salesRoleOf(r) {
 // (PART_READY). For June's Tees + COS Sales that one is the track's ready key
 // (tracks.js `ready`), so apparel commission starts when June signs off
 // apparel sales, never on a software sign-off. Design + Marketing keeps the
-// course's own final ready, so nobody already on it loses ready or pay.
+// course's own final ready, so nobody already on it loses ready or pay; that
+// final ready waits for every lesson and for the Design sign-off
+// (training.js progress).
 const PART_READY = {
-  'sales-software': { key: 'signoff:apparel-ready', type: 'signoff', minutes: 0, partReady: true,
+  'sales-software': { key: 'signoff:apparel-ready', type: 'signoff', minutes: 0, partReady: true, short: 'the June’s Tees sign-off',
     title: 'Ready to send small June’s Tees quotes and messages on their own',
     hint: 'The last step of the June’s Tees half. Apparel commission starts here, on quotes you create from now on. June decides when to move you up.' },
-  'design-marketing': { key: 'signoff:design-ready', type: 'signoff', minutes: 0, partReady: true,
-    title: 'Ready to send proofs on their own',
-    hint: 'The last step of the Design half. Proofs and messages go straight to customers from here. June decides when to move you up.' },
+  'design-marketing': { key: 'signoff:design-ready', type: 'signoff', minutes: 0, partReady: true, short: 'the Design sign-off',
+    title: 'Design work signed off',
+    hint: 'The last step of the Design half: June checks your proofs and design work. Your final ready sign-off waits for it. June decides when to move you up.' },
 };
 const dualCourses = new Map();
 function dualCourse(track) {
