@@ -316,26 +316,59 @@ function salesRoleOf(r) {
 // A single combined course avoids duplicated Team basics, lesson IDs and
 // final sign-offs. Original lesson/quiz keys and the primary ready key stay
 // intact: assigning a second duty never deletes training or earned pay.
+//
+// Each duty is a `part` (owner, 2026-11-18: Myra trains "side by side"): a
+// module waits only for the modules before it in its own part (and for Team
+// basics), so one duty's exam never holds the other duty shut. The second
+// duty ends in its own practical assessment and its own ready sign-off
+// (PART_READY). For June's Tees + COS Sales that one is the track's ready key
+// (tracks.js `ready`), so apparel commission starts when June signs off
+// apparel sales, never on a software sign-off. Design + Marketing keeps the
+// course's own final ready, so nobody already on it loses ready or pay; that
+// final ready waits for every lesson and for the Design sign-off
+// (training.js progress).
+const PART_READY = {
+  'sales-software': { key: 'signoff:apparel-ready', type: 'signoff', minutes: 0, partReady: true, short: 'the June’s Tees sign-off',
+    title: 'Ready to send small June’s Tees quotes and messages on their own',
+    hint: 'The last step of the June’s Tees half. Apparel commission starts here, on quotes you create from now on. June decides when to move you up.' },
+  'design-marketing': { key: 'signoff:design-ready', type: 'signoff', minutes: 0, partReady: true, short: 'the Design sign-off',
+    title: 'Design work signed off',
+    hint: 'The last step of the Design half: June checks your proofs and design work. Your final ready sign-off waits for it. June decides when to move you up.' },
+};
 const dualCourses = new Map();
 function dualCourse(track) {
   if (dualCourses.has(track)) return dualCourses.get(track);
   const isSales = track === 'sales-software';
   const primary = isSales ? SOFTWARE_CORE : SALES_CORE;
   const secondary = isSales ? SALES_CORE : DESIGN_CORE;
+  const secondaryPart = isSales ? 'sales' : 'design';
   const secondaryFinal = {
     key: `${secondary.key}:assessment`, title: `${secondary.title}: practical assessment`,
     goal: `Demonstrate the ${secondary.title.toLowerCase()} work before working independently.`,
-    lessons: [], quiz: secondary.final.quiz, buffer: 5,
-    practice: [], // The combined final sign-off covers both duties; no early release here.
+    lessons: [], quiz: secondary.final.quiz, buffer: 5, part: secondaryPart,
+    practice: [PART_READY[track]],
   };
   const team = SOFTWARE_CORE.modules[0];
+  const as = (part) => (m) => ({ ...m, part });
+  // Content's c4 (editing) is left out on purpose: in this role the designer
+  // captures or requests raw footage and the video editor edits it (tracks.js).
   const core = isSales
-    ? [team, ...SALES_CORE.modules, secondaryFinal, ...SOFTWARE_CORE.modules.filter(m => m.key !== 'team')]
-    : [team, ...DESIGN_CORE.modules.filter(m => m.key !== 'team'), secondaryFinal,
-        ...CONTENT_CORE.modules.filter(m => ['c2', 'c3', 'c5', 'c6', 'c7', 'c8'].includes(m.key)), ...SALES_CORE.modules];
+    ? [team, ...SALES_CORE.modules.map(as('sales')), secondaryFinal, ...SOFTWARE_CORE.modules.filter(m => m.key !== 'team').map(as('software'))]
+    : [team, ...DESIGN_CORE.modules.filter(m => m.key !== 'team').map(as('design')), secondaryFinal,
+        ...CONTENT_CORE.modules.filter(m => ['c2', 'c3', 'c5', 'c6', 'c7', 'c8'].includes(m.key)).map(as('content')),
+        ...SALES_CORE.modules.map(as('sales'))];
   const c = {
     ...primary, key: track, title: isSales ? 'June’s Tees + COS Sales' : 'Design + Marketing & Light Sales', track,
-    modules: core.map((m, i) => ({ ...m, key: `${i}:${m.key}` })), final: primary.final,
+    modules: core.map((m, i) => ({ ...m, key: `${i}:${m.key}` })),
+    /* On June's Tees + COS the software ready no longer ends training or
+       starts commission (the apparel sign-off does), so it says so (code
+       review). Same key, so a ready already given is kept. */
+    final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:ready'
+      ? { ...x, title: 'Ready to sell COS software on your own',
+          hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }
+      : x)) } : primary.final,
+    // The closing exam and sign-offs belong to the first duty's part.
+    finalPart: isSales ? 'software' : 'sales',
   };
   dualCourses.set(track, c);
   return c;
@@ -367,4 +400,4 @@ function glossary() {
   return out;
 }
 
-module.exports = { COURSES, SALES_ROLES, salesRoleOf, coursesFor, lessonArticles, glossary };
+module.exports = { COURSES, SALES_ROLES, PART_READY, salesRoleOf, coursesFor, lessonArticles, glossary };
