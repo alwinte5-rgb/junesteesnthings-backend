@@ -34241,7 +34241,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (!id) return res.redirect('/admin/staff');
   try {
-    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, hourly_rate, archived_at, perms FROM staff WHERE id = $1', [id]);
+    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, sales_role, hourly_rate, archived_at, perms FROM staff WHERE id = $1', [id]);
     if (!s) return back(res, '/admin/staff', 'err', 'No such helper.');
     switch (String(b.action)) {
       case 'preset': {
@@ -34314,21 +34314,36 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            ticks are kept either way. */
         const presetName = STAFF.presetOnPathChange(TRAINING.trackOf(s.training_track), track, b.apply_preset === '1');
         const p = presetName ? STAFF.presetPerms(presetName) : null;
-        if (p) {
-          await pool.query('UPDATE staff SET training_track = $2, perms = $3 WHERE id = $1', [id, track, JSON.stringify(p)]);
-        } else {
-          await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
-        }
         /* A trained Sales helper moved onto June's Tees + COS keeps their
            apparel ready: the Sales course's ready is that sign-off, under
-           another key (TRAINING.carriedReady; code review). Same date and
-           signer, so commission carries on unbroken. */
+           another key (TRAINING.carriedReady; code review). Only when their
+           training on the old path had ended (its own ready, a role's
+           included), with the same date and signer. One transaction with the
+           path change, so a failure never leaves them moved but not carried. */
         const carry = TRAINING.carriedReady(s.training_track, track);
-        if (carry) {
-          await pool.query(
-            `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
-             SELECT staff_id, $3::text, done_at, signed_by FROM staff_training WHERE staff_id = $1 AND step_key = $2
-             ON CONFLICT DO NOTHING`, [id, carry.from, carry.to]);
+        const oldReady = TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role));
+        let carried = 0;
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          if (p) {
+            await client.query('UPDATE staff SET training_track = $2, perms = $3 WHERE id = $1', [id, track, JSON.stringify(p)]);
+          } else {
+            await client.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
+          }
+          if (carry) {
+            ({ rowCount: carried } = await client.query(
+              `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+               SELECT staff_id, $3::text, done_at, signed_by FROM staff_training WHERE staff_id = $1 AND step_key = $2
+                  AND EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$4')})
+               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady]));
+          }
+          await client.query('COMMIT');
+        } catch (e) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw e;
+        } finally {
+          client.release();
         }
         /* A path change can lower what they may do (a Trusted helper put on a
            new path starts on its training preset), so it is on the record
@@ -34336,7 +34351,8 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         if (track !== TRAINING.trackOf(s.training_track)) {
           logActivity(currentActor(), 'helper path changed', { type: 'staff', id },
             { name: s.name, from: TRAINING.trackOf(s.training_track), to: track,
-              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}) });
+              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}),
+              ...(carried ? { readyCarried: carry.to } : {}) });
         }
         const lost = p && lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path${
@@ -44553,7 +44569,7 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
         client.release();
       }
       if (removed) log('training sign-off undone');
-      else return back(res, to, 'err', `${s.title} is not signed off (already undone?), so nothing changed.`);
+      else return back(res, to, 'err', `${s.title} had no sign-off to undo, so nothing changed.`);
       return back(res, to, 'ok', `Undone: ${s.title}.`);
     }
     /* Not before the gate in front of it: the ready sign-off starts commission
