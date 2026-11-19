@@ -28487,8 +28487,23 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
              l.phone ? `<a href="tel:${escEmail(l.phone)}">${escEmail(l.phone)}</a>` : '',
              chat ? `<a href="https://dashboard.tawk.to/" target="_blank" rel="noopener">${
                l.email || l.phone ? 'answer in tawk.to' : 'No email left — answer in tawk.to'}</a>` : '',
+             /* Correct a wrong email or phone (owner, 2026-11-19). */
+             (l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayEditLeadContact(l)
+               ? `<a href="#" onclick="var f=document.getElementById('ce-${l.id}');f.style.display=f.style.display==='block'?'none':'block';return false">Edit contact</a>` : '',
             ].filter(Boolean).join(' &middot; ')}
         </div>
+        ${(l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayEditLeadContact(l) ? `
+        <div id="ce-${l.id}" style="display:none;margin-top:8px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">Fix a wrong email or phone. The old one is kept in a note on this lead.</p>
+          <form method="POST" action="/admin/lead/${l.id}/contact-email" style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px">
+            <input name="email" type="email" maxlength="254" required value="${escEmail(l.email || '')}" placeholder="Their email" aria-label="Their email" style="flex:1 1 200px;padding:7px;font-size:13px">
+            <input type="hidden" name="back" value="${escEmail(back)}">
+            <button type="submit" class="btn" style="padding:7px 14px;font-size:13px">Save email</button></form>
+          ${isFoundLead(l) ? '' : `<form method="POST" action="/admin/lead/${l.id}/contact-phone" style="display:flex;gap:6px;flex-wrap:wrap;margin:0">
+            <input name="phone" type="tel" maxlength="40" required value="${escEmail(l.phone || '')}" placeholder="Their phone" aria-label="Their phone" style="flex:1 1 200px;padding:7px;font-size:13px">
+            <input type="hidden" name="back" value="${escEmail(back)}">
+            <button type="submit" class="btn" style="padding:7px 14px;font-size:13px">Save phone</button></form>`}
+        </div>` : ''}
         ${Array.isArray(l.chat_transcript) && l.chat_transcript.length ? `
         <details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px;color:#1848B8">The chat
           (${l.chat_transcript.length} message${l.chat_transcript.length === 1 ? '' : 's'})</summary>
@@ -28573,10 +28588,7 @@ function isFoundLead(l) {
  *  never to a found lead, and for a helper only on a lead that is theirs or
  *  nobody's (the route checks the same again). */
 function mayAddLeadPhone(l) {
-  if (!l || String(l.phone || '').trim() || isFoundLead(l)) return false;
-  const a = currentActor();
-  if (!a || a.kind !== 'staff') return true;
-  return (l.assigned_to == null || Number(l.assigned_to) === a.id) && (l.rep_id == null || Number(l.rep_id) === a.id);
+  return !!l && !String(l.phone || '').trim() && !isFoundLead(l) && mayEditLeadContact(l);
 }
 
 /** The Text them box: the text box when a text can go, else why not, with a
@@ -36456,14 +36468,9 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
     return back(res, backTo, 'err', 'Emails to leads go through the owner for now. Write what you want to say in a note on the lead.');
   }
   try {
-    const { rows: [l] } = await pool.query('SELECT id, email, name FROM submissions WHERE id = $1', [id]);
+    const { rows: [l] } = await pool.query('SELECT id, email FROM submissions WHERE id = $1', [id]);
     if (!l) return back(res, backTo, 'err', 'No such lead.');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(l.email || '').trim())) return back(res, backTo, 'err', 'This lead has no email address.');
-    /* The box opens with only a greeting and a sign-off: never sent like that. */
-    const flat = (t) => String(t).replace(/\s+/g, ' ').trim();
-    if (flat(m.text) === flat(LEADMAIL.blankEmail(l, { signer: SHOP_SIGNER, shop: SHOP_NAME }).body)) {
-      return back(res, backTo, 'err', 'Write the message first, or pick a template.');
-    }
     /* A helper in training writes it and the owner sends it, as with job
        messages (2026-10-13: trainees were stuck with no way to write to a
        lead). So does any helper whose email mentions being paid outside the
@@ -36635,18 +36642,67 @@ app.post('/admin/lead/:id/text', requireAdmin, async (req, res) => {
  *  and for a helper only on a lead that is theirs or nobody's (the route
  *  checks the same again). */
 function mayAddLeadEmail(l) {
-  if (!l || String(l.email || '').trim()) return false;
+  return !!l && !String(l.email || '').trim() && mayEditLeadContact(l);
+}
+
+/** May whoever is signed in add or correct this lead's email or phone? The
+ *  owner always; a helper on a lead that is theirs or nobody's, and never
+ *  one carrying another helper's credit (the routes check the same again). */
+function mayEditLeadContact(l) {
+  if (!l) return false;
   const a = currentActor();
   if (!a || a.kind !== 'staff') return true;
-  /* Never another helper's: by who has it, or by whose credit it carries. */
   return (l.assigned_to == null || Number(l.assigned_to) === a.id) && (l.rep_id == null || Number(l.rep_id) === a.id);
+}
+
+/** Save a lead's email or phone, new or corrected (owner, 2026-11-19: "I
+ *  entered one wrong and I can't change it"), in one transaction with the
+ *  "already a customer?" check: a value the shop already has makes a credited
+ *  lead a shop lead, so a contact can never be used to claim an existing
+ *  customer. A correction is written on the lead with what it was before.
+ *  Returns { ok, msg } or { err }. */
+async function saveLeadContact(id, field, value, actor) {
+  const isStaff = !!(actor && actor.kind === 'staff');
+  const word = field === 'email' ? 'email' : 'phone';
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [l] } = await client.query(
+      'SELECT id, email, phone, sale_type, rep_id, assigned_to, finder_run_id, sale_type_reason FROM submissions WHERE id = $1 FOR UPDATE', [id]);
+    const stop = (err) => client.query('ROLLBACK').then(() => ({ err }));
+    if (!l) return await stop('No such lead.');
+    if (isStaff && !((l.assigned_to == null || l.assigned_to === actor.id) && (l.rep_id == null || l.rep_id === actor.id))) {
+      return await stop(`That lead is someone else's. Ask the owner to change it.`);
+    }
+    if (field === 'phone' && isFoundLead(l)) return await stop('We never text or call a number found online. Email them instead.');
+    const before = String(l[field] || '').trim();
+    if (before === value) return await stop(`That is already their ${word}.`);
+    await client.query(`UPDATE submissions SET ${field === 'email' ? 'email' : 'phone'} = $2 WHERE id = $1`, [id, value]);
+    let reason = '';
+    if (l.sale_type === 'rep' || l.sale_type === 'pending') {
+      reason = CREDIT.knownReason(await seenCustomer(field === 'email' ? { email: value } : { phone: value }, { excludeLead: id }), fmtDate);
+      if (reason) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
+    }
+    if (before) {
+      await client.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'note', $2, $3)`,
+        [id, `Changed their ${word} from ${before} to ${value}.`, isStaff ? actor.id : null]);
+    }
+    await client.query('COMMIT');
+    logActivity(actor, `lead ${word} ${before ? 'changed' : 'added'}${reason ? ': already known' : ''}`, { type: 'lead', id },
+      { ...(before ? { from: before, to: value } : {}), ...(reason ? { reason } : {}) });
+    const done = `${word[0].toUpperCase()}${word.slice(1)} ${before ? 'changed' : 'saved'}.`;
+    return { ok: true, msg: reason ? `${done} It is now a shop lead: ${reason}.` : `${done} Use ${word === 'email' ? 'Email' : 'Text'} them to write to them.` };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally { client.release(); }
 }
 
 /* Add an email to a lead that has none (owner, 2026-11-18: "add email to the
    leads that are found with ai. Right now we cant send them emails"). The AI
    finder often finds a website but no email; once one is added here the
-   lead's Email them button works. Only fills an empty email, never changes
-   one. A lead registered as a helper's own is checked again, as when it was
+   lead's Email them button works. It also corrects a wrong one (2026-11-19).
+   A lead registered as a helper's own is checked again, as when it was
    added: an email the shop already has makes it a shop lead, so an email
    cannot be used to claim an existing customer. */
 app.post('/admin/lead/:id/contact-email', requireAdmin, async (req, res) => {
@@ -36656,45 +36712,19 @@ app.post('/admin/lead/:id/contact-email', requireAdmin, async (req, res) => {
   if (!id) return res.redirect(backTo);
   const email = String(b.email || '').trim().toLowerCase();
   if (!email || email.length > 254 || !STAFF.EMAIL_RE.test(email)) return back(res, backTo, 'err', 'That email does not look right.');
-  const actor = currentActor();
-  const isStaff = !!(actor && actor.kind === 'staff');
   const toLead = `${backTo.split('#')[0]}#lead-${id}`;
-  /* The email and the "already a customer?" check land together or not at
-     all: a saved email that skipped the check would keep a helper's credit
-     for a customer the shop already has. */
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    const { rows: [l] } = await client.query(
-      `UPDATE submissions SET email = $2
-        WHERE id = $1 AND (email IS NULL OR btrim(email) = '')
-          AND ($3::int IS NULL OR ((assigned_to IS NULL OR assigned_to = $3) AND (rep_id IS NULL OR rep_id = $3)))
-        RETURNING id, sale_type, rep_id`, [id, email, isStaff ? actor.id : null]);
-    if (!l) {
-      await client.query('ROLLBACK');
-      const { rows: [x] } = await pool.query('SELECT email FROM submissions WHERE id = $1', [id]);
-      return back(res, backTo, 'err', !x ? 'No such lead.'
-        : String(x.email || '').trim() ? 'That lead already has an email.'
-        : 'That lead is someone else\'s. Ask the owner to add it.');
-    }
-    let reason = '';
-    if (l.sale_type === 'rep' || l.sale_type === 'pending') {
-      reason = CREDIT.knownReason(await seenCustomer({ email }, { excludeLead: id }), fmtDate);
-      if (reason) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
-    }
-    await client.query('COMMIT');
-    logActivity(actor, reason ? 'lead email added: already known' : 'lead email added', { type: 'lead', id }, reason ? { reason } : {});
-    return back(res, toLead, 'ok', reason ? `Email saved. It is now a shop lead: ${reason}.` : 'Email saved. Use Email them to write to them.');
+    const r = await saveLeadContact(id, 'email', email, currentActor());
+    return back(res, toLead, r.ok ? 'ok' : 'err', r.ok ? r.msg : r.err);
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('lead email add failed:', err.message);
-    return back(res, backTo, 'err', 'Could not save the email. Nothing was changed; try again.');
-  } finally { client.release(); }
+    console.error('lead email save failed:', err.message);
+    return back(res, toLead, 'err', 'Could not save the email. Nothing was changed; try again.');
+  }
 });
 
 /* Add a phone to a lead that has none (owner, 2026-11-19): a chat or email
    lead who gave their number. Never on a found lead (numbers found online are
-   never texted), only fills an empty phone, a helper only on their own or an
+   never texted); also corrects a wrong one; a helper only on their own or an
    unassigned lead; a number the shop already has makes a credited lead a
    shop lead, as an email does. */
 app.post('/admin/lead/:id/contact-phone', requireAdmin, async (req, res) => {
@@ -36702,42 +36732,16 @@ app.post('/admin/lead/:id/contact-phone', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const backTo = safeAdminPath(b.back, '/admin/leads');
   if (!id) return res.redirect(backTo);
-  const raw = String(b.phone || '').trim().slice(0, 40);
-  const phone = normalizeUsPhone(raw);
+  const phone = normalizeUsPhone(String(b.phone || '').trim().slice(0, 40));
   if (!phone) return back(res, backTo, 'err', 'That does not look like a US phone number. Type all 10 digits.');
-  const actor = currentActor();
-  const isStaff = !!(actor && actor.kind === 'staff');
   const toLead = `${backTo.split('#')[0]}#lead-${id}`;
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    const { rows: [l] } = await client.query(
-      `UPDATE submissions SET phone = $2
-        WHERE id = $1 AND btrim(COALESCE(phone, '')) = '' AND finder_run_id IS NULL
-          AND COALESCE(sale_type_reason, '') NOT LIKE 'Found by the salesperson%'
-          AND ($3::int IS NULL OR ((assigned_to IS NULL OR assigned_to = $3) AND (rep_id IS NULL OR rep_id = $3)))
-        RETURNING id, sale_type`, [id, VOICE.pretty(phone), isStaff ? actor.id : null]);
-    if (!l) {
-      await client.query('ROLLBACK');
-      const { rows: [x] } = await pool.query('SELECT phone, finder_run_id, sale_type_reason FROM submissions WHERE id = $1', [id]);
-      return back(res, toLead, 'err', !x ? 'No such lead.'
-        : String(x.phone || '').trim() ? 'That lead already has a phone number.'
-        : isFoundLead(x) ? 'We never text or call a number found online. Email them instead.'
-        : 'That lead is someone else\'s. Ask the owner to add it.');
-    }
-    let reason = '';
-    if (l.sale_type === 'rep' || l.sale_type === 'pending') {
-      reason = CREDIT.knownReason(await seenCustomer({ phone }, { excludeLead: id }), fmtDate);
-      if (reason) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
-    }
-    await client.query('COMMIT');
-    logActivity(actor, reason ? 'lead phone added: already known' : 'lead phone added', { type: 'lead', id }, reason ? { reason } : {});
-    return back(res, toLead, 'ok', reason ? `Phone saved. It is now a shop lead: ${reason}.` : 'Phone saved. Use Text them to write to them.');
+    const r = await saveLeadContact(id, 'phone', VOICE.pretty(phone), currentActor());
+    return back(res, toLead, r.ok ? 'ok' : 'err', r.ok ? r.msg : r.err);
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('lead phone add failed:', err.message);
-    return back(res, backTo, 'err', 'Could not save the phone. Nothing was changed; try again.');
-  } finally { client.release(); }
+    console.error('lead phone save failed:', err.message);
+    return back(res, toLead, 'err', 'Could not save the phone. Nothing was changed; try again.');
+  }
 });
 
 app.post('/admin/lead/:id/assign', requireAdmin, async (req, res) => {

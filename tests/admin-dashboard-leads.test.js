@@ -224,7 +224,7 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
-    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('isFoundLead'), lift('mayAddLeadPhone'), lift('leadTextArea'), lift('leadCardHtml'),
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('mayEditLeadContact'), lift('isFoundLead'), lift('mayAddLeadPhone'), lift('leadTextArea'), lift('leadCardHtml'),
   ].join('\n'), sandbox);
   const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
   const base = { id: 7, created_at: new Date().toISOString(), description: 'hi', phone: '' };
@@ -233,16 +233,16 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   assert.match(anon, /^<a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>No email left — answer in tawk\.to<\/a>$/);
 
   const named = contactLine(sandbox.leadCardHtml({ ...base, source: 'chat', name: 'Dana', email: 'dana@example.com' }));
-  assert.match(named, /^<a href="mailto:dana@example\.com">dana@example\.com<\/a> &middot; <a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>answer in tawk\.to<\/a>$/);
+  assert.match(named, /^<a href="mailto:dana@example\.com">dana@example\.com<\/a> &middot; <a href="https:\/\/dashboard\.tawk\.to\/"[^>]*>answer in tawk\.to<\/a> &middot; <a href="#"[^>]*>Edit contact<\/a>$/);
 
   const phoneOnly = contactLine(sandbox.leadCardHtml({ ...base, source: 'form', name: 'Lee', email: '', phone: '3125550123' }));
-  assert.strictEqual(phoneOnly, '<a href="tel:3125550123">3125550123</a>', 'a form lead with only a phone');
+  assert.match(phoneOnly, /^<a href="tel:3125550123">3125550123<\/a> &middot; <a href="#"[^>]*>Edit contact<\/a>$/, 'a form lead with only a phone');
 
   /* A lead with no email (often one the AI finder found) offers "Add their email" instead of Email them (2026-11-18). */
   const noEmail = sandbox.leadCardHtml({ ...base, source: 'manual', name: 'Lakeview LL', email: '' });
   assert.match(noEmail, /action="\/admin\/lead\/7\/contact-email"/);
   assert.match(noEmail, /No email on file/);
-  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'coach@ll.org' }), /contact-email/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'coach@ll.org' }), /No email on file/);
   /* A helper is offered it only on a lead that is theirs or nobody's. */
   sandbox.currentActor = () => ({ kind: 'staff', id: 3 });
   assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: null }), /contact-email/);
@@ -262,6 +262,14 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   assert.doesNotMatch(found, /contact-phone/);
   assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', phone: '', sale_type_reason: 'Found by the salesperson and registered before anyone else' }), /contact-phone/);
   sandbox.canTextLeads = () => false;
+
+  /* A wrong email or phone can be corrected (owner, 2026-11-19), not on someone else's lead. */
+  const withMail = sandbox.leadCardHtml({ ...base, source: 'form', email: 'wrong@x.org', phone: '3125550123' });
+  assert.match(withMail, /id="ce-7"/); assert.match(withMail, /value="wrong@x\.org"/); assert.match(withMail, /contact-phone/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'c@x.org', phone: '', finder_run_id: 2 }).split('id="ce-7"')[1].split('</div>')[0], /contact-phone/, 'no phone on a found lead');
+  sandbox.currentActor = () => ({ kind: 'staff', id: 3 });
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'form', email: 'a@x.org', assigned_to: 4 }), /id="ce-7"/);
+  sandbox.currentActor = () => null;
 });
 
 test("tawk's placeholder name is not a name", () => {
@@ -314,7 +322,7 @@ test("a long message is never cut off on the lead card", () => {
      (Yazmin, 2026-10-20) stopped mid-word and the rest could not be read. */
   const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '',
     /* The text box is tested in lead-email.test.js. */
-    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '', leadTextArea: () => '' };
+    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '', leadTextArea: () => '', mayEditLeadContact: () => false };
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',

@@ -196,6 +196,13 @@ test('email templates: plain start, greeting and sign-off on each, no prices, wi
   assert.match(M.emailTemplates({})[0].body, /^Hi,\n\n/, 'no name: plain Hi');
 });
 
-test('the untouched plain email is refused by the send route', () => {
-  assert.match(src, /if \(flat\(m\.text\) === flat\(LEADMAIL\.blankEmail\(l, \{ signer: SHOP_SIGNER, shop: SHOP_NAME \}\)\.body\)\) \{\n\s+return back\(res, backTo, 'err', 'Write the message first, or pick a template\.'\);/);
+test('the untouched plain email is refused, however the sign-off is worded', () => {
+  for (const shop of ["June's Tees", "June's Tees & Things"]) {
+    const b = M.blankEmail({ name: 'Sam Lee' }, { signer: 'June', shop });
+    assert.match(M.cleanEmail({ subject: 'Hi', body: b.body }).error, /Write the message first/);
+  }
+  assert.match(M.cleanEmail({ subject: 'Hi', body: 'Hi,\n\nThanks,\nJune' }).error, /Write the message first/);
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam,\n\nYour shirts are ready.\n\nThank you,\nJune' }).error);
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Thanks for the order!' }).error, 'a one-line thank-you is a message');
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam, your shirts are ready.' }).error, 'words on the greeting line count');
 });

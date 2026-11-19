@@ -80,7 +80,19 @@ function cleanEmail(body) {
   if (text.length > LIMITS.body) return { error: `The message is too long (${LIMITS.body} characters at most).` };
   /* Claude marks what it could not know; none of it may reach a customer. */
   if (FILL_IN.test(`${subject}\n${text}`)) return { error: 'Fill in the [June to fill in] parts first.' };
+  /* The box opens with only a greeting and a sign-off (blankEmail): never
+     sent like that, however the sign-off is worded. */
+  if (!middleOf(text)) return { error: 'Write the message first, or pick a template.' };
   return { subject, text };
+}
+
+/** What is written between the greeting ("Hi Sam,") and the sign-off
+ *  ("Thank you," and the lines under it), trimmed. */
+function middleOf(text) {
+  const lines = String(text || '').split('\n');
+  if (lines.length && /^\s*(hi|hello|hey|dear)\b[^,.!?\n]{0,30},?\s*$/i.test(lines[0])) lines.shift();
+  const end = lines.findIndex((l, i) => i >= lines.length - 4 && /^\s*(thank you|thanks|best|regards)[,.!]?\s*$/i.test(l));
+  return (end >= 0 ? lines.slice(0, end) : lines).join('\n').trim();
 }
 
 /** The message as the customer sees it: each paragraph escaped, line breaks kept. */
@@ -210,4 +222,4 @@ function emailTemplates(lead, opts = {}) {
 }
 
 module.exports = { firstName, followUp, LIMITS, TEXT_LIMIT, infoRequest, cleanEmail, cleanText, toHtml, textTemplates,
-  EMAIL_TEMPLATES, blankEmail, emailTemplates };
+  EMAIL_TEMPLATES, blankEmail, emailTemplates, middleOf };
