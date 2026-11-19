@@ -14,7 +14,7 @@
  *   - a text that is only a link (a phone sends a link as a text of its
  *     own, beside the words) is never guessed at: it goes to whoever the
  *     owner's previous text went to, if that was within FOLLOW_MS, or is refused
- *     (owner, 2026-11-19: the link bubbles beside "Text (843) ..." went to
+ *     (owner, 2026-11-19: the link bubbles beside "Text <number> ..." went to
  *     the last texter, a different customer);
  *   - otherwise it goes to the customer whose text was forwarded last, within
  *     a day, unless two different customers were forwarded within ten minutes

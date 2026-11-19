@@ -58,7 +58,7 @@ test('ordinary messages that start with a count are still messages', () => {
   }
 });
 
-/* Owner, 2026-11-19: the link bubbles a phone sends beside "Text (843) ..."
+/* Owner, 2026-11-19: the link bubbles a phone sends beside "Text <number> ..."
    went to the last texter, a different customer. */
 test('a link on its own is never sent to the last texter', () => {
   for (const t of ['https://www.jtees.net/admin/leads#lead-328', 'www.jtees.net', 'jtees.net/shop', 'https://a.com https://b.com']) {
@@ -71,13 +71,13 @@ test('a link on its own is never sent to the last texter', () => {
 });
 
 test('a link on its own goes where the owner\'s previous text went, within two minutes', () => {
-  const prev = { phone: '+18432452427', quote_code: null, at: new Date(NOW - 30e3).toISOString() };
+  const prev = { phone: '+13125550177', quote_code: null, at: new Date(NOW - 30e3).toISOString() };
   let p = R.pickTarget([kim], 'https://www.jtees.net/x', RE, NOW, prev);
-  assert.strictEqual(p.to.phone, '+18432452427');
+  assert.strictEqual(p.to.phone, '+13125550177');
   assert.ok(p.followed && p.byNumber, 'checked like a typed number');
   assert.ok(p.typed, 'nobody on file: the server looks for their job or lead');
   /* A lead on file at that number: filed on it. */
-  const dee = { phone: '+18432452427', lead_id: 9, name: 'Dee', created_at: at(60) };
+  const dee = { phone: '+13125550177', lead_id: 9, name: 'Dee', created_at: at(60) };
   p = R.pickTarget([kim, dee], 'https://x.com/p', RE, NOW, prev);
   assert.strictEqual(p.to.lead_id, 9); assert.strictEqual(p.to.name, 'Dee'); assert.ok(!p.typed);
   /* The job the words were filed on wins over their newest forward. */
