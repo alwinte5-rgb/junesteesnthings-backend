@@ -117,6 +117,13 @@ function endsTraining(readyKey, key, doneAt) {
 function readyRowSql(alias, param) {
   return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz))`;
 }
+/** The sign-off a helper keeps when moved between paths: { from, to } when
+ *  their ready on the old path is the new path's ready under another key
+ *  (tracks.js readyCarriedFrom), else null. */
+function carriedReady(fromTrack, toTrack) {
+  const t = TRACKS[trackOf(toTrack)];
+  return t && t.ready && (t.readyCarriedFrom || []).includes(trackOf(fromTrack)) ? { from: READY_KEY, to: t.ready } : null;
+}
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
   return !!p && p.steps.some((s) => s.done && endsTraining(p.readyKey, s.key, s.doneAt));
@@ -621,7 +628,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

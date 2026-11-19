@@ -130,6 +130,12 @@ test('nobody already trained on June\'s Tees + COS loses ready or commission', (
   assert.match(stmt, /RETURNING 1/, 'the marker decides, in the same statement, whether it runs');
   assert.match(stmt, /SELECT t\.staff_id, 'signoff:apparel-ready', t\.done_at, t\.signed_by/);
   assert.match(stmt, /training_track = 'sales-software' AND t\.step_key = 'signoff:ready'/);
+  // A trained Sales helper moved onto the path keeps their apparel ready (the Sales course's ready is that sign-off).
+  assert.deepEqual(T.carriedReady('sales', 'sales-software'), { from: 'signoff:ready', to: 'signoff:apparel-ready' });
+  assert.equal(T.carriedReady('software', 'sales-software'), null, 'a software ready is not an apparel one');
+  assert.equal(T.carriedReady('design', 'sales-software'), null);
+  assert.equal(T.carriedReady('sales', 'design'), null);
+  assert.match(SRC, /TRAINING\.carriedReady\(s\.training_track, track\)/, 'the Staff page path change uses it');
   // The Team page and the owner's alert read it the same way as the session.
   const steps = T.progress(new Map([['signoff:apparel-ready', { done_at: '2026-11-01T00:00:00Z' }]]), {}, undefined, 'sales-software').steps;
   assert.equal(T.readyGiven({ steps, readyKey: rk }), true);

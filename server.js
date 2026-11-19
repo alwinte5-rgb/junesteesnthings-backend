@@ -34319,14 +34319,24 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         } else {
           await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
         }
+        /* A trained Sales helper moved onto June's Tees + COS keeps their
+           apparel ready: the Sales course's ready is that sign-off, under
+           another key (TRAINING.carriedReady; code review). Same date and
+           signer, so commission carries on unbroken. */
+        const carry = TRAINING.carriedReady(s.training_track, track);
+        if (carry) {
+          await pool.query(
+            `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+             SELECT staff_id, $3::text, done_at, signed_by FROM staff_training WHERE staff_id = $1 AND step_key = $2
+             ON CONFLICT DO NOTHING`, [id, carry.from, carry.to]);
+        }
         /* A path change can lower what they may do (a Trusted helper put on a
            new path starts on its training preset), so it is on the record
            with what they had before (code review). */
         if (track !== TRAINING.trackOf(s.training_track)) {
           logActivity(currentActor(), 'helper path changed', { type: 'staff', id },
             { name: s.name, from: TRAINING.trackOf(s.training_track), to: track,
-              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}) })
-            .catch((e) => console.error('path change log failed:', e.message));
+              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}) });
         }
         const lost = p && lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path${
@@ -44543,7 +44553,7 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
         client.release();
       }
       if (removed) log('training sign-off undone');
-      else return back(res, to, 'err', `${s.title} was not signed off, so there was nothing to undo.`);
+      else return back(res, to, 'err', `${s.title} is not signed off (already undone?), so nothing changed.`);
       return back(res, to, 'ok', `Undone: ${s.title}.`);
     }
     /* Not before the gate in front of it: the ready sign-off starts commission
