@@ -108,10 +108,16 @@ function readyKeyFor(track = DEFAULT_TRACK, role = null) {
    keeps commission (code review, 2026-11-18). */
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const KEY = /^signoff:[a-z-]+$/;
+/* Checked and built once at load, so a bad tracks.js value stops the boot
+   instead of breaking commission on first use (code review). */
+const MOVED_READY = Object.values(TRACKS).filter((t) => t.ready && t.readyFrom).map((t) => {
+  if (!KEY.test(t.ready) || !ISO.test(t.readyFrom)) throw new Error(`tracks.js: bad ready/readyFrom on ${t.label}`);
+  return { ready: t.ready, before: t.readyFrom };
+});
+const ALWAYS_LEGACY = [{ key: READY_KEY, before: LEGACY_READY_BEFORE }];
 function legacyReadyFor(readyKey) {
-  const out = [{ key: READY_KEY, before: LEGACY_READY_BEFORE }];
-  for (const t of Object.values(TRACKS)) if (t.ready && t.ready === readyKey && t.readyFrom) out.push({ key: READY_KEY, before: t.readyFrom });
-  return out;
+  const moved = MOVED_READY.filter((m) => m.ready === readyKey);
+  return moved.length ? [...ALWAYS_LEGACY, ...moved.map((m) => ({ key: READY_KEY, before: m.before }))] : ALWAYS_LEGACY;
 }
 /** Did this sign-off (key, given at doneAt) end training on a path whose
  *  ready key is readyKey? The one rule for JS; readyRowSql is the same in SQL. */
@@ -124,14 +130,10 @@ function endsTraining(readyKey, key, doneAt) {
 /** SQL for "this staff_training row ended training", where `param` holds the
  *  path's ready key. Only checked constants are written into the text. */
 function readyRowSql(alias, param) {
-  const or = [`${alias}.step_key = ${param}`,
-    `(${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz)`];
-  for (const t of Object.values(TRACKS)) {
-    if (!t.ready || !t.readyFrom) continue;
-    if (!KEY.test(t.ready) || !ISO.test(t.readyFrom)) throw new Error(`tracks.js: bad ready/readyFrom on ${t.label}`);
-    or.push(`(${param}::text = '${t.ready}' AND ${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${t.readyFrom}'::timestamptz)`);
-  }
-  return `(${or.join(' OR ')})`;
+  return `(${[`${alias}.step_key = ${param}`,
+    `(${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz)`,
+    ...MOVED_READY.map((m) => `(${param}::text = '${m.ready}' AND ${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${m.before}'::timestamptz)`),
+  ].join(' OR ')})`;
 }
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
@@ -217,7 +219,16 @@ function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK, role 
  * until its module's lessons are (`waiting` says which).
  */
 function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK, role = null, times = new Map()) {
+  const pathReady = readyKeyFor(track, role);
+  /* An older ready that still ends training on this path (endsTraining)
+     shows the path's ready step as done, so the page, the Team pill and the
+     owner's alerts agree with the session (code review). */
+  let legacy = null;
+  for (const [k, t] of ticks) if (k !== pathReady && t && endsTraining(pathReady, k, t.done_at)) { legacy = { key: k, ...t }; break; }
   const raw = visibleSteps(features, track, role).map((s) => {
+    if (legacy && s.key === pathReady && !ticks.get(s.key)) {
+      return { ...s, done: true, doneAt: legacy.done_at, signedBy: legacy.signed_by || null, took: null, legacyFrom: legacy.key };
+    }
     const t = ticks.get(s.key);
     const done = s.type === 'do' ? Number(facts[s.fact] || 0) >= (s.need || 1)
       : s.type === 'quiz' ? Number((facts.quizzes || {})[s.quiz] || 0) > 0
@@ -237,15 +248,16 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
   const partOf = new Map();
   for (const s of raw) if (s.module && !partOf.has(s.module)) partOf.set(s.module, s.part || null);
   const shutBy = new Map();
-  order.forEach((m, i) => {
+  const blocked = new Set(); // parts with an unpassed gate so far
+  let blockedAll = false;    // an unpassed gate outside any part, or a part-less module after any
+  for (const m of order) {
     const p = partOf.get(m);
-    shutBy.set(m, order.slice(0, i).some((e) => gateDone.has(e) && !gateDone.get(e)
-      && (partOf.get(e) == null || p == null || partOf.get(e) === p)));
-  });
+    shutBy.set(m, blockedAll || (p == null ? blocked.size > 0 : blocked.has(p)));
+    if (gateDone.has(m) && !gateDone.get(m)) { if (p == null) blockedAll = true; else blocked.add(p); }
+  }
   /* The lessons a closing sign-off waits for: its course's, and in a part,
      that part's (Team basics count for every part). */
   const samePart = (s, x) => !s.part || !x.part || x.part === s.part;
-  const pathReady = readyKeyFor(track, role);
   /* A course's closing sign-offs (ready starts commission and ends training)
      share the final module with the final exam, so the module gate never
      held them. They wait for that exam and for every lesson in the course.
@@ -268,9 +280,10 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
     const whole = s.key === pathReady && !s.partReady;
     const exam = raw.find((x) => x.module === s.module && x.gate);
     const lessons = raw.filter((x) => x.course === s.course && x.type === 'lesson' && !x.done && (whole || samePart(s, x))).length;
+    const quizzes = whole ? raw.filter((x) => x.course === s.course && x.gate && !x.done && x.module !== s.module).length : 0;
     const halves = whole ? raw.filter((x) => x.course === s.course && x.partReady && !x.done).map((x) => x.short || x.title) : [];
     return [exam && !exam.done ? (s.partReady ? 'the practical assessment' : 'the final exam') : '', lessons ? `${lessons} lesson${lessons === 1 ? '' : 's'}` : '',
-      ...halves].filter(Boolean).join(' and ');
+      quizzes ? `${quizzes} quiz${quizzes === 1 ? '' : 'zes'}` : '', ...halves].filter(Boolean).join(' and ');
   };
   const steps = raw.map((s) => {
     if (!s.module) return { ...s, locked: false };

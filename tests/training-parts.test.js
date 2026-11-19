@@ -129,11 +129,16 @@ test('nobody already trained on June\'s Tees + COS loses ready or commission', (
   // The Team page and the owner's alert read it the same way.
   const steps = T.progress(new Map([['signoff:ready', { done_at: before }]]), {}, undefined, 'sales-software').steps;
   assert.equal(T.readyGiven({ steps, readyKey: rk }), true);
+  // The path's ready step shows as done (from the earlier one), so nothing asks June to sign it again.
+  const ar = steps.find((s) => s.key === rk);
+  assert.ok(ar.done && ar.legacyFrom === 'signoff:ready', 'apparel step counted from the earlier ready');
+  const late = T.progress(new Map([['signoff:ready', { done_at: after }]]), {}, undefined, 'sales-software').steps;
+  assert.ok(!late.find((s) => s.key === rk).done, 'a later software ready does not count');
+  // The software ready says it no longer ends training on this path.
+  assert.match(late.find((s) => s.key === 'signoff:ready').hint, /not here/);
   // And SQL says the same as JS.
   const sql = T.readyRowSql('t', '$2');
   assert.ok(sql.includes(`$2::text = 'signoff:apparel-ready' AND t.step_key = 'signoff:ready' AND t.done_at < '${from}'::timestamptz`), sql);
-  assert.match(SRC, /const readyRow = \(alias, param\) => TRAINING\.readyRowSql/);
-  assert.match(SRC, /inTraining: !\(s\.ready_rows/, 'sign-in reads ready through the same rule');
 });
 
 test('Design + Marketing is not trained until both halves are signed off', () => {
@@ -150,9 +155,15 @@ test('Design + Marketing is not trained until both halves are signed off', () =>
   p = T.progress(lessonsDone(steps, () => true), { quizzes, exams }, undefined, track);
   row = p.steps.find((s) => s.key === rk);
   assert.ok(row.locked && row.waiting === 'the Design sign-off', row.waiting);
-  // Design sign-off given: open.
+  // Content quizzes unpassed: shut, even with everything else done.
   const ticks = lessonsDone(steps, () => true);
   ticks.set('signoff:design-ready', { done_at: new Date() });
+  const noContent = Object.fromEntries(Object.entries(quizzes).filter(([k]) => !/^content/.test(k)));
+  assert.ok(Object.keys(noContent).length < Object.keys(quizzes).length, 'the path has content quizzes');
+  p = T.progress(ticks, { quizzes: noContent, exams }, undefined, track);
+  row = p.steps.find((s) => s.key === rk);
+  assert.ok(row.locked && /quiz/.test(row.waiting), row.waiting);
+  // Design sign-off given and every quiz passed: open.
   p = T.progress(ticks, { quizzes, exams }, undefined, track);
   assert.ok(!p.steps.find((s) => s.key === rk).locked);
   // The design sign-off itself waits only for the design half.

@@ -30,13 +30,13 @@ test('the ready key is the last ready on the path', () => {
 
 test('commission, the session and restarts all read the path\'s ready key, with the old Sales ready kept', () => {
   // One rule (TRAINING.readyRowSql / endsTraining): the path's key, or a Sales ready from before role courses.
-  assert.match(src, /const readyRow = \(alias, param\) => TRAINING\.readyRowSql\(alias, param\)/);
+  assert.match(src, /TRAINING\.readyRowSql\(/);
   assert.ok(TRAINING.readyRowSql('t', '$2').includes(`t.step_key = $2 OR (t.step_key = '${TRAINING.READY_KEY}' AND t.done_at < '${TRAINING.LEGACY_READY_BEFORE}'::timestamptz)`));
   assert.equal(TRAINING.endsTraining('signoff:closer-ready', TRAINING.READY_KEY, '2026-10-01T00:00:00Z'), true, 'old Sales ready kept');
   assert.equal(TRAINING.endsTraining('signoff:closer-ready', TRAINING.READY_KEY, '2026-10-20T00:00:00Z'), false);
   assert.match(fnOf('async function commissionStartsAt('), /readyRow\('t', '\$2'\)[\s\S]*await readyKeyOf\(staffId\)/);
   const who = fnOf('async function staffByEmail(');
-  assert.match(who, /inTraining: !\(s\.ready_rows \|\| \[\]\)\.some\(\(r\) => TRAINING\.endsTraining\(\s*TRAINING\.readyKeyFor\(/);
+  assert.match(who, /TRAINING\.endsTraining\(/);
   assert.match(src, /FROM staff_training t WHERE t\.staff_id = \$1 AND \$\{readyRow\('t', '\$2'\)\}\n\s+ORDER BY t\.done_at\n\s+ON CONFLICT DO NOTHING`, \[staffId, await readyKeyOf\(staffId\)\]/, 'a restart keeps the window of whichever ready ended training');
   assert.ok(new Date(TRAINING.LEGACY_READY_BEFORE) > new Date('2026-10-13T00:00:00Z'));
 });

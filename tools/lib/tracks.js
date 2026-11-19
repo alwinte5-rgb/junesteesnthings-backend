@@ -43,7 +43,7 @@ const TRACKS = {
 // assignment and the explicitly selected permission preset change.
 TRACKS['sales-software'] = {
   label: 'June’s Tees + COS Sales', short: 'Apparel + COS sales', role: 'June’s Tees & COS Sales Agent', preset: 'dual-sales',
-  trained: 'dual-sales-trained', ready: 'signoff:apparel-ready', readyFrom: '2026-11-18T18:00:00Z',
+  trained: 'dual-sales-trained', ready: 'signoff:apparel-ready', readyFrom: '2026-11-19T03:00:00Z',
   includes: ['sales', 'software'],
   note: 'Start with June’s Tees sales (about 75% of effort) and supported COS outreach (about 25%), within agreed hours. Review the split after 30 days. Keep leads and commission records separate. No automatic task assignments.',
 };

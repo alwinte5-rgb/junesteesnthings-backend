@@ -34304,6 +34304,14 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         } else {
           await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
         }
+        /* A path change can lower what they may do (a Trusted helper put on a
+           new path starts on its training preset), so it is on the record
+           with what they had before (code review). */
+        if (track !== TRAINING.trackOf(s.training_track)) {
+          logActivity(currentActor(), 'helper path changed', { type: 'staff', id },
+            { name: s.name, from: TRAINING.trackOf(s.training_track), to: track,
+              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}) });
+        }
         const lost = p && lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path${
           p ? `, with ${STAFF.PRESETS[presetName].label} permissions` : ''}.${lost}`);
@@ -42805,6 +42813,10 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       } else if (s.type === 'quiz') {
         action = owner ? `${everTried.has(s.quiz) ? `<a class="btn btn-ghost" href="/admin/training/attempts?staff=${staffId}&amp;quiz=${encodeURIComponent(s.quiz)}" title="${escEmail(who.name)}'s answers">Answers</a> ` : ''}<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">Questions</a>`
           : `<a class="btn ${s.done ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(s.quiz)}">${s.done ? 'Take it again' : 'Take the quiz'}</a>`;
+      } else if (s.type === 'signoff' && owner && s.legacyFrom) {
+        /* Counted from an earlier ready (TRAINING.endsTraining): there is no
+           row of its own to undo; that sign-off's own Undo clears it. */
+        action = '<span class="muted" style="font-size:12px">Counted from their earlier ready sign-off</span>';
       } else if (s.type === 'signoff' && owner) {
         /* The owner's own action, labelled as such. Undo asks for a tick
            first, like Restart: one stray tap used to clear a sign-off. */

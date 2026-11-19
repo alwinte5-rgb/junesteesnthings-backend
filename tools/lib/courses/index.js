@@ -359,7 +359,14 @@ function dualCourse(track) {
         ...SALES_CORE.modules.map(as('sales'))];
   const c = {
     ...primary, key: track, title: isSales ? 'June’s Tees + COS Sales' : 'Design + Marketing & Light Sales', track,
-    modules: core.map((m, i) => ({ ...m, key: `${i}:${m.key}` })), final: primary.final,
+    modules: core.map((m, i) => ({ ...m, key: `${i}:${m.key}` })),
+    /* On June's Tees + COS the software ready no longer ends training or
+       starts commission (the apparel sign-off does), so it says so (code
+       review). Same key, so a ready already given is kept. */
+    final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:ready'
+      ? { ...x, title: 'Ready to sell COS software on your own',
+          hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }
+      : x)) } : primary.final,
     // The closing exam and sign-offs belong to the first duty's part.
     finalPart: isSales ? 'software' : 'sales',
   };
