@@ -117,28 +117,24 @@ test('changing a helper\'s path also sets that path\'s permissions unless June u
 
 test('nobody already trained on June\'s Tees + COS loses ready or commission', () => {
   const rk = T.readyKeyFor('sales-software');
-  const from = TRACKS['sales-software'].readyFrom;
-  const before = new Date(new Date(from).getTime() - 86400000).toISOString();
-  const after = new Date(new Date(from).getTime() + 86400000).toISOString();
-  assert.equal(T.endsTraining(rk, 'signoff:ready', before), true, 'a software ready given before the change still ends training');
-  assert.equal(T.endsTraining(rk, 'signoff:ready', after), false, 'one given after it does not: apparel commission waits for apparel');
-  assert.equal(T.endsTraining(rk, 'signoff:apparel-ready', after), true);
-  // Other paths: unchanged.
-  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', after), false);
+  // A software or design ready never ends training here by itself: a designer moved onto the path is not trained for apparel.
+  assert.equal(T.endsTraining(rk, 'signoff:ready', '2026-11-01T00:00:00Z'), false);
+  assert.equal(T.endsTraining(rk, 'signoff:apparel-ready', '2026-11-01T00:00:00Z'), true);
+  // Other paths: unchanged (the old Sales ready from before role courses still counts).
   assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', '2026-10-01T00:00:00Z'), true);
-  // The Team page and the owner's alert read it the same way.
-  const steps = T.progress(new Map([['signoff:ready', { done_at: before }]]), {}, undefined, 'sales-software').steps;
+  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', '2026-10-20T00:00:00Z'), false);
+  // Those already signed ready on the path are given the apparel sign-off once, at startup, with the same date and signer.
+  const at = SRC.indexOf("'once:apparel-ready-from-ready'");
+  assert.ok(at > 0, 'the one-time grant exists');
+  const stmt = SRC.slice(SRC.lastIndexOf('WITH mark AS', at), SRC.indexOf('ON CONFLICT DO NOTHING`', at));
+  assert.match(stmt, /RETURNING 1/, 'the marker decides, in the same statement, whether it runs');
+  assert.match(stmt, /SELECT t\.staff_id, 'signoff:apparel-ready', t\.done_at, t\.signed_by/);
+  assert.match(stmt, /training_track = 'sales-software' AND t\.step_key = 'signoff:ready'/);
+  // The Team page and the owner's alert read it the same way as the session.
+  const steps = T.progress(new Map([['signoff:apparel-ready', { done_at: '2026-11-01T00:00:00Z' }]]), {}, undefined, 'sales-software').steps;
   assert.equal(T.readyGiven({ steps, readyKey: rk }), true);
-  // The path's ready step shows as done (from the earlier one), so nothing asks June to sign it again.
-  const ar = steps.find((s) => s.key === rk);
-  assert.ok(ar.done && ar.legacyFrom === 'signoff:ready', 'apparel step counted from the earlier ready');
-  const late = T.progress(new Map([['signoff:ready', { done_at: after }]]), {}, undefined, 'sales-software').steps;
-  assert.ok(!late.find((s) => s.key === rk).done, 'a later software ready does not count');
   // The software ready says it no longer ends training on this path.
-  assert.match(late.find((s) => s.key === 'signoff:ready').hint, /not here/);
-  // And SQL says the same as JS.
-  const sql = T.readyRowSql('t', '$2');
-  assert.ok(sql.includes(`$2::text = 'signoff:apparel-ready' AND t.step_key = 'signoff:ready' AND t.done_at < '${from}'::timestamptz`), sql);
+  assert.match(steps.find((s) => s.key === 'signoff:ready').hint, /not here/);
 });
 
 test('Design + Marketing is not trained until both halves are signed off', () => {

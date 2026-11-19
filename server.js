@@ -1854,6 +1854,21 @@ async function initStaffTables() {
   /* Which training path a helper walks (TRAINING.TRACKS). Every helper
      before this was a sales helper, hence the default. */
   await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS training_track TEXT NOT NULL DEFAULT 'sales'`);
+  /* Once: June's Tees + COS Sales used to end at the software ready
+     (signoff:ready); it now ends at its own apparel sign-off. Anyone on it
+     who was already signed ready gets the apparel one with the same date and
+     signer, so nobody already trained goes back into training or loses
+     commission. A marker row makes it run once, in the same statement, so a
+     helper moved onto the path later is not given it (code review). */
+  await pool.query(`
+    WITH mark AS (
+      INSERT INTO shop_settings (key, value) VALUES ('once:apparel-ready-from-ready', jsonb_build_object('at', NOW()))
+      ON CONFLICT DO NOTHING RETURNING 1)
+    INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+    SELECT t.staff_id, 'signoff:apparel-ready', t.done_at, t.signed_by
+      FROM staff_training t JOIN staff s ON s.id = t.staff_id
+     WHERE EXISTS (SELECT 1 FROM mark) AND s.training_track = 'sales-software' AND t.step_key = 'signoff:ready'
+    ON CONFLICT DO NOTHING`);
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
      The role adds its own course after the consolidated Sales course. */
@@ -3881,14 +3896,14 @@ function attributedStaffId() {
 
 /** The active helper with this email, or null. */
 async function staffByEmail(email) {
-  /* `flags`: the page tips they dismissed and their ready sign-offs, so
-     adminPage() can show tips without a query of its own. Training is over
+  /* `flags`: the page tips they dismissed, so adminPage() can show tips
+     without a query of its own; `ready_rows`: their ready sign-offs. Training is over
      at the path's own ready (TRAINING.readyKeyFor), or an older ready that
      still counts on it (TRAINING.endsTraining). */
   const { rows } = await pool.query(
     `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track, s.sales_role, s.time_zone,
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
-                       WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
+                       WHERE t.staff_id = s.id AND t.step_key LIKE 'tip:%'), '{}') AS flags,
             COALESCE((SELECT json_agg(json_build_object('key', t.step_key, 'at', t.done_at)) FROM staff_training t
                        WHERE t.staff_id = s.id AND t.step_key LIKE 'signoff:%ready'), '[]'::json) AS ready_rows,
             (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock,
@@ -34310,7 +34325,8 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         if (track !== TRAINING.trackOf(s.training_track)) {
           logActivity(currentActor(), 'helper path changed', { type: 'staff', id },
             { name: s.name, from: TRAINING.trackOf(s.training_track), to: track,
-              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}) });
+              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}) })
+            .catch((e) => console.error('path change log failed:', e.message));
         }
         const lost = p && lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path${
@@ -35648,7 +35664,7 @@ app.post('/admin/timeclock/approve', requireAdmin, async (req, res) => {
 /* ── Commission ───────────────────────────────────────────────────────────── */
 
 /* Commission starts when training ends: only quotes a helper created on or
-   after the owner's "ready" sign-off (TRAINING.READY_KEY) earn it. Quotes
+   after the sign-off that ended training (TRAINING.endsTraining) earn it. Quotes
    built in training were the owner's work as much as theirs, checked line by
    line. A payout already recorded always stays on the list, even if the
    sign-off is later undone. */
@@ -42620,10 +42636,9 @@ async function readyKeyOf(staffId) {
   return TRAINING.readyKeyFor(path.track, path.role);
 }
 
-/* SQL for "this staff_training row ended training": the path's ready key
-   (the parameter named) or an older ready that still counts on it
-   (TRAINING.readyRowSql, the same rule as TRAINING.endsTraining). */
-const readyRow = (alias, param) => TRAINING.readyRowSql(alias, param);
+/* SQL for "this staff_training row ended training" (TRAINING.readyRowSql,
+   the same rule as TRAINING.endsTraining). */
+const readyRow = TRAINING.readyRowSql;
 
 async function trainingFor(staffId) {
   const [ticks, facts, path, times] = await Promise.all([
@@ -42789,8 +42804,8 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       undefined, tries.flat()) : null;
     const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
-    /* The sign-off whose Undo can keep the commission window: this path's
-       ready, or a Sales ready from before role courses had their own. */
+    /* The sign-off whose Undo can keep the commission window: the one that
+       ended training (TRAINING.endsTraining). */
     const endsTraining = (s) => TRAINING.endsTraining(p.readyKey, s.key, s.doneAt);
     const stepRow = (s) => {
       const lessonHref = s.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(s.key.slice('lesson:'.length))}` : '';
@@ -42813,10 +42828,6 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       } else if (s.type === 'quiz') {
         action = owner ? `${everTried.has(s.quiz) ? `<a class="btn btn-ghost" href="/admin/training/attempts?staff=${staffId}&amp;quiz=${encodeURIComponent(s.quiz)}" title="${escEmail(who.name)}'s answers">Answers</a> ` : ''}<a class="btn btn-ghost" href="/admin/training/quiz/${escEmail(s.quiz)}">Questions</a>`
           : `<a class="btn ${s.done ? 'btn-ghost' : ''}" href="/admin/training/quiz/${escEmail(s.quiz)}">${s.done ? 'Take it again' : 'Take the quiz'}</a>`;
-      } else if (s.type === 'signoff' && owner && s.legacyFrom) {
-        /* Counted from an earlier ready (TRAINING.endsTraining): there is no
-           row of its own to undo; that sign-off's own Undo clears it. */
-        action = '<span class="muted" style="font-size:12px">Counted from their earlier ready sign-off</span>';
       } else if (s.type === 'signoff' && owner) {
         /* The owner's own action, labelled as such. Undo asks for a tick
            first, like Restart: one stray tap used to clear a sign-off. */
@@ -44532,6 +44543,7 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
         client.release();
       }
       if (removed) log('training sign-off undone');
+      else return back(res, to, 'err', `${s.title} was not signed off, so there was nothing to undo.`);
       return back(res, to, 'ok', `Undone: ${s.title}.`);
     }
     /* Not before the gate in front of it: the ready sign-off starts commission

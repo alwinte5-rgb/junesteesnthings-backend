@@ -15,9 +15,6 @@
    ready   the sign-off that ends training (and starts commission), when it is
            not the course's last ready step: a combined track's second duty
            has its own (courses/index.js PART_READY)
-   readyFrom when `ready` replaced the Sales/Software ready (signoff:ready) as
-           the end of training: one given before then still ends it, so
-           nobody already trained loses commission (training.js endsTraining)
    channel true when the track gets its own chat channel at startup (made
            once; an archived one counts). Sales has had # Sales from day one
    note    what the course covers, shown on the paths page */
@@ -43,7 +40,7 @@ const TRACKS = {
 // assignment and the explicitly selected permission preset change.
 TRACKS['sales-software'] = {
   label: 'June’s Tees + COS Sales', short: 'Apparel + COS sales', role: 'June’s Tees & COS Sales Agent', preset: 'dual-sales',
-  trained: 'dual-sales-trained', ready: 'signoff:apparel-ready', readyFrom: '2026-11-19T03:00:00Z',
+  trained: 'dual-sales-trained', ready: 'signoff:apparel-ready',
   includes: ['sales', 'software'],
   note: 'Start with June’s Tees sales (about 75% of effort) and supported COS outreach (about 25%), within agreed hours. Review the split after 30 days. Keep leads and commission records separate. No automatic task assignments.',
 };

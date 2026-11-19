@@ -100,40 +100,22 @@ function readyKeyFor(track = DEFAULT_TRACK, role = null) {
   readyKeys.set(memo, key);
   return key;
 }
-/* Older "ready" sign-offs that still end training on a path whose ready
-   key moved. Always: a Sales ready from before role courses had their own
-   (LEGACY_READY_BEFORE). And per track (tracks.js `readyFrom`): June's Tees +
-   COS Sales ended at the software ready until it got its own apparel
-   sign-off, so a ready given on it before then still ends training and
-   keeps commission (code review, 2026-11-18). */
-const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-const KEY = /^signoff:[a-z-]+$/;
-/* Checked and built once at load, so a bad tracks.js value stops the boot
-   instead of breaking commission on first use (code review). */
-const MOVED_READY = Object.values(TRACKS).filter((t) => t.ready && t.readyFrom).map((t) => {
-  if (!KEY.test(t.ready) || !ISO.test(t.readyFrom)) throw new Error(`tracks.js: bad ready/readyFrom on ${t.label}`);
-  return { ready: t.ready, before: t.readyFrom };
-});
-const ALWAYS_LEGACY = [{ key: READY_KEY, before: LEGACY_READY_BEFORE }];
-function legacyReadyFor(readyKey) {
-  const moved = MOVED_READY.filter((m) => m.ready === readyKey);
-  return moved.length ? [...ALWAYS_LEGACY, ...moved.map((m) => ({ key: READY_KEY, before: m.before }))] : ALWAYS_LEGACY;
-}
+/* An older "ready" that still ends training on any path: a Sales ready
+   from before role courses had their own (LEGACY_READY_BEFORE). People
+   already trained on June's Tees + COS Sales when it got its own apparel
+   sign-off were given that sign-off once at startup (server.js), so no rule
+   here depends on which path a sign-off was given on (code review). */
+const LEGACY_BEFORE_MS = new Date(LEGACY_READY_BEFORE).getTime();
 /** Did this sign-off (key, given at doneAt) end training on a path whose
  *  ready key is readyKey? The one rule for JS; readyRowSql is the same in SQL. */
 function endsTraining(readyKey, key, doneAt) {
   if (key === readyKey) return true;
-  if (!doneAt) return false;
-  const at = new Date(doneAt).getTime();
-  return legacyReadyFor(readyKey).some((l) => l.key === key && at < new Date(l.before).getTime());
+  return key === READY_KEY && !!doneAt && new Date(doneAt).getTime() < LEGACY_BEFORE_MS;
 }
 /** SQL for "this staff_training row ended training", where `param` holds the
  *  path's ready key. Only checked constants are written into the text. */
 function readyRowSql(alias, param) {
-  return `(${[`${alias}.step_key = ${param}`,
-    `(${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz)`,
-    ...MOVED_READY.map((m) => `(${param}::text = '${m.ready}' AND ${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${m.before}'::timestamptz)`),
-  ].join(' OR ')})`;
+  return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz))`;
 }
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
@@ -220,15 +202,7 @@ function mayTick(key, byOwner, features = FEATURES, track = DEFAULT_TRACK, role 
  */
 function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK, role = null, times = new Map()) {
   const pathReady = readyKeyFor(track, role);
-  /* An older ready that still ends training on this path (endsTraining)
-     shows the path's ready step as done, so the page, the Team pill and the
-     owner's alerts agree with the session (code review). */
-  let legacy = null;
-  for (const [k, t] of ticks) if (k !== pathReady && t && endsTraining(pathReady, k, t.done_at)) { legacy = { key: k, ...t }; break; }
   const raw = visibleSteps(features, track, role).map((s) => {
-    if (legacy && s.key === pathReady && !ticks.get(s.key)) {
-      return { ...s, done: true, doneAt: legacy.done_at, signedBy: legacy.signed_by || null, took: null, legacyFrom: legacy.key };
-    }
     const t = ticks.get(s.key);
     const done = s.type === 'do' ? Number(facts[s.fact] || 0) >= (s.need || 1)
       : s.type === 'quiz' ? Number((facts.quizzes || {})[s.quiz] || 0) > 0
