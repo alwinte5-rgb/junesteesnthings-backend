@@ -24,7 +24,9 @@ test('the follow-up names their enquiry, asks if they still need it, and has no 
 });
 
 test('every lead with an email gets Claude, but only when its button is pressed, never from the stock message', () => {
-  assert.match(src, /const m = \(contacted \? LEADMAIL\.followUp : LEADMAIL\.infoRequest\)\(l,/);
+  /* The box opens plain, with a template menu (owner, 2026-11-19: the stock message assumed too much). */
+  assert.match(src, /const m = LEADMAIL\.blankEmail\(l, \{ signer: SHOP_SIGNER, shop: SHOP_NAME \}\);/);
+  assert.match(src, /const tpls = LEADMAIL\.emailTemplates\(l,/);
   // The button is on new leads too, not only contacted ones (owner, 2026-10-22).
   assert.match(src, /<div style="margin:0 0 8px">\s*<button type="button" class="btn" data-lsug="\$\{l\.id\}"[^>]*>\$\{contacted \? 'Suggest a follow-up with Claude' : 'Write a reply with Claude'\}/);
   // Opening the box no longer asks Claude (owner, 2026-11-12: "stop claude from auto replying when I expand the lead").

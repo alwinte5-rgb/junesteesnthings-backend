@@ -224,7 +224,7 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',
-    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('leadCardHtml'),
+    lift('escEmail'), lift('pill'), lift('ageInWords'), lift('saleTypePill'), lift('mayAddLeadEmail'), lift('isFoundLead'), lift('mayAddLeadPhone'), lift('leadTextArea'), lift('leadCardHtml'),
   ].join('\n'), sandbox);
   const contactLine = (html) => html.match(/margin-top:8px;font-size:12\.5px">([\s\S]*?)<\/div>/)[1].trim();
   const base = { id: 7, created_at: new Date().toISOString(), description: 'hi', phone: '' };
@@ -241,7 +241,7 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   /* A lead with no email (often one the AI finder found) offers "Add their email" instead of Email them (2026-11-18). */
   const noEmail = sandbox.leadCardHtml({ ...base, source: 'manual', name: 'Lakeview LL', email: '' });
   assert.match(noEmail, /action="\/admin\/lead\/7\/contact-email"/);
-  assert.match(noEmail, />Add their email</);
+  assert.match(noEmail, /No email on file/);
   assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: 'coach@ll.org' }), /contact-email/);
   /* A helper is offered it only on a lead that is theirs or nobody's. */
   sandbox.currentActor = () => ({ kind: 'staff', id: 3 });
@@ -249,6 +249,19 @@ test("an anonymous chat's card sends the owner to tawk.to, and no card opens on 
   assert.match(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: 3 }), /contact-email/);
   assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', assigned_to: 4 }), /contact-email/);
   sandbox.currentActor = () => null;
+
+  /* Every open card has both buttons (owner, 2026-11-19), and a box that says why not. */
+  const chatOnly = sandbox.leadCardHtml({ ...base, source: 'chat', name: 'Sy', email: 'sy@x.org', phone: '' });
+  assert.match(chatOnly, />Email them</); assert.match(chatOnly, />Text them</);
+  assert.match(chatOnly, /id="tx-7"/);
+  assert.match(chatOnly, /go through June/, 'texting off for this person: says so');
+  sandbox.canTextLeads = () => true;
+  assert.match(sandbox.leadCardHtml({ ...base, source: 'chat', email: 'sy@x.org', phone: '' }), /action="\/admin\/lead\/7\/contact-phone"/, 'a shop lead: add their phone');
+  const found = sandbox.leadCardHtml({ ...base, source: 'manual', email: '', phone: '', finder_run_id: 3 });
+  assert.match(found, /never text or call a number found online/);
+  assert.doesNotMatch(found, /contact-phone/);
+  assert.doesNotMatch(sandbox.leadCardHtml({ ...base, source: 'manual', email: '', phone: '', sale_type_reason: 'Found by the salesperson and registered before anyone else' }), /contact-phone/);
+  sandbox.canTextLeads = () => false;
 });
 
 test("tawk's placeholder name is not a name", () => {
@@ -301,7 +314,7 @@ test("a long message is never cut off on the lead card", () => {
      (Yazmin, 2026-10-20) stopped mid-word and the rest could not be read. */
   const sandbox = { CREDIT: require('../tools/lib/sales-credit'), leadEmailBox: () => '',
     /* The text box is tested in lead-email.test.js. */
-    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '' };
+    normalizeUsPhone: () => '', canTextLeads: () => false, currentActor: () => null, leadTextBox: () => '', leadTextArea: () => '' };
   vm.createContext(sandbox);
   vm.runInContext([
     grab('const LEAD_SOURCES = {', '};'), 'const LEAD_PREVIEW_MAX = 300;',

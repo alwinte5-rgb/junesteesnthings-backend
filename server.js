@@ -28526,12 +28526,14 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                 job and the window closed. Filing the second under the first
                 loses the only number that says the shop is leaving money on the
                 table, and it is untrue about the customer. */ ''}
-          ${l.email ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>`
-            : mayAddLeadEmail(l) ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('ae-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Add their email</button>` : ''}
-          ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('tx-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Text them</button>` : ''}
+          ${/* The same two buttons on every open lead (owner, 2026-11-19: "only
+                certain customers have certain options and its confusing"). One
+                that cannot be used says why in its box, and offers to add the
+                missing email or phone where that is allowed. */ ''}
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('tx-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Text them</button>
           <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
             <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
@@ -28546,16 +28548,53 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                  style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
           <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
         </form>
-        ${l.email ? leadEmailBox(l, backField) : mayAddLeadEmail(l) ? `
-        <form id="ae-${l.id}" method="POST" action="/admin/lead/${l.id}/contact-email"
-              style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
-          <p class="muted" style="margin:0 0 8px;font-size:12.5px">Found their email (on their website's contact page, say)? Add it here and the Email them button appears. Use a public business email, never a private one.</p>
-          <input name="email" type="email" maxlength="254" required placeholder="name@their-site.org" autocomplete="off"
-                 style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
-          <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Save email</button>
-        </form>` : ''}
-        ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? leadTextBox(l, backField) : ''}`}
+        ${l.email ? leadEmailBox(l, backField) : `
+        <div id="em-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <p style="margin:0 0 8px;font-size:13px"><b>No email on file.</b></p>
+          ${mayAddLeadEmail(l) ? `<form id="ae-${l.id}" method="POST" action="/admin/lead/${l.id}/contact-email" style="margin:0">
+            <p class="muted" style="margin:0 0 8px;font-size:12.5px">Found their email (on their website's contact page, say)? Add it here, then write to them. Use a public business email, never a private one.</p>
+            <input name="email" type="email" maxlength="254" required placeholder="name@their-site.org" autocomplete="off"
+                   style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
+            <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Save email</button>
+          </form>` : '<p class="muted" style="margin:0;font-size:12.5px">This lead is someone else\'s. Ask June to add their email.</p>'}
+        </div>`}
+        ${leadTextArea(l, backField)}`}
       </div>`;
+}
+
+/** Is this a lead a salesperson found (the AI finder, or "I found this
+ *  customer")? Numbers found online are never called or texted (sales
+ *  course lg3), so no phone is added to one. */
+function isFoundLead(l) {
+  return !!(l && (l.finder_run_id || /^Found by the salesperson/.test(String(l.sale_type_reason || ''))));
+}
+
+/** May whoever is signed in add a phone to this lead? Only when it has none,
+ *  never to a found lead, and for a helper only on a lead that is theirs or
+ *  nobody's (the route checks the same again). */
+function mayAddLeadPhone(l) {
+  if (!l || String(l.phone || '').trim() || isFoundLead(l)) return false;
+  const a = currentActor();
+  if (!a || a.kind !== 'staff') return true;
+  return (l.assigned_to == null || Number(l.assigned_to) === a.id) && (l.rep_id == null || Number(l.rep_id) === a.id);
+}
+
+/** The Text them box: the text box when a text can go, else why not, with a
+ *  way to add their phone where that is allowed. */
+function leadTextArea(l, backField) {
+  const box = (inner) => `<div id="tx-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">${inner}</div>`;
+  const why = (t) => box(`<p style="margin:0;font-size:13px">${t}</p>`);
+  if (!canTextLeads(currentActor())) return why('Texts to leads go through June for now. Write what you want to say in a note on the lead.');
+  if (normalizeUsPhone(l.phone)) return leadTextBox(l, backField);
+  if (String(l.phone || '').trim()) return why(`<b>${escEmail(l.phone)} cannot take a text from the shop</b> (not a US mobile number). Email them, or call from your phone.`);
+  if (isFoundLead(l)) return why('<b>No phone on file.</b> We never text or call a number found online: email them, or message them on social.');
+  if (!mayAddLeadPhone(l)) return why('<b>No phone on file.</b> This lead is someone else\'s. Ask June to add their number.');
+  return box(`<p style="margin:0 0 8px;font-size:13px"><b>No phone on file.</b></p>
+    <form method="POST" action="/admin/lead/${l.id}/contact-phone" style="margin:0">
+      <p class="muted" style="margin:0 0 8px;font-size:12.5px">Did they give you their number (in the chat, by email or on a call)? Add it here, then text them.</p>
+      <input name="phone" type="tel" maxlength="40" required placeholder="(312) 555-0123" autocomplete="off" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
+      <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Save phone</button>
+    </form>`);
 }
 
 /** Text a lead from their card, from the shop's number (POST /admin/lead/:id/text).
@@ -28595,7 +28634,10 @@ function leadEmailBox(l, backField) {
   /* Already written to and waiting on them: the stock message is a follow-up
      (owner, 2026-10-15). */
   const contacted = l.lead_status === 'contacted';
-  const m = (contacted ? LEADMAIL.followUp : LEADMAIL.infoRequest)(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
+  /* It opens plain (owner, 2026-11-19: the old stock message assumed too
+     much); the template menu below fills it for the situation. */
+  const m = LEADMAIL.blankEmail(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
+  const tpls = LEADMAIL.emailTemplates(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
   // In training it goes to the owner first (POST /admin/lead/:id/email).
   const actor = currentActor();
   const held = !!actor && actor.kind === 'staff' && actorLevel('customers.message') === 'approval';
@@ -28603,6 +28645,12 @@ function leadEmailBox(l, backField) {
       <form method="POST" action="/admin/lead/${l.id}/email"
             onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Sending...'">
         <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. ${held ? 'June checks it first and it is sent when she approves it. ' : ''}Their reply comes to the shop's email.</p>
+        ${/* Picking a template fills the subject and the message to edit; it has no name, so it is never posted. */ ''}
+        <select aria-label="Start from a template" style="width:100%;padding:6px;font-size:13px;margin-bottom:8px"
+                onchange="var i=this.value,f=this.form,t=${escEmail(JSON.stringify(tpls.map((x) => ({ s: x.subject, b: x.body }))))}[i];this.selectedIndex=0;if(!t)return;if(f.body.value.trim()&&f.body.value!==f.body.defaultValue&&f.body.value!==t.b&&!confirm('Replace what you have typed with this template?'))return;f.subject.value=t.s;f.body.value=t.b;f.body.focus()">
+          <option value="">Start from a template...</option>
+          ${tpls.map((t, i) => `<option value="${i}">${escEmail(t.label)}</option>`).join('')}
+        </select>
         <input name="subject" maxlength="${LEADMAIL.LIMITS.subject}" required value="${escEmail(m.subject)}" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
         <textarea name="body" rows="14" maxlength="${LEADMAIL.LIMITS.body}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${escEmail(m.body)}</textarea>${backField}
         <div style="margin:0 0 8px">
@@ -36408,9 +36456,14 @@ app.post('/admin/lead/:id/email', requireAdmin, async (req, res) => {
     return back(res, backTo, 'err', 'Emails to leads go through the owner for now. Write what you want to say in a note on the lead.');
   }
   try {
-    const { rows: [l] } = await pool.query('SELECT id, email FROM submissions WHERE id = $1', [id]);
+    const { rows: [l] } = await pool.query('SELECT id, email, name FROM submissions WHERE id = $1', [id]);
     if (!l) return back(res, backTo, 'err', 'No such lead.');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(l.email || '').trim())) return back(res, backTo, 'err', 'This lead has no email address.');
+    /* The box opens with only a greeting and a sign-off: never sent like that. */
+    const flat = (t) => String(t).replace(/\s+/g, ' ').trim();
+    if (flat(m.text) === flat(LEADMAIL.blankEmail(l, { signer: SHOP_SIGNER, shop: SHOP_NAME }).body)) {
+      return back(res, backTo, 'err', 'Write the message first, or pick a template.');
+    }
     /* A helper in training writes it and the owner sends it, as with job
        messages (2026-10-13: trainees were stuck with no way to write to a
        lead). So does any helper whose email mentions being paid outside the
@@ -36636,6 +36689,54 @@ app.post('/admin/lead/:id/contact-email', requireAdmin, async (req, res) => {
     await client.query('ROLLBACK').catch(() => {});
     console.error('lead email add failed:', err.message);
     return back(res, backTo, 'err', 'Could not save the email. Nothing was changed; try again.');
+  } finally { client.release(); }
+});
+
+/* Add a phone to a lead that has none (owner, 2026-11-19): a chat or email
+   lead who gave their number. Never on a found lead (numbers found online are
+   never texted), only fills an empty phone, a helper only on their own or an
+   unassigned lead; a number the shop already has makes a credited lead a
+   shop lead, as an email does. */
+app.post('/admin/lead/:id/contact-phone', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const backTo = safeAdminPath(b.back, '/admin/leads');
+  if (!id) return res.redirect(backTo);
+  const raw = String(b.phone || '').trim().slice(0, 40);
+  const phone = normalizeUsPhone(raw);
+  if (!phone) return back(res, backTo, 'err', 'That does not look like a US phone number. Type all 10 digits.');
+  const actor = currentActor();
+  const isStaff = !!(actor && actor.kind === 'staff');
+  const toLead = `${backTo.split('#')[0]}#lead-${id}`;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [l] } = await client.query(
+      `UPDATE submissions SET phone = $2
+        WHERE id = $1 AND btrim(COALESCE(phone, '')) = '' AND finder_run_id IS NULL
+          AND COALESCE(sale_type_reason, '') NOT LIKE 'Found by the salesperson%'
+          AND ($3::int IS NULL OR ((assigned_to IS NULL OR assigned_to = $3) AND (rep_id IS NULL OR rep_id = $3)))
+        RETURNING id, sale_type`, [id, VOICE.pretty(phone), isStaff ? actor.id : null]);
+    if (!l) {
+      await client.query('ROLLBACK');
+      const { rows: [x] } = await pool.query('SELECT phone, finder_run_id, sale_type_reason FROM submissions WHERE id = $1', [id]);
+      return back(res, toLead, 'err', !x ? 'No such lead.'
+        : String(x.phone || '').trim() ? 'That lead already has a phone number.'
+        : isFoundLead(x) ? 'We never text or call a number found online. Email them instead.'
+        : 'That lead is someone else\'s. Ask the owner to add it.');
+    }
+    let reason = '';
+    if (l.sale_type === 'rep' || l.sale_type === 'pending') {
+      reason = CREDIT.knownReason(await seenCustomer({ phone }, { excludeLead: id }), fmtDate);
+      if (reason) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, reason]);
+    }
+    await client.query('COMMIT');
+    logActivity(actor, reason ? 'lead phone added: already known' : 'lead phone added', { type: 'lead', id }, reason ? { reason } : {});
+    return back(res, toLead, 'ok', reason ? `Phone saved. It is now a shop lead: ${reason}.` : 'Phone saved. Use Text them to write to them.');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('lead phone add failed:', err.message);
+    return back(res, backTo, 'err', 'Could not save the phone. Nothing was changed; try again.');
   } finally { client.release(); }
 });
 
