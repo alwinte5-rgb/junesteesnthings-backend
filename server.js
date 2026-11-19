@@ -4996,9 +4996,9 @@ async function textToLead(from, text, sid) {
       WHERE ${samePhone} AND s.dismissed_at IS NULL
         AND ((s.source = 'text' AND s.created_at > NOW() - INTERVAL '14 days')
           OR EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = 'text'
-                        AND n.body LIKE 'You texted:%' AND n.created_at > NOW() - INTERVAL '14 days'))
+                        AND (n.body LIKE 'You texted:%' OR n.body LIKE 'You replied:%') AND n.created_at > NOW() - INTERVAL '14 days'))
       ORDER BY GREATEST(s.created_at, COALESCE((SELECT MAX(n.created_at) FROM lead_notes n
-                 WHERE n.submission_id = s.id AND n.kind = 'text' AND n.body LIKE 'You texted:%'), s.created_at)) DESC
+                 WHERE n.submission_id = s.id AND n.kind = 'text' AND (n.body LIKE 'You texted:%' OR n.body LIKE 'You replied:%')), s.created_at)) DESC
       LIMIT 1`, [digits]);
   if (open.length) {
     await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text', $2)`,
@@ -5127,7 +5127,21 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   const { rows: forwards } = await pool.query(
     `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
       WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC LIMIT 50`);
-  const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE);
+  /* A link sent on its own (a phone sends the link beside the words as a
+     text of its own) goes where the owner's previous text went, never to the
+     last texter (owner, 2026-11-19). Followed links ('relaylink:') are not
+     a previous text, so links cannot chain on from an old one. */
+  const previous = RELAY.isLinkOnly(text) ? (await pool.query(
+    `SELECT phone, quote_code, created_at AS at FROM sms_messages
+      WHERE ref LIKE 'relay:%' AND template = 'manual' AND status IN ('sending', 'sent', 'delivered')
+        AND created_at > NOW() - interval '5 minutes'
+      ORDER BY id DESC LIMIT 1`).catch((e) => {
+      console.error('relay previous lookup failed:', e.message);
+      reportError('twilio:relay-lookup', e).catch(() => {});
+      return { rows: [] };
+    })).rows[0] || null : null;
+  const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE, Date.now(), previous);
+  if (pick.linkOnly) return sendOwnerSms('Not sent: a link on its own was not sent to anyone. Start it with their number or code, e.g. 312 555 0199 https://...');
   if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. Start with their number or code, e.g. 312 555 0199 or AB12CD, then your message.');
   if (pick.badNumber) return sendOwnerSms('Not sent: that does not look like a full 10-digit number. Start with the number, e.g. 312 555 0199 then your message.');
   if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
@@ -5152,6 +5166,17 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
       .then((r) => r.rows[0] || null)
       .catch((e) => { console.error('typed number job lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
     if (job) to = { ...to, quote_code: job.code, name: job.name || '' };
+    else {
+      /* Or on their open lead (a web form, a call): their answer then lands
+         on it too, rather than starting a second lead (2026-11-19). */
+      const lead = await pool.query(
+        `SELECT id, name FROM submissions WHERE ${SAME_PHONE_SQL} AND dismissed_at IS NULL
+            AND created_at > NOW() - INTERVAL '120 days' ORDER BY created_at DESC LIMIT 1`,
+        [to.phone.replace(/\D/g, '').slice(-10)])
+        .then((r) => r.rows[0] || null)
+        .catch((e) => { console.error('typed number lead lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
+      if (lead) to = { ...to, lead_id: lead.id, name: lead.name || '' };
+    }
   }
   const code = RELAY.codeOf(to);
   const label = `${to.name || VOICE.pretty(normalizeUsPhone(to.phone) || to.phone)}${code ? ` (${code})` : ''}`;
@@ -5163,7 +5188,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
     `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code)
      VALUES ($1, 'transactional', $2, 'manual', $3, 'sending', $4)
      ON CONFLICT DO NOTHING RETURNING id`,
-    [to.phone, 'relay:' + (sid || Date.now()), `June's Tees: ${words || '(picture)'}`, to.quote_code || null]);
+    [to.phone, (pick.followed ? 'relaylink:' : 'relay:') + (sid || Date.now()), `June's Tees: ${words || '(picture)'}`, to.quote_code || null]);
   if (!row) return;
   if (pics.length) await pool.query('UPDATE sms_messages SET media = $2 WHERE id = $1', [row.id, JSON.stringify(pics)]).catch(() => {});
   try {
@@ -5505,6 +5530,14 @@ async function recordSmsDelivery(p) {
   const what = rows.length ? `${String(rows[0].template).split(':')[0]} text to …${tail}`
     : `Alert text to the shop's phone …${tail}`;
   console.warn(`sms ${status}: ${what} — ${why}`);
+  /* The owner's own text, passed on from her phone: she was told "Sent to",
+     so she is told it did not arrive too (2026-11-19). */
+  if (rows.length && rows[0].template === 'manual' && /^relay(?:link)?:/.test(String(rows[0].ref))) {
+    const who = VOICE.pretty(normalizeUsPhone(p.To) || String(p.To || ''));
+    /* Not waited on: Twilio's callback is answered without it. */
+    sendOwnerSms(`Your text to ${who} did not arrive (${smsPlain(why, 120)}). Call them, or email them from their job or lead.`)
+      .catch((e) => console.error('owner undelivered notice failed:', e.message));
+  }
   reportError('sms-undelivered', new Error(`${what} was not delivered. ${why}`),
     rows.length ? `ref ${rows[0].ref}, message ${sid}` : `message ${sid}`).catch(() => {});
   return { status, updated: rows.length };

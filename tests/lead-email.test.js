@@ -112,7 +112,8 @@ test('the lead card offers Text them only for a usable phone, with a box that po
 
 test('a reply to a lead texted from its card comes back onto that lead', () => {
   const fn = src.slice(src.indexOf('async function textToLead('), src.indexOf('async function saveTextMedia('));
-  assert.match(fn, /n\.body LIKE 'You texted:%' AND n\.created_at > NOW\(\) - INTERVAL '14 days'/);
+  /* The owner's replies from her phone ("You replied:") count too (2026-11-19). */
+  assert.match(fn, /\(n\.body LIKE 'You texted:%' OR n\.body LIKE 'You replied:%'\) AND n\.created_at > NOW\(\) - INTERVAL '14 days'/);
   assert.match(textRoute, /`You texted: \$\{words\}`/);
   assert.match(src, /action="\/admin\/lead\/\$\{l\.id\}\/text"/);
 });
