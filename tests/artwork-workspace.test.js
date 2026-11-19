@@ -14,3 +14,20 @@ test('unknown writes and non-PNG upload bodies cannot reach upstream',async()=>{
 test('designer edit instructions are visible without exposing owner metadata',()=>{const r=artworkCard({id:1,designer_edit_required:true,designer_note:'Review yard sign bleed',settings:{note:'owner private note'}});assert.equal(r.designer_edit_required,true);assert.equal(r.designer_note,'Review yard sign bleed');assert.equal('settings' in r,false);const page=setup(true),res=response();page.routes.get('GET /admin/artwork').at(-1)({},res);assert.match(res.body,/artwork\?designer=1/);});
 test('source-copy requests keep the server draft guard and cannot be used on writes',async()=>{const s=setup(false,'on'),r=response();await s.routes.get('GET /admin/artwork/source').at(-1)({query:{kind:'template',id:'12',copy:'1'}},r);assert.equal(r.code,200);assert.match(s.calls[0][0],/draft=1/);assert.match(s.calls[0][0],/copy=1/);const bad=response();await s.routes.get('POST /admin/artwork/save').at(-1)({query:{kind:'template',id:'12',copy:'1'},body:{name:'Edited',collection:'Christmas',revision:'a'.repeat(64)}},bad);assert.equal(bad.code,400);assert.equal(s.calls.length,1);});
 test('clipart copies download only from a verified attachment response',async()=>{const s=setup(false,'on',async()=>({ok:true,headers:{get:()=> 'attachment; filename="clipart-12.svg"'},arrayBuffer:async()=>Buffer.from('<svg/>')})),r=response();await s.routes.get('GET /admin/artwork/file').at(-1)({query:{kind:'clipart',id:'12'}},r);assert.equal(r.code,200);assert.equal(r.body.toString(),'<svg/>');assert.match(s.calls[0][0],/draft=1/);assert.equal(require('../tools/lib/staff').mayUseRoute({kind:'staff',perms:{'art.work':'on'}},'GET','/admin/artwork/file'),true);});
+
+test('artwork staff can submit drafts but cannot pass extra fields', async()=>{
+ const artist={kind:'staff',perms:{'art.work':'on'}};
+ assert.equal(STAFF.mayUseRoute(artist,'POST','/admin/artwork/submit'),true);
+ const s=setup(false,'on',async()=>({ok:true,json:async()=>({ok:true,item:{id:12,kind:'template',status:'submitted'}})}));
+ const submit=s.routes.get('POST /admin/artwork/submit').at(-1);
+ const query={kind:'template',id:'12'};
+ const bad=response();
+ await submit({query,body:{submitter:'someone@example.test'}},bad);
+ assert.equal(bad.code,400);
+ assert.equal(s.calls.length,0);
+ const r=response();
+ await submit({query,body:{}},r);
+ assert.equal(r.body.item.status,'submitted');
+ assert.match(s.calls[0][0],/draft=1/);
+ assert.equal(s.calls[0][1].body,'action=submit');
+});
