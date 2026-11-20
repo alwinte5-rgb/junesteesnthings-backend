@@ -1871,6 +1871,39 @@ async function initStaffTables() {
       FROM staff_training t JOIN staff s ON s.id = t.staff_id
      WHERE EXISTS (SELECT 1 FROM mark) AND s.training_track = 'sales-software' AND t.step_key = 'signoff:ready'
     ON CONFLICT DO NOTHING`);
+  /* Once: every course used to end at the same key, signoff:ready, so a
+     helper moved between paths could find another course's ready counted
+     (issue #569: a trained designer put on Design + Marketing was trained at
+     once). Each course has its own key now (TRAINING.RENAMED_READY). A
+     helper's existing signoff:ready is given again under their path's key,
+     same date and signer, and the old one is removed, except:
+       - on Sales, where signoff:ready is still the key;
+       - on Design + Marketing, whose signoff:ready is the Sales course's own
+         final (kept as the Sales record);
+       - a ready from before LEGACY_READY_BEFORE, which ends training on every
+         path and so is kept as well.
+     A marker row makes it run once, in the same statement, so a helper
+     moved onto a path later is not touched. The keys are parameters. */
+  {
+    const renamed = Object.entries(TRAINING.RENAMED_READY);
+    const r = await pool.query(`
+      WITH mark AS (
+        INSERT INTO shop_settings (key, value) VALUES ('once:ready-key-per-course', jsonb_build_object('at', NOW()))
+        ON CONFLICT DO NOTHING RETURNING 1),
+      map AS (SELECT * FROM unnest($1::text[], $2::text[]) AS m(track, key)),
+      copied AS (
+        INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+        SELECT t.staff_id, m.key, t.done_at, t.signed_by
+          FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
+         WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
+        ON CONFLICT DO NOTHING RETURNING 1)
+      DELETE FROM staff_training t USING staff s, map m
+       WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track
+         AND m.track <> 'design-marketing' AND t.step_key = $3 AND t.done_at >= $4::timestamptz
+      RETURNING (SELECT count(*) FROM copied) AS copied`,
+      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
+    if (r.rowCount) console.log(`training: ${r.rowCount} ready sign-off(s) moved to their course's own key (#569)`);
+  }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
      The role adds its own course after the consolidated Sales course. */
@@ -34937,9 +34970,10 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            ticks are kept either way. */
         const presetName = STAFF.presetOnPathChange(TRAINING.trackOf(s.training_track), track, b.apply_preset === '1');
         const p = presetName ? STAFF.presetPerms(presetName) : null;
-        /* A trained Sales helper moved onto June's Tees + COS keeps their
-           apparel ready: the Sales course's ready is that sign-off, under
-           another key (TRAINING.carriedReady; code review). Only when their
+        /* A trained helper keeps a ready that is the same training under the
+           new path's key: Sales onto June's Tees + COS (apparel ready), and
+           back to Sales from it or from Design + Marketing (TRAINING.
+           carriedReady, tracks.js `carry`; #569). Only when their
            training on the old path had ended (its own ready, a role's
            included), with the same date and signer. One transaction with the
            path change, so a failure never leaves them moved but not carried. */

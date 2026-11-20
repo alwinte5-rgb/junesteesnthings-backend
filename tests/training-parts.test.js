@@ -54,7 +54,8 @@ test('the apparel half ends in its own sign-off, and that is the path\'s ready k
   const steps = T.visibleSteps(undefined, 'sales-software');
   const keys = steps.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length, 'no step key twice');
-  assert.ok(keys.includes('signoff:ready'), 'the software ready sign-off already earned is kept');
+  assert.ok(keys.includes('signoff:software-ready'), 'the software ready sign-off already earned is kept');
+  assert.ok(!keys.includes('signoff:ready'), 'and the Sales ready is not on it (#569): that would show the software half signed');
   const ar = steps.find((s) => s.key === 'signoff:apparel-ready');
   assert.equal(ar.part, 'sales');
   // It waits for the sales assessment and the sales lessons, never the software ones.
@@ -74,7 +75,7 @@ test('the apparel half ends in its own sign-off, and that is the path\'s ready k
 });
 
 test('Design + Marketing keeps its ready key, adds a design sign-off, and leaves editing to the video editor', () => {
-  assert.equal(T.readyKeyFor('design-marketing'), 'signoff:ready', 'nobody already on it loses ready or pay');
+  assert.equal(T.readyKeyFor('design-marketing'), 'signoff:marketing-ready', 'its own key (#569); those already signed were given it once');
   const steps = T.visibleSteps(undefined, 'design-marketing');
   const keys = steps.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
@@ -140,7 +141,7 @@ test('nobody already trained on June\'s Tees + COS loses ready or commission', (
   const steps = T.progress(new Map([['signoff:apparel-ready', { done_at: '2026-11-01T00:00:00Z' }]]), {}, undefined, 'sales-software').steps;
   assert.equal(T.readyGiven({ steps, readyKey: rk }), true);
   // The software ready says it no longer ends training on this path.
-  assert.match(steps.find((s) => s.key === 'signoff:ready').hint, /not here/);
+  assert.match(steps.find((s) => s.key === 'signoff:software-ready').hint, /not here/);
 });
 
 test('Design + Marketing is not trained until both halves are signed off', () => {
@@ -196,4 +197,41 @@ test('every back-office page a course sends people to exists', () => {
     }
   }
   assert.deepEqual([...missing], []);
+});
+
+test('each course ends at its own ready key, so a move between paths never borrows one (#569)', () => {
+  const ends = (track, key) => T.endsTraining(T.readyKeyFor(track), key, '2026-11-15T00:00:00Z');
+  const done = (track, key) => T.progress(new Map([[key, { done_at: '2026-11-15T00:00:00Z' }]]), {}, undefined, track)
+    .steps.filter((s) => s.done).map((s) => s.key);
+  // Design -> Design + Marketing: the design half is signed, the path is not finished.
+  assert.equal(ends('design-marketing', 'signoff:design-ready'), false);
+  assert.ok(done('design-marketing', 'signoff:design-ready').includes('signoff:design-ready'));
+  // Sales -> Design + Marketing: the Sales ready alone does not finish it either.
+  assert.equal(ends('design-marketing', 'signoff:ready'), false);
+  // Sales -> June's Tees + COS: the Sales ready is not the software half signed.
+  assert.deepEqual(done('sales-software', 'signoff:ready'), []);
+  // Back to Sales, a trained helper keeps the Sales ready (carried, same date and signer).
+  assert.deepEqual(T.carriedReady('sales-software', 'sales'), { from: 'signoff:apparel-ready', to: 'signoff:ready' });
+  assert.deepEqual(T.carriedReady('design-marketing', 'sales'), { from: 'signoff:marketing-ready', to: 'signoff:ready' });
+  assert.equal(T.carriedReady('sales', 'design-marketing'), null, 'Sales alone is not Design + Marketing');
+  assert.equal(T.carriedReady('sales', 'sales'), null, 'no change, nothing carried');
+  // Every path's ready key is one only its own course gives.
+  const owner = {};
+  for (const t of Object.keys(TRACKS)) if (!['sales-software', 'design-marketing'].includes(t)) {
+    const k = T.readyKeyFor(t);
+    assert.ok(!owner[k], `${t} and ${owner[k]} share ${k}`);
+    owner[k] = t;
+  }
+});
+
+test('the existing ready sign-offs move to their course\'s key once, at startup (#569)', () => {
+  const at = SRC.indexOf("'once:ready-key-per-course'");
+  assert.ok(at > 0, 'the one-time rename exists');
+  const stmt = SRC.slice(SRC.lastIndexOf('WITH mark AS', at), SRC.indexOf('RETURNING (SELECT count(*) FROM copied)', at));
+  assert.match(stmt, /ON CONFLICT DO NOTHING RETURNING 1\),\s*map AS \(SELECT \* FROM unnest\(\$1::text\[\], \$2::text\[\]\)/, 'the marker decides, and the keys are parameters');
+  assert.match(stmt, /SELECT t\.staff_id, m\.key, t\.done_at, t\.signed_by/, 'same date and signer');
+  assert.match(stmt, /m\.track <> 'design-marketing' AND t\.step_key = \$3 AND t\.done_at >= \$4::timestamptz/,
+    'the Sales record on Design + Marketing, and a ready from before role courses, are kept');
+  assert.ok(SRC.indexOf("'once:apparel-ready-from-ready'") < at, 'after the apparel grant, which reads the old key');
+  for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.equal(T.readyKeyFor(t) === k || t === 'sales-software', true, `${t}: ${k}`);
 });

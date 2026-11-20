@@ -811,7 +811,7 @@ const FINAL = {
   signoffs: [
     { key: 'signoff:handoff', type: 'signoff', minutes: 0,
       title: 'Knows what is June\'s to decide', hint: 'New campaigns, budget changes, offers and prices in ads, complaints in ad comments. June signs this off after seeing you do it.' },
-    { key: 'signoff:ready', type: 'signoff', minutes: 0,
+    { key: 'signoff:ads-ready', type: 'signoff', minutes: 0,
       title: 'Ready to run the ads day to day', hint: 'The last step. June decides when you run the approved campaigns without her checking each change first.' },
   ],
 };

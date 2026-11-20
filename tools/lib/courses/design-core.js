@@ -2,9 +2,11 @@
 
 /* The Design course: the eight hours a designer walks before sending proofs
    on their own (owner, 2026-10-09). It replaced the old design checklist in
-   training.js and keeps its sign-off keys (signoff:art, signoff:handoff,
-   signoff:ready), its "do" steps (do:message, do:proof) and its quiz key
-   (`design`), so a designer's earlier ticks and passes still count.
+   training.js and keeps its sign-off keys (signoff:art, signoff:handoff),
+   its "do" steps (do:message, do:proof) and its quiz key
+   (`design`), so a designer's earlier ticks and passes still count. Its
+   final ready is signoff:design-ready (issue #569; existing ones were renamed
+   once at startup), the same key as the Design half of Design + Marketing.
 
    What the course teaches comes from what the shop already wrote down or
    built: the artwork articles in the Playbook, the screen, embroidery and
@@ -859,7 +861,7 @@ const FINAL = {
   signoffs: [
     { key: 'signoff:handoff', type: 'signoff', minutes: 0,
       title: 'Knows when to hand a customer to June', hint: 'Discounts, refunds, logos the customer does not own, angry customers. June signs this off after seeing you do it.' },
-    { key: 'signoff:ready', type: 'signoff', minutes: 0,
+    { key: 'signoff:design-ready', type: 'signoff', minutes: 0,
       title: 'Ready to send proofs on their own', hint: 'The last step. Proofs and messages go straight to customers from here. June decides when to move you up from Design training.' },
   ],
 };

@@ -15,15 +15,20 @@
    ready   the sign-off that ends training (and starts commission), when it is
            not the course's last ready step: a combined track's second duty
            has its own (courses/index.js PART_READY)
-   readyCarriedFrom the paths whose ready (signoff:ready) is this track's
-           `ready` too: the Sales course's ready is the apparel sign-off, so a
-           trained Sales helper moved here keeps it (training.js carriedReady)
+   carry   { fromTrack: [fromKey, toKey] }: a trained helper moved here from
+           fromTrack has their fromKey sign-off given again as toKey, because
+           it is the same training under another key (training.js
+           carriedReady). Each course has its own ready key (issue #569), so a
+           sign-off never counts on a path whose course did not give it
    channel true when the track gets its own chat channel at startup (made
            once; an archived one counts). Sales has had # Sales from day one
    note    what the course covers, shown on the paths page */
 
 const TRACKS = {
   sales: { label: 'Sales', short: 'Sales', role: 'Sales & Customer Service Assistant', preset: 'training', trained: 'supervised',
+    /* The apparel half of June's Tees + COS, and the Design + Marketing final
+       (the Sales course's own final), are the Sales course signed off. */
+    carry: { 'sales-software': ['signoff:apparel-ready', 'signoff:ready'], 'design-marketing': ['signoff:marketing-ready', 'signoff:ready'] },
     note: 'Leads, quotes, follow-ups and finding new customers.' },
   design: { label: 'Design', short: 'Design', role: 'Graphic Designer', preset: 'design', trained: 'designer',
     note: 'Print-ready artwork, signs, proofs, AI and its cleanup, site and blog images, and social graphics.' },
@@ -43,13 +48,13 @@ const TRACKS = {
 // assignment and the explicitly selected permission preset change.
 TRACKS['sales-software'] = {
   label: 'June’s Tees + COS Sales', short: 'Apparel + COS sales', role: 'June’s Tees & COS Sales Agent', preset: 'dual-sales',
-  trained: 'dual-sales-trained', ready: 'signoff:apparel-ready', readyCarriedFrom: ['sales'],
+  trained: 'dual-sales-trained', ready: 'signoff:apparel-ready', carry: { sales: ['signoff:ready', 'signoff:apparel-ready'] },
   includes: ['sales', 'software'],
   note: 'Start with June’s Tees sales (about 75% of effort) and supported COS outreach (about 25%), within agreed hours. Review the split after 30 days. Keep leads and commission records separate. No automatic task assignments.',
 };
 TRACKS['design-marketing'] = {
   label: 'Design + Marketing & Light Sales', short: 'Design + marketing', role: 'Graphic Designer & Marketing Coordinator', preset: 'design-marketing',
-  trained: 'design-marketing-trained',
+  trained: 'design-marketing-trained', ready: 'signoff:marketing-ready',
   includes: ['design', 'content', 'sales'],
   note: 'Design remains primary: about 70% design, 20% campaigns/COS publishing and 10% sales training or inquiry follow-up. The designer creates artwork and captures or requests raw footage; the video editor edits it. Keep one main design task and one small secondary task active. All assignments remain manual; June approves prices, spend, samples and delivery promises.',
 };

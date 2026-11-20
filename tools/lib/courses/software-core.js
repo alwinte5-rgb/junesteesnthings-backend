@@ -841,7 +841,7 @@ const FINAL = {
   signoffs: [
     { key: 'signoff:handoff', type: 'signoff', minutes: 0,
       title: 'Knows what is June\'s to decide', hint: 'Discounts beyond the half-price first month, free trials, custom plans, feature promises, setup prices and refunds. June signs this off after seeing you do it.' },
-    { key: 'signoff:ready', type: 'signoff', minutes: 0,
+    { key: 'signoff:software-ready', type: 'signoff', minutes: 0,
       title: 'Ready to sell on your own', hint: 'The last step. June decides when you contact prospects and run demos without her checking first, and your commission starts.' },
   ],
 };

@@ -323,10 +323,10 @@ function salesRoleOf(r) {
 // duty ends in its own practical assessment and its own ready sign-off
 // (PART_READY). For June's Tees + COS Sales that one is the track's ready key
 // (tracks.js `ready`), so apparel commission starts when June signs off
-// apparel sales, never on a software sign-off. Design + Marketing keeps the
-// course's own final ready, so nobody already on it loses ready or pay; that
-// final ready waits for every lesson and for the Design sign-off
-// (training.js progress).
+// apparel sales, never on a software sign-off. Design + Marketing ends at its
+// own final ready (signoff:marketing-ready, issue #569; anyone already signed
+// was given it once at startup), which waits for every lesson and for the
+// Design sign-off (training.js progress).
 const PART_READY = {
   'sales-software': { key: 'signoff:apparel-ready', type: 'signoff', minutes: 0, partReady: true, short: 'the June’s Tees sign-off',
     title: 'Ready to send small June’s Tees quotes and messages on their own',
@@ -363,10 +363,17 @@ function dualCourse(track) {
     /* On June's Tees + COS the software ready no longer ends training or
        starts commission (the apparel sign-off does), so it says so (code
        review). Same key, so a ready already given is kept. */
-    final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:ready'
+    /* Design + Marketing's final is the Sales course's, under the track's own
+       key (signoff:marketing-ready, issue #569): the Sales ready alone is not
+       this path finished, so a trained Sales helper moved here is not counted
+       as trained. */
+    final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:software-ready'
       ? { ...x, title: 'Ready to sell COS software on your own',
           hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }
-      : x)) } : primary.final,
+      : x)) } : { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:ready'
+      ? { ...x, key: 'signoff:marketing-ready', title: 'Ready to work on their own: design, marketing and light sales',
+          hint: 'The last step. It waits for every lesson, every quiz and the Design sign-off. June decides when to move you up.' }
+      : x)) },
     // The closing exam and sign-offs belong to the first duty's part.
     finalPart: isSales ? 'software' : 'sales',
   };
