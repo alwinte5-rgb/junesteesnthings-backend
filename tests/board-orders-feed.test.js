@@ -151,7 +151,10 @@ test('every nav entry points at a route that exists', () => {
   /* Routes live in server.js and in the tools/lib modules it registers
      (studio-controls.js and others). A ?tab= link is the same page. */
   const lib = path.join(__dirname, '..', 'tools', 'lib');
-  const routes = src + fs.readdirSync(lib).filter((f) => f.endsWith('.js'))
+  /* Only modules server.js actually registers: a deleted register line is a
+     dead menu entry too. */
+  const routes = src + fs.readdirSync(lib).filter((f) => f.endsWith('.js')
+      && new RegExp(`require\\('\\./tools/lib/${f.replace(/\.js$/, '').replace(/[-.]/g, '\\$&')}'\\)\\.register`).test(src))
     .map((f) => fs.readFileSync(path.join(lib, f), 'utf8')).join('\n');
   for (const href of hrefs) {
     assert.ok(routes.includes(`app.get('${href.split('?')[0]}'`),

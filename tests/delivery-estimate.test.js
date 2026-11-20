@@ -216,6 +216,7 @@ test('the designer does not promise a rush the shop cannot buy', () => {
     'SinaLite is never offered a rush');
   assert.match(body, /a rush fee is shown for you to agree to before you pay/,
     'and the rush is one the customer agrees to, not a promise');
+  assert.match(body, /\. \$rush \. '<\/span>'/, 'and the line actually prints it');
 });
 
 /* Digitizing days.

@@ -390,6 +390,7 @@ test('a minimum item count is enforced with the real cart', () => {
   const conn = readDesigner('php_connector.php');
   assert.match(conn, /\$jt_pieces = isset\(\$cart_data\['items'\]\)/,
     'the order path must count the real cart');
+  assert.match(conn, /jt_cart_pieces\(\(array\) \$cart_data\['items'\]\)/, 'in pieces, not cart lines');
   assert.match(conn, /jt_promo_block_reason\(\$jt_promo_code, \$order_total,[\s\S]{0,120}\$jt_pieces\)/,
     'and pass that count');
 });

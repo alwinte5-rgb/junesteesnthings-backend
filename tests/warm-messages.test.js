@@ -74,7 +74,7 @@ test('reminders only text in the daytime, Chicago time', () => {
 });
 
 /* textToLead against a fake pool that answers by the SQL it is given. */
-function textLead({ jobs = [], open = [], known = [] } = {}) {
+function textLead({ jobs = [], open = [], known = [], letGo = [] } = {}) {
   const calls = [];
   const pool = { query: async (sql, args) => {
     calls.push({ sql, args });
@@ -83,6 +83,12 @@ function textLead({ jobs = [], open = [], known = [] } = {}) {
     if (/INSERT INTO submissions/.test(sql)) return { rows: [{ id: 77 }] };
     if (/WHERE dedupe_key = \$1/.test(sql)) return { rows: [] };
     if (/source = 'text'/.test(sql)) return { rows: open };
+    /* The reopen: only a lead the follow-ups let go (#544). The fake answers by
+       the guard, so dropping it from the SQL flips the result. */
+    if (/^\s*UPDATE submissions SET dismissed_at = NULL/.test(sql)) {
+      const guarded = /AND dismiss_reason = \$2/.test(sql) && args[1] === 'No reply after two follow-ups';
+      return { rows: [], rowCount: guarded ? (letGo.includes(args[0]) ? 1 : 0) : 1 };
+    }
     if (/name NOT LIKE/.test(sql)) return { rows: known };
     return { rows: [] };
   } };
@@ -114,6 +120,9 @@ test('a second text while the lead is open is a note on it, not a second lead', 
   const { f, calls } = textLead({ open: [{ id: 5 }] });
   assert.deepStrictEqual({ ...(await f('+17735550100', 'Also need 20 hats', 'SM3')) }, { lead: 5, reopened: false },
     'an open lead is not reopened (#544 reopens only one the follow-ups let go)');
+  const back = textLead({ open: [{ id: 6 }], letGo: [6] });
+  assert.deepStrictEqual({ ...(await back.f('+17735550100', 'still want them', 'SM5')) }, { lead: 6, reopened: true },
+    'a lead the follow-ups let go is back on Leads');
   assert.ok(calls.some((c) => /INSERT INTO lead_notes/.test(c.sql) && c.args[0] === 5));
   assert.ok(!calls.some((c) => /INSERT INTO submissions/.test(c.sql)));
 });
