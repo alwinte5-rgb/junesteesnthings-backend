@@ -34991,10 +34991,15 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
           }
           if (carry) {
             ({ rowCount: carried } = await client.query(
+              /* Carried onto Sales, it is dated no earlier than LEGACY_READY_BEFORE:
+                 an older date would make it the pre-role-course Sales ready,
+                 which also ends a sales role's training (closer, lead gen,
+                 accounts) that this helper never did (code review). */
               `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
-               SELECT staff_id, $3::text, done_at, signed_by FROM staff_training WHERE staff_id = $1 AND step_key = $2
+               SELECT staff_id, $3::text, CASE WHEN $3::text = $5::text THEN GREATEST(done_at, $6::timestamptz) ELSE done_at END, signed_by
+                 FROM staff_training WHERE staff_id = $1 AND step_key = $2
                   AND EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$4')})
-               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady]));
+               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]));
           }
           await client.query('COMMIT');
         } catch (e) {

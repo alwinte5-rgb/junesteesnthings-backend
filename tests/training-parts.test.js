@@ -215,7 +215,10 @@ test('each course ends at its own ready key, so a move between paths never borro
   assert.deepEqual(T.carriedReady('design-marketing', 'sales'), { from: 'signoff:marketing-ready', to: 'signoff:ready' });
   assert.equal(T.carriedReady('sales', 'design-marketing'), null, 'Sales alone is not Design + Marketing');
   assert.equal(T.carriedReady('sales', 'sales'), null, 'no change, nothing carried');
-  // Every path's ready key is one only its own course gives.
+  // A key is shared only where it is the same course's sign-off (code review).
+  assert.equal(T.RENAMED_READY['sales-software'], T.readyKeyFor('software'), 'the Software course final, on both');
+  assert.ok(T.visibleSteps(undefined, 'design-marketing').some((s) => s.key === T.readyKeyFor('design') && s.partReady), 'the Design half is the Design course signed off');
+  // Every single path's ready key is one only its own course gives.
   const owner = {};
   for (const t of Object.keys(TRACKS)) if (!['sales-software', 'design-marketing'].includes(t)) {
     const k = T.readyKeyFor(t);
@@ -242,5 +245,13 @@ test('a Sales ready from before role courses counts only on the Sales paths it w
   const old = '2026-10-01T00:00:00Z';
   for (const r of [null, ...Object.keys(T.SALES_ROLES)]) assert.equal(T.endsTraining(T.readyKeyFor('sales', r), 'signoff:ready', old), true, `sales/${r}`);
   for (const t of ['design', 'design-marketing', 'sales-software', 'software', 'content']) assert.equal(T.endsTraining(T.readyKeyFor(t), 'signoff:ready', old), false, t);
-  assert.match(T.readyRowSql('t', '$2'), /AND \$2 IN \('signoff:ready', 'signoff:closer-ready', 'signoff:leadgen-ready', 'signoff:accounts-ready'\)/);
+  assert.match(T.readyRowSql('t', '$2'), /AND \$2 IN \('signoff:ready', 'signoff:leadgen-ready', 'signoff:closer-ready', 'signoff:accounts-ready'\)/);
+  assert.deepEqual(T.legacyReadyPaths(), ['signoff:ready', ...Object.keys(T.SALES_ROLES).map((r) => T.readyKeyFor('sales', r))], 'from the roles, not a list by hand');
+});
+
+test('a ready carried onto Sales is never older than the role courses, so it cannot end a role (#569 review)', () => {
+  const at = SRC.indexOf('TRAINING.carriedReady(s.training_track, track)');
+  const block = SRC.slice(at, SRC.indexOf("await client.query('COMMIT')", at));
+  assert.match(block, /CASE WHEN \$3::text = \$5::text THEN GREATEST\(done_at, \$6::timestamptz\) ELSE done_at END/);
+  assert.match(block, /\[id, carry\.from, carry\.to, oldReady, TRAINING\.READY_KEY, TRAINING\.LEGACY_READY_BEFORE\]/);
 });

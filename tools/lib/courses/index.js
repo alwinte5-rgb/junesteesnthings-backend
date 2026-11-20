@@ -366,7 +366,8 @@ function dualCourse(track) {
     /* Design + Marketing's final is the Sales course's, under the track's own
        key (signoff:marketing-ready, issue #569): the Sales ready alone is not
        this path finished, so a trained Sales helper moved here is not counted
-       as trained. */
+       as trained. (Helpers already on it when this came in had their
+       signoff:ready copied to it once, owner's choice; see server.js.) */
     final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:software-ready'
       ? { ...x, title: 'Ready to sell COS software on your own',
           hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }

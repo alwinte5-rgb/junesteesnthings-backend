@@ -5,8 +5,8 @@
    training.js and keeps its sign-off keys (signoff:art, signoff:handoff),
    its "do" steps (do:message, do:proof) and its quiz key
    (`design`), so a designer's earlier ticks and passes still count. Its
-   final ready is signoff:design-ready (issue #569; existing ones were renamed
-   once at startup), the same key as the Design half of Design + Marketing.
+   final ready is signoff:design-ready (issue #569; existing ones were copied to
+   it once at startup, the original kept as signoff:old-ready), the same key as the Design half of Design + Marketing.
 
    What the course teaches comes from what the shop already wrote down or
    built: the artwork articles in the Playbook, the screen, embroidery and
