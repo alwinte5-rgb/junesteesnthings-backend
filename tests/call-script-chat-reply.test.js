@@ -112,7 +112,7 @@ test('two chats at once are two people: the owner is asked which', () => {
   ];
   const pick = RELAY.pickTarget(forwards, 'hello', CODE, NOW);
   assert.equal(pick.ask.length, 2);
-  assert.equal(RELAY.askText(pick.ask), 'Not sent: 2 customers wrote just now. Start your reply with their code: L330 for Whitney (website chat), L331 for Dana (website chat).');
+  assert.equal(RELAY.askText(pick.ask), 'Not sent: 2 customers wrote just now. Start your reply with their code: L330 for Whitney, L331 for Dana.');
 });
 
 test('a chat with no lead is never answerable by code, and says to use tawk', () => {
@@ -193,4 +193,69 @@ test('the chat reply is silent on a repeat, refuses a let-go lead, and names the
   assert.match(chat, /If you meant \$\{/);
   const relay = fnBody('async function relayOwnerReply(');
   assert.match(relay, /lastChatReply && Date\.now\(\) - lastChatReply\.at <= RELAY\.FOLLOW_MS/, 'a link follows a chat reply');
+});
+
+/* ── #575: the ringing and "still waiting" texts are answerable too ────── */
+
+test('the "Ringing you now" text records the caller as what her reply answers', () => {
+  const ring = fnBody('async function textRinging(');
+  assert.match(ring, /INSERT INTO owner_text_forwards \(phone, quote_code, lead_id, name\) VALUES \(\$1, \$2, \$3, \$4\)/);
+  assert.match(ring, /VOICE\.callable\(caller\)/, 'never a premium or overseas number');
+  assert.ok(ring.indexOf('if (!sent') < ring.indexOf('INSERT'), 'recorded only when she was told');
+});
+
+test('the "still waiting" text records each lead named, and gives their codes', () => {
+  const nudge = fnBody('async function nudgeUnansweredLeads(');
+  assert.match(nudge, /SELECT '', NULL, x\.id, x\.name FROM unnest\(\$1::int\[\], \$2::text\[\]\)/);
+  const N = require('../tools/lib/lead-nudges');
+  const now = Date.parse('2026-10-08T15:00:00Z');
+  const one = N.nudgeText({ first: [], second: [{ id: 7, name: 'Cara Diaz', source: 'form', created_at: new Date(now - 25 * 3600000).toISOString() }] }, { now });
+  assert.match(one, /Cara L7 \(form, 25h\)/);
+  assert.match(one, /Reply here within 10 minutes to answer them\.$/);
+});
+
+test('a lead found online is only ever emailed from a phone reply', () => {
+  assert.match(fnBody('function chatReplyWays('), /!isFoundLead\(l\)/);
+});
+
+/* ── #575 code review fixes ─────────────────────────────────────────────── */
+
+test('the Leads link always survives a long "still waiting" text, and only four are named', () => {
+  const N = require('../tools/lib/lead-nudges');
+  const now = Date.parse('2026-10-08T15:00:00Z');
+  const old = (id) => ({ id: 1000 + id, name: 'Maria-' + 'x'.repeat(14), source: 'offline', created_at: new Date(now - 125 * 3600000).toISOString() });
+  const body = N.nudgeText({ first: [], second: Array.from({ length: 7 }, (_, i) => old(i)) },
+    { now, sourceLabel: () => 'Offline message', link: 'https://www.jtees.net/admin/leads' });
+  assert.ok(body.length <= 320, body.length);
+  assert.match(body, / https:\/\/www\.jtees\.net\/admin\/leads$/);
+  assert.equal(N.NAMED, 4);
+  assert.match(fnBody('async function nudgeUnansweredLeads('), /\.slice\(0, NUDGE\.NAMED\)/);
+});
+
+test('a caller with no job or lead is listed by the number she can type', () => {
+  const t = RELAY.askText([{ id: 2, phone: '+13236575782', name: 'WIRELESS CALLER' }, { id: 1, phone: '+13125550101', quote_code: 'AB12CD', name: 'Dana' }]);
+  assert.match(t, /323 657 5782 for WIRELESS CALLER/);
+  assert.doesNotMatch(t, /,  for/);
+});
+
+test('a lead from a "still waiting" text only takes replies for ten minutes; chats are marked', () => {
+  const relay = fnBody('async function relayOwnerReply(');
+  assert.match(relay, /Date\.now\(\) - new Date\(f\.created_at\)\.getTime\(\) <= NUDGE_REPLY_MS/);
+  assert.match(relay, /ORDER BY created_at DESC, id DESC/);
+  assert.match(src, /const NUDGE_REPLY_MS = 10 \* 60 \* 1000;/);
+  const t = RELAY.askText([{ id: 2, phone: '', lead_id: 9, name: 'Whitney', chat: true }, { id: 1, phone: '', lead_id: 8, name: 'Cara' }]);
+  assert.match(t, /L9 for Whitney \(website chat\), L8 for Cara\./);
+});
+
+test('a blocked caller is never what her reply answers; one lookup rule for a phone', () => {
+  const ring = fnBody('async function textRinging(');
+  assert.match(ring, /await blockedCaller\(caller\)/);
+  assert.match(ring, /await phoneOwner\(caller\)/);
+  assert.match(fnBody('async function relayOwnerReply('), /await phoneOwner\(to\.phone\)/);
+});
+
+test('refusals say the real reason, and only chats mention tawk', () => {
+  const chat = fnBody('async function relayChatReply(');
+  assert.match(chat, /was found online, so it is never texted/);
+  assert.match(chat, /Not sent: that enquiry is gone\.\$\{meant\}/);
 });

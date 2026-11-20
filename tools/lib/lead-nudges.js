@@ -49,6 +49,9 @@ function dueNudges(leads, now = Date.now()) {
   return { first, second };
 }
 
+/* How many leads the text names; only those can be answered from it. */
+const NAMED = 4;
+
 const hoursAgo = (l, now) => Math.max(1, Math.round((now - new Date(l.created_at).getTime()) / 3600000));
 const firstName = (n) => String(n || 'Someone').trim().split(/\s+/)[0].slice(0, 20) || 'Someone';
 
@@ -57,10 +60,17 @@ const firstName = (n) => String(n || 'Someone').trim().split(/\s+/)[0].slice(0, 
 function nudgeText({ first, second }, { now = Date.now(), sourceLabel = (s) => s, link = '' } = {}) {
   const all = [...second, ...first];
   if (!all.length) return '';
-  const who = all.slice(0, 4).map((l) => `${firstName(l.name)} (${sourceLabel(l.source)}, ${hoursAgo(l, now)}h)`).join(', ');
-  const more = all.length > 4 ? ` +${all.length - 4} more` : '';
+  /* Each with its lead code, so the owner can answer one straight from
+     her phone (owner, 2026-11-20: a reply under this text went to the last
+     customer who had texted). The server records these as what her reply
+     answers. */
+  const who = all.slice(0, NAMED).map((l) => `${firstName(l.name)} L${Number(l.id)} (${sourceLabel(l.source)}, ${hoursAgo(l, now)}h)`).join(', ');
+  const more = all.length > NAMED ? ` +${all.length - NAMED} more` : '';
   const head = all.length === 1 ? '1 lead is still waiting for a reply' : `${all.length} leads are still waiting for a reply`;
-  return `June's Tees: ${head}: ${who}${more}.${second.length ? ' Over a day old: reply today or they go elsewhere.' : ''}${link ? ' ' + link : ''}`.slice(0, 320);
+  const how = all.length === 1 ? ' Reply here within 10 minutes to answer them.' : ' Reply within 10 minutes starting with their code to answer one.';
+  /* The link always survives: the words give way to it. */
+  const words = `June's Tees: ${head}: ${who}${more}.${second.length ? ' Over a day old: reply today or they go elsewhere.' : ''}${how}`;
+  return link ? `${words.slice(0, 319 - link.length)} ${link}` : words.slice(0, 320);
 }
 
-module.exports = { dueNudges, nudgeText, inWorkingHours, WINDOW_MS, FIRST_MINS, SECOND_MS };
+module.exports = { NAMED, dueNudges, nudgeText, inWorkingHours, WINDOW_MS, FIRST_MINS, SECOND_MS };

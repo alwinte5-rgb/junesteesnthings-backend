@@ -133,8 +133,10 @@ function pickTarget(forwards, text, codeRe, now = Date.now(), previous = null) {
   return clash.length > 1 ? { ask: clash.slice(0, 4) } : { to: latest, body: whole };
 }
 
-/** Who a forward is from. A website chat's has no phone (isChat): it is
- *  told apart by its lead, so two chats at once are two people, not one. */
+/** Who a forward is from. One with no phone (isChat: a website chat, or a
+ *  lead named in a "still waiting" text) is answered through its lead, by
+ *  email and text; it is told apart by its lead, so two at once are two
+ *  people, not one. */
 function isChat(f) {
   return !!f && !String(f.phone || '').trim();
 }
@@ -142,11 +144,18 @@ function personKey(f) {
   return isChat(f) ? 'chat:' + (codeOf(f) || f.id) : f.phone;
 }
 
+/* A US number as she would type it ("323 657 5782"): a caller with no job
+   or lead has no code, and a reply starting with their number reaches them. */
+function spoken(phone) {
+  const d = String(phone || '').replace(/\D/g, '').slice(-10);
+  return d.length === 10 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : 'their number';
+}
+
 /** The owner's prompt when the reply could go to more than one customer. */
 function askText(list) {
   return `Not sent: ${list.length} customers wrote just now. Start your reply with their code: ` +
-    list.map((f) => !isChat(f) ? `${codeOf(f)} for ${f.name || 'the ' + String(f.phone).slice(-4) + ' number'}`
-      : codeOf(f) ? `${codeOf(f)} for ${f.name || 'the website chat'} (website chat)`
+    list.map((f) => !isChat(f) ? `${codeOf(f) || spoken(f.phone)} for ${f.name || 'the ' + String(f.phone).slice(-4) + ' number'}`
+      : codeOf(f) ? `${codeOf(f)} for ${f.name || 'the website chat'}${f.chat ? ' (website chat)' : ''}`
       : `not ${f.name || 'the website chat'} (answer that chat in the tawk app)`).join(', ') + '.';
 }
 
