@@ -261,15 +261,15 @@ test('two training paths: each ends with "ready", shares the basics, and keeps i
   const sales = TRAINING.visibleSteps(undefined, 'sales').map((s) => s.key);
   const design = TRAINING.visibleSteps(undefined, 'design').map((s) => s.key);
   assert.strictEqual(sales[sales.length - 1], TRAINING.READY_KEY);
-  assert.strictEqual(design[design.length - 1], 'signoff:design-ready');
+  assert.strictEqual(design[design.length - 1], 'signoff:designer-ready');
   assert.ok(sales.includes('do:message') && design.includes('do:message'));
   // #569: each course closes on its own sign-offs, so one never shows as given on the other.
   assert.ok(sales.includes('signoff:handoff') && !design.includes('signoff:handoff'));
-  assert.ok(design.includes('signoff:design-handoff') && !design.includes(TRAINING.READY_KEY));
+  assert.ok(design.includes('signoff:designer-handoff') && !design.includes(TRAINING.READY_KEY));
   for (const k of ['do:lead', 'do:prospects', 'quiz:sales-s1', 'lesson:s8-prospect']) assert.ok(!design.includes(k), `designer is not asked to ${k}`);
   for (const k of ['do:proof', 'lesson:d9-social', 'lesson:d8-web', 'quiz:design', 'signoff:art', 'signoff:ai-cleanup', 'lesson:team-chat'])
     assert.ok(design.includes(k) && !sales.includes(k), k);
-  assert.match(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === 'signoff:design-ready').title, /proofs/);
+  assert.match(TRAINING.visibleSteps(undefined, 'design').find((s) => s.key === 'signoff:designer-ready').title, /proofs/);
   assert.strictEqual(TRAINING.trackOf('nope'), 'sales');
   assert.strictEqual(TRAINING.trackOf('__proto__'), 'sales');
   assert.strictEqual(TRAINING.mayTick('lesson:d8-web', false, undefined, 'sales'), false, 'a step off your path cannot be ticked');

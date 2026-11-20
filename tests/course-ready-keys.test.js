@@ -29,11 +29,25 @@ test('no two paths share a closing sign-off key, unless one walks the other\'s c
   assert.equal(seen.get(T.READY_KEY), 'sales', 'Sales keeps signoff:ready (commission and the legacy rule read it)');
 });
 
-test('Design -> Design + Marketing no longer ends training at once', () => {
-  const designer = ['signoff:design-handoff', 'signoff:design-ready'];
+/* What the Staff page writes on a move: the ticks, plus each carried sign-off. */
+const moved = (keys, from, to) => [...keys, ...T.carriedSignoffs(from, to).filter((c) => keys.includes(c.from)).map((c) => c.to)];
+
+test('Design -> Design + Marketing no longer ends training at once, and the Design half carries', () => {
+  const designer = ['signoff:designer-handoff', 'signoff:designer-ready'];
   assert.equal(trained(designer, 'design'), true);
-  assert.equal(trained(designer, 'design-marketing'), false);
-  assert.equal(given(designer, 'design-marketing').find((s) => s.key === 'signoff:design-ready').done, true, 'the Design half shows signed');
+  const after = moved(designer, 'design', 'design-marketing');
+  assert.equal(trained(after, 'design-marketing'), false);
+  assert.equal(given(after, 'design-marketing').find((s) => s.key === 'signoff:design-ready').done, true, 'the Design half shows signed');
+});
+
+test('Design + Marketing -> Design: the Design half alone is not a trained designer', () => {
+  assert.equal(trained(moved(['signoff:design-ready'], 'design-marketing', 'design'), 'design'), false);
+});
+
+test('Design + Marketing -> Sales keeps ready and handoff: it closed on the Sales course\'s sign-offs', () => {
+  const after = moved(['signoff:marketing-handoff', 'signoff:marketing-ready'], 'design-marketing', 'sales');
+  assert.equal(trained(after, 'sales'), true);
+  assert.ok(after.includes('signoff:handoff'));
 });
 
 test('Sales -> June\'s Tees + COS does not show the software half signed', () => {
@@ -45,8 +59,11 @@ test('Sales -> June\'s Tees + COS does not show the software half signed', () =>
 test('June\'s Tees + COS -> Sales keeps ready: the apparel sign-off carries back', () => {
   assert.deepEqual(T.carriedReady('sales-software', 'sales'), { from: 'signoff:apparel-ready', to: T.READY_KEY });
   assert.deepEqual(T.carriedReady('sales', 'sales-software'), { from: T.READY_KEY, to: 'signoff:apparel-ready' });
-  assert.equal(T.carriedReady('design', 'design-marketing'), null, 'the Design ready already is the Design half (same key)');
   assert.equal(T.carriedReady('software', 'sales'), null);
+  assert.equal(T.carriedReady('design-marketing', 'design'), null);
+  const after = moved(['signoff:apparel-ready'], 'sales-software', 'sales');
+  assert.equal(trained(after, 'sales'), true);
+  assert.ok(after.includes('signoff:handoff'), 'June is not asked for the handoff again');
 });
 
 test('Sales -> Design + Marketing does not end training at once', () => {
@@ -64,13 +81,14 @@ test('the rename table covers every path whose closing keys moved, and nothing e
   for (const x of r) assert.ok(T.visibleSteps(undefined, x.track).some((s) => s.key === x.to), `${x.track}: ${x.to} is on the path`);
 });
 
-test('the startup rename runs once, in one transaction, and never overwrites a tick', () => {
+test('the startup rename: by the path a tick was given on, one transaction, never overwriting', () => {
   const at = SRC.indexOf("'once:course-ready-keys'");
   assert.ok(at > 0);
   const block = SRC.slice(SRC.lastIndexOf("await client.query('BEGIN')", at), SRC.indexOf("client.release()", at));
-  assert.match(block, /ON CONFLICT DO NOTHING`\);\n\s+if \(first\)/, 'the marker decides whether it runs');
   assert.match(block, /TRAINING\.courseKeyRenames\(\)/);
-  assert.match(block, /AND NOT EXISTS \(SELECT 1 FROM staff_training x WHERE x\.staff_id = t\.staff_id AND x\.step_key = \$3\)/);
+  assert.match(block, /a\.action = 'helper path changed'[\s\S]*a\.created_at > t\.done_at[\s\S]*ORDER BY a\.created_at LIMIT 1/, 'the path before the first move after the tick');
+  assert.match(block, /\(\$3 OR NOT g\.moved\)[\s\S]*\(\$3 OR NOT g\.moved\)/, 'later starts only touch ticks given on the current path');
+  assert.match(block, /AND NOT EXISTS \(SELECT 1 FROM staff_training x WHERE x\.staff_id = t\.staff_id AND x\.step_key = m\."to"\)/);
   assert.match(block, /'signoff:apparel-ready'[\s\S]*t\.done_at < \$2::timestamptz/, 'an old June\'s Tees + COS ready keeps ending training');
   assert.match(block, /ROLLBACK/);
   assert.ok(at > SRC.indexOf("'once:apparel-ready-from-ready'"), 'after the earlier apparel grant');

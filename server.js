@@ -1875,16 +1875,21 @@ async function initStaffTables() {
       FROM staff_training t JOIN staff s ON s.id = t.staff_id
      WHERE EXISTS (SELECT 1 FROM mark) AND s.training_track = 'sales-software' AND t.step_key = 'signoff:ready'
     ON CONFLICT DO NOTHING`);
-  /* Once (#569): every course closed on signoff:handoff and signoff:ready, so
-     a helper moved between paths saw another course's sign-off as given (and
+  /* #569: every course closed on signoff:handoff and signoff:ready, so a
+     helper moved between paths saw another course's sign-off as given (and
      Design -> Design + Marketing ended training at once). Each course now has
-     its own keys (TRAINING.courseKeyRenames); a helper's existing ticks move
-     to the keys of the path they are on now, so nobody's training or
-     commission changes. A tick whose new key is already there is left as it
-     was rather than overwritten. A June's Tees + COS ready from before role
-     courses (TRAINING.LEGACY_READY_BEFORE) ended training there; it also gets
-     the apparel sign-off, so it still does. One transaction with its marker:
-     it all happens once, or not at all and runs again on the next start. */
+     its own keys (TRAINING.courseKeyRenames; Sales keeps the old ones). An
+     old-key tick moves to the keys of the path it was given on: the `from`
+     of the first recorded path change after it, else the path the helper is
+     on now. Nobody's training or commission on their own path changes.
+     The first run renames everything. Every later start renames only ticks
+     given on the helper's current path, so a sign-off written in the old
+     keys by the outgoing deploy is still picked up, and a ready the Staff
+     page carried back to Sales (dated before that move) is never touched.
+     A tick whose new key is already there is left as it was, and counted.
+     A June's Tees + COS ready from before role courses
+     (TRAINING.LEGACY_READY_BEFORE) ended training there; it also gets the
+     apparel sign-off, so it still does. One transaction. */
   {
     const client = await pool.connect();
     try {
@@ -1892,24 +1897,36 @@ async function initStaffTables() {
       const { rowCount: first } = await client.query(
         `INSERT INTO shop_settings (key, value) VALUES ('once:course-ready-keys', jsonb_build_object('at', NOW()))
          ON CONFLICT DO NOTHING`);
+      const renames = JSON.stringify(TRAINING.courseKeyRenames());
+      /* Each old-key tick with the path it was given on. */
+      const given = `
+        SELECT t.staff_id, t.step_key, t.done_at, COALESCE(h.from_track, s.training_track) AS track, h.from_track IS NOT NULL AS moved
+          FROM staff_training t JOIN staff s ON s.id = t.staff_id
+          LEFT JOIN LATERAL (
+            SELECT a.detail->>'from' AS from_track FROM staff_activity a
+             WHERE a.action = 'helper path changed' AND a.subject_type = 'staff' AND a.subject_id = t.staff_id::text
+               AND a.created_at > t.done_at
+             ORDER BY a.created_at LIMIT 1) h ON TRUE
+         WHERE t.step_key IN ($1, 'signoff:handoff')`;
+      await client.query(`
+        INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+        SELECT t.staff_id, 'signoff:apparel-ready', t.done_at, t.signed_by
+          FROM staff_training t JOIN (${given}) g ON g.staff_id = t.staff_id AND g.step_key = t.step_key
+         WHERE g.track = 'sales-software' AND t.step_key = $1 AND t.done_at < $2::timestamptz AND ($3 OR NOT g.moved)
+        ON CONFLICT DO NOTHING`, [TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE, !!first]);
+      const { rowCount: renamed } = await client.query(`
+        UPDATE staff_training t SET step_key = m."to"
+          FROM (${given}) g JOIN jsonb_to_recordset($2::jsonb) AS m(track text, "from" text, "to" text)
+            ON m.track = g.track AND m."from" = g.step_key
+         WHERE t.staff_id = g.staff_id AND t.step_key = g.step_key AND ($3 OR NOT g.moved)
+           AND NOT EXISTS (SELECT 1 FROM staff_training x WHERE x.staff_id = t.staff_id AND x.step_key = m."to")`,
+        [TRAINING.READY_KEY, renames, !!first]);
+      if (renamed) console.log(`training: ${renamed} sign-off(s) moved to their course's own key (#569)`);
       if (first) {
-        await client.query(`
-          INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
-          SELECT t.staff_id, 'signoff:apparel-ready', t.done_at, t.signed_by
-            FROM staff_training t JOIN staff s ON s.id = t.staff_id
-           WHERE s.training_track = 'sales-software' AND t.step_key = $1 AND t.done_at < $2::timestamptz
-          ON CONFLICT DO NOTHING`, [TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
-        let renamed = 0;
-        for (const r of TRAINING.courseKeyRenames()) {
-          const { rowCount } = await client.query(`
-            UPDATE staff_training t SET step_key = $3
-              FROM staff s
-             WHERE s.id = t.staff_id AND s.training_track = $1 AND t.step_key = $2
-               AND NOT EXISTS (SELECT 1 FROM staff_training x WHERE x.staff_id = t.staff_id AND x.step_key = $3)`,
-            [r.track, r.from, r.to]);
-          renamed += rowCount;
-        }
-        if (renamed) console.log(`training: ${renamed} sign-off(s) moved to their course's own key (#569)`);
+        const { rows: [left] } = await client.query(`
+          SELECT COUNT(*)::int AS n FROM (${given}) g JOIN jsonb_to_recordset($2::jsonb) AS m(track text, "from" text, "to" text)
+            ON m.track = g.track AND m."from" = g.step_key`, [TRAINING.READY_KEY, renames]);
+        if (left.n) console.warn(`training: ${left.n} old-key sign-off(s) left as they were: the new key was already given (#569)`);
       }
       await client.query('COMMIT');
     } catch (e) {
@@ -34991,9 +35008,9 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
            training on the old path had ended (its own ready, a role's
            included), with the same date and signer. One transaction with the
            path change, so a failure never leaves them moved but not carried. */
-        const carry = TRAINING.carriedReady(s.training_track, track);
+        const carry = TRAINING.carriedSignoffs(s.training_track, track);
         const oldReady = TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role));
-        let carried = 0;
+        const carried = [];
         const client = await pool.connect();
         try {
           await client.query('BEGIN');
@@ -35002,12 +35019,13 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
           } else {
             await client.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
           }
-          if (carry) {
-            ({ rowCount: carried } = await client.query(
+          for (const c of carry) {
+            const { rowCount } = await client.query(
               `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
                SELECT staff_id, $3::text, done_at, signed_by FROM staff_training WHERE staff_id = $1 AND step_key = $2
                   AND EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$4')})
-               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady]));
+               ON CONFLICT DO NOTHING`, [id, c.from, c.to, oldReady]);
+            if (rowCount) carried.push(c.to);
           }
           await client.query('COMMIT');
         } catch (e) {
@@ -35023,7 +35041,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
           logActivity(currentActor(), 'helper path changed', { type: 'staff', id },
             { name: s.name, from: TRAINING.trackOf(s.training_track), to: track,
               ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}),
-              ...(carried ? { readyCarried: carry.to } : {}) });
+              ...(carried.length ? { readyCarried: carried.join(', ') } : {}) });
         }
         const lost = p && lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
         return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path${

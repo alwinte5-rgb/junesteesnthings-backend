@@ -4,10 +4,12 @@
    on their own (owner, 2026-10-09). It replaced the old design checklist in
    training.js and keeps its sign-off key signoff:art, its "do" steps (do:message, do:proof) and its quiz key
    (`design`), so a designer's earlier ticks and passes still count. Its
-   closing sign-offs are signoff:design-handoff and signoff:design-ready
+   closing sign-offs are signoff:designer-handoff and signoff:designer-ready
    (#569: they were signoff:handoff and signoff:ready, the same keys as every
-   other course's; renamed once at startup, server.js). design-ready is also
-   the Design half of Design + Marketing (courses/index.js PART_READY).
+   other course's; renamed at startup, server.js). The Design half of Design +
+   Marketing is signoff:design-ready (courses/index.js PART_READY): a trained
+   designer moved there carries it, but that half alone never makes a trained
+   designer, who also needs the handoff sign-off (code review).
 
    What the course teaches comes from what the shop already wrote down or
    built: the artwork articles in the Playbook, the screen, embroidery and
@@ -860,9 +862,9 @@ const FINAL = {
     questions: null, // design-core-final.js
   },
   signoffs: [
-    { key: 'signoff:design-handoff', type: 'signoff', minutes: 0,
+    { key: 'signoff:designer-handoff', type: 'signoff', minutes: 0,
       title: 'Knows when to hand a customer to June', hint: 'Discounts, refunds, logos the customer does not own, angry customers. June signs this off after seeing you do it.' },
-    { key: 'signoff:design-ready', type: 'signoff', minutes: 0,
+    { key: 'signoff:designer-ready', type: 'signoff', minutes: 0,
       title: 'Ready to send proofs on their own', hint: 'The last step. Proofs and messages go straight to customers from here. June decides when to move you up from Design training.' },
   ],
 };

@@ -403,8 +403,8 @@ test('the Developer course is the developer track\'s path, and a hired developer
 
 test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks and passes still count', () => {
   const keys = TRAINING.visibleSteps(new Set(['proofs']), 'design').map((s) => s.key);
-  for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:design-handoff', 'signoff:design-ready']) assert.ok(keys.includes(k), k);
-  assert.strictEqual(keys[keys.length - 1], 'signoff:design-ready');
+  for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:designer-handoff', 'signoff:designer-ready']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], 'signoff:designer-ready');
   assert.strictEqual(TRAINING.visibleSteps(new Set(['proofs']), 'design').find((s) => s.key === 'do:proof').need, 3);
   // June answered every Design blank (answers.js, 2026-10-13); none is left for her gaps card.
   const gaps = TRAINING.lessonArticles().filter((a) => /^Design course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
