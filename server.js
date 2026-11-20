@@ -1874,19 +1874,17 @@ async function initStaffTables() {
   /* Once: every course used to end at the same key, signoff:ready, so a
      helper moved between paths could find another course's ready counted
      (issue #569: a trained designer put on Design + Marketing was trained at
-     once). Each course has its own key now (TRAINING.RENAMED_READY). A
-     helper's existing signoff:ready is given again under their path's key,
-     same date and signer, and the old one is removed, except:
-       - on Sales, where signoff:ready is still the key;
-       - on Design + Marketing, whose signoff:ready is the Sales course's own
-         final (kept as the Sales record);
-       - a ready from before LEGACY_READY_BEFORE, which ends training on every
-         path and so is kept as well.
-     A marker row makes it run once, in the same statement, so a helper
-     moved onto a path later is not touched. The keys are parameters. */
+     once). Each course has its own key now (TRAINING.RENAMED_READY). The
+     stored row cannot say which course gave it, so (owner, 2026-11-20:
+     "Copy, keep old"): a helper's existing signoff:ready is given again under
+     their current path's key, same date and signer, and the original is kept
+     as TRAINING.OLD_READY_KEY, a record that ends training on no path.
+     Nothing is deleted. Sales keeps signoff:ready as its key. A marker row
+     makes it run once, in the same statement, so a helper moved onto a path
+     later is not touched. The keys are parameters. */
   {
     const renamed = Object.entries(TRAINING.RENAMED_READY);
-    const r = await pool.query(`
+    const { rows: [r] } = await pool.query(`
       WITH mark AS (
         INSERT INTO shop_settings (key, value) VALUES ('once:ready-key-per-course', jsonb_build_object('at', NOW()))
         ON CONFLICT DO NOTHING RETURNING 1),
@@ -1896,13 +1894,16 @@ async function initStaffTables() {
         SELECT t.staff_id, m.key, t.done_at, t.signed_by
           FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
          WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
-        ON CONFLICT DO NOTHING RETURNING 1)
-      DELETE FROM staff_training t USING staff s, map m
-       WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track
-         AND m.track <> 'design-marketing' AND t.step_key = $3 AND t.done_at >= $4::timestamptz
-      RETURNING (SELECT count(*) FROM copied) AS copied`,
-      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
-    if (r.rowCount) console.log(`training: ${r.rowCount} ready sign-off(s) moved to their course's own key (#569)`);
+        ON CONFLICT DO NOTHING RETURNING 1),
+      kept AS (
+        UPDATE staff_training t SET step_key = $4
+          FROM staff s, map m
+         WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track AND t.step_key = $3
+           AND NOT EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
+        RETURNING 1)
+      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept`,
+      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
+    if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
