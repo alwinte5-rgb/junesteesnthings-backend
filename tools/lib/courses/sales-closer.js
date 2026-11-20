@@ -262,7 +262,7 @@ Before you build the quote, read the order back in one message: "So that's about
 - Enter the size mix, so bigger sizes are priced correctly
 - Tick each print place and its method; enter ink colours for screen printing
 - Leave the price boxes empty. Prices are June's: if something needs a special price, save it as a draft and leave June a note on the job
-- Put in the needed-by date. The form adds rush if the date needs it and every item is DTF (nothing else can be rushed), and says why
+- Put in the needed-by date. The form adds rush if the date needs it and every item can be rushed (DTF, embroidery, signs and cutouts; not screen printing or SinaLite items), and says why
 - Tax is added automatically. A tax-exempt customer uploads their certificate on their quote page; it is accepted straight away and tax comes off. June checks it later and, if she refuses it, the tax is added back
 
 **Notes the customer reads**
@@ -297,7 +297,7 @@ Read every orange warning under an item. Read the total the way the customer wil
         { id: 'price', q: 'An item needs a special price. You…',
           choices: ['Type it in the price box', 'Save as draft and leave June a note on the job', 'Use the discount box', 'Skip the item'], answer: 1, article: A.quote, why: 'Prices are June\'s.' },
         { id: 'rush', q: 'How is rush added?',
-          choices: ['You type a percentage', 'The form adds it from the needed-by date', 'June adds it later', 'It never is'], answer: 1, article: A.quote, why: 'Put in the date; the form adds it, on DTF orders only.' },
+          choices: ['You type a percentage', 'The form adds it from the needed-by date', 'June adds it later', 'It never is'], answer: 1, article: A.quote, why: 'Put in the date; the form adds it when every item can be rushed.' },
         { id: 'notes', q: 'What belongs in the customer notes?',
           choices: ['Internal comments about the customer', 'One or two short lines in their words, plus the next step', 'Our costs', 'Nothing'], answer: 1, article: A.quote, why: 'They read it on their quote.' },
         { id: 'valid', q: 'A customer wants to accept a 20-day-old quote. You…',
@@ -412,7 +412,7 @@ Ask what they are deciding between, answer that, and set a follow-up date. "Of c
 
 **"We need it sooner"**
 
-Check the production board and ask June. Only DTF can be rushed, and only when there is room. Put the date in the quote and the form adds the rush fee on DTF.
+Check the production board and ask June. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces), and only when there is room. Put the date in the quote and the form adds the rush fee.
 
 **"That's below your minimum"**
 
@@ -437,7 +437,7 @@ Follow up twice: about 3 days, then about 10 days, each time with something usef
         { id: 'think', q: '"We need to think about it." Best reply?',
           choices: ['"OK bye"', 'Ask what they are deciding between, answer it, set a follow-up date', 'Offer a discount', 'Follow up daily'], answer: 1, article: A.objection, why: 'Help them decide.' },
         { id: 'sooner', q: '"We need it sooner." You…',
-          choices: ['Promise it', 'Check the production board and June; offer rush only on DTF and only with room', 'Say no', 'Skip the proof'], answer: 1, article: A.objection, why: 'Check before promising.' },
+          choices: ['Promise it', 'Check the production board and June; offer rush only on items that can be rushed, and only with room', 'Say no', 'Skip the proof'], answer: 1, article: A.objection, why: 'Check before promising.' },
         { id: 'min', q: '30 shirts, they asked for screen printing. You suggest…',
           choices: ['Screen printing anyway', 'DTF: no minimum', 'Embroidery', 'Waiting until 50'], answer: 1, article: A.objection, why: 'Screens start at 50.' },
         { id: 'quiet', q: 'A customer went quiet after the quote. How many follow-ups?',

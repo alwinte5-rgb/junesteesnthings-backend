@@ -40,7 +40,7 @@ const QUOTE_JS = require('./lib/css-tag').scriptTag('/assets/js/quote-form.js');
 const POPUP_JS = require('./lib/css-tag').scriptTag('/assets/js/texts-popup.js');
 // Any tag for it, however written, so a hand-edited one is replaced, not kept.
 const POPUP_ANY = /<script\b[^>]*\bsrc="\/assets\/js\/texts-popup\.js[^"]*"[^>]*>\s*<\/script>\n?/g;
-const NO_POPUP = new Set(['contact.html', 'sms-consent.html', '404.html', 'partners.html']);
+const NO_POPUP = new Set(['contact.html', 'sms-consent.html', '404.html', 'partners.html', 'shop-designs.html']);
 function applyPopup(html, rel) {
   const out = html.replace(POPUP_ANY, '');
   return NO_POPUP.has(rel) ? out : out.replace('</body>', `${POPUP_JS.tag}\n</body>`);

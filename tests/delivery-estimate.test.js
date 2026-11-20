@@ -52,14 +52,17 @@ function liftConst(re, what) {
 
 /* The real functions, not a restatement — a change to the cut-off or the
    business-day walk runs these tests. */
+globalThis.__JT_SHOPDAYS = require('../tools/lib/shop-days');
 const W = vm.runInThisContext(`(function(){
+  const SHOPDAYS = globalThis.__JT_SHOPDAYS;
   const HOLIDAY_MODE = false;
   ${liftConst(/const HOLIDAY_EXTRA_DAYS = .*;/, 'HOLIDAY_EXTRA_DAYS')}
   ${liftConst(/const SHOP_TZ = .*;/, 'SHOP_TZ')}
-  ${liftConst(/const CUTOFF_MIN = \(\(\) => \{[\s\S]*?\}\)\(\);/, 'CUTOFF_MIN')}
+  ${liftConst(/const CUTOFF_MIN = 15 \* 60;/, 'CUTOFF_MIN')}
   ${liftConst(/const SHEET_PIECE_CEILING = .*;/, 'SHEET_PIECE_CEILING')}
   ${liftConst(/const DIGITIZING_DAYS = .*;/, 'DIGITIZING_DAYS')}
   ${lift('addBusinessDays')}
+  ${lift('localYmd')}
   ${lift('shopMinutes')}
   ${lift('productionStart')}
   ${lift('deliveryEstimate')}
@@ -70,7 +73,7 @@ const WED_AM = new Date('2026-09-02T15:00:00Z');   // 10:00 in Chicago, before t
 
 /* ── The clock the promise is made on ────────────────────────────────────── */
 
-test('work handed over after the 3:30pm cut-off starts the next business day', () => {
+test('work handed over after the 3pm cut-off starts the next business day (owner, 2026-11-16)', () => {
   const before = W.productionStart(new Date('2026-09-02T19:00:00Z')); // 14:00 Chicago
   const after  = W.productionStart(new Date('2026-09-02T21:00:00Z')); // 16:00 Chicago
   assert.strictEqual(before.getDate(), 2, 'before the cut-off, the day has started');
@@ -87,7 +90,7 @@ test('the cut-off is read in the shop timezone, not the server one', () => {
 });
 
 test('a weekend order starts on Monday', () => {
-  const sat = W.productionStart(new Date('2026-09-05T15:00:00Z'));
+  const sat = W.productionStart(new Date('2026-10-10T15:00:00Z'));
   assert.strictEqual(sat.getDay(), 1, 'nothing is produced at the weekend');
 });
 
@@ -253,4 +256,14 @@ test('the caller can say so directly when it already knows', () => {
   const on = W.deliveryEstimate(WED_AM, { digitizing: true, items: [{ qty: 1, description: 'plain tee' }] });
   assert.strictEqual(off.digitizing_days, 0, 'explicit false wins over the description');
   assert.strictEqual(on.digitizing_days, 2, 'explicit true wins too — customer supplied no file');
+});
+
+test('an evening order starts the next SHOP day, not two days on (code review, 2026-11-16)', () => {
+  /* Tue 7pm CST is Wed 01:00 UTC on Railway: the start is Wednesday, not Thursday. */
+  const s = W.productionStart(new Date('2026-11-18T01:00:00Z'));
+  assert.strictEqual(s.toISOString().slice(0, 10), '2026-11-18');
+  /* Sun 7pm CST is Mon 01:00 UTC: the start is Monday. */
+  assert.strictEqual(W.productionStart(new Date('2026-11-16T01:00:00Z')).toISOString().slice(0, 10), '2026-11-16');
+  /* Wed 4pm before Thanksgiving: Monday. */
+  assert.strictEqual(W.productionStart(new Date('2026-11-25T22:00:00Z')).toISOString().slice(0, 10), '2026-11-30');
 });

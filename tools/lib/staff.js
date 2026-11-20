@@ -189,6 +189,30 @@ const PRESETS = {
       'customers.view': 'on', 'customers.message': 'approval', 'kb.edit': 'approval',
     },
   },
+  /* Where the two combined roles move up to once their training is signed
+     off (tracks.js `trained`; owner, 2026-11-18): the apparel side becomes
+     Supervised, and the design side sends proofs and messages itself, as a
+     Designer does. Everything else in the role stays as it was. */
+  'dual-sales-trained': {
+    label: 'June’s Tees + COS sales (trained)',
+    note: 'Apparel training signed off: sends quotes up to $500 and messages customers; discounts still come to you. Own software leads.',
+    perms: {
+      'leads.view': 'on', 'leads.dismiss': 'on', 'quotes.view': 'on', 'quotes.draft': 'on',
+      'quotes.send': { level: 'on', maxTotal: 500 }, 'quotes.discount': 'approval',
+      'customers.view': 'on', 'customers.message': 'on', 'production.stage': 'on',
+      'orders.view': 'on', 'proofs.upload': 'on', 'art.request': 'on', 'certificates.prescreen': 'on', 'reviews.manage': 'on',
+      'kb.edit': 'approval', 'jobs.schedule': 'on', 'software.leads': 'on',
+    },
+  },
+  'design-marketing-trained': {
+    label: 'Design + marketing & light sales (trained)',
+    note: 'Training signed off: sends proofs and messages to customers itself. Quotes still come to you before they go.',
+    perms: {
+      'jobs.design': 'on', 'jobs.schedule': 'on', 'proofs.upload': 'on', 'art.work': 'on',
+      'leads.view': 'on', 'quotes.view': 'on', 'quotes.draft': 'on', 'quotes.send': 'approval',
+      'customers.view': 'on', 'customers.message': 'on', 'kb.edit': 'approval',
+    },
+  },
   /* The Team preset plus read-only Finances: what a bookkeeper needs to
      close a month, and nothing that changes the books. */
   books: {
@@ -225,6 +249,13 @@ const PRESETS = {
 const TRACK_PRESET = require('./tracks').PRESET_FOR_TRACK;
 function presetForTrack(track) {
   return Object.prototype.hasOwnProperty.call(TRACK_PRESET, track) ? TRACK_PRESET[track] : 'training';
+}
+
+/** The preset to apply when June saves a helper's training path, or null.
+ *  Only on a real change of path with the box ticked: saving the same path
+ *  never resets a trained helper's permissions (code review, 2026-11-18). */
+function presetOnPathChange(fromTrack, toTrack, applyBox) {
+  return applyBox && fromTrack !== toTrack ? presetForTrack(toTrack) : null;
 }
 
 /* Every admin route, and the permission a helper needs for it.
@@ -414,6 +445,10 @@ const ROUTES = {
   'POST /admin/lead/:id/email': 'customers.message',
   'POST /admin/lead/:id/text': 'customers.message',
   'POST /admin/lead/:id/assign': 'leads.view',
+  /* Add an email to a lead that has none (2026-11-18). */
+  'POST /admin/lead/:id/contact-email': 'leads.view',
+  /* Add a phone to a lead that has none (2026-11-19). */
+  'POST /admin/lead/:id/contact-phone': 'leads.view',
   'POST /admin/lead/:id/outcome': 'leads.view',
   'POST /admin/leads/add': 'leads.view',
   /* The AI lead finder (tools/lib/lead-finder.js): capped per helper per day. */
@@ -517,6 +552,8 @@ const ROUTES = {
   'GET /admin/team-chat': 'any',
   'POST /admin/team-chat': 'any',
   'POST /admin/team-chat/edit': 'any',
+  /* A helper opens a direct chat with a teammate (2026-11-18). */
+  'POST /admin/team-chat/start': 'any',
   'GET /admin/api/team-chat': 'any',
   'POST /admin/api/chat-file-signature': 'any',
   'GET /admin/team-chat/file/:kind/:id': 'any',
@@ -540,6 +577,24 @@ const ROUTES = {
   'GET /admin/staff': 'owner',
   'POST /admin/staff': 'owner',
   'POST /admin/staff/:id': 'owner',
+  'GET /admin/artwork': 'art.work',
+  'GET /admin/artwork/data': 'art.work',
+  'GET /admin/artwork/source': 'art.work',
+  'GET /admin/artwork/file': 'art.work',
+  'POST /admin/artwork/preview': 'art.work',
+  'POST /admin/artwork/save': 'art.work',
+  'POST /admin/artwork/submit': 'art.work',
+  'GET /admin/studio-controls/stock': 'owner',
+  'POST /admin/studio-controls/stock': 'owner',
+  'GET /admin/studio-controls': 'owner',
+  'GET /admin/studio-controls/data': 'owner',
+  'POST /admin/studio-controls/data': 'owner',
+  'POST /admin/studio-controls/upload': 'owner',
+  'GET /admin/design-requests': 'owner',
+  'GET /admin/design-library/master': 'owner',
+  'POST /admin/design-library/master': 'owner',
+  'GET /admin/design-library': 'owner',
+  'POST /admin/design-library': 'owner',
   'GET /admin/approvals': 'owner',
   'POST /admin/approvals/:id': 'owner',
   'POST /admin/approvals/:id/edit': 'any',
@@ -801,7 +856,7 @@ function presetMatching(perms) {
 
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
 
-module.exports = { limitsOf, presetForTrack,
+module.exports = { limitsOf, presetForTrack, presetOnPathChange,
   LEVELS, PERMISSIONS, PRESETS, ROUTES, NEVER_STAFF, STAFF_SESSION_HOURS, MIN_PASSWORD, EMAIL_RE,
   routeKey, permForRoute, normalizePerm, presetPerms, effectivePerms, levelOf, mayUseRoute,
   quoteNeedsApproval, discountCodeCap, hashPassword, verifyPassword, generatePassword,

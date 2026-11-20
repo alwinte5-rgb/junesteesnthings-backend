@@ -32,7 +32,7 @@ function fn(name) {
 test('kinds: known ones only; the owner and a helper each get their own set', () => {
   assert.strictEqual(NOTIFY.kindOf('lead'), 'lead');
   assert.strictEqual(NOTIFY.kindOf('not-a-kind'), null);
-  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'backlog', 'chat', 'late', 'lead', 'mail', 'payment', 'review', 'studio_checkout', 'studio_order', 'task']);
+  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'art', 'backlog', 'chat', 'customer', 'hours', 'late', 'lead', 'library', 'mail', 'payment', 'review', 'studio_checkout', 'studio_order', 'task', 'team', 'training']);
   assert.deepStrictEqual(NOTIFY.kindsFor('staff:4').sort(), ['chat', 'decided', 'lead', 'mail', 'task']);
 });
 
@@ -79,7 +79,9 @@ test('derived from the records, so every way a lead, approval, review, payment o
   assert.match(fn('async function notifySweep('), /const leads = await notifyPart\('leads', unansweredLeads\(\)\);/, 'leads read once a sweep');
   assert.match(owner, /for \(const l of leads\)/);
   assert.match(owner, /FROM staff_approvals WHERE status = 'pending'/);
-  assert.match(owner, /FROM art_requests a JOIN quotes q/);
+  // Art to approve is read with the owner's other alerts (owner-alerts.js), and its rows go to the bell.
+  assert.match(owner, /ownerAlerts\(\{ fresh: true \}\)/);
+  assert.match(fn('async function readOwnerAlerts('), /FROM art_requests a JOIN quotes q/);
   assert.match(owner, /FROM reviews[\s\S]*approved IS NOT TRUE/);
   assert.match(owner, /FROM quote_payments[\s\S]*kind = 'payment' AND amount > 0/);
   assert.match(owner, /quoteSchedule\(q\)[\s\S]*kind: 'late', ref: String\(q\.code\)/, 'a late job once per job');
@@ -96,10 +98,10 @@ test('a helper hears about their own requests and their own leads only, and not 
 
 test('message notifications read what the chat alerts read, and clear once the conversation is read', () => {
   const msgs = fn('async function messageNotices(');
-  assert.match(msgs, /unreadConversations\(rd, roster, channels, state, 0\)/);
+  assert.match(msgs, /unreadConversations\(rd, roster, channels, state, 0, names\)/);
   assert.match(msgs, /DO UPDATE SET title = EXCLUDED\.title WHERE notifications\.read_at IS NULL/);
   assert.match(msgs, /SET read_at = NOW\(\)[\s\S]*kind = ANY\(\$3::text\[\]\)[\s\S]*NOT \(ref = ANY\(\$2::text\[\]\)\)/);
-  assert.match(fn('async function sendChatAlerts('), /unreadConversations\(rd, roster, channels, state, CHAN\.ALERT_AFTER_MIN\)/);
+  assert.match(fn('async function sendChatAlerts('), /unreadConversations\(rd, roster, channels, state, CHAN\.ALERT_AFTER_MIN, names\)/);
 });
 
 test('emails are claimed before sending, and messages are never emailed twice', () => {
@@ -236,7 +238,10 @@ test('a lead answered, an approval decided or a review moderated clears its noti
   assert.match(clear, /read_at IS NULL AND NOT \(ref = ANY\(\$3::text\[\]\)\)/);
   const owner = fn('async function ownerNotices(');
   assert.match(owner, /notifyClearResolved\('owner', 'lead', leads\.map/);
-  assert.match(owner, /notifyClearResolved\('owner', 'approval'/);
+  // Approvals clear with the rest of the owner's alert kinds (owner-alerts.js), staff requests included.
+  assert.match(owner, /approval: \['art'\]/);
+  assert.match(owner, /if \(kind === 'approval'\) live\.push\(\.\.\.appr\.rows\.map/);
+  assert.match(owner, /notifyClearResolved\('owner', kind, live\)/);
   assert.match(owner, /notifyClearResolved\('owner', 'review'/);
   assert.doesNotMatch(owner, /status = 'pending' ORDER BY id DESC LIMIT/, 'the waiting list it clears against is never cut short');
   assert.match(fn('async function staffNotices('), /notifyClearResolved\(`staff:\$\{id\}`, 'lead', refs\)/, 'a lead given to someone else clears');

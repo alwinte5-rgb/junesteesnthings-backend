@@ -1,4 +1,4 @@
-/* The "10% off for joining our texts" popup on jtees.net (owner, 2026-10-18:
+/* The "$15 off $50+ for joining our texts" popup on jtees.net (owner, 2026-10-18:
  * "yeah lets add it", after asking whether the site had one like the Design
  * Studio's cart popup).
  *
@@ -28,7 +28,9 @@
   if (window.JTTextsPopup) return;
   window.JTTextsPopup = true;
 
-  var PCT = 10;
+  /* The sign-up offer (owner, 2026-11-14: dollars, not a percentage). Static file, so the
+     words are fixed here; they must match tools/lib/promo-offer.js (tests/texts-popup.test.js). */
+  var OFF = '$15 off', FLOOR = '$50';
   var KEY_SEEN = 'jt_tx_pop_seen', KEY_JOINED = 'jt_tx_joined';
   // An 80px-tall copy of the logo (small, not the master), loaded while it
   // waits; logo-current follows the season (tools/lib/seasonal.js).
@@ -95,7 +97,7 @@
       '<button type="button" class="jttx-x" aria-label="Close">&times;</button>' +
       '<div class="jttx">' +
       '<div class="jttx-logo"><img src="' + LOGO + '" alt="June\'s Tees &amp; Things" width="102" height="40"></div>' +
-      '<div class="jttx-top"><h2 id="jttx-h">Get <span>' + PCT + '% off</span> your next order</h2>' +
+      '<div class="jttx-top"><h2 id="jttx-h">Get <span>' + OFF + '</span> your next order of ' + FLOOR + '+</h2>' +
       '<p>Join June\'s Tees texts for new products and seasonal deals. Your code comes right away.</p></div>' +
       '<form method="POST" action="/texts">' +
       '<input type="hidden" name="src" value="popup">' +
@@ -108,7 +110,7 @@
       '<p class="t">Your code comes with the second box, our deals texts. See our <a href="/sms-terms" target="_blank" rel="noopener">SMS Terms</a> and ' +
       '<a href="https://design.jtees.net/privacy.php" target="_blank" rel="noopener">Privacy Policy</a>.</p>' +
       '<p class="e" role="alert"></p>' +
-      '<button type="submit">Get my ' + PCT + '% off</button>' +
+      '<button type="submit">Get my ' + OFF + '</button>' +
       '<button type="button" class="no">No thanks</button>' +
       '</form></div></div>';
   }

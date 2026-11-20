@@ -134,6 +134,20 @@ module.exports = {
       q('Clipart for the online designer is at most…', ['3300 px on its longest side', '20,000 px'], 0, 'Bigger shows as a black box on iPhones.'),
     ] },
   ],
+  'd8-artwork': [
+    { from: null, checks: [
+      q('Where are the templates, ready-made designs and clipart kept?', ['The Artwork workspace', 'Your downloads folder'], 0, 'Artwork in the menu.'),
+      q('A design under "Missing source files"…', ['Can be published anyway', 'Cannot be published until the source is restored or replaced'], 1, 'The original file has to be there.'),
+    ] },
+    { from: 'Preparing a design and sending it to June', checks: [
+      q('After preparing a design you…', ['Publish it', 'Submit it for approval'], 1, 'June publishes it and sets the price.'),
+      q('The artwork preview is…', ['A clean image of the artwork on its own', 'A photo of a customer'], 0, 'A design without one cannot be published.'),
+    ] },
+    { from: 'What customers can change', checks: [
+      q('A customer can change…', ['Only bracketed text and photo placeholders', 'Anything in the design'], 0, 'Everything else stays locked.'),
+      q('A design that is already live needs a change. You…', ['Change it yourself', 'Ask June in Team chat'], 1, 'Changing live artwork is June\'s.'),
+    ] },
+  ],
   'd9-social': [
     { from: null, checks: [
       q('Who makes the videos?', ['You', 'The Content person'], 1, 'You make images; Content makes video.'),

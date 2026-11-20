@@ -48,7 +48,7 @@ function dueStep(lead, now = new Date()) {
  *  checked to be on the designer site), `code` the shop's current promo code
  *  for the last one. Returns { subject, heading, inner } for the shop's
  *  customer email wrapper. */
-function followupEmail(step, { name, product, link, preview, code, pct = 10 }) {
+function followupEmail(step, { name, product, link, preview, code, offer = require('./promo-offer').promoOffer() }) {
   const first = String(name || '').trim().split(/\s+/)[0] || '';
   const hi = first ? `Hi ${esc(first)},` : 'Hi,';
   const what = product ? esc(product) : 'your design';
@@ -60,7 +60,7 @@ function followupEmail(step, { name, product, link, preview, code, pct = 10 }) {
       subject: 'Your design is saved',
       heading: 'Your design is saved',
       inner: `<p>${hi}</p><p>Thanks for designing with us. We saved ${what} so you can pick up right where you left off.</p>${img}
-        ${btn('Open my design')}<p>Small orders are ready in 5–7 business days after you order, larger ones in 7–14.</p>${help}`,
+        ${btn('Open my design')}<p>Small orders are ready in 5–10 business days after you order, larger ones in 7–14.</p>${help}`,
     };
   }
   if (step === 2) {
@@ -73,10 +73,10 @@ function followupEmail(step, { name, product, link, preview, code, pct = 10 }) {
     };
   }
   return {
-    subject: `Your design is still saved, plus ${pct}% off`,
+    subject: `Your design is still saved, plus ${offer.off}`,
     heading: 'Still thinking it over?',
     inner: `<p>${hi}</p><p>${what.charAt(0).toUpperCase() + what.slice(1)} is still saved. When you are ready, code
-      <b style="color:#E0107A">${esc(code)}</b> takes ${pct}% off at checkout.</p>
+      <b style="color:#E0107A">${esc(code)}</b> takes ${offer.off} an order of ${offer.floor} or more at checkout.</p>
       ${btn('Finish my order')}${help}<p style="color:#6b7280">This is our last reminder about this design.</p>`,
   };
 }

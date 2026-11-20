@@ -27,6 +27,7 @@ const A = {
   aiClean:  'Design course 6b: AI, cleaning up what it makes',
   proofs:   'Design course 7: Proofs that get approved',
   web:      'Design course 8: Site, blog and Etsy images',
+  workspace: 'Design course 8b: The Artwork workspace',
   social:   'Design course 9: Social media graphics',
 };
 
@@ -672,6 +673,43 @@ We also sell digital downloads on Etsy, and these are the one place we use Canva
 **Art for the online designer**
 
 Clipart and ready-made designs for the designer on jtees.net: transparent PNG, no longer than 3300 pixels on its longest side (bigger files show as a black box on iPhones). Send them to June to add.`,
+    }, {
+      /* The Artwork workspace (/admin/artwork, tools/lib/artwork-workspace.js)
+         was taught nowhere (training audit, 2026-11-18). */
+      id: 'd8-artwork', article: A.workspace, minutes: 8, tags: 'artwork workspace, design library, templates, ready-made designs, clipart, artwork preview, submit for approval, affinity, source files, designer edits',
+      goals: ['Find a design in the Artwork workspace and see what it still needs', 'Prepare a design and submit it for June\'s approval', 'Know what you change and what only June changes'],
+      tryIt: [{ label: 'Artwork workspace', href: '/admin/artwork' }],
+      body:
+`The **Artwork workspace** (Artwork in the menu) is where the designs customers can start from on jtees.net are kept: templates, ready-made designs and clipart. You prepare them here; June publishes them and sets their prices.
+
+**What is on the page**
+
+- **All artwork, Templates, Ready-made designs, Clipart:** the library, by kind
+- **Designer edits:** designs June has sent back to you, with her note
+- **Names & collections to review:** a design whose title or collection needs checking
+- **Missing artwork previews:** a design with no preview yet, so it cannot be published
+- **Missing source files:** a design whose original file is missing. It cannot be published until the source is restored or replaced
+- **Designer working copies & brief:** the shared Drive folder with working files and the brief
+- **Assigned jobs & proofs:** your customer jobs (Design jobs), which is a different list
+
+**Preparing a design and sending it to June**
+
+1. Open it in the designer (Open designer), and save the design there
+2. Prepare its **artwork preview**: the clean image of the artwork on its own that the shop shows
+3. Give it a plain title and the right collection (Christmas, birthdays, family reunions…)
+4. **Submit it for approval.** June sees it on her dashboard and in her bell, then publishes it and sets the price
+
+**What customers can change**
+
+Only **bracketed text** (like [NAME] or [YEAR]) and **photo placeholders**. Everything else in the artwork stays locked. If a customer should be able to change something, make it bracketed text or a photo placeholder before you submit.
+
+**What is June's**
+
+Publishing, prices, featuring a design on the homepage, and changing a design that is already live. You can prepare drafts, previews, names and collections. To change something live, ask June in Team chat.
+
+**Editing in Affinity**
+
+Download an editable PDF from the designer to work on in Affinity. Quote and order changes for a customer's own job happen on that job (Design jobs), after the quote is reviewed and paid, never in the library.`,
     }],
     practice: [],
     quiz: {
@@ -707,6 +745,12 @@ Clipart and ready-made designs for the designer on jtees.net: transparent PNG, n
         { id: 'clipart', q: 'Clipart for the online designer must be no longer than…',
           choices: ['3300 px on its longest side', '10,000 px', '500 px', 'There is no limit'],
           answer: 0, article: A.web, why: 'Bigger files show as a black box on iPhones.' },
+        { id: 'awsubmit', q: 'You finished preparing a ready-made design in the Artwork workspace. What next?',
+          choices: ['Publish it yourself', 'Submit it for approval; June publishes it and sets the price', 'Email it to the customer', 'Leave it as a draft'],
+          answer: 1, article: A.workspace, why: 'Publishing and prices are June\'s.' },
+        { id: 'awedit', q: 'In a library design, what can a customer change?',
+          choices: ['Anything', 'Only bracketed text and photo placeholders', 'Only the colors', 'Nothing at all'],
+          answer: 1, article: A.workspace, why: 'Everything else in the artwork stays locked.' },
       ],
     },
     buffer: 6,

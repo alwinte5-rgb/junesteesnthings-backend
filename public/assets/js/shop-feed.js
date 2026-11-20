@@ -33,7 +33,7 @@
     var shelf = el('div', 'pb-shelf'); shelf.id = 'pb-shelf-ready';
     var head = el('div', 'pb-shelf-h');
     head.appendChild(el('h3', null, 'Ready-Made Designs'));
-    var all = el('a', null, 'See all \u2192'); all.href = 'https://design.jtees.net/ready-made.php'; all.setAttribute('data-from', 'home_shop_readymade');
+    var all = el('a', null, 'See all \u2192'); all.href = '/shop-designs'; all.setAttribute('data-from', 'home_shop_readymade');
     head.appendChild(all);
     shelf.appendChild(head);
     var row = el('div', 'pb-row');
@@ -41,10 +41,18 @@
       var a = el('a', 'pb-card'); a.href = r.link; a.setAttribute('data-from', 'home_shop_readymade'); a.setAttribute('data-card', 'readymade');
       var im = el('div', 'pb-im'), img = el('img'); img.src = r.image; img.alt = r.name; img.loading = 'lazy'; img.width = 300; img.height = 300;
       im.appendChild(img); a.appendChild(im);
+      var shots = [r.image].concat((r.mockups || []).slice(0, 3)), shot = 0, timer = 0;
+      function show(i) { shot = (i + shots.length) % shots.length; img.src = shots[shot]; }
+      a.addEventListener('mouseenter', function(){ if (shots.length > 1 && window.matchMedia('(hover:hover) and (prefers-reduced-motion:no-preference)').matches) { show(1); timer = setInterval(function(){ show(shot + 1); }, 1400); } });
+      a.addEventListener('mouseleave', function(){ clearInterval(timer); show(0); });
+      var start = null, swiped = false;
+      a.addEventListener('touchstart', function(e){ start = e.changedTouches[0].clientX; swiped = false; }, {passive:true});
+      a.addEventListener('touchend', function(e){ if (start !== null && Math.abs(e.changedTouches[0].clientX - start) > 35) { show(shot + (e.changedTouches[0].clientX < start ? 1 : -1)); swiped = true; } start = null; }, {passive:true});
+      a.addEventListener('click', function(e){ if (swiped) { e.preventDefault(); swiped = false; } });
       var bd = el('div', 'pb-bd');
       bd.appendChild(el('div', 'pb-nm', r.name));
       if (typeof r.from_price === 'number') bd.appendChild(el('div', 'pb-pr', 'From $' + r.from_price.toFixed(2) + ' each, printing included'));
-      bd.appendChild(el('span', 'pb-go', 'Shop This \u2192'));
+      bd.appendChild(el('span', 'pb-go', 'Customize this design \u2192'));
       a.appendChild(bd); row.appendChild(a);
     });
     shelf.appendChild(row);
@@ -56,7 +64,14 @@
        the designer lists a live one, so it never opens an empty page. */
     var rmLink = document.getElementById ? document.getElementById('jt-rm-link') : null;
     if (rmLink) rmLink.hidden = !(d.categories || []).some(function (c) { return /\/ready-made\.php$/.test(c.link || ''); });
-    readyShelf(d.readymades || []);
+    // Artwork-first designs open the exact design/product directly, without onboarding.
+    window.fetch('/api/design-library').then(function(r){ if (!r.ok) throw new Error('Designs unavailable'); return r.json(); })
+      .then(function(lib){ if (!lib.ok || !Array.isArray(lib.items)) return;
+        var designs = lib.items.filter(function(r){ return r.kind !== 'clipart'; });
+        designs.sort(function(a,b){ return Number(b.featured) - Number(a.featured); });
+        readyShelf(designs);
+        if (rmLink) rmLink.hidden = designs.length === 0;
+      }).catch(function(){});
     var byLink = {};
     var products = d.products || [];
     (d.categories || []).concat(d.best || [], products).forEach(function (it) {

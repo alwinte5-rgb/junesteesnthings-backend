@@ -13,7 +13,7 @@
  *   ads        6 weeks before   Google Ads campaign on, Brevo campaign out
  *                               (6 weeks is the minimum an occasion may set)
  *   order by   2 weeks before the event (owner, 2026-10-28): small orders
- *              take 5–7 business days, larger 7–14; later is a paid rush
+ *              take 5–10 business days, larger 7–14; later is a paid rush
  *
  * Social posts run from the ads date to the order-by date. The holiday pages
  * print their "when to order" line from here (tools/occasion-pages.js), and

@@ -1,0 +1,33 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const {artworkArgs,artworkCard,registerArtworkWorkspace}=require('../tools/lib/artwork-workspace');
+const STAFF=require('../tools/lib/staff');
+function response(){return{code:200,status(n){this.code=n;return this;},set(){return this;},send(b){this.body=b;return this;},json(b){this.body=b;return this;}};}
+function setup(owner=false,level='off',fetcher=async()=>({ok:true,json:async()=>({ok:true,stages:[]})})){const routes=new Map(),auth=()=>{},calls=[];registerArtworkWorkspace({get(p,...h){routes.set('GET '+p,h);},post(p,...h){routes.set('POST '+p,h);}},{requireAdmin:auth,isOwner:()=>owner,actorLevel:()=>level,adminPage:(_,b)=>b,pageHeader:()=>'',esc:String,rawBody:()=>()=>{},studioFetch:async(...a)=>{calls.push(a);return fetcher(...a);},invalidate(){}});return{routes,auth,calls};}
+test('artwork work uses existing artwork permission; pricing and publication stay owner only',()=>{const artist={kind:'staff',perms:{'art.work':'on'}};for(const p of ['/admin/artwork','/admin/artwork/data','/admin/artwork/source'])assert.equal(STAFF.mayUseRoute(artist,'GET',p),true);for(const p of ['/admin/studio-controls','/admin/design-library'])assert.equal(STAFF.mayUseRoute(artist,'GET',p),false);assert.equal(STAFF.mayUseRoute(artist,'POST','/admin/design-library'),false);});
+test('every workspace route authenticates and refuses non-artwork staff before fetching',async()=>{const s=setup();for(const [path,handlers]of s.routes){assert.equal(handlers[0],s.auth);const r=response();await handlers.at(-1)({query:{},body:{}},r);assert.equal(r.code,403,path);}assert.equal(s.calls.length,0);});
+test('workspace records exclude prices, master files, submitter email and private notes',()=>{const r=artworkCard({id:1,kind:'template',name:'Design',settings:{prices:{12:1500},master:{name:'private.afdesign'},note:'private',submitted_by:'private@example.test'},offer:{12:{price:15}},artwork_revision:'revision'});assert.equal(r.revision,'revision');for(const k of ['settings','offer','prices','submitted_by','note','master'])assert.equal(k in r,false);});
+test('staff cannot remove the draft-only restriction or select arbitrary upstream targets',async()=>{const s=setup(false,'on'),h=s.routes.get('GET /admin/artwork/source').at(-1);let r=response();await h({query:{kind:'template',id:'12'}},r);assert.equal(r.code,200);assert.match(s.calls[0][0],/draft=1/);for(const q of [{kind:'template',id:'12',draft:'0'},{kind:'template',id:'../data'},{kind:'clipart',id:'1'},{kind:'template',id:'0'}]){r=response();await h({query:q},r);assert.equal(r.code,400);}assert.equal(s.calls.length,1);});
+test('draft conflicts and live-art refusals stay errors, never saved messages',async()=>{for(const code of [403,409]){const s=setup(false,'on',async()=>({ok:false,status:code,json:async()=>({error:'Owner action needed'})})),r=response();await s.routes.get('POST /admin/artwork/save').at(-1)({query:{kind:'template',id:'1'},body:{name:'Birthday',collection:'Birthdays',revision:'a'.repeat(64)}},r);assert.equal(r.code,code);assert.equal(r.body.error,'Owner action needed');assert.match(s.calls[0][0],/draft=1/);}});
+test('unknown writes and non-PNG upload bodies cannot reach upstream',async()=>{const s=setup(true);let r=response();await s.routes.get('POST /admin/artwork/save').at(-1)({query:{kind:'template',id:'1'},body:{name:'Birthday',collection:'Birthdays',revision:'a'.repeat(64),publish:true}},r);assert.equal(r.code,400);r=response();await s.routes.get('POST /admin/artwork/preview').at(-1)({query:{kind:'template',id:'1'},body:'image'},r);assert.equal(r.code,400);assert.equal(s.calls.length,0);assert.equal(artworkArgs({kind:'template',id:'-1'}),false);});
+
+test('designer edit instructions are visible without exposing owner metadata',()=>{const r=artworkCard({id:1,designer_edit_required:true,designer_note:'Review yard sign bleed',settings:{note:'owner private note'}});assert.equal(r.designer_edit_required,true);assert.equal(r.designer_note,'Review yard sign bleed');assert.equal('settings' in r,false);const page=setup(true),res=response();page.routes.get('GET /admin/artwork').at(-1)({},res);assert.match(res.body,/artwork\?designer=1/);});
+test('source-copy requests keep the server draft guard and cannot be used on writes',async()=>{const s=setup(false,'on'),r=response();await s.routes.get('GET /admin/artwork/source').at(-1)({query:{kind:'template',id:'12',copy:'1'}},r);assert.equal(r.code,200);assert.match(s.calls[0][0],/draft=1/);assert.match(s.calls[0][0],/copy=1/);const bad=response();await s.routes.get('POST /admin/artwork/save').at(-1)({query:{kind:'template',id:'12',copy:'1'},body:{name:'Edited',collection:'Christmas',revision:'a'.repeat(64)}},bad);assert.equal(bad.code,400);assert.equal(s.calls.length,1);});
+test('clipart copies download only from a verified attachment response',async()=>{const s=setup(false,'on',async()=>({ok:true,headers:{get:()=> 'attachment; filename="clipart-12.svg"'},arrayBuffer:async()=>Buffer.from('<svg/>')})),r=response();await s.routes.get('GET /admin/artwork/file').at(-1)({query:{kind:'clipart',id:'12'}},r);assert.equal(r.code,200);assert.equal(r.body.toString(),'<svg/>');assert.match(s.calls[0][0],/draft=1/);assert.equal(require('../tools/lib/staff').mayUseRoute({kind:'staff',perms:{'art.work':'on'}},'GET','/admin/artwork/file'),true);});
+
+test('artwork staff can submit drafts but cannot pass extra fields', async()=>{
+ const artist={kind:'staff',perms:{'art.work':'on'}};
+ assert.equal(STAFF.mayUseRoute(artist,'POST','/admin/artwork/submit'),true);
+ const s=setup(false,'on',async()=>({ok:true,json:async()=>({ok:true,item:{id:12,kind:'template',status:'submitted'}})}));
+ const submit=s.routes.get('POST /admin/artwork/submit').at(-1);
+ const query={kind:'template',id:'12'};
+ const bad=response();
+ await submit({query,body:{submitter:'someone@example.test'}},bad);
+ assert.equal(bad.code,400);
+ assert.equal(s.calls.length,0);
+ const r=response();
+ await submit({query,body:{}},r);
+ assert.equal(r.body.item.status,'submitted');
+ assert.match(s.calls[0][0],/draft=1/);
+ assert.equal(s.calls[0][1].body,'action=submit');
+});

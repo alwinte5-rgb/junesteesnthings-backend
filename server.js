@@ -36,12 +36,15 @@ const DESIGN_FU = require('./tools/lib/design-followups');
 const SIGNAGE = require('./tools/lib/signage');
 const QSIGNS = require('./tools/lib/quote-signs');
 const SIGN_FAMILIES = require('./tools/lib/sign-families');
+const SHOPDAYS = require('./tools/lib/shop-days');
 const SINALITE = require('./tools/lib/sinalite');
 const SERVICES = require('./tools/lib/services');
 const LEADMAIL = require('./tools/lib/lead-email');
 const LEADFU = require('./tools/lib/lead-followups');
 const REINTRO = require('./tools/lib/reintro');
 const PARTNERS = require('./tools/lib/partners');
+/* Wholesale connector (docs/wholesale-api-v1.md): off until JT_WHOLESALE=on. */
+const WHOLESALE = require('./tools/lib/wholesale-routes');
 const PARTNERS_INVITE = require('./tools/lib/partners-invite');
 const PROGRESS = require('./tools/lib/order-progress');
 const BRAND = require('./tools/lib/brand-files');
@@ -121,6 +124,7 @@ const CHAN = require('./tools/lib/team-channels');
 const MB = require('./tools/lib/mailbox');
 const CLOCKNOTE = require('./tools/lib/clockin-note');
 const NOTIFY = require('./tools/lib/notifications');
+const OWNER_ALERTS = require('./tools/lib/owner-alerts');
 const FLOW = require('./tools/lib/task-flow');
 const { NEXT_PRESET, CHANNEL_TRACKS, TRACKS: JOB_TRACKS } = require('./tools/lib/tracks');
 const CHATFILES = require('./tools/lib/team-chat-files');
@@ -258,6 +262,18 @@ const DEADLINE_ALERTS = false;
    marks a body as read, and the general parser below then leaves it alone. */
 app.use(['/q/:code/certificate', '/admin/quote/:code/certificate', '/api/tax-certificates'],
   express.json({ limit: '12mb' }));
+/* The wholesale API takes small JSON bodies: refused at 256 KB before they are
+   read, rather than after the general 1 MB parser has read them. */
+app.use('/api/wholesale', express.json({ limit: '256kb' }));
+/* Its own error shape for a body it refused (too large, not JSON), never the
+   default HTML error page. */
+app.use('/api/wholesale', (err, _req, res, next) => {
+  if (!err || !err.type) return next(err);
+  const big = err.type === 'entity.too.large';
+  res.set('Cache-Control', 'no-store');
+  res.status(big ? 413 : 400).json({ error: { code: big ? 'body_too_large' : 'invalid_body',
+    message: big ? 'Request body over 256 KB.' : 'Send a JSON object.' } });
+});
 /* A customer's email, parsed by Brevo: long HTML threads run past 1mb. */
 app.use('/webhooks/brevo/inbound', express.json({ limit: '8mb' }));
 app.use(express.json({
@@ -282,8 +298,8 @@ app.use((req, res, next) => {
 
 // Grad season pages are retired — redirect old links home.
 app.get(['/grad', '/grad/', '/grad/*'], (_req, res) => res.redirect(302, '/'));
-// Design Ideas is replaced by the online Design Studio — permanent redirect.
-app.get('/design-ideas.html', (_req, res) => res.redirect(301, 'https://design.jtees.net/products.php'));
+// One customer gallery for current links and old Design Ideas bookmarks.
+app.get(['/design-ideas.html','/design-ideas'], (_req,res)=>res.redirect(301,'/shop-designs'));
 /* A garment's page in the designer, on a jtees.net address: lead replies link
    garments this way because customers only ever see jtees.net (owner,
    2026-10-05). Whole numbers only, to a fixed host. */
@@ -790,6 +806,16 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  /* Each opt-out is also put on Brevo's blocklist (brevoOptoutSync), so a
+     campaign sent from Brevo itself cannot reach somebody who unsubscribed
+     here. NULL brevo_synced_at = not there yet; the hourly sweep retries,
+     which is also how every opt-out from before this column reaches Brevo. */
+  for (const col of ['brevo_synced_at TIMESTAMPTZ', 'brevo_attempts INT NOT NULL DEFAULT 0', 'brevo_error TEXT',
+                     'brevo_tried_at TIMESTAMPTZ']) {
+    await pool.query(`ALTER TABLE email_optouts ADD COLUMN IF NOT EXISTS ${col}`);
+  }
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS email_optouts_brevo_pending ON email_optouts (created_at) WHERE brevo_synced_at IS NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS grad_orders (
       id             SERIAL PRIMARY KEY,
@@ -1661,6 +1687,9 @@ async function initStaffTables() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS team_channel_messages_idx ON team_channel_messages (channel_id, id)');
+  /* A direct chat between two helpers is a channel with the audience
+     'pair:<lower id>:<higher id>' (team-channels.js): one per two people. */
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS team_channels_pair_idx ON team_channels (audience) WHERE audience LIKE 'pair:%'`);
   /* A file sent with a message (tools/lib/team-chat-files.js): its Cloudinary
      address and the name it had on the sender's computer. body is '' when a
      file goes on its own. */
@@ -1826,6 +1855,21 @@ async function initStaffTables() {
   /* Which training path a helper walks (TRAINING.TRACKS). Every helper
      before this was a sales helper, hence the default. */
   await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS training_track TEXT NOT NULL DEFAULT 'sales'`);
+  /* Once: June's Tees + COS Sales used to end at the software ready
+     (signoff:ready); it now ends at its own apparel sign-off. Anyone on it
+     who was already signed ready gets the apparel one with the same date and
+     signer, so nobody already trained goes back into training or loses
+     commission. A marker row makes it run once, in the same statement, so a
+     helper moved onto the path later is not given it (code review). */
+  await pool.query(`
+    WITH mark AS (
+      INSERT INTO shop_settings (key, value) VALUES ('once:apparel-ready-from-ready', jsonb_build_object('at', NOW()))
+      ON CONFLICT DO NOTHING RETURNING 1)
+    INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+    SELECT t.staff_id, 'signoff:apparel-ready', t.done_at, t.signed_by
+      FROM staff_training t JOIN staff s ON s.id = t.staff_id
+     WHERE EXISTS (SELECT 1 FROM mark) AND s.training_track = 'sales-software' AND t.step_key = 'signoff:ready'
+    ON CONFLICT DO NOTHING`);
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
      The role adds its own course after the consolidated Sales course. */
@@ -2194,6 +2238,9 @@ async function initStaffTables() {
       ship_to      JSONB,
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  /* Wholesale connector: partners, their production requests, the audit/event
+     log and the webhook outbox (tools/lib/wholesale-routes.js). */
+  await WHOLESALE.ensureTables(pool);
   await repairSentAsDelivered().catch((e) => console.error('sent-as-delivered repair failed:', e.message));
   /* After the server is listening: it calls Twilio and Cloudinary. */
   setTimeout(() => repairTextPictures().catch((e) => console.error('text picture repair failed:', e.message)), 30 * 1000).unref();
@@ -2544,8 +2591,7 @@ function depositWorkingDate(q) {
   const est = deliveryEstimate(at, { items, pickup });
   const transit = pickup ? 0 : parseInt(process.env.JT_SHIP_MAX || '5', 10);
   let start = new Date(DELIV.toYmd(at) + 'T12:00:00Z');
-  const dow = start.getUTCDay();
-  if (dow === 0 || dow === 6 || shopMinutes(at) >= CUTOFF_MIN) start = addBusinessDays(start, 1);
+  if (SHOPDAYS.shopClosed(DELIV.toYmd(at)) || shopMinutes(at) >= CUTOFF_MIN) start = addBusinessDays(start, 1);
   return addBusinessDays(start, est.production_days[1] + transit).toISOString().slice(0, 10);
 }
 
@@ -2835,6 +2881,21 @@ async function isUnsubscribed(email) {
   } catch { return false; }   // never block a send because the table is unreachable
 }
 
+/* The check a MARKETING send makes. Unlike isUnsubscribed it fails CLOSED: when
+   the opt-out list cannot be read, a promotion is held rather than risked on
+   somebody who asked to stop. Receipts, payment links and proofs never ask it,
+   so an outage cannot stop a customer hearing about their own order. */
+async function marketingBlocked(email) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM email_optouts WHERE email = $1 LIMIT 1', [String(email).toLowerCase()]);
+    return rows.length > 0;
+  } catch (e) {
+    console.error(`marketing email held for ${email}: opt-out list unreadable (${e.message})`);
+    return true;
+  }
+}
+
 /* Brevo answers a send with `201 Created` and a real messageId even when the
    account has zero send credits left, and then quietly discards the message.
    Nothing throws, so the Resend fallback below never fires and every caller
@@ -2951,8 +3012,8 @@ async function holdForShopDigest({ to, subject, html, replyTo, attachments, even
 
 async function sendEmail({ to, subject, html, replyTo, marketing = false, text, promo = true, attachments = [], urgent = false, event = null }) {
   if (!urgent && !marketing && await holdForShopDigest({ to, subject, html, replyTo, attachments, event })) return;
-  if (marketing && await isUnsubscribed(to)) {
-    console.log(`sendEmail: skipped ${to} (unsubscribed)`);
+  if (marketing && await marketingBlocked(to)) {
+    console.log(`sendEmail: skipped ${to} (unsubscribed, or the opt-out list was unreadable)`);
     return;
   }
   /* Marketing mail must carry an unsubscribe link that works. With no signing
@@ -3212,8 +3273,20 @@ function activePromoCode() {
   if (!pool.length) pool.push('SAVE10');
   return pool[Math.floor(Date.now() / 1000 / 604800) % pool.length];
 }
-/** The percentage that code takes off (JT_PROMO_PCT, default 10). */
-function activePromoPct() { return parseInt(process.env.JT_PROMO_PCT, 10) || 10; }
+/* What that code is worth: a set dollar amount off an order over a floor
+   (owner, 2026-11-14: $15 off $50+), from tools/lib/promo-offer.js. The
+   designer reads the same JT_PROMO_AMOUNT / JT_PROMO_MIN, so the email that
+   promises it and the checkout that takes it agree. */
+const { promoOffer } = require('./tools/lib/promo-offer');
+const BUSINESS = require('./tools/lib/business-contact');
+/** The offer a code was issued at, as the designer reports it (amount, min),
+ *  so a text describes the code the customer actually holds. Falls back to this
+ *  server's own offer when the designer sends nothing usable (an older build). */
+function issuedOffer(b) {
+  const amount = Number(b && b.amount), min = Number(b && b.min);
+  if (!Number.isFinite(amount) || amount <= 0) return promoOffer();
+  return promoOffer({ JT_PROMO_AMOUNT: String(amount), JT_PROMO_MIN: Number.isFinite(min) ? String(min) : '' });
+}
 console.log(`Active recovery promo code this week: ${activePromoCode()}`);
 
 /* HTML escaping, used on every interpolated value in this file.
@@ -3357,10 +3430,46 @@ function explainFailures(instance, service) {
    them and not the other, so every CRM call authenticated with a dead key
    while sending looked fine. Two homes for one secret is two chances to rotate
    half of it. */
-const brevo = keepFirstSource(keepContactsWhenPhoneFails(explainFailures(axios.create({
+const brevo = joinBusinessList(keepFirstSource(keepContactsWhenPhoneFails(explainFailures(axios.create({
   baseURL: 'https://api.brevo.com/v3',
   headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
-}), 'Brevo')));
+}), 'Brevo'))));
+
+/** New business contacts join the Brevo "Business" list (owner, 2026-11-14:
+ *  "add new businesses"), on the client every contact write passes through, so
+ *  no way in — quote form, checkout, chat, a quote the shop builds — can miss
+ *  it. A business is an email on a custom domain (tools/lib/business-contact.js;
+ *  BREVO_BUSINESS_LIST_ID picks the list, "off" stops it). The list is only
+ *  ever added to the write, never removed, so a contact already on it stays.
+ *  The list must never cost a contact: if Brevo refuses a write the list was
+ *  added to, the same write (phone and source already settled by the other
+ *  interceptors) is sent once more with only that list taken back out.
+ *  tests/business-contact.test.js. */
+function joinBusinessList(instance) {
+  instance.interceptors.request.use((cfg) => {
+    if (cfg.jtNoBusinessList || String(cfg.method).toLowerCase() !== 'post' || cfg.url !== '/contacts') return cfg;
+    const body = contactWriteBody(cfg);
+    /* An unsubscribe (pushOptoutToBrevo) is not someone getting in touch: it
+       must never put a person on, or create them in, a marketing list. */
+    if (body && 'emailBlacklisted' in body) return cfg;
+    const next = BUSINESS.withBusinessList(body);
+    if (!body || next === body) return cfg;
+    return { ...cfg, data: next, jtBusinessListId: next.listIds[next.listIds.length - 1] };
+  });
+  instance.interceptors.response.use(null, (err) => {
+    const cfg = err && err.config;
+    const body = contactWriteBody(cfg);
+    const status = err && err.response ? err.response.status : 0;   // only a refusal of the write itself; a dead key or outage is not retried
+    const said = String((err && err.response && err.response.data && err.response.data.message) || '');
+    if (!cfg || !cfg.jtBusinessListId || cfg.jtNoBusinessList || !body || (status !== 400 && status !== 404)
+        || !/\blist/i.test(said)) return Promise.reject(err);   // a refusal about anything else is not ours to retry
+    console.warn('brevo: contact write refused with the business list added; sending it without —',
+      err.response && err.response.data && err.response.data.message || err.message);
+    const listIds = (Array.isArray(body.listIds) ? body.listIds : []).filter((id) => id !== cfg.jtBusinessListId);
+    return instance.request({ ...cfg, data: { ...body, listIds }, jtNoBusinessList: true });
+  });
+  return instance;
+}
 
 /** The phone rule, where every contact write passes through. Brevo's SMS
  *  attribute must be E.164, and a phone it cannot use — typed as
@@ -3811,19 +3920,19 @@ function attributedStaffId() {
 
 /** The active helper with this email, or null. */
 async function staffByEmail(email) {
-  /* `flags`: the page tips they dismissed and their ready sign-offs, so
-     adminPage() can show tips without a query of its own. Training is over
-     at the path's own ready (TRAINING.readyKeyFor), or a Sales ready given
-     before role courses had one (TRAINING.LEGACY_READY_BEFORE). */
+  /* `flags`: the page tips they dismissed, so adminPage() can show tips
+     without a query of its own; `ready_rows`: their ready sign-offs. Training is over
+     at the path's own ready (TRAINING.readyKeyFor), or an older ready that
+     still counts on it (TRAINING.endsTraining). */
   const { rows } = await pool.query(
     `SELECT s.id, s.name, s.email, s.perms, s.active, s.training_track, s.sales_role, s.time_zone,
             COALESCE((SELECT array_agg(t.step_key) FROM staff_training t
-                       WHERE t.staff_id = s.id AND (t.step_key LIKE 'tip:%' OR t.step_key LIKE 'signoff:%ready')), '{}') AS flags,
-            EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = s.id AND t.step_key = $2
-                     AND t.done_at < $3::timestamptz) AS legacy_ready,
+                       WHERE t.staff_id = s.id AND t.step_key LIKE 'tip:%'), '{}') AS flags,
+            COALESCE((SELECT json_agg(json_build_object('key', t.step_key, 'at', t.done_at)) FROM staff_training t
+                       WHERE t.staff_id = s.id AND t.step_key LIKE 'signoff:%ready'), '[]'::json) AS ready_rows,
             (SELECT started_at FROM staff_shifts h WHERE h.staff_id = s.id AND h.ended_at IS NULL LIMIT 1) AS on_clock,
-            EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $4) AS agreement_signed
-       FROM staff s WHERE lower(s.email) = $1`, [email, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE, AGREEMENT.VERSION]);
+            EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $2) AS agreement_signed
+       FROM staff s WHERE lower(s.email) = $1`, [email, AGREEMENT.VERSION]);
   const s = rows[0];
   if (!s || !s.active) return null;
   pool.query(`UPDATE staff SET last_seen_at = NOW()
@@ -3831,7 +3940,8 @@ async function staffByEmail(email) {
     .catch(() => {});
   const flags = s.flags || [];
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
-           inTraining: !(s.legacy_ready || flags.includes(TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)))),
+           inTraining: !(s.ready_rows || []).some((r) => TRAINING.endsTraining(
+             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), r.key, r.at)),
            track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
@@ -4910,9 +5020,9 @@ async function textToLead(from, text, sid) {
       WHERE ${samePhone} AND (s.dismissed_at IS NULL OR s.dismiss_reason = $2)
         AND ((s.source = 'text' AND s.created_at > NOW() - INTERVAL '14 days')
           OR EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = 'text'
-                        AND n.body LIKE 'You texted:%' AND n.created_at > NOW() - INTERVAL '14 days'))
+                        AND (n.body LIKE 'You texted:%' OR n.body LIKE 'You replied:%') AND n.created_at > NOW() - INTERVAL '14 days'))
       ORDER BY GREATEST(s.created_at, COALESCE((SELECT MAX(n.created_at) FROM lead_notes n
-                 WHERE n.submission_id = s.id AND n.kind = 'text' AND n.body LIKE 'You texted:%'), s.created_at)) DESC
+                 WHERE n.submission_id = s.id AND n.kind = 'text' AND (n.body LIKE 'You texted:%' OR n.body LIKE 'You replied:%')), s.created_at)) DESC
       LIMIT 1`, [digits, LEADFU.LET_GO_REASON]);
   if (open.length) {
     /* Let go by the follow-ups and now texting back: on Leads again. */
@@ -5047,11 +5157,59 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   const { rows: forwards } = await pool.query(
     `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
       WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC LIMIT 50`);
-  const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE);
-  if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. To answer an older one, start with their code, e.g. AB12CD then your message, or use the job page.');
+  /* A link sent on its own (a phone sends the link beside the words as a
+     text of its own) goes where the owner's previous text went, never to the
+     last texter (owner, 2026-11-19). Followed links ('relaylink:') are not
+     a previous text, so links cannot chain on from an old one. */
+  const previous = RELAY.isLinkOnly(text) ? (await pool.query(
+    `SELECT phone, quote_code, created_at AS at FROM sms_messages
+      WHERE ref LIKE 'relay:%' AND template = 'manual' AND status IN ('sending', 'sent', 'delivered')
+        AND created_at > NOW() - interval '5 minutes'
+      ORDER BY id DESC LIMIT 1`).catch((e) => {
+      console.error('relay previous lookup failed:', e.message);
+      reportError('twilio:relay-lookup', e).catch(() => {});
+      return { rows: [] };
+    })).rows[0] || null : null;
+  const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE, Date.now(), previous);
+  if (pick.linkOnly) return sendOwnerSms('Not sent: a link on its own was not sent to anyone. Start it with their number or code, e.g. 312 555 0199 https://...');
+  if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. Start with their number or code, e.g. 312 555 0199 or AB12CD, then your message.');
+  if (pick.badNumber) return sendOwnerSms('Not sent: that does not look like a full 10-digit number. Start with the number, e.g. 312 555 0199 then your message.');
   if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
-  const to = pick.to;
-  const label = `${to.name || 'the ' + String(to.phone).slice(-4) + ' number'} (${RELAY.codeOf(to)})`;
+  let to = pick.to;
+  if (pick.byNumber) {
+    /* A number the owner typed (owner, 2026-11-17: "I want to be able to
+       contact who I want"). The same guards as CALL, for every typed number:
+       never the shop or the owner, never a premium or overseas line. */
+    const shop = normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || '');
+    const typed = normalizeUsPhone(to.phone);
+    if (typed === normalizeUsPhone(process.env.TWILIO_TO_NUMBER || '') || typed === shop) {
+      return sendOwnerSms('Not sent: that is your own number.');
+    }
+    if (!VOICE.callable(typed)) return sendOwnerSms(`Not sent: ${VOICE.pretty(typed)} is a premium-rate or overseas number. Text them from your phone if you mean to.`);
+  }
+  if (pick.typed) {
+    /* Nobody on file from their texts: filed on their latest job when they
+       have one, so the job page shows it. */
+    const job = await pool.query(
+      `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`,
+      [to.phone.replace(/\D/g, '').slice(-10)])
+      .then((r) => r.rows[0] || null)
+      .catch((e) => { console.error('typed number job lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
+    if (job) to = { ...to, quote_code: job.code, name: job.name || '' };
+    else {
+      /* Or on their open lead (a web form, a call): their answer then lands
+         on it too, rather than starting a second lead (2026-11-19). */
+      const lead = await pool.query(
+        `SELECT id, name FROM submissions WHERE ${SAME_PHONE_SQL} AND dismissed_at IS NULL
+            AND created_at > NOW() - INTERVAL '120 days' ORDER BY created_at DESC LIMIT 1`,
+        [to.phone.replace(/\D/g, '').slice(-10)])
+        .then((r) => r.rows[0] || null)
+        .catch((e) => { console.error('typed number lead lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
+      if (lead) to = { ...to, lead_id: lead.id, name: lead.name || '' };
+    }
+  }
+  const code = RELAY.codeOf(to);
+  const label = `${to.name || VOICE.pretty(normalizeUsPhone(to.phone) || to.phone)}${code ? ` (${code})` : ''}`;
   const words = smsPlain(String(pick.body).replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 600);
   if (!words && !ownerMedia.length) return sendOwnerSms(`Not sent to ${label}: the message was empty.`);
   const pics = ownerMedia.length ? await saveTextMedia(ownerMedia, to.quote_code || null) : [];
@@ -5060,7 +5218,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
     `INSERT INTO sms_messages (phone, kind, ref, template, body, status, quote_code)
      VALUES ($1, 'transactional', $2, 'manual', $3, 'sending', $4)
      ON CONFLICT DO NOTHING RETURNING id`,
-    [to.phone, 'relay:' + (sid || Date.now()), `June's Tees: ${words || '(picture)'}`, to.quote_code || null]);
+    [to.phone, (pick.followed ? 'relaylink:' : 'relay:') + (sid || Date.now()), `June's Tees: ${words || '(picture)'}`, to.quote_code || null]);
   if (!row) return;
   if (pics.length) await pool.query('UPDATE sms_messages SET media = $2 WHERE id = $1', [row.id, JSON.stringify(pics)]).catch(() => {});
   try {
@@ -5068,7 +5226,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
     await pool.query(`UPDATE sms_messages SET status = 'sent', twilio_sid = $2 WHERE id = $1`, [row.id, tsid]);
   } catch (err) {
     await pool.query(`UPDATE sms_messages SET status = 'failed', error = $2 WHERE id = $1`, [row.id, String(err.message).slice(0, 300)]);
-    console.error(`owner reply to ${RELAY.codeOf(to)} failed:`, err.message);
+    console.error(`owner reply to ${code || 'a typed number'} failed:`, err.message);
     return sendOwnerSms(`Not sent to ${label}: ${err.twilioCode === 21610 ? 'they have texted STOP' : 'the text service refused it'}. Try the job page or call them.`);
   }
   if (to.lead_id) {
@@ -5076,7 +5234,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
       [to.lead_id, `You replied: ${words}`]).catch(() => {});
     await markLeadResponded(to.lead_id, null);
   }
-  console.log(`owner reply sent to ${RELAY.codeOf(to)}`);
+  console.log(`owner reply sent to ${code || 'a typed number'}`);
   return sendOwnerSms(`Sent to ${label}.`);
 }
 
@@ -5470,6 +5628,14 @@ async function recordSmsDelivery(p) {
   const what = rows.length ? `${String(rows[0].template).split(':')[0]} text to …${tail}`
     : `Alert text to the shop's phone …${tail}`;
   console.warn(`sms ${status}: ${what} — ${why}`);
+  /* The owner's own text, passed on from her phone: she was told "Sent to",
+     so she is told it did not arrive too (2026-11-19). */
+  if (rows.length && rows[0].template === 'manual' && /^relay(?:link)?:/.test(String(rows[0].ref))) {
+    const who = VOICE.pretty(normalizeUsPhone(p.To) || String(p.To || ''));
+    /* Not waited on: Twilio's callback is answered without it. */
+    sendOwnerSms(`Your text to ${who} did not arrive (${smsPlain(why, 120)}). Call them, or email them from their job or lead.`)
+      .catch((e) => console.error('owner undelivered notice failed:', e.message));
+  }
   reportError('sms-undelivered', new Error(`${what} was not delivered. ${why}`),
     rows.length ? `ref ${rows[0].ref}, message ${sid}` : `message ${sid}`).catch(() => {});
   return { status, updated: rows.length };
@@ -6501,7 +6667,7 @@ async function sendDesignFollowups(now = new Date()) {
        ON CONFLICT (campaign, email) DO NOTHING RETURNING id`, [designFuCampaign(lead.id, step), lead.email]);
     if (!claim.length) continue;
     const m = DESIGN_FU.followupEmail(step, { name: lead.name, link: lead.design_url,
-      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(), pct: activePromoPct() });
+      preview: designerUrlOk(lead.photo_url) ? lead.photo_url : '', code: activePromoCode(), offer: promoOffer() });
     try {
       await sendEmail({ to: lead.email, subject: m.subject, html: customerEmailHtml(m.heading, m.inner), marketing: true, promo: false });
       await pool.query(`UPDATE campaign_emails SET status = 'sent' WHERE id = $1`, [claim[0].id]);
@@ -6791,7 +6957,7 @@ app.post('/api/sms-cart-code', requireInternalKey, capPerRecipient('sms-cart-cod
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
   const status = await sendCustomerSms({
     phone: consent.phone, kind: 'marketing', ref: 'cart-code:' + day,
-    msg: SMS.cartCode({ code, pct: b.pct, restoreUrl }),
+    msg: SMS.cartCode({ code, offer: issuedOffer(b), restoreUrl }),
   });
   res.json({ ok: status === 'sent' || status === 'duplicate', status });
 });
@@ -6811,7 +6977,7 @@ app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart
   const month = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }).slice(0, 7);
   const status = await sendCustomerSms({
     phone, kind: 'marketing', ref: 'cart-followup:' + month,
-    msg: SMS.cartFollowup({ code, pct: b.pct, restoreUrl }),
+    msg: SMS.cartFollowup({ code, offer: issuedOffer(b), restoreUrl }),
   });
   // Settled outcomes answer 200 so the cron marks the cart done. Not-set-up or
   // a failed send answers 503 so the next hourly run tries again.
@@ -6822,7 +6988,7 @@ app.post('/api/sms-cart-followup', requireInternalKey, capPerRecipient('sms-cart
 /* ── The reintroduction campaign (tools/lib/reintro.js) ─────────────────────
    Owner, 2026-10-05: say hello to everyone, the safe way. A promotional TEXT
    only to phones with marketing consent; an EMAIL to the rest of the Brevo
-   list, inviting them to sign up for texts, and signing up earns a 10% code.
+   list, inviting them to sign up for texts, and signing up earns the $15-off-$50+ code.
    The owner starts each half from /admin/campaign; nothing here sends on its
    own until then. */
 
@@ -6845,15 +7011,16 @@ async function campaignTextPhones() {
   return REINTRO.marketingPhones(rows, foldSmsConsent);
 }
 
-/** A single-use 10% code for one sign-up, made in the studio's promo table. */
+/** A single-use sign-up code (the dollar offer, REINTRO.OFFER) for one sign-up, made in the studio's promo table. */
 async function mintSignupCode(email) {
   const expires = new Date(Date.now() + REINTRO.CODE_DAYS * 86400000).toISOString().slice(0, 10);
   let last = '';
   for (let i = 0; i < 3; i++) {
     const form = new URLSearchParams();
     form.set('code', REINTRO.newCode());
-    form.set('kind', 'percent');
-    form.set('value', String(REINTRO.PCT));
+    form.set('kind', 'amount');
+    form.set('value', String(REINTRO.OFFER.amount));
+    form.set('min_order', String(REINTRO.OFFER.min));
     form.set('expires', expires);
     form.set('note', `Text sign-up (${REINTRO.CAMPAIGN})`);
     form.set('max_uses', '1');
@@ -6930,18 +7097,18 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
       <p>${again ? (code ? 'Here is your code from when you signed up.' : 'Thanks for being with us.')
         : code ? "Here's your code. We've texted it to you too." : 'Your code is on its way.'}</p></div>
     <div class="tx-wrap"><div class="tx-card" style="text-align:center">
-      ${code ? `<div style="font-weight:700;color:#0B1F4B">Your ${REINTRO.PCT}% off code</div>
+      ${code ? `<div style="font-weight:700;color:#0B1F4B">${again ? 'Your code' : `Your ${REINTRO.OFFER.short} code`}</div>
         <div class="tx-code">${escEmail(code)}</div>
         <p class="tx-small">Use it at checkout in the Design Lab, or mention it when you get a quote.
           Good once, for ${REINTRO.CODE_DAYS} days${again ? ' from when you signed up. Used or run out? Call or text us at (773) 900-4592' : ''}.</p>`
-      : again ? `<p>Can't find your ${REINTRO.PCT}% off code? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a> and we'll sort it out.</p>`
-      : `<p>June will send your ${REINTRO.PCT}% off code to you shortly.</p>`}
+      : again ? `<p>Can't find your ${REINTRO.OFFER.short} code? Call or text us at <a href="tel:+17739004592">(773) 900-4592</a> and we'll sort it out.</p>`
+      : `<p>June will send your ${REINTRO.OFFER.short} code to you shortly.</p>`}
       <a class="tx-btn" href="${LAB}">Start designing</a>
       <div class="tx-garments">${garments}</div>
     </div></div>${foot}
     <script>/* Signed up: jtees.net's texts popup (assets/js/texts-popup.js) stops asking. */
       try { localStorage.setItem('jt_tx_joined', String(Date.now())); } catch (e) {}</script>` : `${top}
-    <div class="tx-hero"><h1>Get <span>${REINTRO.PCT}% off</span><br>your next order</h1>
+    <div class="tx-hero"><h1>Get <span>${REINTRO.OFFER.off}</span><br>your next order of ${REINTRO.OFFER.floor}+</h1>
       <p>Join June's Tees texts for new products, seasonal deals and first dibs on specials. Your code is yours right away.</p></div>
     <div class="tx-wrap"><div class="tx-card">
       ${error ? `<div class="tx-err">${escEmail(error)}</div>` : ''}
@@ -6956,7 +7123,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
         <input id="tx-first" name="first" maxlength="40" autocomplete="given-name" value="${v(first)}">
         <div style="margin-top:12px">${consentCheckboxesHtml()}</div>
         <p class="tx-small" style="margin:6px 0 0">Your code comes with the second box, our deals texts.</p>
-        <button type="submit" class="tx-btn">Get my ${REINTRO.PCT}% off</button>
+        <button type="submit" class="tx-btn">Get my ${REINTRO.OFFER.off}</button>
       </form>
       <ul class="tx-perks"><li>Design your own online: 45+ garments, live pricing, no minimums</li>
         <li>Printed by June's Tees in Chicago</li><li>Up to 4 texts a month. Reply STOP any time.</li></ul>
@@ -6966,7 +7133,7 @@ function textsPage({ email = '', first = '', phone = '', error = '', code = '', 
      colour headings and inputs for a different layout, and leaked through. */
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Get ${REINTRO.PCT}% off - June's Tees</title>
+<title>Get ${REINTRO.OFFER.short} - June's Tees</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap">
 <style>*,*:before,*:after{box-sizing:border-box}${TEXTS_CSS}</style></head><body>${body}</body></html>`;
@@ -7010,8 +7177,8 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
     if (code) {
       sendCustomerSms({ phone: consent.phone, kind: 'marketing', ref: 'signup:' + REINTRO.CAMPAIGN, msg: REINTRO.codeText({ code }) })
         .catch((e) => console.error('sign-up code text failed:', e.message));
-      sendEmail({ to: email, subject: `Your ${REINTRO.PCT}% off code: ${code}`, promo: false,
-        html: customerEmailHtml(`Here's your ${REINTRO.PCT}% off`,
+      sendEmail({ to: email, subject: `Your ${REINTRO.OFFER.short} code: ${code}`, promo: false,
+        html: customerEmailHtml(`Here's your ${REINTRO.OFFER.short}`,
           `<p>Hi${first ? ' ' + escEmail(first) : ''}, thanks for signing up for our texts!</p>
            <p>Your code is <b style="font-size:18px;letter-spacing:1px">${escEmail(code)}</b>. Use it at checkout in the
              <a href="${STUDIO_BASE}/editor.php?product_base=12">Design Lab</a>, or mention it when you get a quote. It's good for
@@ -7019,7 +7186,7 @@ app.post(REINTRO.SIGNUP_PATH, makeRateLimit(6, 60 * 60 * 1000), async (req, res)
         .catch((e) => console.error('sign-up code email failed:', e.message));
     } else {
       sendEmail({ to: NOTIFY_EMAIL, subject: `Text sign-up needs a code: ${email}`,
-        html: `<p>${escEmail(first || email)} signed up for texts, but the ${REINTRO.PCT}% code could not be made.
+        html: `<p>${escEmail(first || email)} signed up for texts, but the ${REINTRO.OFFER.short} code could not be made.
           Send them one from <a href="${PUBLIC_BASE_URL}/admin/discounts">Discounts</a>.</p>` }).catch(() => {});
     }
     res.send(textsPage({ done: true, code }));
@@ -7049,7 +7216,7 @@ async function joinByText(phone) {
     await sendCustomerSms({ phone, kind: 'marketing', ref: 'signup:' + REINTRO.CAMPAIGN, msg: REINTRO.codeText({ code }) });
   } else {
     sendEmail({ to: NOTIFY_EMAIL, subject: `Texted JOIN, needs a code: ${phone}`,
-      html: `<p>${escEmail(phone)} texted JOIN, but the ${REINTRO.PCT}% code could not be made. Text them one from
+      html: `<p>${escEmail(phone)} texted JOIN, but the ${REINTRO.OFFER.short} code could not be made. Text them one from
         <a href="${PUBLIC_BASE_URL}/admin/discounts">Discounts</a>.</p>` }).catch(() => {});
   }
 }
@@ -7179,7 +7346,7 @@ app.get('/admin/marketing-calendar', requireAdmin, (req, res) => {
 <div class="card">
   <p style="margin:0 0 6px">Each occasion counts back from its <b>season start</b>, the day customers begin ordering:
   <b>prep</b> ${lead.prepWeeks} weeks before (designs, photos, page), <b>ads and email</b> ${lead.adsWeeks} weeks before. <b>Last day to order</b> is
-  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since small orders take 5 to 7 business days and larger ones 7 to 14
+  ${Math.round(lead.orderByDays / 7)} weeks before the event (or the end of a season-long occasion), since small orders take 5 to 10 business days and larger ones 7 to 14
   from the order (or from the proof, when we design it). An occasion can set its own lead times; the table always shows its real dates. Nothing here is sent automatically.</p>
 </div>
 ${dueBox}
@@ -7269,14 +7436,14 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
           : '<p><b>Done</b>: everyone with deals consent has had the hello text.</p>'}
       </div>
       <div class="card" style="margin-top:14px">
-        <h2 class="card-title">2. The email, with ${REINTRO.PCT}% off for signing up for texts</h2>
+        <h2 class="card-title">2. The email, with ${REINTRO.OFFER.short} for signing up for texts</h2>
         ${brevoErr ? `<div class="warn">Could not read the Brevo list: ${escEmail(brevoErr)}</div>` : `
         <p class="muted"><b>${audience.length}</b> people on the Brevo list who are not getting the text and have not
           unsubscribed. Up to ${cap} a day go out, so your daily email allowance is not used up.</p>`}
         <p><b>Subject:</b> ${escEmail(mail.subject)}</p>
         <div style="border:1px solid #e3e8f2;border-radius:10px;padding:12px">${mail.html}</div>
         <p class="muted" style="font-size:12.5px">The button goes to <a href="${REINTRO.SIGNUP_PATH}" target="_blank">the sign-up page</a>.
-          Each person who signs up gets their own single-use ${REINTRO.PCT}% code, by text, by email and on screen.</p>
+          Each person who signs up gets their own single-use ${REINTRO.OFFER.short} code, by text, by email and on screen.</p>
         <p>Emailed: <b>${emailedOk}</b>${cnt(em, ['failed']) ? ` · failed: ${cnt(em, ['failed'])}` : ''}</p>
         ${started('email') ? `<p class="muted">Started ${fmtDate(started('email').started_at)}. It carries on by itself each day until everyone has it.</p>`
           : brevoErr || !audience.length ? '' : `
@@ -7285,7 +7452,7 @@ app.get('/admin/campaign', requireAdmin, async (req, res) => {
       </div>
       <div class="card" style="margin-top:14px">
         <h2 class="card-title">3. Keep growing the text list</h2>
-        <p class="muted">Every way in gives the same single-use ${REINTRO.PCT}% code and records their consent.</p>
+        <p class="muted">Every way in gives the same single-use ${REINTRO.OFFER.short} code and records their consent.</p>
         <table class="dtable" style="width:100%;font-size:14px">${Object.entries(REINTRO.SOURCES).map(([k, label]) =>
           `<tr><td style="padding:6px 4px">${escEmail(label)}</td><td style="text-align:right;padding:6px 4px"><b>${
             (su.find((r) => r.source === k) || { n: 0 }).n}</b></td></tr>`).join('')}
@@ -7316,7 +7483,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
   if (!isOwner()) return res.redirect('/admin/dashboard');
   const url = `${PUBLIC_BASE_URL}${REINTRO.SIGNUP_PATH}?src=shop`;
   const qr = `https://api.qrserver.com/v1/create-qr-code/?size=520x520&margin=8&data=${encodeURIComponent(url)}`;
-  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Get ${REINTRO.PCT}% off - June's Tees</title>
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Get ${REINTRO.OFFER.short} - June's Tees</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>body{font-family:system-ui,sans-serif;margin:0;color:#12203c;text-align:center}
       .s{max-width:640px;margin:0 auto;padding:36px 24px}h1{font-size:54px;margin:8px 0;color:#F0275A}
@@ -7324,7 +7491,7 @@ app.get('/admin/campaign/sign', requireAdmin, (req, res) => {
       img.qr{width:300px;height:300px}.f{font-size:13px;color:#4b5563;line-height:1.5;margin-top:22px}
       @media print{.np{display:none}}</style></head><body><div class="s">
     <img src="${PUBLIC_BASE_URL}/assets/images/brand/logo-current-900.png" alt="June's Tees" style="width:220px">
-    <h1>Get ${REINTRO.PCT}% off</h1>
+    <h1>Get ${REINTRO.OFFER.short}</h1>
     <p style="font-size:22px;margin:0">your next order when you join our texts</p>
     <img class="qr" src="${escEmail(qr)}" alt="QR code to sign up">
     <p style="font-size:18px;margin:4px 0">Scan to sign up</p>
@@ -8361,20 +8528,20 @@ app.post('/api/abandoned-cart-email', requireInternalKey, capPerRecipient('aband
       for (const [k, t] of recentCartEmails) if (Date.now() - t > CART_EMAIL_DEDUP_MS) recentCartEmails.delete(k);
     }
     const promoCode = activePromoCode();
-    const promoPct = activePromoPct();
+    const offer = promoOffer();
     const cartLine = `Your cart at June's Tees &amp; Things has <strong>${count} item${count === 1 ? '' : 's'}</strong>${total ? ` (about $${total.toFixed(2)})` : ''} — including your custom design work. It's saved and ready whenever you are.`;
     const copy = count > 0 ? {
-      1: { subject: `Your cart is saved + here's ${promoPct}% off ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready — and code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off at checkout.`, cta: `Pick Up Where I Left Off →` },
+      1: { subject: `Your cart is saved + here's ${offer.off} ✅`, heading: `We saved your cart!`, body: `${cartLine} This link works on any device, whenever you're ready — and code <strong style="color:#F0275A;">${promoCode}</strong> takes ${offer.off} orders of ${offer.floor} or more at checkout.`, cta: `Pick Up Where I Left Off →` },
       2: { subject: `Your custom design is waiting for you 🎨`, heading: `You left something great behind!`, body: cartLine, cta: `Pick Up Where I Left Off →` },
-      3: { subject: `Take ${promoPct}% off and finish your order 🎉`, heading: `Here's a little something to help`, body: `${cartLine} Use code <strong style="color:#F0275A;">${promoCode}</strong> at checkout for ${promoPct}% off.`, cta: `Finish My Order →` },
+      3: { subject: `Take ${offer.off} and finish your order 🎉`, heading: `Here's a little something to help`, body: `${cartLine} Use code <strong style="color:#F0275A;">${promoCode}</strong> at checkout for ${offer.off} an order of ${offer.floor} or more.`, cta: `Finish My Order →` },
       4: { subject: `Still thinking it over? Your design is safe`, heading: `No rush — it's all saved`, body: `${cartLine} Want a hand with sizing, colors, or bulk pricing? Just reply to this email or text us.`, cta: `See My Saved Cart →` },
-      5: { subject: `Last call — your saved cart expires soon ⏳`, heading: `Don't lose your design`, body: `${cartLine} Saved carts are cleared after a while, so grab it before it's gone — code <strong style="color:#F0275A;">${promoCode}</strong> still gets you ${promoPct}% off.`, cta: `Rescue My Cart →` },
+      5: { subject: `Last call — your saved cart expires soon ⏳`, heading: `Don't lose your design`, body: `${cartLine} Saved carts are cleared after a while, so grab it before it's gone — code <strong style="color:#F0275A;">${promoCode}</strong> still gets you ${offer.off} an order of ${offer.floor} or more.`, cta: `Rescue My Cart →` },
     } : {
-      1: { subject: `Welcome to June's Tees — here's ${promoPct}% off 🎁`, heading: `Thanks for stopping by!`, body: `Ready when you are: design custom tees, hoodies, hats and more in minutes. Use code <strong style="color:#F0275A;">${promoCode}</strong> for ${promoPct}% off your order.`, cta: `Start Designing →` },
-      2: { subject: `Ready to create something custom?`, heading: `Your ideas, printed`, body: `Custom apparel for teams, events, businesses and birthdays — designed by you, printed with love in Chicago. Your ${promoPct}% off code <strong style="color:#F0275A;">${promoCode}</strong> is waiting.`, cta: `Start Designing →` },
-      3: { subject: `Your ${promoPct}% off code is still waiting 🎉`, heading: `Don't forget your discount`, body: `Code <strong style="color:#F0275A;">${promoCode}</strong> takes ${promoPct}% off anything you design — tees, hoodies, hats, tote bags and more.`, cta: `Browse Products →` },
+      1: { subject: `Welcome to June's Tees — here's ${offer.off} 🎁`, heading: `Thanks for stopping by!`, body: `Ready when you are: design custom tees, hoodies, hats and more in minutes. Use code <strong style="color:#F0275A;">${promoCode}</strong> for ${offer.off} your order of ${offer.floor} or more.`, cta: `Start Designing →` },
+      2: { subject: `Ready to create something custom?`, heading: `Your ideas, printed`, body: `Custom apparel for teams, events, businesses and birthdays — designed by you, printed with love in Chicago. Your ${offer.off} code <strong style="color:#F0275A;">${promoCode}</strong> is waiting.`, cta: `Start Designing →` },
+      3: { subject: `Your ${offer.off} code is still waiting 🎉`, heading: `Don't forget your discount`, body: `Code <strong style="color:#F0275A;">${promoCode}</strong> takes ${offer.off} any order of ${offer.floor} or more you design — tees, hoodies, hats, tote bags and more.`, cta: `Browse Products →` },
       4: { subject: `Need ideas? Custom apparel made easy`, heading: `From idea to printed in days`, body: `Family reunions, team uniforms, memorials, birthdays, business merch — tell us what you're planning and we'll help you design it. Reply to this email or text us anytime.`, cta: `Get Started →` },
-      5: { subject: `Last call for your ${promoPct}% off ⏳`, heading: `Your discount is about to expire`, body: `This is the last reminder for code <strong style="color:#F0275A;">${promoCode}</strong> — ${promoPct}% off your custom order. We'd love to make something great with you.`, cta: `Use My Discount →` },
+      5: { subject: `Last call for your ${offer.off} ⏳`, heading: `Your discount is about to expire`, body: `This is the last reminder for code <strong style="color:#F0275A;">${promoCode}</strong> — ${offer.off} your custom order of ${offer.floor} or more. We'd love to make something great with you.`, cta: `Use My Discount →` },
     };
     const c = copy[stage];
     recentCartEmails.set(dedupKey, Date.now());
@@ -9095,8 +9262,8 @@ async function logClientEmail(quote, kind, mail, status, error = null) {
  *  marketing email to someone who unsubscribed is not sent, and says so
  *  ('skipped') rather than reading as sent. */
 async function sendClientEmail({ quote, kind, ...mail }) {
-  if (mail.marketing && await isUnsubscribed(mail.to)) {
-    await logClientEmail(quote, kind, mail, 'skipped', 'unsubscribed from marketing email');
+  if (mail.marketing && await marketingBlocked(mail.to)) {
+    await logClientEmail(quote, kind, mail, 'skipped', 'unsubscribed from marketing email (or the opt-out list was unreadable)');
     return;
   }
   const { preview, ...email } = mail;   // for the record, not the customer
@@ -9387,16 +9554,22 @@ function cardFee(amount) { return round2(Number(amount) * CARD_FEE); }
 /* Negative days walk BACKWARDS, which is what backwards-scheduling a deadline
    needs. Without this the loop simply never ran and every computed "start by"
    date silently equalled the deadline itself. */
+/* Closed days (weekends and the shop's holidays, tools/lib/shop-days.js) are
+   skipped, read from the date's own day as getDay() reads it. */
 function addBusinessDays(from, days) {
   const d = new Date(from);
   const step = days < 0 ? -1 : 1;
   let left = Math.abs(days);
   while (left > 0) {
     d.setDate(d.getDate() + step);
-    const dow = d.getDay();
-    if (dow !== 0 && dow !== 6) left--;
+    if (!SHOPDAYS.shopClosed(localYmd(d))) left--;
   }
   return d;
+}
+
+/** 'YYYY-MM-DD' of a Date's own (server-local) day, the day getDay() reads. */
+function localYmd(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
 /** Estimated ready/delivery window, same env knobs the designer uses. */
@@ -9417,13 +9590,15 @@ function shopMinutes(at) {
   return (get('hour') % 24) * 60 + get('minute');
 }
 
-/* Anchorfish states a 3:30pm CST business-day cut-off on both 2026 sheets:
-   work handed over after it is received the next business day, so day one has
-   not begun. A weekend is the same problem — nothing is produced on one. */
-const CUTOFF_MIN = (() => {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(process.env.JT_CUTOFF || '15:30'));
-  return m ? Number(m[1]) * 60 + Number(m[2]) : 15 * 60 + 30;
-})();
+/* The shop's cut-off (owner, 2026-11-16: "after 3pm that day doesn't
+   count"): an order taken at 3pm Chicago or later starts the next open day, so
+   day one has not begun. A closed day (weekend or shop holiday,
+   tools/lib/shop-days.js) is the same. Anchorfish's own sheet cut-off is
+   3:30pm, so 3pm also leaves the handover time. */
+/* Fixed, not read from JT_CUTOFF: the designer counts the same 3pm
+   (jt-auth.php jt_shop_cutoff_min), and an old env value would make the two
+   sites quote different dates (code review). */
+const CUTOFF_MIN = 15 * 60;
 
 /** The day the clock actually starts.
  *
@@ -9432,9 +9607,13 @@ const CUTOFF_MIN = (() => {
  *  on the promise the customer actually reads. */
 function productionStart(from) {
   const d = new Date(from);
-  const dow = d.getDay();
-  if (dow === 0 || dow === 6 || shopMinutes(d) >= CUTOFF_MIN) return addBusinessDays(d, 1);
-  return d;
+  const c = SHOPDAYS.shopClock(d, SHOP_TZ);
+  if (!SHOPDAYS.shopClosed(c.ymd) && c.min < CUTOFF_MIN) return d;
+  /* The next open day on the SHOP's calendar, at noon UTC so the server's own
+     day (getDay, as addBusinessDays reads it) is that date: read as a UTC date,
+     a Chicago evening is already tomorrow and the start landed a day late
+     (code review). */
+  return new Date(SHOPDAYS.shopStartDay(d, CUTOFF_MIN, SHOP_TZ) + 'T12:00:00Z');
 }
 
 /* Anchorfish quotes 7–10 business days on up to 2,400 prints and says over
@@ -9880,12 +10059,12 @@ const ORDER_SHARED_CODES = ADDONS.filter((a) => a.orderShared).map((a) => a.code
  * that costs money. Whatever the table says, the person quoting can still
  * override the percentage or clear it on any individual quote.
  */
-/* Owner, 2026-11-06: rush tops out at 70%, for same day; each day of lead
-   time steps it down. `days: 0` is today, or a date already past. */
+/* Owner, 2026-11-06: rush tops out at 70%; each day of lead time steps it
+   down. Owner, 2026-11-14: no same-day and no next-day orders, so the ladder
+   starts at 2 business days (tools/lib/rush.js rushFor refuses anything
+   sooner, and has its own steps for embroidery and 50+ pieces). */
 const RUSH_MAX_PCT = 70;
 const RUSH_TIERS_DEFAULT = [
-  { days: 0, pct: 70 },   // same day
-  { days: 1, pct: 50 },   // next business day
   { days: 2, pct: 35 },
   { days: 3, pct: 20 },
   { days: 4, pct: 10 },
@@ -9911,32 +10090,126 @@ const RUSH_TIERS = (() => {
   }
 })();
 
-/** Business days from `from` to `to`, counting neither endpoint twice. Returns
- *  null when there is no date to measure to. Past dates count as 0 — someone
- *  asking for yesterday is the most urgent case there is, not the least. */
+/** Open business days from an order taken at `from` (now when absent) to
+ *  the date `to`, on the shop's calendar (tools/lib/shop-days.js, owner
+ *  2026-11-16): weekends and the shop's holidays do not count, and an order
+ *  taken on a closed day or at the 3pm cutoff or later starts the next open
+ *  day. Null when there is no date to measure to. A date on or before the
+ *  start day counts as 0: someone asking for yesterday is the most urgent
+ *  case there is, not the least. */
 function businessDaysUntil(to, from) {
   if (!to) return null;
-  const end = new Date(to.length <= 10 ? to + 'T12:00:00' : to);
-  if (isNaN(end.getTime())) return null;
-  const start = from ? new Date(from) : new Date();
-  start.setHours(12, 0, 0, 0);
-  if (end <= start) return 0;
-  let n = 0;
-  const d = new Date(start);
-  while (d < end) {
-    d.setDate(d.getDate() + 1);
-    const wd = d.getDay();
-    if (wd !== 0 && wd !== 6) n++;
+  const at = from ? new Date(from) : new Date();
+  if (isNaN(at.getTime())) return null;
+  let end = String(to);
+  if (end.length > 10) {
+    const t = new Date(end);
+    if (isNaN(t.getTime())) return null;
+    end = SHOPDAYS.shopClock(t, SHOP_TZ).ymd;
   }
-  return n;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end) || isNaN(new Date(end + 'T00:00:00Z').getTime())) return null;
+  return SHOPDAYS.shopDaysUntil(end, at, CUTOFF_MIN, SHOP_TZ);
 }
 
-/** The rush percentage a requested date earns, before anyone overrides it. */
-function rushPctFor(neededBy, from) {
-  const days = businessDaysUntil(neededBy, from);
-  if (days === null) return 0;
-  for (const t of RUSH_TIERS) if (days <= t.days) return t.pct;
-  return 0;
+/** The rush percentage a requested date earns, before anyone overrides it.
+ *  kind: RUSH.rushKind() ('large', 'embroidery' or ''). A date no rush can
+ *  buy (same day, next day; under 3 days for embroidery or 50+ pieces) earns 0. */
+function rushPctFor(neededBy, from, kind) {
+  return RUSH.rushFor(businessDaysUntil(neededBy, from), RUSH_TIERS, kind || '', RUSH_RULE).pct;
+}
+
+/* The floors and the 50+ and embroidery steps, from tools/lib/rush.js, for
+   rushFor here and on the quote form (which gets them as JSON, as it gets
+   RUSH_TIERS). */
+const RUSH_RULE = { earliest: RUSH.EARLIEST_DAYS, slowEarliest: RUSH.SLOW_EARLIEST_DAYS, slowTiers: RUSH.SLOW_TIERS,
+  embroideryTiers: RUSH.EMBROIDERY_TIERS };
+
+/* Top level, not inside the quote form handler: rushSignOf() below reads
+   SIZED_BY_NAME_RE, and while it was declared inside that handler every
+   quote form load threw "SIZED_BY_NAME_RE is not defined" and hung (#551). */
+/* The product list is 180-odd rows and was one flat alphabetical run, so
+   finding a hoodie meant scrolling past every cap in the catalogue. Grouped
+   into <optgroup>s by what the thing IS, which the browser renders as headed
+   sections and keyboard search still walks normally.
+
+   Matched on the NAME, in order, first hit wins — so the order below is the
+   rule, not just a display preference. "Long-Sleeve Twill Shirt" has to reach
+   Woven Shirts rather than Long Sleeve, and an infant bodysuit has to reach
+   Youth before anything else claims it. The supplier's own naming is all
+   there is to go on; the catalogue carries no category field. */
+const PRODUCT_GROUPS = [
+  /* No bare "canvas" here, and no bare "sign". Both looked obvious and both
+     were wrong: "canvas" swept in the whole Bella+Canvas range and every
+     canvas tote — thirteen shirts filed under Signs — because a brand name
+     and a material share a word. Match on what only a sign is called. */
+  /* Things BOUGHT PRINTED (Signs365, SinaLite) come first, split four ways
+     (owner, 2026-10-15) so the Category picker on a quote line keeps the
+     product list short. A group marked 'sized' is one whose NAMES are only ever
+     bought-printed goods, so the quote form gives them the sizer by name
+     (SIZED_BY_NAME_RE). Labels and drinkware are not: the shop decorates its
+     own mugs and stickers, so a SinaLite one is recognised by its exact
+     catalogue name instead (quote-signs.js signKindOf). No bare "label": tee
+     names carry "Tear Away Label"; no bare "pouch" or "bottle": hoodies have a
+     "Pouch Pocket" and bags a "Bottle Pocket". */
+  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i, 'sized'],
+  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i, 'sized'],
+  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?![\s-]*pocket)/i],
+  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?![\s-]*(?:pocket|holder|sleeve))/i],
+  ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
+  ['Scrubs',                  /scrub/i],
+  /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
+     "Legend Pullover" is a sweatshirt — the zip is what decides, so it has to
+     be asked about first. */
+  ['Quarter-Zips',            /quarter[-\s]?zip|1\/4[-\s]?zip/i],
+  ['Hoodies & Sweatshirts',   /hood|sweatshirt|fleece|crewneck|pullover/i],
+  ['Polos',                   /polo/i],
+  ['Woven Shirts',            /twill|oxford|broadcloth|flannel|work shirt|button[-\s]?down|utility shirt|shoreline|dress shirt/i],
+  ['Tanks',                   /tank/i],
+  ['Long Sleeve',             /long[-\s]?sleeve/i],
+  ['T-Shirts',                /tee\b|t-shirt|tshirt/i],
+  ['Hats & Beanies',          /\bcap\b|\bhat\b|beanie|trucker|visor/i],
+  ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
+];
+
+/** One pattern for "this name is a sized, bought-printed item", from the
+ *  groups marked SIZED — a flag, not a position, so reordering the list
+ *  cannot turn youth tees into signs. */
+const SIZED_BY_NAME_RE = new RegExp(PRODUCT_GROUPS.filter((g) => g[2] === 'sized')
+  .map(([, re]) => '(?:' + re.source + ')').join('|'), 'i');
+
+/** Whether a sized kind is a SinaLite item or a Signs365 sign (deliveryEstimate's rule). */
+function rushSignOfKind(kind) {
+  return kind === 'banner' || SIGN_FAMILIES.FAMILIES[kind] ? 'signs365' : 'sinalite';
+}
+
+/** A catalogue product's sign supplier for the rush: 'sinalite', 'signs365',
+ *  or undefined for anything that is not a sign. A product is a sign only when
+ *  it is filed under the sized groups by name and is not an S&S garment:
+ *  signKindOf alone matches loose words, so "Acrylic Knit Beanie" read as an
+ *  acrylic sign (code review). */
+function rushSignOf(prod) {
+  if (!prod) return undefined;
+  if (prod.supplier === 'sinalite') return 'sinalite';
+  if (/^ssa/.test(String(prod.supplier || '')) || !SIZED_BY_NAME_RE.test(String(prod.name || ''))) return undefined;
+  const kind = sizedKindOf(prod);
+  return kind ? rushSignOfKind(kind) : undefined;
+}
+
+/** A quote line as tools/lib/rush.js reads it: whether it has a product, its
+ *  pieces, its method titles, and whether it is a Signs365 sign ('signs365')
+ *  or a SinaLite item ('sinalite'). One place for the save, the form's saved
+ *  state and the helper's lock, so the three cannot read a line differently. */
+function rushLineOf(it, catalog) {
+  const methods = (catalog && catalog.methods) || [];
+  const mt = (id) => (methods.find((m) => String(m.id) === String(id)) || {}).title || '';
+  const prod = it.product_id ? ((catalog && catalog.products) || []).find((p) => String(p.id) === String(it.product_id)) : null;
+  const sign = it.sign && it.sign.kind ? rushSignOfKind(it.sign.kind) : rushSignOf(prod);
+  return {
+    product: !!it.product_id,
+    qty: parseInt(it.qty, 10) || 0,
+    titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
+    ...(sign ? { sign } : {}),
+  };
 }
 
 /* Holiday mode: everything takes HOLIDAY_EXTRA_DAYS longer. One switch rather
@@ -11577,6 +11850,16 @@ const ADMIN_NAV = [
   { key: 'mystats',    href: '/admin/my-stats',      label: 'My stats',   icon: 'grid',   staffOnly: true },
   { key: 'clock',      href: '/admin/clock',         label: 'My hours',   icon: 'clock',  staffOnly: true },
   { key: 'myschedule', href: '/admin/work-schedule', label: 'My schedule', icon: 'clock', staffOnly: true },
+  { key: 'studio-controls', href: '/admin/studio-controls', label: 'Designer controls', icon: 'edit' },
+  { key: 'artwork', href: '/admin/artwork', label: 'Artwork workspace', icon: 'edit' },
+  { key: 'studio-products', href: '/admin/studio-controls?tab=products', label: 'Products & print areas', icon: 'edit', ownerOnly: true },
+  { key: 'studio-pricing', href: '/admin/studio-controls?tab=pricing', label: 'Decoration pricing', icon: 'edit', ownerOnly: true },
+  { key: 'studio-fonts', href: '/admin/studio-controls?tab=fonts', label: 'Fonts', icon: 'edit', ownerOnly: true },
+  { key: 'studio-collections', href: '/admin/studio-controls?tab=collections', label: 'Collections & clipart', icon: 'edit', ownerOnly: true },
+  { key: 'studio-ai', href: '/admin/studio-controls?tab=ai', label: 'AI usage', icon: 'edit', ownerOnly: true },
+  { key: 'studio-uploads', href: '/admin/studio-controls?tab=uploads', label: 'Upload artwork', icon: 'edit', ownerOnly: true },
+  { key: 'design-requests', href: '/admin/design-requests', label: 'Design requests', icon: 'layers' },
+  { key: 'design-library', href: '/admin/design-library', label: 'Design library', icon: 'layers' },
   { key: 'dashboard',  href: '/admin/dashboard',     label: 'Dashboard',  icon: 'grid',   badge: 'jobnotes' },
   { key: 'tasks',      href: '/admin/tasks',         label: 'Tasks',      icon: 'check' },
   { key: 'leads',      href: '/admin/leads',         label: 'Leads',      icon: 'inbox',  badge: 'leads' },
@@ -11603,14 +11886,14 @@ const ADMIN_NAV = [
   { key: 'chat',       href: '/admin/team-chat',     label: 'Team chat',  icon: 'chat',   badge: 'chat' },
   { key: 'playbook',   href: '/admin/playbook',      label: 'Playbook',   icon: 'book' },
   { key: 'resources',  href: '/admin/resources',     label: 'Resources',  icon: 'key' },
-  { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn' },
+  { key: 'training',   href: '/admin/training',      label: 'Training',   icon: 'learn', badge: 'training' },
   { key: 'paths',      href: '/admin/training/paths', label: 'Training paths', icon: 'learn' },
   { key: 'hiring',     href: '/admin/hiring',        label: 'Hiring',     icon: 'users' },
-  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team' },
+  { key: 'team',       href: '/admin/team',    label: 'Team',       icon: 'team', badge: 'team' },
   { key: 'approvals',  href: '/admin/approvals',     label: 'Approvals',  icon: 'check',  badge: 'approvals' },
   { key: 'activity',   href: '/admin/activity',      label: 'Activity',   icon: 'clock' },
   { key: 'staff',      href: '/admin/staff',         label: 'Staff and permissions', icon: 'key' },
-  { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock' },
+  { key: 'timeclock',  href: '/admin/timeclock', label: 'Hours',      icon: 'clock', badge: 'hours' },
   { key: 'workschedule', href: '/admin/work-schedule', label: 'Work schedule', icon: 'clock', ownerOnly: true },
   { key: 'agreement',  href: '/admin/agreement',     label: 'Agreements', icon: 'file',   ownerOnly: true },
 ];
@@ -11627,7 +11910,8 @@ const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
   { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'notifications', 'tasks', 'mailbox', 'chat'] },
   { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers', 'softleads'] },
-  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production', 'orders', 'shipping', 'delivery', 'deliveryset'] },
+  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','orders','shipping','delivery','deliveryset'] },
+  { key: 'designs', label: 'Designs & studio', icon: 'edit', items: ['artwork','design-library','design-requests','studio-controls','studio-products','studio-pricing','studio-fonts','studio-collections','studio-ai','studio-uploads'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
   { key: 'team',      label: 'Team',      icon: 'team',   items: ['team', 'approvals', 'activity', 'timeclock', 'workschedule', 'staff', 'agreement', 'hiring'] },
@@ -11993,7 +12277,7 @@ function navItemsFor(actor) {
   const staff = actor && actor.kind === 'staff' ? actor : null;
   return ADMIN_NAV.filter((n) => (!n.when || n.when()) && (staff
     /* Schedule is the no-prices view; whoever has the Production board uses that. */
-    ? !n.ownerOnly && STAFF.mayUseRoute(staff, 'GET', n.href) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
+    ? !n.ownerOnly && STAFF.mayUseRoute(staff, 'GET', n.href.split('?')[0]) && !(n.key === 'schedule' && STAFF.levelOf(staff, 'quotes.view') === 'on')
     : !n.staffOnly));
 }
 
@@ -12372,7 +12656,8 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
   if (exam && !(await examOpenFor(currentActor() || OWNER_ACTOR))) {
     return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
   }
-  const examDate = exam ? addBusinessDays(new Date(), exam.businessDays).toISOString().slice(0, 10) : '';
+  /* On the shop's calendar, as the rush counts it (3pm cutoff, holidays). */
+  const examDate = exam ? SHOPDAYS.shopDateAfter(exam.businessDays, new Date(), CUTOFF_MIN, SHOP_TZ) : '';
   const canDraft = (!isEdit || isDraft) && !exam;
   /* Upsells change the items, which a helper cannot do once the job is agreed
      or paid; they still see the ideas, without the Apply button. */
@@ -12390,55 +12675,6 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
      `method_id` were being saved correctly the whole time; they were simply
      never read back. Everything downstream then priced from a line with no
      product and no method, which is why the totals collapsed to nothing. */
-/* The product list is 180-odd rows and was one flat alphabetical run, so
-   finding a hoodie meant scrolling past every cap in the catalogue. Grouped
-   into <optgroup>s by what the thing IS, which the browser renders as headed
-   sections and keyboard search still walks normally.
-
-   Matched on the NAME, in order, first hit wins — so the order below is the
-   rule, not just a display preference. "Long-Sleeve Twill Shirt" has to reach
-   Woven Shirts rather than Long Sleeve, and an infant bodysuit has to reach
-   Youth before anything else claims it. The supplier's own naming is all
-   there is to go on; the catalogue carries no category field. */
-const PRODUCT_GROUPS = [
-  /* No bare "canvas" here, and no bare "sign". Both looked obvious and both
-     were wrong: "canvas" swept in the whole Bella+Canvas range and every
-     canvas tote — thirteen shirts filed under Signs — because a brand name
-     and a material share a word. Match on what only a sign is called. */
-  /* Things BOUGHT PRINTED (Signs365, SinaLite) come first, split four ways
-     (owner, 2026-10-15) so the Category picker on a quote line keeps the
-     product list short. A group marked 'sized' is one whose NAMES are only ever
-     bought-printed goods, so the quote form gives them the sizer by name
-     (SIZED_BY_NAME_RE). Labels and drinkware are not: the shop decorates its
-     own mugs and stickers, so a SinaLite one is recognised by its exact
-     catalogue name instead (quote-signs.js signKindOf). No bare "label": tee
-     names carry "Tear Away Label"; no bare "pouch" or "bottle": hoodies have a
-     "Pouch Pocket" and bags a "Bottle Pocket". */
-  ['Signs & Display',         /banner|cutout|poster|magnet|acrylic|window graphic|wall graphic|floor graphic|vehicle graphic|yard sign|rigid sign|photo panel|stretched canvas|table cover|x-frame/i, 'sized'],
-  ['Print & Paper',           /business card|flyer|brochure|postcard|door hanger|calendar|rack card|tear card|notepad|envelope|booklet|presentation folder/i, 'sized'],
-  ['Labels, Stickers & Packaging', /roll labels?|stickers?\b|decals?\b|\bpouch(?:es)?\b(?![\s-]*pocket)/i],
-  ['Drinkware',               /\bmugs?\b|tumbler|\bbottles?\b(?![\s-]*(?:pocket|holder|sleeve))/i],
-  ['Youth, Toddler & Infant', /youth|toddler|infant|bodysuit|onesie/i],
-  ['Scrubs',                  /scrub/i],
-  /* Before Hoodies, because a "Quarter-Zip Pullover" is a quarter-zip and a
-     "Legend Pullover" is a sweatshirt — the zip is what decides, so it has to
-     be asked about first. */
-  ['Quarter-Zips',            /quarter[-\s]?zip|1\/4[-\s]?zip/i],
-  ['Hoodies & Sweatshirts',   /hood|sweatshirt|fleece|crewneck|pullover/i],
-  ['Polos',                   /polo/i],
-  ['Woven Shirts',            /twill|oxford|broadcloth|flannel|work shirt|button[-\s]?down|utility shirt|shoreline|dress shirt/i],
-  ['Tanks',                   /tank/i],
-  ['Long Sleeve',             /long[-\s]?sleeve/i],
-  ['T-Shirts',                /tee\b|t-shirt|tshirt/i],
-  ['Hats & Beanies',          /\bcap\b|\bhat\b|beanie|trucker|visor/i],
-  ['Bags & Totes',            /tote|bags?\b|backpack|sackpack|drawstring/i],
-];
-
-/** One pattern for "this name is a sized, bought-printed item", from the
- *  groups marked SIZED — a flag, not a position, so reordering the list
- *  cannot turn youth tees into signs. */
-const SIZED_BY_NAME_RE = new RegExp(PRODUCT_GROUPS.filter((g) => g[2] === 'sized')
-  .map(([, re]) => '(?:' + re.source + ')').join('|'), 'i');
 
 /** Staff-only services: design fees, folding. Never shown in the shop. */
 const SERVICE_GROUP = 'Services (not in shop)';
@@ -12886,17 +13122,18 @@ function productGroupOf(name) {
               <input name="rush_pct" id="rushpct" type="number" step="0.01" min="0" max="${RUSH_MAX_PCT}"
                      inputmode="decimal" value="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}"${
                      canPrice ? '' : ' readonly title="Set from the needed-by date. Only the owner can change it."'}
-                     data-saved="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}" data-was-rushable="${(() => {
+                     data-saved="${Number(E.rush_pct) > 0 ? val(E.rush_pct) : ''}" data-was-rushable="${
                        /* What the save route reads for a helper: the saved rush stands
-                          while the date is unchanged, unless they took a rushable
-                          order off DTF. The box shows the same, so the total on
-                          screen is the total saved. */
-                       const mt = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
-                       return RUSH.rushAllowed((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional).map((it) => ({
-                         product: !!it.product_id,
-                         titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(mt),
-                       }))) ? '1' : '';
-                     })()}"
+                          while the date is unchanged, unless they made a rushable
+                          order one that cannot be rushed. The box shows the same, so
+                          the total on screen is the total saved. */
+                       RUSH.rushAllowed((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional)
+                         .map((it) => rushLineOf(it, catalog))) ? '1' : ''}" data-was-kind="${
+                       /* Which rush rule the saved order took (50+, embroidery or
+                          the usual): the save keeps a rush only while that is
+                          unchanged too. */
+                       RUSH.rushKind((Array.isArray(E.items) ? E.items : []).filter((it) => it && !it.optional)
+                         .map((it) => rushLineOf(it, catalog)))}"
                      style="width:80px;padding:5px 6px;font-size:13px" placeholder="0">
               <span style="font-size:13px;color:#6b7280">% &middot;</span>
               <span id="rushwhy" style="font-size:12px;color:#b45309"></span>
@@ -13290,31 +13527,42 @@ function productGroupOf(name) {
          in, it never overwrites a figure that was typed or deliberately
          cleared. */
       var RUSH_TIERS = ${JSON.stringify(RUSH_TIERS)};
+      var RUSH_RULE = ${JSON.stringify(RUSH_RULE)};
 
-      /* Business days between today and the requested date, the same count
-         rushPctFor() makes on the server. A date in the past is the most
-         urgent case there is, not the least, so it counts as zero. */
+      /* Open business days between now and the requested date, the same
+         count rushPctFor() makes on the server: the shop's calendar
+         (tools/lib/shop-days.js, shipped by its source), weekends and holidays
+         skipped, and from 3pm Chicago today no longer counts. A date in the
+         past counts as zero, like today: too soon to take (owner, 2026-11-14). */
+      var SHOP_TZ = ${JSON.stringify(SHOP_TZ)}, CUTOFF_MIN = ${CUTOFF_MIN};
+      ${SHOPDAYS.shopHolidays.toString()}
+      ${SHOPDAYS.shopClosed.toString()}
+      ${SHOPDAYS.shopAddDays.toString()}
+      ${SHOPDAYS.shopClock.toString()}
+      ${SHOPDAYS.shopStartDay.toString()}
+      ${SHOPDAYS.shopDaysUntil.toString()}
       function rushDaysUntil(v) {
-        if (!v) return null;
-        var end = new Date(v + 'T12:00:00');
-        if (isNaN(end.getTime())) return null;
-        var d = new Date(); d.setHours(12,0,0,0);
-        if (end <= d) return 0;
-        var n = 0;
-        while (d < end) {
-          d.setDate(d.getDate() + 1);
-          var wd = d.getDay();
-          if (wd !== 0 && wd !== 6) n++;
-        }
-        return n;
+        if (!v || isNaN(new Date(v + 'T00:00:00Z').getTime())) return null;
+        return shopDaysUntil(v, new Date(), CUTOFF_MIN, SHOP_TZ);
       }
 
-      function rushSuggest(days) {
-        if (days === null) return 0;
-        for (var i = 0; i < RUSH_TIERS.length; i++)
-          if (days <= RUSH_TIERS[i].days) return RUSH_TIERS[i].pct;
-        return 0;
-      }
+      /* The rules themselves, shipped by their source (tools/lib/rush.js) so
+         the form and the save cannot part. The patterns come from the server
+         as strings: a regex literal in this template would lose its
+         backslashes. */
+      var RUSHABLE = new RegExp(${JSON.stringify(RUSH.RUSHABLE.source)}, 'i');
+      var EMBROIDERY = new RegExp(${JSON.stringify(RUSH.EMBROIDERY.source)}, 'i');
+      var CUTOUT = new RegExp(${JSON.stringify(RUSH.CUTOUT.source)}, 'i');
+      var LARGE_QTY = ${RUSH.LARGE_QTY};
+      ${RUSH.methodRushable.toString()}
+      ${RUSH.lineRushable.toString()}
+      ${RUSH.rushAllowed.toString()}
+      ${RUSH.rushKind.toString()}
+      ${RUSH.rushFor.toString()}
+      /* Each catalogue product that is a sign: 'signs365' (can be rushed) or
+         'sinalite' (cannot), as rushLineOf() reads it on the server. */
+      var RUSH_SIGN = ${JSON.stringify(Object.fromEntries((catalog.products || [])
+        .map((p) => [String(p.id), rushSignOf(p)]).filter((x) => x[1])))};
 
       /* Show the row only when a date has been asked for, and say WHY the
          number is what it is — "2 business days" is checkable, a bare 50% is
@@ -13327,30 +13575,29 @@ function productGroupOf(name) {
         if (!dateEl || !row || !box) return;
 
         var days = rushDaysUntil(dateEl.value);
-        /* Only DTF can be rushed (tools/lib/rush.js): every decoration picked
-           on the form has to be DTF, and something has to be picked. The save
-           route makes a helper's rush 0 otherwise; the owner may type one. */
-        /* Line by line, like the save (tools/lib/rush.js): every required line
-           with a garment or a method needs a method, and every method is DTF.
-           The pattern comes from the server as a string: a regex literal in
-           this template would lose its backslashes. */
-        var rushable = new RegExp(${JSON.stringify(RUSH.RUSHABLE.source)}, 'i');
+        /* Line by line, like the save (tools/lib/rush.js): only DTF,
+           embroidery, Signs365 signs and cutouts can be rushed. The save route
+           makes a helper's rush 0 otherwise; the owner may type one. */
         var lines = {};
-        Array.prototype.forEach.call(document.querySelectorAll('select[name], input[name^="product"]'), function (el) {
-          var m = /^(?:product|method2?|pr_m_[a-z]+?)([0-9]+)$/.exec(el.name || '');
+        Array.prototype.forEach.call(document.querySelectorAll('select[name], input[name^="product"], input[name^="qty"]'), function (el) {
+          var m = /^(?:product|qty|method2?|pr_m_[a-z]+?)([0-9]+)$/.exec(el.name || '');
           if (!m) return;
-          var i = m[1], L = lines[i] || (lines[i] = { product: false, titles: [] });
-          if (/^product/.test(el.name)) { if (el.value) L.product = true; return; }
+          var i = m[1], L = lines[i] || (lines[i] = { product: false, titles: [], qty: 0 });
+          if (/^product/.test(el.name)) { if (el.value) { L.product = true; if (RUSH_SIGN[el.value]) L.sign = RUSH_SIGN[el.value]; } return; }
+          if (/^qty/.test(el.name)) { L.qty = parseInt(el.value, 10) || 0; return; }
           if (el.value && el.selectedIndex >= 0) L.titles.push(el.options[el.selectedIndex].text);
         });
         var real = Object.keys(lines).filter(function (i) {
           var opt = document.querySelector('[name="optional' + i + '"]');
-          return !(opt && opt.checked) && (lines[i].product || lines[i].titles.length);
-        });
-        var dtfOnly = real.length > 0 && real.every(function (i) {
-          return lines[i].titles.length > 0 && lines[i].titles.every(function (t) { return rushable.test(t); });
-        });
-        var pct = dtfOnly ? rushSuggest(days) : 0;
+          return !(opt && opt.checked);
+        }).map(function (i) { return lines[i]; });
+        var rushOk = rushAllowed(real);
+        /* 50+ garment pieces or embroidery: 7 days, never sooner than 3, their
+           own steps (owner, 2026-11-16). */
+        var kind = rushKind(real);
+        var r = rushFor(days, RUSH_TIERS, kind, RUSH_RULE);
+        var pct = rushOk ? r.pct : 0;
+        var kindWords = kind === 'large' ? ' (50+ pieces)' : kind === 'embroidery' ? ' (embroidery)' : '';
 
         row.style.display = days === null ? 'none' : '';
         if (days === null) { box.value = ''; if (why) why.textContent = ''; calc(); return; }
@@ -13364,19 +13611,20 @@ function productGroupOf(name) {
            enforces it); the owner's box keeps whatever they typed. */
         if (fill && box.readOnly) {
           /* The save keeps the saved rush while the date is unchanged (unless a
-             rushable order was taken off DTF), so the box does too; otherwise
+             rushable order became one that cannot be rushed), so the box does too; otherwise
              the ladder's figure. Without this the screen showed the ladder and
              the save kept the owner's figure: two prices for one quote. */
           var keep = dateEl.dataset.saved !== undefined && dateEl.value === dateEl.dataset.saved
-            && (dtfOnly || box.dataset.wasRushable !== '1');
+            && (rushOk || box.dataset.wasRushable !== '1')
+            && (box.dataset.wasKind === undefined || box.dataset.wasKind === kind);
           box.value = keep ? (box.dataset.saved || '') : (pct > 0 ? String(pct) : '');
         }
 
         if (why) {
           why.textContent = pct > 0
-            ? (days === 0 ? 'today or earlier' : days + ' business day' + (days === 1 ? '' : 's'))
-              + ' — ladder suggests ' + pct + '%'
-            : !dtfOnly && rushSuggest(days) > 0 ? 'only DTF can be rushed: ask June about the date'
+            ? days + ' business days' + kindWords + ' — ladder suggests ' + pct + '%'
+            : r.tooSoon ? 'too soon: no same-day or next-day orders' + (kind ? ', and embroidery or 50+ pieces need 3 business days' : '') + ': ask June about the date'
+            : !rushOk && r.pct > 0 ? 'only DTF, embroidery, Signs365 signs and cutouts can be rushed: ask June about the date'
             : days + ' business days — no rush at this lead time';
         }
         calc();
@@ -14677,10 +14925,12 @@ ${uploadStatusScript()}
           nb.dataset.rushBound = '1';
           nb.addEventListener('input',  function(){ rushSync(true); });
           nb.addEventListener('change', function(){ rushSync(true); });
-          /* So does the decoration: only DTF can be rushed. */
+          /* So does the decoration and the product (only DTF, embroidery,
+             Signs365 signs and cutouts can be rushed) and the quantity (50+
+             pieces have their own steps). */
           document.addEventListener('change', function (e) {
             var n = e.target && e.target.name || '';
-            if (/^(method|pr_m_)/.test(n)) rushSync(true);
+            if (/^(method|pr_m_|qty[0-9]|product[0-9])/.test(n)) rushSync(true);
           });
         }
         /* Remove clears the fee AND remembers that it was cleared, so editing
@@ -15749,13 +15999,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
     let rushPct = Number(one(b.rush_pct));
     if (!Number.isFinite(rushPct) || rushPct < 0) rushPct = 0;
     rushPct = Math.min(rushPct, RUSH_MAX_PCT);
-    /* Only DTF can be rushed (tools/lib/rush.js). The owner may still type a
-       rush on anything; a helper's is 0 unless every required line is DTF. */
-    const methodTitle = (id) => ((catalog.methods || []).find((m) => String(m.id) === String(id)) || {}).title || '';
-    const rushOk = RUSH.rushAllowed(items.filter((it) => !it.optional).map((it) => ({
-      product: !!it.product_id,
-      titles: [...new Set([...(it.prints || []).map((p) => p.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
-    })));
+    /* Only DTF, embroidery, Signs365 signs and cutouts can be rushed
+       (tools/lib/rush.js). The owner may still type a rush on anything; a
+       helper's is 0 unless every required line can be rushed. */
+    const rushLines = items.filter((it) => !it.optional).map((it) => rushLineOf(it, catalog));
+    const rushOk = RUSH.rushAllowed(rushLines);
+    /* 50+ pieces or embroidery: 7 days, never sooner than 3, their own steps. */
+    const rushKind = RUSH.rushKind(rushLines);
     /* RUSH IS LOCKED FOR HELPERS (owner, 2026-10-08: "lock rush. keep open for
        me to override"). Without quotes.price a helper's rush is what the
        needed-by date earns on the ladder; whatever was typed is replaced, not
@@ -15773,13 +16023,27 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         /* A rush kept from before is dropped when this helper took the order
            off DTF since: it was rushable then and is not now. An owner's
            figure on an order that was never rushable stays. */
-        const wasRushOk = was ? RUSH.rushAllowed((Array.isArray(was.items) ? was.items : []).filter((it) => it && !it.optional).map((it) => ({
-          product: !!it.product_id,
-          titles: [...new Set([...(it.prints || []).map((pp) => pp.method_id), it.method_id, it.method2_id].filter(Boolean))].map(methodTitle),
-        }))) : false;
-        rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk))
+        const wasLines = was ? (Array.isArray(was.items) ? was.items : []).filter((it) => it && !it.optional)
+          .map((it) => rushLineOf(it, catalog)) : [];
+        const wasRushOk = was ? RUSH.rushAllowed(wasLines) : false;
+        /* Embroidery added or the order crossing 50 pieces (or back) changes
+           its ladder, so a kept rush would be the wrong one (code review). */
+        const wasKind = was ? RUSH.rushKind(wasLines) : '';
+        /* Owner, 2026-11-14: no same-day or next-day orders (3 days for
+           embroidery or 50+ pieces). A helper cannot quote such a date; the
+           owner still can, since rush is the owner's call. */
+        if (wantDate && RUSH.rushFor(businessDaysUntil(wantDate), RUSH_TIERS, rushKind, RUSH_RULE).tooSoon
+            && !(was && wasDate === wantDate)) {
+          return res.status(400).send(quotePage('That date is too soon', `
+        <div class="card">
+          <div class="warn">Nothing was saved — we do not take same-day or next-day orders${rushKind ? ', and embroidery or orders of 50 or more pieces need at least 3 business days' : ''}.</div>
+          <p class="muted" style="margin-top:8px">Pick a later needed-by date, or ask June about this one.</p>
+          <p style="margin-top:12px"><a class="btn" href="${backTo}">Go back</a></p>
+        </div>`));
+        }
+        rushPct = (was && wasDate === wantDate && (rushOk || !wasRushOk) && rushKind === wasKind)
           ? Math.max(0, Number(was.rush_pct || 0))
-          : (wantDate && rushOk ? rushPctFor(wantDate) : 0);
+          : (wantDate && rushOk ? rushPctFor(wantDate, undefined, rushKind) : 0);
       }
     }
     const rush = round2(subtotal * rushPct / 100);
@@ -22401,40 +22665,59 @@ app.post('/admin/quote/:code/cancel', requireAdmin, async (req, res) => {
         return back(res, backTo, 'ok', 'This job is accepted or paid, so the owner decides. Your request is with them.');
       }
     }
-    await snapshotQuote(code, 'cancel', clientIp(req));
-    /* delivered_at is cleared: a cancelled job did not ship, and leaving the
-       stamp on would keep it counted as delivered work in the schedule. It is
-       also how these were being hidden before cancelling existed. */
-    const { rows } = await pool.query(
-      /* A cancelled DRAFT stays a draft: 'cancelled' would open it on the
-         customer's page, which hides only held and draft (Codex #129). */
-      `UPDATE quotes SET cancelled_at = NOW(), cancel_reason = $2,
-              status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END, delivered_at = NULL
-        WHERE code = $1 AND cancelled_at IS NULL RETURNING *`,
-      [code, reason || null]);
-    // Its Brevo deal moves to lost, rather than staying open in the pipeline.
-    if (rows.length) syncDealStage(rows[0]).catch(() => {});
-    /* A card page the customer opened before now could still be paid, and
-       the money would land on a job that no longer exists. Close it. */
-    if (rows.length && rows[0].stripe_session) await expireCheckoutSession(rows[0].stripe_session);
-    /* Its delivery seat is freed now, not when someone next opens the
-       delivery board (Codex #143). */
-    if (rows.length) await DELIVERY.cancelRef('quote:' + code, 'system', 'quote cancelled').catch(() => {});
-    /* Every cancelled job comes to the owner to follow up (owner, 2026-10-06),
-       whoever cancelled it: win it back, refund it, or let it go. */
-    if (rows.length) {
-      // A helper's request to cancel this job is answered by cancelling it.
-      await pool.query(`UPDATE owner_followups SET done_at = NOW(), outcome = 'done'
-                         WHERE quote_code = $1 AND kind = 'cancel_request' AND done_at IS NULL`, [code]).catch(() => {});
-      await raiseFollowup({ kind: 'cancelled', code, title: `Job cancelled: ${code}`,
-        detail: { ...facts, 'Cancelled by': actor.kind === 'staff' ? actor.name : 'You' } });
-    }
+    await applyQuoteCancel(code, reason, { ip: clientIp(req), facts,
+      by: actor.kind === 'staff' ? actor.name : 'You' });
   } catch (err) {
     console.error('cancel failed:', err.message);
   }
   // Back where it was cancelled from: the job page sends 'production'.
   res.redirect(backTo);
 });
+
+/* Cancelling a quote, every step of it, wherever the cancel comes from: the
+   job page, or a wholesale partner cancelling an unpaid request
+   (tools/lib/wholesale-routes.js). One copy, so a cancelled job is always
+   off the schedule, unpayable and on the owner's follow-up list. Returns the
+   cancelled row, or null when it was already cancelled / does not exist. */
+async function applyQuoteCancel(code, reason, { ip = null, facts = null, by = 'You', onlyUnpaid = false } = {}) {
+  /* Nothing to do for a quote that is gone or already cancelled, and no
+     history row claiming a cancel that never happened. `onlyUnpaid` (the
+     wholesale API) refuses a quote money has landed on since the caller looked:
+     that is the owner's call, as it is for a helper on the job page. */
+  const { rows: [cur] } = await pool.query('SELECT cancelled_at, paid_amount FROM quotes WHERE code = $1', [code]);
+  if (!cur || cur.cancelled_at || (onlyUnpaid && Number(cur.paid_amount || 0) > 0)) return null;
+  await snapshotQuote(code, 'cancel', ip);
+  /* delivered_at is cleared: a cancelled job did not ship, and leaving the
+     stamp on would keep it counted as delivered work in the schedule. It is
+     also how these were being hidden before cancelling existed. */
+  const { rows } = await pool.query(
+    /* A cancelled DRAFT stays a draft: 'cancelled' would open it on the
+       customer's page, which hides only held and draft (Codex #129). */
+    `UPDATE quotes SET cancelled_at = NOW(), cancel_reason = $2,
+            status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END, delivered_at = NULL
+      WHERE code = $1 AND cancelled_at IS NULL AND ($3::boolean IS NOT TRUE OR COALESCE(paid_amount, 0) = 0)
+      RETURNING *`,
+    [code, reason || null, onlyUnpaid]);
+  if (!rows.length) return null;
+  const q = rows[0];
+  // Its Brevo deal moves to lost, rather than staying open in the pipeline.
+  syncDealStage(q).catch(() => {});
+  /* A card page the customer opened before now could still be paid, and
+     the money would land on a job that no longer exists. Close it. */
+  if (q.stripe_session) await expireCheckoutSession(q.stripe_session);
+  /* Its delivery seat is freed now, not when someone next opens the
+     delivery board (Codex #143). */
+  await DELIVERY.cancelRef('quote:' + code, 'system', 'quote cancelled').catch(() => {});
+  /* Every cancelled job comes to the owner to follow up (owner, 2026-10-06),
+     whoever cancelled it: win it back, refund it, or let it go. */
+  // A helper's request to cancel this job is answered by cancelling it.
+  await pool.query(`UPDATE owner_followups SET done_at = NOW(), outcome = 'done'
+                     WHERE quote_code = $1 AND kind = 'cancel_request' AND done_at IS NULL`, [code]).catch(() => {});
+  await raiseFollowup({ kind: 'cancelled', code, title: `Job cancelled: ${code}`,
+    detail: { ...(facts || { Job: `${code} — ${q.name || ''}`, Total: money(q.total), Paid: money(q.paid_amount || 0),
+                             Reason: reason || '(none given)' }), 'Cancelled by': by } });
+  return q;
+}
 
 app.post('/admin/quote/:code/uncancel', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
@@ -22645,6 +22928,17 @@ const studioFetch = (url, init) => fetch(url, Object.assign({}, init, {
   signal: AbortSignal.timeout((init && init.timeoutMs) || 8000),
 }));
 
+require('./tools/lib/artwork-workspace').registerArtworkWorkspace(app,{requireAdmin,isOwner,actorLevel,adminPage,pageHeader,esc:escEmail,studioFetch,rawBody:express.raw,invalidate:()=>{_shopCache.at=0;}});
+require('./tools/lib/studio-controls').registerStudioControls(app,{requireAdmin,isOwner,adminPage,pageHeader,esc:escEmail,studioFetch,rawBody:express.raw,pool,invalidate:()=>{_catCache.at=0;_shopCache.at=0;}});
+require('./tools/lib/design-library').registerDesignLibrary(app, {
+  requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
+  requireInternalKey, notifyAdd, sendEmail, NOTIFY_EMAIL, pool, rawBody: express.raw,
+  /* A design decided here leaves the owner's alert list at once, not on the
+     next 5-minute library read. */
+  invalidate: () => { _shopCache.at = 0; libraryWaitingCache.at = 0; ownerAlertsCache = null; },
+});
+app.get('/shop-designs', (_req, res) => res.sendFile(require('path').join(__dirname, 'public', 'shop-designs.html')));
+
 async function fetchPromoCodes() {
   if (!process.env.JT_INTERNAL_KEY) return { codes: [], error: 'JT_INTERNAL_KEY not set' };
   try {
@@ -22796,7 +23090,7 @@ app.get('/admin/discounts', requireAdmin, async (req, res) => {
     </tr>`;
 
   res.send(adminPage('Discounts', `<h1>Discounts</h1>${isOwner() ? `
-    <p style="margin:-4px 0 12px"><a href="/admin/campaign" style="color:#1848B8;font-weight:600">Reintroduction campaign: hello text + ${REINTRO.PCT}% off for signing up to texts &rarr;</a></p>` : ''}
+    <p style="margin:-4px 0 12px"><a href="/admin/campaign" style="color:#1848B8;font-weight:600">Reintroduction campaign: hello text + ${REINTRO.OFFER.short} for signing up to texts &rarr;</a></p>` : ''}
     ${customerList}
     <div class="sub">${liveCount} live &middot; ${codes.length} total &middot;
       <span class="muted" style="font-size:12px">codes you issue by hand, for design.jtees.net checkout</span></div>
@@ -23321,6 +23615,22 @@ app.post('/admin/partners/action', requireAdmin, async (req, res) => {
     res.redirect('/admin/partners?err=' + encodeURIComponent('That did not save: the designer could not be reached. Please try again.'));
   }
 });
+
+/* Wholesale connector: the partner API under /api/wholesale/v1 and the owner's
+   /admin/wholesale page. Off (404) until JT_WHOLESALE=on. */
+const wholesaleDeps = {
+  pool, quoteTotals, publicBase: PUBLIC_BASE_URL, alertShop, reportError, requireAdmin, isOwner,
+  adminPage, esc: escEmail, fmtDate, logActivity, actor: () => currentActor() || OWNER_ACTOR,
+  clientIp, quoteCodeRe: QUOTE_CODE_RE,
+  /* A line as the customer's quote page reads it: the item's own amount and
+     each, with only the extras shown on their own rows listed. */
+  lineFigures: (item) => {
+    const f = customerLineFigures(item);
+    return { unit_price: f.each, line_total: f.amount, extras: shownAddons(item) };
+  },
+  cancelQuote: (code, reason, partnerName) => applyQuoteCancel(code, reason, { by: `${partnerName} (wholesale API)`, onlyUnpaid: true }),
+};
+WHOLESALE.mount(app, wholesaleDeps);
 
 app.get('/admin/customers', requireAdmin, async (_req, res) => {
   try {
@@ -28412,8 +28722,23 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
              l.phone ? `<a href="tel:${escEmail(l.phone)}">${escEmail(l.phone)}</a>` : '',
              chat ? `<a href="https://dashboard.tawk.to/" target="_blank" rel="noopener">${
                l.email || l.phone ? 'answer in tawk.to' : 'No email left — answer in tawk.to'}</a>` : '',
+             /* Correct a wrong email or phone (owner, 2026-11-19). */
+             (l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayCorrectLeadContact(l)
+               ? `<a href="#" onclick="var f=document.getElementById('ce-${l.id}');f.style.display=f.style.display==='block'?'none':'block';return false">Edit contact</a>` : '',
             ].filter(Boolean).join(' &middot; ')}
         </div>
+        ${(l.email || l.phone) && status !== 'quoted' && status !== 'dismissed' && mayCorrectLeadContact(l) ? `
+        <div id="ce-${l.id}" style="display:none;margin-top:8px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <p class="muted" style="margin:0 0 8px;font-size:12.5px">Fix a wrong email or phone. The old one is kept in a note on this lead.${!l.email || !l.phone ? ' To add a missing one, use Email them or Text them.' : ''}</p>
+          ${l.email ? `<form method="POST" action="/admin/lead/${l.id}/contact-email" style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px">
+            <input name="email" type="email" maxlength="254" required value="${escEmail(l.email || '')}" placeholder="Their email" aria-label="Their email" style="flex:1 1 200px;padding:7px;font-size:13px">
+            <input type="hidden" name="back" value="${escEmail(back)}">
+            <button type="submit" class="btn" style="padding:7px 14px;font-size:13px">Save email</button></form>` : ''}
+          ${isFoundLead(l) || !l.phone ? '' : `<form method="POST" action="/admin/lead/${l.id}/contact-phone" style="display:flex;gap:6px;flex-wrap:wrap;margin:0">
+            <input name="phone" type="tel" maxlength="40" required value="${escEmail(l.phone || '')}" placeholder="Their phone" aria-label="Their phone" style="flex:1 1 200px;padding:7px;font-size:13px">
+            <input type="hidden" name="back" value="${escEmail(back)}">
+            <button type="submit" class="btn" style="padding:7px 14px;font-size:13px">Save phone</button></form>`}
+        </div>` : ''}
         ${Array.isArray(l.chat_transcript) && l.chat_transcript.length ? `
         <details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px;color:#1848B8">The chat
           (${l.chat_transcript.length} message${l.chat_transcript.length === 1 ? '' : 's'})</summary>
@@ -28451,10 +28776,14 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                 job and the window closed. Filing the second under the first
                 loses the only number that says the shop is leaving money on the
                 table, and it is untrue about the customer. */ ''}
-          ${l.email ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>` : ''}
-          ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? `<button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
-             onclick="var f=document.getElementById('tx-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Text them</button>` : ''}
+          ${/* The same two buttons on every open lead (owner, 2026-11-19: "only
+                certain customers have certain options and its confusing"). One
+                that cannot be used says why in its box, and offers to add the
+                missing email or phone where that is allowed. */ ''}
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('tx-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Text them</button>
           <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
             <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
@@ -28469,9 +28798,50 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
                  style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
           <button type="submit" class="btn btn-ghost" style="padding:7px 16px;font-size:13px">Dismiss</button>
         </form>
-        ${l.email ? leadEmailBox(l, backField) : ''}
-        ${normalizeUsPhone(l.phone) && canTextLeads(currentActor()) ? leadTextBox(l, backField) : ''}`}
+        ${l.email ? leadEmailBox(l, backField) : `
+        <div id="em-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">
+          <p style="margin:0 0 8px;font-size:13px"><b>No email on file.</b></p>
+          ${mayAddLeadEmail(l) ? `<form id="ae-${l.id}" method="POST" action="/admin/lead/${l.id}/contact-email" style="margin:0">
+            <p class="muted" style="margin:0 0 8px;font-size:12.5px">Found their email (on their website's contact page, say)? Add it here, then write to them. Use a public business email, never a private one.</p>
+            <input name="email" type="email" maxlength="254" required placeholder="name@their-site.org" autocomplete="off"
+                   style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
+            <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Save email</button>
+          </form>` : '<p class="muted" style="margin:0;font-size:12.5px">This lead is someone else\'s. Ask June to add their email.</p>'}
+        </div>`}
+        ${leadTextArea(l, backField)}`}
       </div>`;
+}
+
+/** Is this a lead a salesperson found (the AI finder, or "I found this
+ *  customer")? Numbers found online are never called or texted (sales
+ *  course lg3), so no phone is added to one. */
+function isFoundLead(l) {
+  return !!(l && (l.finder_run_id || /^Found by the salesperson/.test(String(l.sale_type_reason || ''))));
+}
+
+/** May whoever is signed in add a phone to this lead? Only when it has none,
+ *  never to a found lead, and for a helper only on a lead that is theirs or
+ *  nobody's (the route checks the same again). */
+function mayAddLeadPhone(l) {
+  return !!l && !String(l.phone || '').trim() && !isFoundLead(l) && mayEditLeadContact(l);
+}
+
+/** The Text them box: the text box when a text can go, else why not, with a
+ *  way to add their phone where that is allowed. */
+function leadTextArea(l, backField) {
+  const box = (inner) => `<div id="tx-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">${inner}</div>`;
+  const why = (t) => box(`<p style="margin:0;font-size:13px">${t}</p>`);
+  if (!canTextLeads(currentActor())) return why('Texts to leads go through June for now. Write what you want to say in a note on the lead.');
+  if (normalizeUsPhone(l.phone)) return leadTextBox(l, backField);
+  if (String(l.phone || '').trim()) return why(`<b>${escEmail(l.phone)} cannot take a text from the shop</b> (not a US mobile number). Email them, or call from your phone.`);
+  if (isFoundLead(l)) return why('<b>No phone on file.</b> We never text or call a number found online: email them, or message them on social.');
+  if (!mayAddLeadPhone(l)) return why('<b>No phone on file.</b> This lead is someone else\'s. Ask June to add their number.');
+  return box(`<p style="margin:0 0 8px;font-size:13px"><b>No phone on file.</b></p>
+    <form method="POST" action="/admin/lead/${l.id}/contact-phone" style="margin:0">
+      <p class="muted" style="margin:0 0 8px;font-size:12.5px">Did they give you their number (in the chat, by email or on a call)? Add it here, then text them.</p>
+      <input name="phone" type="tel" maxlength="40" required placeholder="(312) 555-0123" autocomplete="off" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${backField}
+      <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Save phone</button>
+    </form>`);
 }
 
 /** Text a lead from their card, from the shop's number (POST /admin/lead/:id/text).
@@ -28497,9 +28867,11 @@ function leadTextBox(l, backField) {
       <script>/* A send that fails comes back to an empty box; the text typed is kept in this tab and put back,
          only when the error is this lead's (the route answers with #lead-<id>). */
       (function(){var k='jt-lead-text-${l.id}',box=document.getElementById('tx-${l.id}'),f=box&&box.querySelector('form');if(!f)return;
-      try{var p=new URLSearchParams(location.search),d=sessionStorage.getItem(k);
-        if(d&&p.get('err')&&location.hash==='#lead-${l.id}'){f.body.value=d;box.style.display='block';}else if(p.get('ok'))sessionStorage.removeItem(k);}catch(e){}
-      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,f.body.value);}catch(e){}});})();</script>
+      try{var p=new URLSearchParams(location.search),d=JSON.parse(sessionStorage.getItem(k)||'null');
+        /* Only the answer to this box's own send, a moment ago: not a later error about the lead's contact details. */
+        if(d&&d.v&&Date.now()-d.at<60000&&p.get('err')&&location.hash==='#lead-${l.id}'){f.body.value=d.v;box.style.display='block';}
+        sessionStorage.removeItem(k);}catch(e){}
+      f.addEventListener('submit',function(){try{sessionStorage.setItem(k,JSON.stringify({v:f.body.value,at:Date.now()}));}catch(e){}});})();</script>
     </div>`;
 }
 
@@ -28511,7 +28883,10 @@ function leadEmailBox(l, backField) {
   /* Already written to and waiting on them: the stock message is a follow-up
      (owner, 2026-10-15). */
   const contacted = l.lead_status === 'contacted';
-  const m = (contacted ? LEADMAIL.followUp : LEADMAIL.infoRequest)(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
+  /* It opens plain (owner, 2026-11-19: the old stock message assumed too
+     much); the template menu below fills it for the situation. */
+  const m = LEADMAIL.blankEmail(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
+  const tpls = LEADMAIL.emailTemplates(l, { signer: SHOP_SIGNER, shop: SHOP_NAME });
   // In training it goes to the owner first (POST /admin/lead/:id/email).
   const actor = currentActor();
   const held = !!actor && actor.kind === 'staff' && actorLevel('customers.message') === 'approval';
@@ -28519,6 +28894,12 @@ function leadEmailBox(l, backField) {
       <form method="POST" action="/admin/lead/${l.id}/email"
             onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Sending...'">
         <p class="muted" style="margin:0 0 8px;font-size:12.5px">To ${escEmail(l.email)}. ${held ? 'June checks it first and it is sent when she approves it. ' : ''}Their reply comes to the shop's email.</p>
+        ${/* Picking a template fills the subject and the message to edit; it has no name, so it is never posted. */ ''}
+        <select aria-label="Start from a template" style="width:100%;padding:6px;font-size:13px;margin-bottom:8px"
+                onchange="var i=this.value,f=this.form,t=${escEmail(JSON.stringify(tpls.map((x) => ({ s: x.subject, b: x.body }))))}[i];this.selectedIndex=0;if(!t)return;var lb=f.dataset.tb||f.body.defaultValue,ls=f.dataset.ts||f.subject.defaultValue;if(f.body.value!==lb&&f.body.value.trim()&&!confirm('Replace what you have typed with this template?'))return;if(f.subject.value===ls)f.subject.value=t.s;f.body.value=t.b;f.dataset.tb=t.b;f.dataset.ts=f.subject.value;f.body.focus()">
+          <option value="">Start from a template...</option>
+          ${tpls.map((t, i) => `<option value="${i}">${escEmail(t.label)}</option>`).join('')}
+        </select>
         <input name="subject" maxlength="${LEADMAIL.LIMITS.subject}" required value="${escEmail(m.subject)}" style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">
         <textarea name="body" rows="14" maxlength="${LEADMAIL.LIMITS.body}" required style="width:100%;padding:7px;font-size:13px;margin-bottom:8px">${escEmail(m.body)}</textarea>${backField}
         <div style="margin:0 0 8px">
@@ -28745,10 +29126,19 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
+    /* Approvals: staff requests, plus art, designer questions and library
+       designs from the owner's alert list (the sweep's reading, never waited
+       on here); the same list gives the Hours, Training and Team badges. */
+    /* Approvals counts what the Approvals page shows: staff requests and art
+       to approve, read live. Hours, Training and Team come from the owner's
+       alert list (the sweep's reading, never waited on here). */
     isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
                                  + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
                                      WHERE a.status = 'submitted' AND q.cancelled_at IS NULL) AS n`)
-      .then(({ rows }) => { out.approvals = Number(rows[0].n); }).catch(() => {}) : Promise.resolve(),
+      .then(({ rows }) => {
+        out.approvals = Number(rows[0].n);
+        if (ownerAlertsCache) Object.assign(out, OWNER_ALERTS.counts(ownerAlertsCache.rows.filter((r) => !r.ref.startsWith('note:'))));
+      }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
     }).catch(() => {}),
@@ -29039,7 +29429,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
     ]);
   const owner = isOwner();
   /* The rest of what the page needs, read side by side. */
-  const [studioFeed, hidden, approvals, money2, doing] = await Promise.all([
+  const [studioFeed, hidden, approvals, money2, doing, alerts] = await Promise.all([
     safe(fetchStudioOrders(), { orders: [], abandoned: [], error: null }, 'studio orders'),
     hiddenStudio(),
     /* The same list as /admin/approvals: pending, and any interrupted by a
@@ -29049,6 +29439,9 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
                    ORDER BY created_at LIMIT 20`, 'team approvals') : Promise.resolve([]),
     owner ? safe(moneyThisAndLast(), null, 'money in and out') : Promise.resolve(undefined),
     owner ? safe(howWeAreDoing(), null, 'how we are doing') : Promise.resolve(undefined),
+    /* Hours, training, team, art and library (owner-alerts.js): the same list
+       the bell and the menu badges are made from. */
+    owner ? safe(ownerAlerts({ stale: true }), null, 'team alerts') : Promise.resolve(null),
   ]);
   /* No studio key here (a local copy) is the studio being off, not a fault. */
   if (studioFeed.error && studioFeed.error !== 'JT_INTERNAL_KEY not set') failed.push('studio orders');
@@ -29190,6 +29583,34 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       <span class="row-end">${pill(`${Number(t.unread)} new`, 'red')}</span></a>`),
   ];
 
+  /* The rest of what needs the owner (owner-alerts.js), each in its section.
+     Customer rows the list above already has are left out, and so are job
+     notes, which the pin card at the top already shows. */
+  const alertGroups = OWNER_ALERTS.byGroup(alerts ? alerts.rows : []);
+  const alertFailed = alerts ? alerts.failed : (owner ? ['team alerts'] : []);
+  const alertRow = (r) => row({ tone: r.tone, icon: r.icon, title: escEmail(r.title), sub: escEmail(r.sub), href: escEmail(r.href) });
+  const NEW_CUSTOMER_REFS = /^(proof-ok|proof-chg|cnote):/;
+  const custExtra = alertGroups.customers.filter((r) => NEW_CUSTOMER_REFS.test(r.ref)).map(alertRow);
+  const fromTeamExtra = alertGroups.approvals.map(alertRow);
+  const SECTION_SOURCES = { hours: ['hours'], training: ['training'], team: ['agreements', 'tasks', 'job notes', 'team'] };
+  const alertSection = (g, list) => {
+    const why = alertFailed.filter((f) => SECTION_SOURCES[g].includes(f) || f === 'team alerts');
+    const shown = list.map(alertRow);
+    return `<h3 class="dgroup" style="margin:14px 0 6px" id="needs-${g}">${escEmail(OWNER_ALERTS.GROUPS[g].label)} <span class="muted">${shown.length || ''}</span></h3>
+      ${why.length ? couldNot(why) : ''}
+      ${shown.length ? `<div class="rows">${shown.slice(0, 8).join('')}</div>${shown.length > 8
+        ? `<details style="margin-top:6px"><summary class="muted">${shown.length - 8} more</summary><div class="rows">${shown.slice(8).join('')}</div></details>` : ''}`
+        : why.length ? '' : emptyState(OWNER_ALERTS.GROUPS[g].empty)}`;
+  };
+  const ownerSections = owner ? [
+    alertSection('hours', alertGroups.hours),
+    alertSection('training', alertGroups.training),
+    alertSection('team', alertGroups.team.filter((r) => !r.ref.startsWith('note:'))),
+  ].join('') : '';
+  const ownerExtraCount = owner ? alertGroups.hours.length + alertGroups.training.length
+    + alertGroups.team.filter((r) => !r.ref.startsWith('note:')).length : 0;
+  const artFailed = alertFailed.filter((f) => ['art', 'design library', 'team alerts'].includes(f));
+
   /* Money in and out, this month and last, from the same reading as Finances. */
   const moneyCol = (m) => `<div style="flex:1 1 240px;min-width:0">
     <div style="font-weight:700;margin-bottom:6px">${escEmail(m.label)}</div>
@@ -29236,24 +29657,26 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
       Numbers below may be incomplete. Refresh to try again.</div>` : ''}
     ${flash(req.query)}
     ${notesPin ? PIN_CSS + notesPin : ''}
+    <div class="card" id="needs">
+      <h2 class="card-title">Needs you now <span class="muted">${attention.length + custExtra.length + teamRows.length + fromTeamExtra.length + ownerExtraCount || ''}</span></h2>
+      <h3 class="dgroup" style="margin:6px 0">Customers <span class="muted">${attention.length + custExtra.length || ''}</span></h3>
+      ${customersFailed.length ? couldNot(customersFailed) : ''}
+      ${attention.length + custExtra.length ? `<div class="rows">${[...attention.map(row), ...custExtra].slice(0, 12).join('')}</div>${attention.length + custExtra.length > 12
+        ? `<details style="margin-top:6px"><summary class="muted">${attention.length + custExtra.length - 12} more</summary><div class="rows">${[...attention.map(row), ...custExtra].slice(12).join('')}</div></details>` : ''}`
+        : customersFailed.length ? '' : emptyState('All clear. No customer is waiting on you.')}
+      <h3 class="dgroup" style="margin:14px 0 6px" id="team">${owner ? 'Approvals and messages from your team' : 'From your team'} <span class="muted">${teamRows.length + fromTeamExtra.length || ''}</span></h3>
+      ${teamFailed.length ? couldNot(teamFailed) : ''}
+      ${owner && artFailed.length ? couldNot(artFailed.map((f) => (f === 'team alerts' ? 'art and library approvals' : f))) : ''}
+      ${teamRows.length + fromTeamExtra.length ? `<div class="rows">${teamRows.join('')}${fromTeamExtra.join('')}</div>`
+        : teamFailed.length ? '' : emptyState(owner ? 'Nothing from the team is waiting on you.' : 'No new messages from the team.')}
+      ${ownerSections}
+    </div>
+
     <form method="get" action="/admin/find" class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px">
       <label for="findq" style="margin:0;white-space:nowrap">Find an order</label>
       <input id="findq" name="q" maxlength="120" placeholder="Quote code, name, phone or email" style="flex:1 1 220px;min-width:0" required>
       <button type="submit">Open</button>
     </form>
-
-    <div class="card" id="needs">
-      <h2 class="card-title">Needs you now <span class="muted">${attention.length + teamRows.length || ''}</span></h2>
-      <h3 class="dgroup" style="margin:6px 0">Customers <span class="muted">${attention.length || ''}</span></h3>
-      ${customersFailed.length ? couldNot(customersFailed) : ''}
-      ${attention.length ? `<div class="rows">${attention.slice(0, 12).map(row).join('')}</div>${attention.length > 12
-        ? `<details style="margin-top:6px"><summary class="muted">${attention.length - 12} more</summary><div class="rows">${attention.slice(12).map(row).join('')}</div></details>` : ''}`
-        : customersFailed.length ? '' : emptyState('All clear. No customer is waiting on you.')}
-      <h3 class="dgroup" style="margin:14px 0 6px" id="team">From your team <span class="muted">${teamRows.length || ''}</span></h3>
-      ${teamFailed.length ? couldNot(teamFailed) : ''}
-      ${teamRows.length ? `<div class="rows">${teamRows.join('')}</div>`
-        : teamFailed.length ? '' : emptyState(owner ? 'Nothing from the team is waiting on you.' : 'No new messages from the team.')}
-    </div>
 
     ${statTiles([
       { label: 'Money in this month', tone: 'green', href: FINANCES_PATH,
@@ -30371,6 +30794,74 @@ async function doUnsubscribe(email, source) {
     `INSERT INTO email_optouts (email, source) VALUES ($1, $2)
      ON CONFLICT (email) DO NOTHING`,
     [String(email).toLowerCase(), source || 'one-click']);
+  /* Straight on to Brevo's blocklist too. Awaited but never thrown: the opt-out
+     is already saved here (the app's own sends honour it at once), and a Brevo
+     failure is retried by the hourly sweep. */
+  await pushOptoutToBrevo(String(email).toLowerCase());
+}
+
+
+/* Put one address on Brevo's marketing blocklist (emailBlacklisted). That stops
+   Brevo CAMPAIGNS; transactional sends (receipts, payment links, proofs) are
+   not affected, which is what an unsubscribe from promotions should mean.
+   updateEnabled makes it one call whether or not Brevo has the contact.
+   Returns true when Brevo took it; records the error otherwise. */
+const OPTOUT_BREVO_TRIES = 10;
+async function pushOptoutToBrevo(email) {
+  if (!process.env.BREVO_API_KEY) return false;
+  try {
+    await brevo.post('/contacts', { email, emailBlacklisted: true, updateEnabled: true }, { timeout: 8000 });
+    await pool.query(
+      `UPDATE email_optouts SET brevo_synced_at = NOW(), brevo_error = NULL, brevo_attempts = brevo_attempts + 1,
+              brevo_tried_at = NOW() WHERE email = $1`, [email]);
+    return true;
+  } catch (e) {
+    const why = String(e.response?.data?.message || e.message || e).slice(0, 300);
+    await pool.query(
+      `UPDATE email_optouts SET brevo_attempts = brevo_attempts + 1, brevo_error = $2, brevo_tried_at = NOW()
+        WHERE email = $1`, [email, why])
+      .catch(() => {});
+    console.error(`unsubscribe ${email} not yet on Brevo's blocklist: ${why}`);
+    /* 'outage' when Brevo could not be reached or refused us as a whole (no
+       answer, 5xx, 401/403 key or IP block, 429): every address would fail
+       the same way. Anything else is about THIS address. */
+    const st = e.response && e.response.status;
+    return !st || st >= 500 || [401, 403, 429].includes(st) ? 'outage' : false;
+  }
+}
+
+/* Hourly: every opt-out Brevo has not confirmed. Hourly for the first
+   OPTOUT_BREVO_TRIES tries, then once a day for as long as it takes: an
+   opt-out is never abandoned, because until Brevo has it a Brevo campaign
+   could still reach that person. Reaching the tenth failure is reported once.
+   The batch stops at the first failure: in an outage every address fails the
+   same way, so trying the rest only holds up the hourly sweep; a refusal of one
+   address (a 400) skips past it instead. First run after
+   deploy copies the whole existing list (they are all unsynced), 200 an hour. */
+async function brevoOptoutSync() {
+  if (!process.env.BREVO_API_KEY) return '';
+  const { rows } = await pool.query(
+    `SELECT email, brevo_attempts FROM email_optouts
+      WHERE brevo_synced_at IS NULL
+        AND (brevo_attempts < $1 OR brevo_tried_at IS NULL OR brevo_tried_at < NOW() - interval '24 hours')
+      ORDER BY created_at LIMIT 200`, [OPTOUT_BREVO_TRIES]);
+  let ok = 0, stopped = false;
+  const overdue = [];
+  for (const r of rows) {
+    const done = await pushOptoutToBrevo(r.email);
+    if (done === true) { ok++; continue; }
+    if (r.brevo_attempts + 1 === OPTOUT_BREVO_TRIES) overdue.push(r.email);
+    /* An outage stops the batch (the rest would fail the same way); an
+       address Brevo refuses on its own merits never blocks the ones behind it. */
+    if (done === 'outage') { stopped = true; break; }
+  }
+  if (overdue.length) {
+    await reportError('brevo-optout-sync', new Error(
+      `An unsubscribe has failed to reach Brevo's blocklist ${OPTOUT_BREVO_TRIES} times; it is retried daily. ` +
+      'Add it to the blocklist in Brevo by hand before the next Brevo campaign'), overdue.join(', ').slice(0, 500));
+  }
+  const left = rows.length - ok;
+  return rows.length ? `${ok} opt-out(s) sent to Brevo${left ? `, ${left} still pending${stopped ? ' (stopped at a failure; next hour)' : ''}` : ''}` : '';
 }
 
 app.post('/api/unsubscribe', async (req, res) => {
@@ -33510,6 +34001,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     await step('tax check', taxMonthlyCheck);
     await step('brevo breach check', brevoBreachCheck);
     await step('brevo catch-up', brevoCatchUp);
+    await step('brevo opt-out sync', brevoOptoutSync);
     await step('brevo quote catch-up', brevoQuoteCatchUp);
     await step('brevo quote re-sync', brevoQuoteResync);
     /* Cancelled quotes and refunded studio orders give their delivery seats
@@ -33547,6 +34039,10 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
   /* The notifications bell: 20 seconds after boot, then every 2 minutes. */
   setTimeout(() => step('notifications', notifySweep), 20 * 1000);
   setInterval(() => step('notifications', notifySweep), 2 * 60 * 1000);
+  /* Wholesale: statuses derived from quotes and payments, and webhooks out,
+     every 2 minutes. Does nothing while JT_WHOLESALE is off. */
+  setInterval(() => step('wholesale', () => WHOLESALE.sweep(wholesaleDeps)),
+    Math.max(5000, Number(process.env.JT_WHOLESALE_SWEEP_MS) || 2 * 60 * 1000));
   /* The task flow: everyone's routine and empty lanes, every 10 minutes. */
   setTimeout(() => step('task flow', taskFlowSweep), 40 * 1000);
   setInterval(() => step('task flow', taskFlowSweep), 10 * 60 * 1000);
@@ -33903,7 +34399,9 @@ async function renderStaffPage(req, res, extra = '') {
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
         <input type="hidden" name="action" value="track">
         <label>Training path <select name="training_track">${Object.entries(TRAINING.TRACKS).map(([k, t]) =>
-          `<option value="${k}"${TRAINING.trackOf(s.training_track) === k ? ' selected' : ''}>${escEmail(t.label)}</option>`).join('')}</select></label>
+          `<option value="${k}"${TRAINING.trackOf(s.training_track) === k ? ' selected' : ''}>${escEmail(t.label)} (starts on ${escEmail((STAFF.PRESETS[STAFF.presetForTrack(k)] || {}).label || 'Training')})</option>`).join('')}</select></label>
+        <label style="display:flex;gap:6px;align-items:center;text-transform:none;letter-spacing:0;font-weight:600;margin:0">
+          <input type="checkbox" name="apply_preset" value="1" checked style="width:auto;margin:0"> and set their permissions to what that path starts with</label>
         <button type="submit" class="btn btn-ghost">Save</button>
       </form>
       <form method="post" action="/admin/staff/${s.id}" class="row" style="margin-top:10px;gap:6px;align-items:center">
@@ -34077,7 +34575,7 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (!id) return res.redirect('/admin/staff');
   try {
-    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, hourly_rate, archived_at, perms FROM staff WHERE id = $1', [id]);
+    const { rows: [s] } = await pool.query('SELECT id, name, email, active, training_track, sales_role, hourly_rate, archived_at, perms FROM staff WHERE id = $1', [id]);
     if (!s) return back(res, '/admin/staff', 'err', 'No such helper.');
     switch (String(b.action)) {
       case 'preset': {
@@ -34143,8 +34641,56 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
         return back(res, '/admin/staff', 'ok', `${s.name} can sign in again.`);
       case 'track': {
         const track = TRAINING.trackOf(b.training_track);
-        await pool.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
-        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path.`);
+        /* A new path changes the job, so by default it changes what they may
+           do too (owner, 2026-11-18): before, the path moved and the
+           permissions stayed, so a helper given apparel sales could not
+           draft a quote, or could send one without June's OK. Their training
+           ticks are kept either way. */
+        const presetName = STAFF.presetOnPathChange(TRAINING.trackOf(s.training_track), track, b.apply_preset === '1');
+        const p = presetName ? STAFF.presetPerms(presetName) : null;
+        /* A trained Sales helper moved onto June's Tees + COS keeps their
+           apparel ready: the Sales course's ready is that sign-off, under
+           another key (TRAINING.carriedReady; code review). Only when their
+           training on the old path had ended (its own ready, a role's
+           included), with the same date and signer. One transaction with the
+           path change, so a failure never leaves them moved but not carried. */
+        const carry = TRAINING.carriedReady(s.training_track, track);
+        const oldReady = TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role));
+        let carried = 0;
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          if (p) {
+            await client.query('UPDATE staff SET training_track = $2, perms = $3 WHERE id = $1', [id, track, JSON.stringify(p)]);
+          } else {
+            await client.query('UPDATE staff SET training_track = $2 WHERE id = $1', [id, track]);
+          }
+          if (carry) {
+            ({ rowCount: carried } = await client.query(
+              `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+               SELECT staff_id, $3::text, done_at, signed_by FROM staff_training WHERE staff_id = $1 AND step_key = $2
+                  AND EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$4')})
+               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady]));
+          }
+          await client.query('COMMIT');
+        } catch (e) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw e;
+        } finally {
+          client.release();
+        }
+        /* A path change can lower what they may do (a Trusted helper put on a
+           new path starts on its training preset), so it is on the record
+           with what they had before (code review). */
+        if (track !== TRAINING.trackOf(s.training_track)) {
+          logActivity(currentActor(), 'helper path changed', { type: 'staff', id },
+            { name: s.name, from: TRAINING.trackOf(s.training_track), to: track,
+              ...(p ? { permsFrom: STAFF.presetMatching(s.perms || {}) || 'custom', permsTo: presetName } : {}),
+              ...(carried ? { readyCarried: carry.to } : {}) });
+        }
+        const lost = p && lostDesignWork(s, p) ? (await releaseAutoReviews(id), await autoArtLostNote(id)) : '';
+        return back(res, `/admin/staff#staff-${id}`, 'ok', `${s.name} is on the ${TRAINING.TRACKS[track].label} training path${
+          p ? `, with ${STAFF.PRESETS[presetName].label} permissions` : ''}.${lost}`);
       }
       case 'zone': {
         const z = String(b.time_zone || '');
@@ -34759,7 +35305,9 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
         <div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="min-width:12em"><b>${escEmail(s.name)}</b>
           <div class="row-sub" style="white-space:normal">${escEmail(range.label)} &middot; last seen ${escEmail(whenShort(s.last_seen_at))}${
             trainings[i] ? ` &middot; <a href="/admin/training?staff=${s.id}">training ${trainings[i].done}/${trainings[i].total}</a>` : ''}${
-            trainings[i] && trainings[i].complete && nextPresetFor(s)
+            /* Ready is the path's ready sign-off (TRAINING.readyGiven), not
+               every step of both duties: the owner's alert says the same. */
+            trainings[i] && (trainings[i].complete || TRAINING.readyGiven(trainings[i])) && nextPresetFor(s)
               ? ` <a href="/admin/staff#staff-${s.id}">${pill(`Ready for ${STAFF.PRESETS[nextPresetFor(s)].label} →`, 'green')}</a>` : ''}</div></span>
           <span class="row-end" style="display:flex;flex-wrap:wrap;gap:6px;white-space:normal"><a class="btn btn-ghost" href="/admin/my-stats?staff=${s.id}">Stats</a>
             <a class="btn btn-ghost" href="/admin/activity?who=${s.id}">Activity</a>
@@ -35476,7 +36024,7 @@ app.post('/admin/timeclock/approve', requireAdmin, async (req, res) => {
 /* ── Commission ───────────────────────────────────────────────────────────── */
 
 /* Commission starts when training ends: only quotes a helper created on or
-   after the owner's "ready" sign-off (TRAINING.READY_KEY) earn it. Quotes
+   after the sign-off that ended training (TRAINING.endsTraining) earn it. Quotes
    built in training were the owner's work as much as theirs, checked line by
    line. A payout already recorded always stays on the list, even if the
    sign-off is later undone. */
@@ -36330,6 +36878,129 @@ app.post('/admin/lead/:id/text', requireAdmin, async (req, res) => {
     console.error('lead text failed:', err.message);
     reportError('lead-text', err, `lead ${id}`).catch(() => {});
     return back(res, here, 'err', 'The text did not send. Try again.');
+  }
+});
+
+/** May whoever is signed in add an email to this lead? Only when it has none,
+ *  and for a helper only on a lead that is theirs or nobody's (the route
+ *  checks the same again). */
+function mayAddLeadEmail(l) {
+  return !!l && !String(l.email || '').trim() && mayEditLeadContact(l);
+}
+
+/** May whoever is signed in add or correct this lead's email or phone? The
+ *  owner always; a helper on a lead that is theirs or nobody's, and never
+ *  one carrying another helper's credit (the routes check the same again). */
+function mayEditLeadContact(l, a = currentActor()) {
+  if (!l) return false;
+  if (!a || a.kind !== 'staff') return true;
+  return (l.assigned_to == null || Number(l.assigned_to) === a.id) && (l.rep_id == null || Number(l.rep_id) === a.id);
+}
+
+/** May whoever is signed in change an email or phone already on this lead?
+ *  The owner always; a helper only on a lead credited to them (their own
+ *  find). Changing a shop lead's contact would hide the customer from the
+ *  "already a customer?" check, so a helper could re-add them as their own
+ *  find and take the credit (security review, 2026-11-19). */
+function mayCorrectLeadContact(l, a = currentActor()) {
+  if (!l) return false;
+  if (!a || a.kind !== 'staff') return true;
+  return l.rep_id != null && Number(l.rep_id) === a.id;
+}
+
+/** Save a lead's email or phone, new or corrected (owner, 2026-11-19: "I
+ *  entered one wrong and I can't change it"), in one transaction with the
+ *  "already a customer?" check: a value the shop already has makes a credited
+ *  lead a shop lead, so a contact can never be used to claim an existing
+ *  customer. A correction is written on the lead with what it was before.
+ *  Returns { ok, msg } or { err }. */
+async function saveLeadContact(id, field, value, actor) {
+  const isStaff = !!(actor && actor.kind === 'staff');
+  const word = field === 'email' ? 'email' : 'phone';
+  const same = (x, y) => (field === 'email' ? String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase()
+    : normalizeUsPhone(x) === normalizeUsPhone(y));
+  /* The "already a customer?" check may ask the studio over the network, so
+     it runs before the row is locked, and only for a credited lead. */
+  const { rows: [peek] } = await pool.query('SELECT sale_type FROM submissions WHERE id = $1', [id]);
+  const reason = peek && (peek.sale_type === 'rep' || peek.sale_type === 'pending')
+    ? CREDIT.knownReason(await seenCustomer(field === 'email' ? { email: value } : { phone: value }, { excludeLead: id }), fmtDate) : '';
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [l] } = await client.query(
+      'SELECT id, email, phone, sale_type, rep_id, assigned_to, finder_run_id, sale_type_reason FROM submissions WHERE id = $1 FOR UPDATE', [id]);
+    const stop = (err) => client.query('ROLLBACK').then(() => ({ err }));
+    if (!l) return await stop('No such lead.');
+    if (!mayEditLeadContact(l, actor)) return await stop(`That lead is someone else's. Ask the owner to change it.`);
+    if (field === 'phone' && isFoundLead(l)) return await stop('We never text or call a number found online. Email them instead.');
+    const before = String(l[field] || '').trim();
+    if (before && same(before, value)) return await stop(`That is already their ${word}.`);
+    if (before && !mayCorrectLeadContact(l, actor)) {
+      return await stop(`Only June can change a ${word} that is already on a lead. Write the right one in a note and she will fix it.`);
+    }
+    await client.query(`UPDATE submissions SET ${field === 'email' ? 'email' : 'phone'} = $2 WHERE id = $1`, [id, value]);
+    const known = reason && (l.sale_type === 'rep' || l.sale_type === 'pending') ? reason : '';
+    if (known) await client.query(`UPDATE submissions SET sale_type = 'shop', sale_type_reason = $2, rep_id = NULL WHERE id = $1`, [id, known]);
+    if (before) {
+      await client.query(`INSERT INTO lead_notes (submission_id, kind, body, staff_id) VALUES ($1, 'note', $2, $3)`,
+        [id, `Changed their ${word} from ${before} to ${value}.`, isStaff ? actor.id : null]);
+    }
+    await client.query('COMMIT');
+    logActivity(actor, `lead ${word} ${before ? 'changed' : 'added'}${known ? ': already known' : ''}`, { type: 'lead', id },
+      { ...(before ? { from: before, to: value } : {}), ...(known ? { reason: known } : {}) });
+    const done = `${word[0].toUpperCase()}${word.slice(1)} ${before ? 'changed' : 'saved'}.`;
+    const next = word === 'email' ? ' Use Email them to write to them.' : canTextLeads(actor) ? ' Use Text them to write to them.' : '';
+    return { ok: true, msg: known ? `${done} It is now a shop lead: ${known}.` : `${done}${next}` };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally { client.release(); }
+}
+
+/* Add an email to a lead that has none (owner, 2026-11-18: "add email to the
+   leads that are found with ai. Right now we cant send them emails"). The AI
+   finder often finds a website but no email; once one is added here the
+   lead's Email them button works. It also corrects a wrong one (2026-11-19).
+   A lead registered as a helper's own is checked again, as when it was
+   added: an email the shop already has makes it a shop lead, so an email
+   cannot be used to claim an existing customer. */
+app.post('/admin/lead/:id/contact-email', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const backTo = safeAdminPath(b.back, '/admin/leads');
+  if (!id) return res.redirect(backTo);
+  const email = String(b.email || '').trim().toLowerCase();
+  if (!email || email.length > 254 || !STAFF.EMAIL_RE.test(email)) return back(res, backTo, 'err', 'That email does not look right.');
+  const toLead = `${backTo.split('#')[0]}#lead-${id}`;
+  try {
+    const r = await saveLeadContact(id, 'email', email, currentActor());
+    return back(res, toLead, r.ok ? 'ok' : 'err', r.ok ? r.msg : r.err);
+  } catch (err) {
+    console.error('lead email save failed:', err.message);
+    return back(res, toLead, 'err', 'Could not save the email. Nothing was changed; try again.');
+  }
+});
+
+/* Add a phone to a lead that has none (owner, 2026-11-19): a chat or email
+   lead who gave their number. Never on a found lead (numbers found online are
+   never texted); also corrects a wrong one; a helper only on their own or an
+   unassigned lead; a number the shop already has makes a credited lead a
+   shop lead, as an email does. */
+app.post('/admin/lead/:id/contact-phone', requireAdmin, async (req, res) => {
+  const id = intIn(req.params.id);
+  const b = req.body || {};
+  const backTo = safeAdminPath(b.back, '/admin/leads');
+  if (!id) return res.redirect(backTo);
+  const phone = normalizeUsPhone(String(b.phone || '').trim().slice(0, 40));
+  if (!phone) return back(res, backTo, 'err', 'That does not look like a US phone number. Type all 10 digits.');
+  if (!VOICE.callable(phone)) return back(res, backTo, 'err', `${VOICE.pretty(phone)} is a premium-rate or overseas number. The shop does not text those.`);
+  const toLead = `${backTo.split('#')[0]}#lead-${id}`;
+  try {
+    const r = await saveLeadContact(id, 'phone', VOICE.pretty(phone), currentActor());
+    return back(res, toLead, r.ok ? 'ok' : 'err', r.ok ? r.msg : r.err);
+  } catch (err) {
+    console.error('lead phone save failed:', err.message);
+    return back(res, toLead, 'err', 'Could not save the phone. Nothing was changed; try again.');
   }
 });
 
@@ -39810,11 +40481,41 @@ async function teamChannels({ withArchived = false } = {}) {
   return rows;
 }
 
-/** The channels this person may use: all of them for the owner, their
- *  track's (and everyone's) for a helper. */
+/** The channels this person is in, whose messages count as unread for them:
+ *  every group channel for the owner; their track's, everyone's and their own
+ *  direct chats with teammates for a helper. A direct chat between two helpers
+ *  is not the owner's: she may open it (chatChannelFor) but is never pinged. */
 function channelsFor(actor, channels, roster) {
   const me = actor.kind === 'staff' ? roster.find((r) => r.id === actor.id) : null;
-  return channels.filter((c) => CHAN.mayUse(actor, c, me, TRAINING.trackOf));
+  return channels.filter((c) => CHAN.isIn(actor, c, me, TRAINING.trackOf));
+}
+
+/** A channel's name on screen, from this person's side: "# Everyone", the
+ *  teammate's name in a helper's direct chat, "Ana & Ben" for the owner. */
+function channelLabel(c, actor, roster) {
+  const pair = CHAN.pairOf(c);
+  if (!pair) return `# ${c.name}`;
+  const other = actor.kind === 'staff' ? CHAN.pairOther(c, actor.id) : null;
+  return other ? nameOf(roster, other) : `${nameOf(roster, pair[0])} & ${nameOf(roster, pair[1])}`;
+}
+
+/** The direct chat between helpers a and b, made the first time either opens
+ *  it. Both must be on the roster; the caller checks who may. */
+async function pairChannel(a, b) {
+  const audience = CHAN.pairAudience(a, b);
+  if (!audience) return null;
+  await pool.query(`INSERT INTO team_channels (name, audience) VALUES ('Direct', $1)
+                    ON CONFLICT (audience) WHERE audience LIKE 'pair:%' DO NOTHING`, [audience]);
+  const { rows: [c] } = await pool.query('SELECT id, name, audience, archived_at FROM team_channels WHERE audience = $1', [audience]);
+  return c || null;
+}
+
+/** A teammate this helper can start a direct chat with: on the roster,
+ *  working, not archived, not themselves. */
+function chatTeammate(actor, raw, roster) {
+  const id = intIn(raw);
+  if (!id || actor.kind !== 'staff' || id === actor.id) return null;
+  return roster.find((r) => r.id === id && r.active && !r.archived_at) || null;
 }
 
 /** Unread channel messages per channel for this reader: newer than what they
@@ -39857,12 +40558,25 @@ function chatThreadFor(raw, roster) {
   return id && roster.some((r) => r.id === id) ? id : null;
 }
 
-/** The channel a request is about, if this person may use it. */
+/** The channel a request is about, if this person may open it. The owner
+ *  may open a direct chat between two helpers to read it. */
 function chatChannelFor(raw, channels, roster) {
   const id = intIn(raw);
   if (!id) return null;
   const c = channels.find((x) => x.id === id);
-  return c && channelsFor(currentActor() || OWNER_ACTOR, [c], roster).length ? c : null;
+  const actor = currentActor() || OWNER_ACTOR;
+  const me = actor.kind === 'staff' ? roster.find((r) => r.id === actor.id) : null;
+  return c && CHAN.mayUse(actor, c, me, TRAINING.trackOf) ? c : null;
+}
+
+/** May this person post in the channel? Not the owner in two helpers' direct
+ *  chat, and nobody once the other helper is disabled. Returns '' or why not. */
+function channelPostBlock(c, actor, roster) {
+  const pair = CHAN.pairOf(c);
+  if (!pair) return '';
+  if (actor.kind !== 'staff') return 'This is a chat between two helpers. You can read it, but not post in it.';
+  const other = roster.find((r) => r.id === CHAN.pairOther(c, actor.id));
+  return other && other.active && !other.archived_at ? '' : `${other ? other.name : 'That helper'} is disabled, so this chat is read-only.`;
 }
 
 async function chatLines(staffId, after = 0) {
@@ -39890,9 +40604,12 @@ function chatMarkRead(staffId) {
 }
 
 /** A channel is read up to the newest message this person has had on screen. */
-async function channelMarkRead(channelId, upTo) {
+async function channelMarkRead(channelId, upTo, channel = null) {
   if (!upTo) return;
   const actor = currentActor() || OWNER_ACTOR;
+  /* The owner reading two helpers' direct chat is not one of them reading it:
+     no "Seen by June" on their lines. */
+  if (channel && actor.kind !== 'staff' && CHAN.pairOf(channel)) return;
   const reader = CHAN.readerKey(actor);
   try {
     /* The time each newly read message was seen: those after what this
@@ -40050,10 +40767,33 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     const unreadCh = await channelUnread(actor, channels.map((c) => c.id));
     const channel = chatChannelFor(req.query.channel, allChannels, roster);
     let staffId = channel ? null : chatThreadFor(req.query.staff, roster);
-    const chanChips = channels.map((c) => ({ label: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}`,
+    const chanChips = channels.filter((c) => !CHAN.pairOf(c)).map((c) => ({ label: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}`,
       on: !!channel && channel.id === c.id, count: unreadCh.get(c.id) || null }));
     let people = [];
     let dmChips = [];
+    /* Direct chats between helpers: a helper's own, one per working teammate
+       (and any older one with someone since disabled); for the owner, every
+       one that has a message in it, to read. */
+    let mateChips = [];
+    let mateStart = [];
+    if (owner) {
+      const { rows: used } = await pool.query('SELECT DISTINCT channel_id FROM team_channel_messages WHERE channel_id = ANY($1)',
+        [allChannels.filter((c) => CHAN.pairOf(c)).map((c) => c.id)]);
+      const has = new Set(used.map((u) => Number(u.channel_id)));
+      mateChips = allChannels.filter((c) => CHAN.pairOf(c) && (has.has(c.id) || (channel && channel.id === c.id)))
+        .map((c) => ({ label: channelLabel(c, actor, roster), href: `/admin/team-chat?channel=${c.id}`, on: !!channel && channel.id === c.id }));
+    } else {
+      const mine = new Map(channels.filter((c) => CHAN.pairOf(c)).map((c) => [CHAN.pairOther(c, actor.id), c]));
+      const mates = roster.filter((r) => r.id !== actor.id && !r.archived_at && (r.active || mine.has(r.id)));
+      mateChips = mates.filter((r) => mine.has(r.id)).map((r) => {
+        const c = mine.get(r.id);
+        return { label: r.name + (r.active ? '' : ' (disabled)'), href: `/admin/team-chat?channel=${c.id}`,
+          on: !!(channel && channel.id === c.id), count: unreadCh.get(c.id) || null };
+      });
+      /* Teammates with no chat yet: a button each, which makes it (a POST, so
+         a prefetched or planted link never does). */
+      mateStart = mates.filter((r) => r.active && !mine.has(r.id));
+    }
     if (owner) {
       const { rows: counts } = await pool.query(
         `SELECT staff_id, COUNT(*) FILTER (WHERE NOT from_owner AND read_at IS NULL)::int AS unread,
@@ -40091,15 +40831,22 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
     let lines, lineHtml, canWrite, intro, placeholder, hidden, pollQuery;
     let seen = {};
     let open = new Set();
+    let readOnly = 'This helper is disabled, so the conversation is read-only.';
     if (channel) {
       lines = await channelLines(channel.id);
       const last = lines.length ? Number(lines[lines.length - 1].id) : 0;
-      await channelMarkRead(channel.id, last);
+      await channelMarkRead(channel.id, last, channel);
       seen = await chatSeen({ channelId: channel.id }, roster).catch(() => ({}));
       lineHtml = (m) => chatLineHtml(channelLineJson(m, roster, open), seen);
-      canWrite = true;
-      intro = `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`;
-      placeholder = `Message # ${channel.name}`;
+      const block = channelPostBlock(channel, actor, roster);
+      canWrite = !block;
+      if (block) readOnly = block;
+      const label = channelLabel(channel, actor, roster);
+      intro = !CHAN.pairOf(channel)
+        ? `# ${escEmail(channel.name)}: ${channel.audience === 'all' ? 'everyone on the team' : `the ${escEmail(CHAN.AUDIENCES[channel.audience] || channel.audience)} team`} and June. Customers never see this.`
+        : owner ? `Between ${escEmail(CHAN.pairOf(channel).map((id) => nameOf(roster, id)).join(' and '))}. You can read it; it is their chat, so you do not post here.`
+        : `Just you and ${escEmail(label)}. June can read it too. Customers never see this.`;
+      placeholder = CHAN.pairOf(channel) ? `Message ${label}` : `Message # ${channel.name}`;
       hidden = `<input type="hidden" name="channel" value="${channel.id}">`;
       pollQuery = `channel=${channel.id}`;
     } else {
@@ -40129,6 +40876,9 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
       <div class="tc-tabs" data-tctabs>
       <div class="muted" style="font-size:12px;margin:4px 0">Channels</div>${filterChips(chanChips)}
       <div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Direct' : 'Direct with June'}</div>${filterChips(dmChips)}
+      ${mateChips.length || mateStart.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">${owner ? 'Between helpers (you can read these)' : 'Direct with a teammate'}</div>${mateChips.length ? filterChips(mateChips) : ''}` : ''}
+      ${mateStart.length ? `<form method="post" action="/admin/team-chat/start" class="chips" style="margin-top:4px">${mateStart.map((r) =>
+        `<button type="submit" name="with" value="${r.id}" class="chip-f" style="cursor:pointer">+ ${escEmail(r.name)}</button>`).join('')}</form>` : ''}
       </div>
       <div class="card">
         <div class="tc-log" data-tclog data-after="${last}" data-since="${escEmail(since)}">${lines.length ? lines.map(lineHtml).join('')
@@ -40142,7 +40892,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
           <textarea name="body" rows="3" maxlength="${TEAM_CHAT_MAX}" placeholder="${escEmail(placeholder)}"></textarea>
           <button type="submit" class="btn" data-tcsend>Send</button>
         </form>
-        <div class="tc-filestat muted" data-tcfilestat hidden></div>` : '<p class="muted">This helper is disabled, so the conversation is read-only.</p>'}
+        <div class="tc-filestat muted" data-tcfilestat hidden></div>` : `<p class="muted">${escEmail(readOnly)}</p>`}
       </div>
       <details class="card" id="alerts"><summary><b>Email alerts</b> <span class="muted">${alertsOn ? 'on' : 'off'}</span></summary>
         <p class="muted">When a message waits ${CHAN.ALERT_AFTER_MIN} minutes without you reading it, you get an email listing what is waiting: at most ${CHAT_ALERTS_PER_DAY} emails a day. A conversation is not emailed again until you have read it. The ding and pop-ups are under <a href="/admin/notifications/settings">Notification settings</a>.</p>
@@ -40150,7 +40900,7 @@ app.get('/admin/team-chat', requireAdmin, async (req, res) => {
           <input type="hidden" name="on" value="${alertsOn ? '0' : '1'}">
           <button type="submit" class="btn btn-ghost">${alertsOn ? 'Turn email alerts off' : 'Turn email alerts on'}</button></form></details>
       ${owner ? `<details class="card"><summary><b>Channels</b> <span class="muted">add or archive</span></summary>
-        ${allChannels.map((c) => `<div class="row-i"><span class="row-main"><b># ${escEmail(c.name)}</b>
+        ${allChannels.filter((c) => !CHAN.pairOf(c)).map((c) => `<div class="row-i"><span class="row-main"><b># ${escEmail(c.name)}</b>
           <div class="row-sub">${escEmail(CHAN.AUDIENCES[c.audience] || c.audience)}</div></span>
           <span class="row-end"><form method="post" action="/admin/team-chat/channels" style="margin:0">
             <input type="hidden" name="action" value="archive"><input type="hidden" name="id" value="${c.id}">
@@ -40309,6 +41059,8 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
       const ch = chatChannelFor(b.channel, channels, roster);
       if (!ch) return back(res, '/admin/team-chat', 'err', 'That channel is not one of yours.');
       const backTo = `/admin/team-chat?channel=${ch.id}`;
+      const block = channelPostBlock(ch, actor, roster);
+      if (block) return back(res, backTo, 'err', block);
       if (badFile) return back(res, backTo, 'err', FILE_ERR);
       if (!body && !fileUrl) return back(res, backTo, 'err', 'Write something or pick a file first.');
       if (body.length > TEAM_CHAT_MAX) return back(res, backTo, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
@@ -40344,6 +41096,20 @@ app.post('/admin/team-chat', requireAdmin, async (req, res) => {
   }
 });
 
+/* A helper starts (or reopens) their direct chat with a teammate. */
+app.post('/admin/team-chat/start', requireAdmin, async (req, res) => {
+  try {
+    const actor = currentActor() || OWNER_ACTOR;
+    const mate = chatTeammate(actor, (req.body || {}).with, await staffRoster());
+    const c = mate && await pairChannel(actor.id, mate.id);
+    if (!c || c.archived_at) return back(res, '/admin/team-chat', 'err', 'That teammate is not on the team.');
+    return res.redirect(303, `/admin/team-chat?channel=${c.id}`);
+  } catch (err) {
+    console.error('team chat start failed:', err.message);
+    return back(res, '/admin/team-chat', 'err', 'Could not open that chat. Try again.');
+  }
+});
+
 /* The author rewords their own message (owner, 2026-10-14: "add an edit
    feature on the messages"). Only the author: a helper their own lines, the
    owner hers; in a channel still open to them. The first wording is kept
@@ -40362,6 +41128,8 @@ app.post('/admin/team-chat/edit', requireAdmin, async (req, res) => {
       const ch = m && chatChannelFor(m.channel_id, channels, roster);
       if (!m || !ch || m.staff_id !== staff) return back(res, '/admin/team-chat', 'err', 'You can edit only your own messages.');
       const to = `/admin/team-chat?channel=${ch.id}`;
+      const block = channelPostBlock(ch, actor, roster);
+      if (block) return back(res, to, 'err', block);
       if (!body && !m.file_url) return back(res, to, 'err', 'A message needs words. Leave it as it was, or write something.');
       if (body.length > TEAM_CHAT_MAX) return back(res, to, 'err', `That is too long. Keep it under ${TEAM_CHAT_MAX} characters.`);
       const { rowCount } = await pool.query(
@@ -40408,7 +41176,9 @@ app.post('/admin/team-chat/channels', requireAdmin, async (req, res) => {
     if (b.action === 'archive') {
       const id = intIn(b.id);
       if (!id) return back(res, '/admin/team-chat', 'err', 'No such channel.');
-      const { rowCount } = await pool.query('UPDATE team_channels SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL', [id]);
+      /* A direct chat between two helpers is theirs, never archived: one per
+         pair, so an archived one could never be opened again. */
+      const { rowCount } = await pool.query(`UPDATE team_channels SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL AND audience NOT LIKE 'pair:%'`, [id]);
       return back(res, '/admin/team-chat', rowCount ? 'ok' : 'err', rowCount ? 'Channel archived.' : 'No such channel.');
     }
     const name = CHAN.cleanName(b.name);
@@ -40553,7 +41323,7 @@ app.get('/admin/api/team-chat', requireAdmin, async (req, res) => {
       const ch = chatChannelFor(req.query.channel, allChannels, roster);
       if (!ch) return res.status(404).json({ lines: [] });
       const lines = await channelLines(ch.id, after);
-      if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id));
+      if (lines.length) await channelMarkRead(ch.id, Number(lines[lines.length - 1].id), ch);
       const seen = await chatSeen({ channelId: ch.id }, roster).catch(() => ({}));
       const open = await openableTags(lines);
       return res.json({ lines: lines.map((m) => channelLineJson(m, roster, open)), seen, tabs: await counts(), now,
@@ -40854,12 +41624,12 @@ async function mailNewPage(res, actor, v, status = 200) {
   const fileUrl = v.fileUrl && CHATFILES.fileUrlOk(v.fileUrl, QPHOTOS.cloudName()) ? v.fileUrl : '';
   res.status(status).set('Cache-Control', 'no-store');
   res.send(adminPage('New conversation', `${MAIL_CSS}
-    ${pageHeader('New conversation', staff ? 'It goes to June. Add a teammate if they should see it too.' : 'Pick who it is for. Each one you start is its own conversation.')}
+    ${pageHeader('New conversation', staff ? 'Tick the teammates it is for. June is always in it too.' : 'Pick who it is for. Each one you start is its own conversation.')}
     ${v.err ? `<div class="warn">${escEmail(v.err)}</div>` : ''}
     ${codeRaw && !code && !v.err ? `<div class="warn">There is no order ${escEmail(codeRaw)} you can open, so it is not attached.</div>` : ''}
     <form method="post" action="/admin/mailbox" class="card" data-mailform${staff ? '' : ' data-needto'}>
       <label>To</label>
-      ${staff ? '<p style="margin:4px 0 8px"><b>June</b></p>' : ''}
+      ${staff ? `<p style="margin:4px 0 8px"><b>June</b>${helpers.length ? ' <span class="muted">and any teammates you tick:</span>' : ''}</p>` : ''}
       ${helpers.length ? `<div class="row" style="gap:6px 14px;flex-wrap:wrap;margin:4px 0 12px">${helpers.map((r) => `
         <label style="text-transform:none;letter-spacing:0;font-weight:600;margin:0"><input type="checkbox" name="to" value="${r.id}"${picked.has(r.id) ? ' checked' : ''} style="width:auto;margin:0 6px 0 0">${escEmail(r.name)}</label>`).join('')}</div>`
         : staff ? '' : '<p class="muted">No helpers yet. Add one on Staff and permissions.</p>'}
@@ -41155,7 +41925,7 @@ async function chatReadState() {
  *  least `minAge` minutes old: [{ convo, first, last, n, where, href, mail }].
  *  The chat alert emails and the notifications bell both read this, so they
  *  cannot disagree about what is unread. */
-async function unreadConversations(rd, roster, channels, state, minAge) {
+async function unreadConversations(rd, roster, channels, state, minAge, names = roster) {
   const reader = CHAN.readerKey(rd.actor);
   const due = [];
   /* Direct conversations. */
@@ -41172,7 +41942,7 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
       href: rd.actor.kind === 'staff' ? '/admin/team-chat' : `/admin/team-chat?staff=${d.staff_id}` });
   }
   /* Channels. */
-  const mine = channels.filter((c) => (rd.actor.kind === 'staff' ? CHAN.isMember(c, rd.row, TRAINING.trackOf) : true));
+  const mine = channels.filter((c) => (rd.actor.kind === 'staff' ? CHAN.isMember(c, rd.row, TRAINING.trackOf) : !CHAN.pairOf(c)));
   for (const c of mine) {
     const st = state.get(`${reader}|ch:${c.id}`);
     const { rows: [u] } = await pool.query(
@@ -41180,7 +41950,8 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
         WHERE channel_id = $1 AND id > $2 AND staff_id IS DISTINCT FROM $3
           AND created_at < NOW() - make_interval(mins => $4)`,
       [c.id, st ? st.last_read_id : 0, rd.actor.kind === 'staff' ? rd.actor.id : null, minAge]);
-    if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n, where: `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
+    if (u && u.n) due.push({ convo: `ch:${c.id}`, first: u.first, last: u.last, n: u.n,
+      where: CHAN.pairOf(c) ? `your chat with ${channelLabel(c, rd.actor, names)}` : `# ${c.name}`, href: `/admin/team-chat?channel=${c.id}` });
   }
   /* Mailbox conversations with something this reader has not seen, Done or
      not: someone else marking it Done does not mean this reader read it. */
@@ -41202,7 +41973,8 @@ async function unreadConversations(rd, roster, channels, state, minAge) {
    claimed, so a conversation still unread tomorrow is in tomorrow's first. */
 const CHAT_ALERTS_PER_DAY = 2;
 async function sendChatAlerts() {
-  const [roster, channels] = await Promise.all([staffRoster({ activeOnly: true }), teamChannels()]);
+  /* names: everyone, so a chat with a since-disabled teammate still says who. */
+  const [roster, channels, names] = await Promise.all([staffRoster({ activeOnly: true }), teamChannels(), staffRoster()]);
   const { rows: prefs } = await pool.query('SELECT reader, email_alerts FROM team_chat_prefs');
   const off = new Set(prefs.filter((p) => !p.email_alerts).map((p) => p.reader));
   const state = await chatReadState();
@@ -41211,7 +41983,7 @@ async function sendChatAlerts() {
   for (const rd of chatReaders(roster).filter((r) => r.to)) {
     const reader = CHAN.readerKey(rd.actor);
     if (off.has(reader)) continue;
-    const due = (await unreadConversations(rd, roster, channels, state, CHAN.ALERT_AFTER_MIN)).filter((d) => {
+    const due = (await unreadConversations(rd, roster, channels, state, CHAN.ALERT_AFTER_MIN, names)).filter((d) => {
       const st = state.get(`${reader}|${d.convo}`);
       return CHAN.alertDue(d.first, st && st.alerted_id);
     });
@@ -41331,17 +42103,181 @@ async function notifyEmails(roster) {
 
 /** Each source on its own: one that fails is logged and skipped, and the
  *  others still count. */
-const notifyPart = (name, p) => p.catch((e) => { console.error(`notifications (${name}) failed:`, e.message); return null; });
+const notifyPart = (name, p) => p.catch((e) => {
+  console.error(`notifications (${name}) failed:`, e.message);
+  /* Logged alone, a part that fails on every sweep was a bell that silently
+     never rang (owner, 2026-11-18): the error digest now hears of it. */
+  reportError('notifications', e, `notification part: ${name}`).catch(() => {});
+  return null;
+});
+
+/* ── What needs the owner (tools/lib/owner-alerts.js) ──────────────────────
+   One list for the home dashboard, the bell and the menu badges, so the three
+   never disagree. The sweep reads it and the pages share that reading; each source fails on its own and is named in `failed`, so an
+   empty section is never what a failed read looks like. */
+let ownerAlertsCache = null;
+let ownerAlertsRunning = null;
+let libraryWaitingCache = { at: 0, items: null, error: '' };
+
+/** Library designs submitted on the studio and waiting for the owner. The
+ *  studio's webhook tells the bell too, but nothing on our side ever looked,
+ *  so a missed webhook was a design waiting forever. Read every 5 minutes. */
+async function libraryWaiting({ studioOff = false } = {}) {
+  if (Date.now() - libraryWaitingCache.at < 5 * 60 * 1000) {
+    if (libraryWaitingCache.items) return libraryWaitingCache.items;
+    /* A studio that just failed is asked again in 5 minutes, not every
+       sweep; until then the section still says it could not be checked. */
+    if (libraryWaitingCache.error) throw Object.assign(new Error(libraryWaitingCache.error), { quiet: true });
+  }
+  if (studioOff) return [];
+  const fail = (msg) => { libraryWaitingCache = { at: Date.now(), items: null, error: msg }; throw new Error(msg); };
+  let r, data;
+  try {
+    r = await studioFetch(`${STUDIO_BASE}/jt-library-admin.php`, { timeoutMs: 15000 });
+    data = r.ok ? await r.json() : null;
+  } catch (e) { fail(`design library could not be read: ${e.message}`); }
+  if (!r.ok) fail(`design library answered HTTP ${r.status}`);
+  if (!data || !data.ok || !Array.isArray(data.items)) fail('design library sent an unreadable list');
+  const items = data.items.filter((x) => x && x.status === 'submitted' && Number.isSafeInteger(x.id))
+    .map((x) => ({ kind: String(x.kind || ''), id: x.id, name: String(x.name || ''),
+      submitted_by: x.settings && x.settings.submitted_by ? String(x.settings.submitted_by).slice(0, 80) : '' }));
+  libraryWaitingCache = { at: Date.now(), items, error: '' };
+  return items;
+}
+
+async function readOwnerAlerts() {
+  const failed = [];
+  const part = (name, p, fallback) => p.catch((e) => {
+    /* `quiet`: the same failure, remembered, was logged when it happened. */
+    if (!e.quiet) console.error(`owner alerts (${name}) failed:`, e.message);
+    failed.push(name);
+    return fallback;
+  });
+  const roster = await part('team', staffRoster({ activeOnly: true }), []);
+  const team = roster.filter((r) => r.active && !r.archived_at);
+  const thisWeek = TEAM.weekOf(new Date());
+  const lastWeek = weekShift(thisWeek, -7);
+  const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
+  const rows = [];
+
+  /* Hours: the two weeks the owner works on, read the way the Hours page
+     reads them, for helpers who clocked in; and older weeks never approved. */
+  const hoursP = (async () => {
+    const [{ rows: clocked }, { rows: open }, { rows: old }] = await Promise.all([
+      pool.query(`SELECT DISTINCT staff_id FROM staff_shifts WHERE started_at >= $1`, [TEAM.localMidnight(lastWeek)]),
+      /* Every shift still running, however long ago it started: a clock left
+         on for weeks is the worst case, and it is outside both weeks read. */
+      pool.query(`SELECT id, staff_id, started_at FROM staff_shifts WHERE ended_at IS NULL`),
+      pool.query(
+        `SELECT s.staff_id, to_char(date_trunc('week', s.started_at AT TIME ZONE $3::text), 'YYYY-MM-DD') AS week
+           FROM staff_shifts s
+          WHERE s.started_at >= $1 AND s.started_at < $2 AND s.ended_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM staff_clock_approvals a WHERE a.staff_id = s.staff_id
+                              AND a.week_of = date_trunc('week', s.started_at AT TIME ZONE $3::text)::date)
+          GROUP BY 1, 2`,
+        [TEAM.localMidnight(weekShift(lastWeek, -28)), TEAM.localMidnight(lastWeek), SHOP_TZ])]);
+    const ids = new Set(clocked.map((r) => r.staff_id));
+    const lists = await Promise.all(team.map(async (s) => {
+      const unapproved = old.filter((o) => o.staff_id === s.id).map((o) => o.week).sort();
+      const openShifts = open.filter((o) => o.staff_id === s.id);
+      if (!ids.has(s.id) && !unapproved.length && !openShifts.length) return [];
+      const [tw, lw] = ids.has(s.id) ? await Promise.all([clockWeek(s.id, thisWeek), clockWeek(s.id, lastWeek)]) : [null, null];
+      return OWNER_ALERTS.hoursAlerts({ staff: s, thisWeek: tw, lastWeek: lw, unapproved, openShifts });
+    }));
+    return lists.flat();
+  })();
+
+  /* Training: a sign-off due from the owner, and a helper finished but not
+     moved up. */
+  const trainingP = Promise.all(team.map(async (s) => {
+    const t = await trainingFor(s.id);
+    const next = nextPresetFor(s);
+    return OWNER_ALERTS.trainingAlerts({ staff: s, progress: t, readyDone: TRAINING.readyGiven(t), nextPreset: next,
+      nextLabel: next && STAFF.PRESETS[next] ? STAFF.PRESETS[next].label : '' });
+  })).then((l) => l.flat());
+
+  const agreementsP = pool.query(
+    `SELECT id, name FROM staff s WHERE s.active AND s.archived_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM staff_agreements a WHERE a.staff_id = s.id AND a.version = $1) ORDER BY name`,
+    [AGREEMENT.VERSION]).then((r) => r.rows.map(OWNER_ALERTS.agreementAlert));
+
+  const tasksP = pool.query(
+    `SELECT id, title, due_on, assigned_to, started_at, created_at FROM staff_tasks
+      WHERE done_at IS NULL AND COALESCE(lane, '') <> $1 AND ${TASK_STEP_NOW}
+      ORDER BY due_on NULLS LAST, created_at LIMIT 200`, [FLOW.DAILY])
+    .then((r) => OWNER_ALERTS.taskAlerts(r.rows, roster, { today: TIMECLOCK.dayOf(new Date()) }));
+
+  const notesP = Promise.all([
+    pool.query(`SELECT n.id, n.quote_code, n.author, n.body FROM job_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.recipient = 'owner' AND n.addressed_at IS NULL AND q.cancelled_at IS NULL ORDER BY n.id DESC LIMIT 50`),
+    pool.query(`SELECT id, title, quote_code FROM owner_followups WHERE done_at IS NULL ORDER BY created_at DESC LIMIT 50`),
+  ]).then(([n, f]) => OWNER_ALERTS.noteAlerts(n.rows, f.rows, roster));
+
+  const artP = Promise.all([
+    pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+                 WHERE a.status = 'submitted' AND q.cancelled_at IS NULL`),
+    pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+                 WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL`),
+  ]).then(([s, q]) => OWNER_ALERTS.artAlerts({ submitted: s.rows, questions: q.rows }));
+  /* No studio key (a local copy): the studio is off, so its notifications
+     are neither made nor cleared, and the page does not call it a failure. */
+  /* Asked of the studio feed (read every sweep anyway), which knows whether
+     a studio key is set. */
+  const studioOff = await fetchStudioOrders().then((f) => f.error === 'JT_INTERNAL_KEY not set').catch(() => false);
+  const skipped = studioOff ? ['design library'] : [];
+  const libraryP = libraryWaiting({ studioOff }).then((library) => OWNER_ALERTS.artAlerts({ library }));
+
+  const customersP = Promise.all([
+    pool.query(UNANSWERED_REPLIES_SQL),
+    pool.query(`SELECT code, name, proof_ok_at FROM quotes WHERE proof_ok_at > $1 AND cancelled_at IS NULL`, [new Date(since)]),
+    pool.query(`SELECT n.id, n.quote_code, n.body, q.name FROM lead_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.kind = 'note' AND n.body LIKE 'Proof changes requested on the quote page:%' AND n.created_at > $1`, [new Date(since)]),
+    pool.query(`SELECT n.id, n.quote_code, n.body, q.name FROM lead_notes n JOIN quotes q ON q.code = n.quote_code
+                 WHERE n.kind = 'customer_note' AND n.created_at > $1`, [new Date(since)]),
+    pool.query(`SELECT code, name, change_request FROM quotes
+                 WHERE NULLIF(btrim(change_request), '') IS NOT NULL AND cancelled_at IS NULL AND COALESCE(paid_amount,0) = 0`),
+    pool.query(`SELECT id, quote_code FROM stripe_disputes WHERE status = ANY($1::text[])`, [[...DISPUTE_OPEN]]),
+  ]).then(([replies, proofOk, proofChanges, notes, changes, disputes]) => OWNER_ALERTS.customerAlerts({
+    replies: replies.rows, proofOk: proofOk.rows, proofChanges: proofChanges.rows, notes: notes.rows,
+    changes: changes.rows, disputes: disputes.rows }));
+
+  /* No roster is no helpers to check, not "no problems": their sections
+     say they could not be checked, and the bell clears nothing of theirs. */
+  if (failed.includes('team')) failed.push('hours', 'training');
+  const parts = await Promise.all([
+    part('hours', hoursP, null), part('training', trainingP, null), part('agreements', agreementsP, null),
+    part('tasks', tasksP, null), part('job notes', notesP, null), part('art', artP, null),
+    part('design library', libraryP, null), part('customers', customersP, null)]);
+  for (const p of parts) if (p) rows.push(...p);
+  return { rows, failed, skipped, at: Date.now() };
+}
+
+/** What needs the owner now: { rows, failed, at }. The sweep reads it fresh
+ *  every 2 minutes; a page takes that reading while it is under 2½ minutes
+ *  old. Callers at the same moment share one read. */
+async function ownerAlerts({ fresh = false, stale = false } = {}) {
+  const read = () => {
+    if (!ownerAlertsRunning) {
+      ownerAlertsRunning = readOwnerAlerts()
+        .then((r) => { ownerAlertsCache = r; return r; })
+        .finally(() => { ownerAlertsRunning = null; });
+    }
+    return ownerAlertsRunning;
+  };
+  if (!fresh && ownerAlertsCache && Date.now() - ownerAlertsCache.at < 150 * 1000) return ownerAlertsCache;
+  /* `stale`: a page shows the last reading at once and asks for a new one
+     behind it, rather than waiting on the studio and every helper's clock. */
+  if (stale && ownerAlertsCache) { read().catch(() => {}); return ownerAlertsCache; }
+  return read();
+}
 
 /** The owner's notifications from the shop's records, and the ones dealt with
  *  since cleared. `leads` is unansweredLeads(), read once per sweep. */
 async function ownerNotices(roster, leads) {
   const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
-  const [appr, art, revs, pays] = await Promise.all([
+  const [appr, alerts, revs, pays] = await Promise.all([
     notifyPart('approvals', pool.query(`SELECT id, kind, requested_by FROM staff_approvals WHERE status = 'pending' ORDER BY id DESC`)),
-    notifyPart('art', pool.query(
-      `SELECT a.quote_code, a.updated_at FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-        WHERE a.status = 'submitted' AND q.cancelled_at IS NULL`)),
+    notifyPart('owner alerts', ownerAlerts({ fresh: true })),
     notifyPart('reviews', pool.query(
       `SELECT id, name, rating, submitted_at FROM reviews
         WHERE submitted_at IS NOT NULL AND deleted_at IS NULL AND moderated_at IS NULL AND approved IS NOT TRUE`)),
@@ -41358,16 +42294,51 @@ async function ownerNotices(roster, leads) {
     }
     await notifyClearResolved('owner', 'lead', leads.map((l) => String(l.id)));
   }
-  if (appr && art) {
+  /* Staff approvals stand on their own: they used to wait on the art read
+     too, so a failed art query silently dropped every approval. */
+  if (appr) {
     for (const a of appr.rows) {
       out.push({ recipient: 'owner', kind: 'approval', ref: String(a.id), link: '/admin/approvals',
         title: `Approval waiting: ${APPROVAL_WORDS[a.kind] || 'a request'} from ${nameOf(roster, a.requested_by)}` });
     }
-    const artRef = (a) => `art:${a.quote_code}:${new Date(a.updated_at).getTime()}`;
-    for (const a of art.rows) {
-      out.push({ recipient: 'owner', kind: 'approval', ref: artRef(a), link: '/admin/approvals', title: `Art to approve on ${a.quote_code}` });
+  }
+  /* Everything else that needs the owner (owner-alerts.js): art, library,
+     hours, training, team and customers. A kind is cleared only when every
+     source behind it was read, so a failed read never reads as "dealt with". */
+  if (alerts) {
+    const ALERT_SOURCES = { approval: ['art'], art: ['art'], library: ['design library'], hours: ['hours'],
+      training: ['training'], team: ['agreements', 'tasks', 'job notes'], customer: ['customers'] };
+    const { rows: hooked } = await pool.query(
+      `SELECT DISTINCT regexp_replace(ref, ':.*$', '') AS key FROM notifications
+        WHERE recipient = 'owner' AND kind = 'library' AND ref NOT LIKE 'poll:%'`).catch(() => ({ rows: [] }));
+    const told = new Set(hooked.map((h) => h.key));
+    for (const r of alerts.rows) {
+      if (r.kind === 'library' && told.has(r.ref.replace(/^poll:/, ''))) continue;
+      out.push({ recipient: 'owner', kind: r.kind, ref: r.ref, link: r.href, title: r.title });
     }
-    await notifyClearResolved('owner', 'approval', [...appr.rows.map((a) => String(a.id)), ...art.rows.map(artRef)]);
+    for (const [kind, sources] of Object.entries(ALERT_SOURCES)) {
+      if (sources.some((s) => alerts.failed.includes(s) || (alerts.skipped || []).includes(s))) continue;
+      if (kind === 'approval' && !appr) continue;
+      const live = alerts.rows.filter((r) => r.kind === kind).map((r) => r.ref);
+      if (kind === 'approval') live.push(...appr.rows.map((a) => String(a.id)));
+      if (kind === 'library') {
+        /* The studio's webhook keys a design 'kind-id:revision' and the poll
+           'poll:kind-id': both are cleared by the design, so a design still
+           waiting keeps its webhook row and a decided one clears both. */
+        const keys = live.map((ref) => ref.replace(/^poll:/, ''));
+        await pool.query(
+          `UPDATE notifications SET read_at = NOW() WHERE recipient = 'owner' AND kind = 'library' AND read_at IS NULL
+              AND NOT (regexp_replace(regexp_replace(ref, '^poll:', ''), ':.*$', '') = ANY($1::text[]))`, [keys]);
+        continue;
+      }
+      await notifyClearResolved('owner', kind, live);
+    }
+  } else if (appr) {
+    /* The alert list failed: clear only plain staff approvals decided since,
+       leaving art refs alone. */
+    await pool.query(
+      `UPDATE notifications SET read_at = NOW() WHERE recipient = 'owner' AND kind = 'approval' AND read_at IS NULL
+          AND ref NOT LIKE 'art:%' AND NOT (ref = ANY($1::text[]))`, [appr.rows.map((a) => String(a.id))]);
   }
   if (revs) {
     for (const r of revs.rows) {
@@ -41518,11 +42489,11 @@ async function taskNotices(roster) {
  *  marked read, so the bell clears itself. A reader whose read fails is
  *  skipped, never cleared, and the next reader still runs. */
 async function messageNotices(roster) {
-  const [channels, state] = await Promise.all([teamChannels(), chatReadState()]);
+  const [channels, state, names] = await Promise.all([teamChannels(), chatReadState(), staffRoster()]);
   for (const rd of chatReaders(roster)) {
     const reader = CHAN.readerKey(rd.actor);
     try {
-      const due = await unreadConversations(rd, roster, channels, state, 0);
+      const due = await unreadConversations(rd, roster, channels, state, 0, names);
       const now = due.map((d) => ({ kind: d.mail ? 'mail' : 'chat', ref: NOTIFY.messageRef(d.convo, d.first), title: NOTIFY.messageTitle(d.n, d.where), link: d.href }));
       if (now.length) {
         await pool.query(
@@ -42089,12 +43060,9 @@ async function readyKeyOf(staffId) {
   return TRAINING.readyKeyFor(path.track, path.role);
 }
 
-/* SQL for "this staff_training row ended training": the path's ready key
-   (the parameter named) or a Sales ready from before role courses had their
-   own. Only constants are written into the text. */
-function readyRow(alias, param) {
-  return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${TRAINING.READY_KEY}' AND ${alias}.done_at < '${TRAINING.LEGACY_READY_BEFORE}'::timestamptz))`;
-}
+/* SQL for "this staff_training row ended training" (TRAINING.readyRowSql,
+   the same rule as TRAINING.endsTraining). */
+const readyRow = TRAINING.readyRowSql;
 
 async function trainingFor(staffId) {
   const [ticks, facts, path, times] = await Promise.all([
@@ -42260,10 +43228,9 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
       undefined, tries.flat()) : null;
     const articleId = new Map(arts.rows.map((a) => [a.title, a.id]));
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
-    /* The sign-off whose Undo can keep the commission window: this path's
-       ready, or a Sales ready from before role courses had their own. */
-    const endsTraining = (s) => s.key === p.readyKey
-      || (s.key === TRAINING.READY_KEY && s.doneAt && new Date(s.doneAt) < new Date(TRAINING.LEGACY_READY_BEFORE));
+    /* The sign-off whose Undo can keep the commission window: the one that
+       ended training (TRAINING.endsTraining). */
+    const endsTraining = (s) => TRAINING.endsTraining(p.readyKey, s.key, s.doneAt);
     const stepRow = (s) => {
       const lessonHref = s.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(s.key.slice('lesson:'.length))}` : '';
       const link = s.locked && !owner ? escEmail(s.title)
@@ -42626,7 +43593,7 @@ async function examOpenFor(actor) {
 async function finishExamAttempt(res, sc, { items, total, rushPct, catalog, neededBy }) {
   const actor = currentActor() || OWNER_ACTOR;
   if (!(await examOpenFor(actor))) return back(res, '/admin/training', 'err', 'The quote exam opens once you pass the module before it.');
-  const r = QEXAM.grade(sc, items, rushPct, catalog, { chosen: neededBy, expected: addBusinessDays(new Date(), sc.businessDays).toISOString().slice(0, 10) });
+  const r = QEXAM.grade(sc, items, rushPct, catalog, { chosen: neededBy, expected: SHOPDAYS.shopDateAfter(sc.businessDays, new Date(), CUTOFF_MIN, SHOP_TZ) });
   if (actor.kind === 'staff') {
     await pool.query(
       `INSERT INTO staff_exam_attempts (staff_id, exam_key, scenario, passed, checks, items, total)
@@ -44000,6 +44967,7 @@ app.post('/admin/training/signoff', requireAdmin, async (req, res) => {
         client.release();
       }
       if (removed) log('training sign-off undone');
+      else return back(res, to, 'err', `${s.title} had no sign-off to undo, so nothing changed.`);
       return back(res, to, 'ok', `Undone: ${s.title}.`);
     }
     /* Not before the gate in front of it: the ready sign-off starts commission
@@ -44377,10 +45345,11 @@ function customerReplyText(body) {
    in [square brackets] is for the owner to fill in. */
 const KB_SEED = [
   { kind: 'faq', shortcut: 'turnaround', title: 'How long will my order take?', tags: 'turnaround, lead time, timing, when',
-    body: `Thanks for asking! Small orders are ready in 5–7 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\n\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`,
-    /* Owner, 2026-10-28: small 5-7 / larger 7-14 business days; rush for a fee,
-       no percentages shown. An unedited live copy of either older text updates. */
-    was: [`Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
+    body: `Thanks for asking! Small orders are ready in 5–10 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\n\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`,
+    /* Owner, 2026-10-28: small 5-10 / larger 7-14 business days; rush for a fee,
+       no percentages shown. Owner, 2026-11-14: small 5-10. An unedited live
+       copy of any older text updates. */
+    was: [`Thanks for asking! Small orders are ready in 5–7 business days and larger ones in 7–14, counted from when you order (or approve your proof, if we are designing it for you), plus shipping time if we ship it.\\n\\nNeed it sooner? Rush is available for a fee. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in about 10 business days after you approve the proof and pay the deposit, plus shipping time if we ship it.\n\nNeed it sooner? On full-color DTF prints we offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%). Screen printing, embroidery and cutouts cannot be rushed. Tell me your date and I will check what we can do.`, `Thanks for asking! Most orders are ready in [standard turnaround] business days after you approve the proof and pay the deposit.\n\nNeed it sooner? We offer rush turnaround for a fee: next business day (+80%), 2 days (+50%), 3 days (+30%) or 4 days (+10%), depending on what is on the press. Tell me your date and I will confirm what we can do.`] },
   { kind: 'faq', shortcut: 'deposit', title: 'Do I pay up front?', tags: 'deposit, payment, pay, balance',
     body: `We take a 50% deposit to start your order, and the balance when it is ready. Orders under $100 are paid in full up front.\n\nYou can pay online from your quote link. Card payments carry a 4% card fee; other ways to pay are listed on the quote.` },
   { kind: 'faq', shortcut: 'minimums', title: 'Is there a minimum order?', tags: 'minimum, how many, quantity, small order',
@@ -44754,7 +45723,7 @@ const KB_ADDED = [
     tags: 'rush, deadline, urgent, fast, by friday, need it soon, turnaround',
     body: `Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].\n\n` +
 `To keep it quick, could you send [the details still missing: quantity, sizes, artwork]?\n\n` +
-`(For you: never promise a date or a rush price before June confirms it. Only DTF can be rushed: screen printing, embroidery and cutouts cannot. Reply the same day either way.)` },
+`(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces); screen printing, business cards, flyers and SinaLite items cannot. Reply the same day either way.)` },
   { kind: 'faq', shortcut: 'checking', title: 'Let me check and get back to you', needsReview: true,
     tags: 'not sure, checking, question, unknown, get back, follow up',
     body: `Good question! Let me check with our production team so I give you the right answer. I'll get back to you by [time].\n\n` +
@@ -45091,7 +46060,13 @@ KB_ADDED.push({ kind: 'sop', title: PAY_GUIDE_TITLE,
      are rebuilt from the embroidery-only copy, which is itself kept in `was`. */
   const dtfOnly = '(For you: never promise a date or a rush price before June confirms it. Only DTF can be rushed: screen printing, embroidery and cutouts cannot. Reply the same day either way.)';
   const embroideryOnly = '(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)';
+  /* 2026-11-16: DTF, embroidery, signs and cutouts can be rushed (owner).
+     The DTF-only copy is rebuilt from the current one and kept in `was`, and
+     the older ones are rebuilt from that, as before. */
+  const signsToo = "(For you: never promise a date or a rush price before June confirms it. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces); screen printing, business cards, flyers and SinaLite items cannot. Reply the same day either way.)";
   const current = r ? r.body : '';
+  if (r) r.body = r.body.split(signsToo).join(dtfOnly);
+  if (r) r.was = [...(r.was || []), r.body];
   if (r) r.body = r.body.split(dtfOnly).join(embroideryOnly);
   if (r) r.was = [...(r.was || []), r.body.split("Hi [name], thanks! [Date] is tight. Let me check with the team what we can do for your date and I'll confirm today by [time].").join("Hi [name], thanks! [Date] is tight but we may be able to rush it for an extra fee. Let me check what's on the press and I'll confirm today by [time], with the price for the rush.")
     .split('(For you: never promise a date or a rush price before June confirms it. Only embroidery can be rushed: screen printing and DTF are made by our partner, who sells no rush. Reply the same day either way.)').join('(For you: never promise a date before June confirms it. Reply the same day either way.)')];

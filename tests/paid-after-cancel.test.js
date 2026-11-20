@@ -293,7 +293,9 @@ test('a new card page closes the quote\'s last one first', () => {
 
 test('cancelling a quote closes its open card page', () => {
   assert.match(cancelRoute, /cancelled_at = NOW\(\)/);
-  assert.match(cancelRoute, /expireCheckoutSession\(rows\[0\]\.stripe_session\)/);
+  /* In applyQuoteCancel, which cancelRoute's slice includes (2026-11-14). */
+  assert.match(cancelRoute, /await applyQuoteCancel\(code, reason,/);
+  assert.match(cancelRoute, /if \(q\.stripe_session\) await expireCheckoutSession\(q\.stripe_session\)/);
 });
 
 test('a cancelled quote still cannot open a new card page', () => {

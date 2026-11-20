@@ -41,7 +41,7 @@ const LOGO = `${SITE}/assets/images/brand/logo-current-900.png`;
    chosen per event. Swap in a better one by changing `photo`. */
 const PHOTOS = `${SITE}/assets/images/`;
 /* Orders close 2 weeks before every event (owner, 2026-10-28, replacing the
-   4 weeks of 2026-10-17): small orders take 5–7 business days and larger
+   4 weeks of 2026-10-17): small orders take 5–10 business days and larger
    ones 7–14, and anything later is a paid rush. */
 const { lastOpenDay, christmasLastDay } = require('./shop-closed');
 /* An occasion page's path, from the one list in marketing-calendar.js. */
@@ -562,7 +562,7 @@ function emailFor(send) {
     <ul style="margin:0 0 16px;padding-left:20px">${w.list.map((p) => `<li style="margin:5px 0">${esc(p)}</li>`).join('')}</ul>` : ''}
     ${showDeadline ? `<p style="margin:0 0 18px;padding:11px 14px;background:#fff1f5;border-left:4px solid ${PINK};border-radius:6px"><b>Order by ${esc(nice(ev.orderByDate))}</b> to have it in hand for ${esc(ev.name)}.</p>` : ''}
     <p style="margin:0 0 20px;text-align:center"><a href="${esc(ev.link)}" style="display:inline-block;background:${BLUE};color:#ffffff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:700;font-size:16px">${esc(ev.cta)}</a></p>
-    <p style="margin:0 0 6px">Questions, or want us to design it? Call or text <a href="tel:+17739004592" style="color:${BLUE}">${PHONE}</a> or reply to this email. Small orders are ready in 5–7 business days; need it sooner? Rush is available for a fee. Free pickup in Lakeview, by appointment.</p>
+    <p style="margin:0 0 6px">Questions, or want us to design it? Call or text <a href="tel:+17739004592" style="color:${BLUE}">${PHONE}</a> or reply to this email. Small orders are ready in 5–10 business days; need it sooner? Rush is available for a fee. Free pickup in Lakeview, by appointment.</p>
     ${s.beat === 'announce' && ev.email.ps ? `<p style="margin:16px 0 0;color:#4b5563"><b>P.S.</b> ${esc(fill(ev.email.ps, ev))}</p>` : ''}
     ${s.also ? `<div style="margin-top:22px;padding-top:14px;border-top:1px solid #e5e8f0;font-size:14px;color:#4b5563"><b style="color:${INK}">Also coming up:</b> ${esc(s.also.name)}, ${esc(nice(s.also.date))}. Order by ${esc(nice(s.also.orderByDate))}. <a href="${esc(s.also.link)}" style="color:${BLUE}">${esc(s.also.cta)}</a></div>` : ''}
   </div>
@@ -572,7 +572,7 @@ function emailFor(send) {
 </div></div>`;
   const text = [w.headline, '', ...w.paras, '', ...w.list.map((x) => '- ' + x), '',
     showDeadline ? `Order by ${nice(ev.orderByDate)} to have it in hand for ${ev.name}.` : '',
-    `${ev.cta}: ${ev.link}`, '', `Questions? Call or text ${PHONE}. Small orders are ready in 5–7 business days; rush available for a fee. Free pickup in Lakeview, by appointment.`,
+    `${ev.cta}: ${ev.link}`, '', `Questions? Call or text ${PHONE}. Small orders are ready in 5–10 business days; rush available for a fee. Free pickup in Lakeview, by appointment.`,
     s.also ? `Also coming up: ${s.also.name}, ${nice(s.also.date)}. Order by ${nice(s.also.orderByDate)}: ${s.also.link}` : ''].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
   return { subject: w.subject, preview: w.preview, html, text };
 }

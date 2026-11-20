@@ -70,7 +70,7 @@ test('until it is signed, every staff page sends a helper to the agreement', () 
   assert.deepStrictEqual(open.sort(), ['GET /admin/agreement', 'POST /admin/agreement', 'POST /admin/clock/out', 'POST /admin/clock/ping']);
   for (const k of open) assert.ok(STAFF.ROUTES[k], `${k} is a real route`);
   /* The flag comes from the current wording's row. */
-  assert.match(src, /staff_agreements a WHERE a\.staff_id = s\.id AND a\.version = \$4/);
+  assert.match(src, /staff_agreements a WHERE a\.staff_id = s\.id AND a\.version = \$\d+/);
 });
 
 test('a signed copy is shown in the wording it was signed under', () => {

@@ -195,9 +195,10 @@ const FAMILIES = {
   stretched_canvas: {
     label: 'Stretched Canvas', sizing: 'stock', target_dpi: 200, labour: 'rigid',
     /* The bars are bought per job (Blick, a Chicago store) and stretched here
-       after the print arrives: two days on top of the printer's promise.
-       An estimate until the owner times one job. */
-    turnaround_days: sg.BANNER_TURNAROUND_DAYS + 2,
+       after the print arrives. It took two days on top of the 3-day banner
+       promise; with every sign now 5 days (owner, 2026-11-16: "normal
+       delivery for everything is 5 days") that fits inside it. */
+    turnaround_days: sg.BANNER_TURNAROUND_DAYS,
     /* The design runs round the bars: the customer picks the FACE size and
        the design area grows by this much on every side (owner, 2026-10-20:
        "customer sizing should not include the 3in"). The print is billed at

@@ -2,7 +2,7 @@
   "_about": "The one menu for every jtees.net page AND the Design Studio (design.jtees.net reads assets/data/site-nav.html). Edit this, then run: node tools/site-nav.js --write  (tests/site-nav.test.js fails if a page drifts).",
   "announcement": [
     {
-      "text": "⚡ Fast turnaround · Small orders 5–7 business days · Rush available",
+      "text": "⚡ Fast turnaround · Small orders 5–10 business days · Rush available",
       "href": "/contact"
     },
     {
@@ -55,7 +55,7 @@
         },
         {
           "label": "Ready-Made Designs",
-          "href": "https://design.jtees.net/ready-made.php"
+          "href": "/shop-designs"
         },
         {
           "label": "Signs & Displays",
@@ -90,6 +90,23 @@
           "label": "All Products →",
           "href": "https://design.jtees.net/products.php",
           "strong": true
+        }
+      ]
+    },
+    {
+      "label": "Designs",
+      "items": [
+        {
+          "label": "Ready-Made Designs",
+          "href": "/shop-designs"
+        },
+        {
+          "label": "Clipart Library",
+          "href": "/clipart"
+        },
+        {
+          "label": "Featured Seasonal Designs",
+          "href": "/seasonal-designs"
         }
       ]
     },
@@ -279,7 +296,7 @@
   "footer": {
     "tagline": "Chicago's custom print shop for the culture. Shirts, signs, standees, party favors — if you can dream it, we can print it. Black-owned. Women-owned. Built for the community.",
     "texts": {
-      "label": "Get 10% off: join our texts →",
+      "label": "Get $15 off $50+: join our texts →",
       "href": "/texts?src=site"
     },
     "areas_note": "Proudly serving Lakeview, Lincoln Park, North Center, Roscoe Village, Logan Square, Wicker Park, Wrigleyville & all of Chicagoland. Pickup by appointment.",

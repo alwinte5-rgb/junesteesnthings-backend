@@ -23,7 +23,10 @@ test('dual roles preserve original learning records and the existing commission-
   const original=T.visibleSteps(undefined,primary).filter(s=>s.type!=='buffer');
   const combined=T.visibleSteps(undefined,dual);
   for(const s of original) assert.ok(combined.some(n=>n.key===s.key), `${dual}: lost ${s.key}`);
-  assert.equal(T.readyKeyFor(dual),T.readyKeyFor(primary));
+  // June's Tees + COS Sales ends in its own apparel sign-off (owner, 2026-11-18): the
+  // commission in the system is apparel commission, so it starts when apparel is
+  // signed off, never on a software sign-off. Design + Marketing keeps the primary's.
+  assert.equal(T.readyKeyFor(dual), dual === 'sales-software' ? 'signoff:apparel-ready' : T.readyKeyFor(primary));
   const ticks=new Map([['signoff:ready',{done_at:'2026-10-28T15:32:00Z'}]]);
   const p=T.progress(ticks,{},undefined,dual);
   assert.equal(p.steps.find(s=>s.key==='signoff:ready').done,true);

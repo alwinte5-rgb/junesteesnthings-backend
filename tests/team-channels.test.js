@@ -63,7 +63,11 @@ test('routes: channels chosen by the server, the owner manages them, alerts are 
   assert.match(send, /const ch = chatChannelFor\(b\.channel, channels, roster\);\n\s+if \(!ch\) return back/);
   assert.match(send, /const author = actor\.kind === 'staff' \? actor\.id : null;/, 'the author is who is signed in');
   const fn = src.slice(src.indexOf('function chatChannelFor('), src.indexOf('\n}\n', src.indexOf('function chatChannelFor(')));
-  assert.match(fn, /channelsFor\(currentActor\(\) \|\| OWNER_ACTOR, \[c\], roster\)/);
+  /* Who may open it is decided from who is signed in, never the form. */
+  assert.match(fn, /const actor = currentActor\(\) \|\| OWNER_ACTOR;/);
+  assert.match(fn, /CHAN\.mayUse\(actor, c, me, TRAINING\.trackOf\)/);
+  /* A helpers' direct chat: the owner reads it but never posts, and nobody posts to a disabled teammate. */
+  assert.match(send, /const block = channelPostBlock\(ch, actor, roster\);\n\s+if \(block\) return back/);
   const poll = route("app.get('/admin/api/team-chat', requireAdmin");
   assert.match(poll, /if \(!ch\) return res\.status\(404\)/);
   const alerts = route("app.post('/admin/team-chat/alerts', requireAdmin");
@@ -86,4 +90,28 @@ test('read receipts: a time per channel reader, only on your own messages, escap
   assert.match(seen, /from_owner = \$2/, 'and own direct messages');
   assert.match(src, /const seenSpan = \(seen, id\) => seen\[id\] \? `<span class="tc-seen" data-seen="\$\{Number\(id\)\}">\$\{escEmail\(seen\[id\]\)\}<\/span>`/);
   assert.match(src, /s\.textContent = \(d\.seen && d\.seen\[m\.id\]\) \|\| 'Not seen yet'/, 'the poll writes text, never HTML');
+});
+
+/* Direct chats between two helpers (2026-11-18). */
+test('a pair chat is for its two helpers only, and the owner reads but is not in it', () => {
+  assert.strictEqual(CHAN.pairAudience(7, 3), 'pair:3:7');
+  assert.strictEqual(CHAN.pairAudience(3, 7), 'pair:3:7');
+  for (const bad of [[3, 3], [0, 3], [-1, 3], ['x', 3], [3, null]]) assert.strictEqual(CHAN.pairAudience(...bad), null, String(bad));
+  const c = { id: 9, audience: 'pair:3:7' };
+  assert.deepStrictEqual(CHAN.pairOf(c), [3, 7]);
+  assert.strictEqual(CHAN.pairOf({ audience: 'all' }), null);
+  assert.strictEqual(CHAN.pairOf({ audience: 'pair:3:7:9' }), null);
+  assert.strictEqual(CHAN.pairOther(c, 3), 7);
+  assert.strictEqual(CHAN.pairOther(c, 4), null);
+  assert.ok(CHAN.isMember(c, { id: 3, active: true }));
+  assert.ok(!CHAN.isMember(c, { id: 4, active: true }));
+  assert.ok(!CHAN.isMember(c, { id: 3, active: false }));
+  assert.ok(!CHAN.isMember({ ...c, archived_at: new Date() }, { id: 3, active: true }));
+  const owner = { kind: 'owner' };
+  assert.ok(CHAN.mayUse(owner, c), 'owner may open it');
+  assert.ok(!CHAN.isIn(owner, c), 'but it never counts as hers');
+  assert.ok(CHAN.isIn(owner, { audience: 'all' }));
+  assert.ok(CHAN.isIn({ kind: 'staff', id: 3 }, c, { id: 3, active: true }));
+  assert.ok(!CHAN.isIn({ kind: 'staff', id: 4 }, c, { id: 4, active: true }));
+  assert.strictEqual(CHAN.audienceOf('pair:3:7'), null, 'never from a form');
 });

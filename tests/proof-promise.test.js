@@ -139,7 +139,7 @@ test('the staff "proof" reply splits designer orders from designs we make', () =
 
 test('the staff "turnaround" reply: 5-7 / 7-14 days, rush for a fee, no percentages', () => {
   const a = playbook().KB_SEED.find((x) => x.shortcut === 'turnaround');
-  assert.match(a.body, /5–7 business days and larger ones in 7–14/);
+  assert.match(a.body, /5–10 business days and larger ones in 7–14/);
   assert.match(a.body, /Rush is available for a fee/);
   assert.doesNotMatch(a.body, /\d+\s*%/);
   assert.ok(a.was.some((w) => /about 10 business days/.test(w)), 'the last live wording is in was');

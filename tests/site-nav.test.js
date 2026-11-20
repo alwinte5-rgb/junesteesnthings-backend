@@ -51,6 +51,9 @@ test('every menu link goes somewhere real', () => {
     } else if (href.startsWith('/#')) {
       assert.match(read('index.html'), new RegExp(`id="${href.slice(2)}"`), 'homepage has ' + href);
     } else {
+      if(['/clipart','/seasonal-designs'].includes(href)){
+        const gallery=require('../tools/lib/public-design-gallery');const registered=new Map();gallery.registerPublicGallery({get(route,handler){registered.set(route,handler);}},{read:async()=>[]});assert.ok(registered.has(href),'public gallery route exists: '+href);continue;
+      }
       // An extensionless page (/contact) is a file plus its own route in server.js.
       const bare = !href.endsWith('/') && !path.extname(href);
       const file = href.endsWith('/') ? href + 'index.html' : bare ? href + '.html' : href;

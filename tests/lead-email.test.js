@@ -104,16 +104,22 @@ test('the lead text route: staff need full messaging and leads, only body/back a
   assert.ok(textRoute.indexOf("if (status !== 'sent')") < textRoute.indexOf("INSERT INTO lead_notes"));
 });
 
-test('the lead card offers Text them only for a usable phone, with a box that posts to the route', () => {
-  assert.match(src, /\$\{normalizeUsPhone\(l\.phone\) && canTextLeads\(currentActor\(\)\) \? `<button[^`]*>Text them<\/button>` : ''\}/);
-  assert.match(src, /\$\{normalizeUsPhone\(l\.phone\) && canTextLeads\(currentActor\(\)\) \? leadTextBox\(l, backField\) : ''\}/);
+test('every open lead card has Text them; the text box only for a usable phone, else why not', () => {
+  /* The same buttons on every card (owner, 2026-11-19); leadTextArea decides what the box holds. */
+  assert.match(src, /onclick="var f=document\.getElementById\('tx-\$\{l\.id\}'\);[^"]*">Text them<\/button>\n/);
+  assert.match(src, /\$\{leadTextArea\(l, backField\)\}/);
+  const fn = src.slice(src.indexOf('function leadTextArea('), src.indexOf('\n}\n', src.indexOf('function leadTextArea(')));
+  assert.match(fn, /if \(!canTextLeads\(currentActor\(\)\)\) return why\(/);
+  assert.match(fn, /if \(normalizeUsPhone\(l\.phone\)\) return leadTextBox\(l, backField\);/);
+  assert.match(fn, /if \(isFoundLead\(l\)\) return why\('<b>No phone on file\.<\/b> We never text or call a number found online/);
   // A failed send is put back only into this lead's box.
   assert.match(src, /p\.get\('err'\)&&location\.hash==='#lead-\$\{l\.id\}'/);
 });
 
 test('a reply to a lead texted from its card comes back onto that lead', () => {
   const fn = src.slice(src.indexOf('async function textToLead('), src.indexOf('async function saveTextMedia('));
-  assert.match(fn, /n\.body LIKE 'You texted:%' AND n\.created_at > NOW\(\) - INTERVAL '14 days'/);
+  /* The owner's replies from her phone ("You replied:") count too (2026-11-19). */
+  assert.match(fn, /\(n\.body LIKE 'You texted:%' OR n\.body LIKE 'You replied:%'\) AND n\.created_at > NOW\(\) - INTERVAL '14 days'/);
   assert.match(textRoute, /`You texted: \$\{words\}`/);
   assert.match(src, /action="\/admin\/lead\/\$\{l\.id\}\/text"/);
 });
@@ -182,4 +188,37 @@ test('the page script: both sets, keys not text in the options, asks before repl
   assert.ok(!js.replace(/^<script>|<\/script>$/g, '').includes('</'), 'nothing that could close the script early');
   assert.ok(!js.slice(js.indexOf('var S='), js.indexOf(';\nfunction fill')).includes('<'), 'the data carries no raw <');
   assert.deepStrictEqual(M.textTemplates({ name: 'ana', email: 'a@b.c' }).map((t) => t.key), sets.e.map((t) => t.key));
+});
+
+/* The Email them box (owner, 2026-11-19): it opens plain, and a template menu
+   fills it for the situation, as the text box's does. */
+test('email templates: plain start, greeting and sign-off on each, no prices, within the limits', () => {
+  const b = M.blankEmail({ name: 'symia johnson' }, { signer: 'June', shop: "June's Tees" });
+  assert.strictEqual(b.body, "Hi Symia,\n\n\n\nThank you,\nJune\nJune's Tees");
+  assert.doesNotMatch(b.body, /quote|sizes|enquiry/i, 'nothing assumed');
+  const list = M.emailTemplates({ name: 'Symia' }, { signer: 'June', shop: "June's Tees" });
+  assert.ok(list.length >= 6);
+  const keys = new Set();
+  for (const t of list) {
+    assert.ok(!keys.has(t.key)); keys.add(t.key);
+    assert.match(t.body, /^Hi Symia,\n\n/); assert.match(t.body, /\n\nThank you,\nJune\nJune's Tees$/);
+    assert.ok(!/\$\d/.test(t.body + t.subject), t.key + ' carries no price');
+    const c = M.cleanEmail({ subject: t.subject, body: t.body });
+    assert.ok(!c.error, t.key + ': ' + c.error);
+  }
+  for (const k of ['details', 'working', 'artwork', 'missed_call', 'intro', 'check_in']) assert.ok(keys.has(k), k);
+  assert.match(M.emailTemplates({})[0].body, /^Hi,\n\n/, 'no name: plain Hi');
+});
+
+test('the untouched plain email is refused, however the sign-off is worded', () => {
+  for (const shop of ["June's Tees", "June's Tees & Things"]) {
+    const b = M.blankEmail({ name: 'Sam Lee' }, { signer: 'June', shop });
+    assert.match(M.cleanEmail({ subject: 'Hi', body: b.body }).error, /Write the message first/);
+  }
+  assert.match(M.cleanEmail({ subject: 'Hi', body: 'Hi,\n\nThanks,\nJune' }).error, /Write the message first/);
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam,\n\nYour shirts are ready.\n\nThank you,\nJune' }).error);
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Thanks for the order!' }).error, 'a one-line thank-you is a message');
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam, your shirts are ready.' }).error, 'words on the greeting line count');
+  /* "Thanks!" above a real sentence is a message, not a sign-off (code review, 2026-11-19). */
+  assert.ok(!M.cleanEmail({ subject: 'Hi', body: 'Hi Sam,\nThanks!\nYour shirts are ready Friday.\nJune' }).error);
 });

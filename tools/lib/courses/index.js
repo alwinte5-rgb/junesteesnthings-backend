@@ -103,7 +103,7 @@ const REWORDED = [
    "Need: a yes or no on a 30-day trial for a 20-client agency.\""],
   ["- Replies but few demos: the ask is too big. Offer a short video of COS doing their kind of work instead\n- Demos but no sign-ups: discovery missed their real problem\n- First months but no sales: the first two days need more help",
    "- Replies but few demos: the ask is too big. Offer the trial instead\n- Demos but no trials: discovery missed their real problem\n- Trials but no sales: the first two days need more help"],
-  /* 2026-11-06: every course brought up to date: Team basics and the Sales tour teach the clock, tasks, projects, bell, Mailbox and tour; chat alerts are capped at two a day; turnaround 5–7 / 7–14 from the deposit (or proof when we design); Claude replies on leads; quote shipping, services, Email and text it, reinstating; customer certificates accepted on upload (#519); the finder's running list and 2 searches a day; Meta Conversions API. */
+  /* 2026-11-06: every course brought up to date: Team basics and the Sales tour teach the clock, tasks, projects, bell, Mailbox and tour; chat alerts are capped at two a day; turnaround 5–10 / 7–14 from the deposit (or proof when we design); Claude replies on leads; quote shipping, services, Email and text it, reinstating; customer certificates accepted on upload (#519); the finder's running list and 2 searches a day; Meta Conversions API. */
   ["While the back office is open, a new message rings the bell at the top, with a sound and a pop-up if you turn them on from the bar on My Day. If a message has been unread for 10 minutes, the person also gets an email about it, at most two a day. You can switch your own alert emails off on the Team chat page, but then check Team chat at the start of every hour you work.",
    "If a message has been unread for 10 minutes, the person gets one email about it. You can switch your own alert emails off on the Team chat page, but then check Team chat at the start of every hour you work."],
   ["**Your shift in the back office**\n\n- **Clock in** on the Timeclock when you start and out when you stop, breaks included. Your pay comes from these hours, and your first clock-in each day posts your open tasks to June's Mailbox, so she sees your plan\n- **Tasks** sit on My Day by how long they take: Now, This week, Big project, plus Every day. Press **Start** when you take one on and **Mark completed** when it is done, saying what you did; some ask for proof (files or a link). The next one arrives by itself. Stuck on one? Its **Stuck?** link tells June\n- **Projects** are big work split into steps of about two hours on a timeline. Do the pink step; the next opens once it is completed\n- **Mailbox** keeps a conversation about one job or one task with it, so nothing is lost in chat. Every task has **Message about this task**\n- **My stats** shows what your week adds up to: hours, and tasks done on time\n- The **back-office tour** on My Day walks you through each of these screens in about ten minutes. Do it on your first day\n\n**Start and end of your day**\n\n- **Start:** clock in, then open My Day and Team chat. Read anything new before you start your own work",
@@ -112,9 +112,9 @@ const REWORDED = [
    "My Day is your to-do list, built for you. Work it top to bottom:\n\n- Leads waiting for a reply, oldest first\n- Follow-ups due today (the dates you set on leads)\n- Your tasks, your training, and June's latest note"],
   ["**Clock, tasks and the bell**\n\n- **Clock in** on the Timeclock when you start and out when you stop, breaks included. Your pay comes from these hours. Your first clock-in each day posts your open tasks to June's Mailbox, so she sees your plan\n- **Tasks** sit on My Day by how long they take: Now, This week, Big project, plus Every day. Press **Start** when you take one on and **Mark completed** when it is done, saying what you did; some ask for proof. The next one arrives by itself. Stuck? Use the task's **Stuck?** link\n- **Projects** are big work, such as a season's campaign, split into steps of about two hours. Do the pink step; the next opens once it is completed\n- **The bell** at the top counts what is new for you. Turn on sound and pop-ups from the bar on My Day so a new lead, task or message reaches you even in another tab\n- **Mailbox** keeps a conversation about one job or one task with it. Every task has **Message about this task**\n- **My stats** shows your week: hours, tasks done on time, and the people you found, contacted and heard back from\n- The **back-office tour** on My Day walks you through these screens in about ten minutes. Do it on your first day\n\n**Training and My earnings**\n\nTraining is this course.",
    "**Training and My earnings**\n\nTraining is this course."],
-  ["- Small orders are ready in 5–7 business days and larger ones in 7–14, plus shipping time if we ship it\n- The clock starts when they pay the deposit, or when they approve the proof if we are designing it for them, not at the first message. Late artwork or a late approval moves the date\n- A Design Studio order (they designed it themselves on jtees.net) has no proof: it prints exactly as they made it",
+  ["- Small orders are ready in 5–10 business days and larger ones in 7–14, plus shipping time if we ship it\n- The clock starts when they pay the deposit, or when they approve the proof if we are designing it for them, not at the first message. Late artwork or a late approval moves the date\n- A Design Studio order (they designed it themselves on jtees.net) has no proof: it prints exactly as they made it",
    "- Most orders are ready in about 10 business days after the customer approves the proof and pays the deposit\n- The clock starts at proof approval and deposit, not at the first message. Late artwork or a late approval moves the date"],
-  ["- Small orders are ready in 5–7 business days and larger ones in 7–14, plus shipping time if we ship it\n- The clock starts when they pay the deposit, or when they approve the proof if we are designing it for them, not at the first message. Late artwork or a late approval moves the date\n- A Design Studio order (they designed it themselves on jtees.net) has no proof: it prints exactly as they made it",
+  ["- Small orders are ready in 5–10 business days and larger ones in 7–14, plus shipping time if we ship it\n- The clock starts when they pay the deposit, or when they approve the proof if we are designing it for them, not at the first message. Late artwork or a late approval moves the date\n- A Design Studio order (they designed it themselves on jtees.net) has no proof: it prints exactly as they made it",
    "- Most orders are ready in [standard turnaround, owner to fill in] business days after the customer approves the proof and pays the deposit\n- The clock starts at proof approval and deposit, not at the first message. Late artwork or a late approval moves the date"],
   ["**Write a reply with Claude**\n\nOpen the lead's full message first: it shows everything they wrote. Then, in the email box on the lead, **Write a reply with Claude** answers what they asked, with our list prices, and replaces the message for you to edit. To change it, type what to change (\"women's cotton tees only, shorter\") and press **Rewrite**. Anything Claude cannot know comes back marked \"June to fill in\", and the email will not send until you replace it with the real answer (ask June if you do not know). Always read it before you send: it is your message, not Claude's. Once a lead is contacted it moves to its own section, and the same button becomes **Suggest a follow-up with Claude**.\n\n**Phone and chat**\n\n- On the phone",
    "**Phone and chat**\n\n- On the phone"],
@@ -230,6 +230,12 @@ const REWORDED = [
    "Press **Quote** on the lead and build it (module 5). If your quote is waiting for June's approval, it shows on My Day once approved; then copy the message and send it."],
   ["- Finishing makes it ready to send. While you are in training it goes to June first, and approving it emails it to the customer. Only one that could not be emailed shows on My Day for you to send",
    "- Finishing makes it ready to send. While you are in training it goes to June first; once approved it shows on My Day for you to send"],
+  /* 2026-11-16: DTF, embroidery, Signs365 signs and cutouts can be rushed;
+     no same-day or next-day orders; 3pm cutoff and holidays (owner). */
+  ["These can be rushed: **DTF**, **embroidery**, **signs and banners** (from Signs365) and **cutouts**. Screen printing, Signs365 business cards and flyers, and SinaLite printed items (stickers, labels, pouches, calendars and the like) cannot be rushed at any price. So for any of those, or a mix that includes one, the answer to \"can you do it faster?\" is \"let me ask June\", never a yes and never a price.\n\nWe never take same-day or next-day orders: the soonest any order can be ready is 2 business days. Business days skip weekends and the shop's holidays (New Year's Day, Memorial Day, July 4, Labor Day, Thanksgiving and the day after, Christmas Eve, Christmas Day and New Year's Eve), and a deposit (or proof approval) that comes in at 3pm or later starts the clock the next business day.\n\n**Rush fees**\n\nA rush counts from the soonest usual date: 5 business days for most orders (the start of the usual 5\u201310). For a fee, depending on what is already in the queue:\n\n- 4 business days: +10%\n- 3 business days: +20%\n- 2 business days: +35% (the soonest)\n\nEmbroidery takes 7 business days and is never ready sooner than 3:\n\n- 6 business days: +10%\n- 5 business days: +20%\n- 4 business days: +35%\n- 3 business days: +50%\n\nOrders of 50 or more garment pieces take 7 business days and are never ready sooner than 3:\n\n- 6 business days: +10%\n- 5 business days: +30%\n- 4 business days: +50%\n- 3 business days: +70%\n\nAn embroidered order of 50 or more pieces takes the 50+ steps.\n\nThe quote form sets the rush from the **Needed by** date you enter, and only when every item can be rushed, so get the real date from the customer. Never promise a rush date before June confirms it can be done.", "Only **DTF** can be rushed. Screen printing, embroidery and cutouts cannot be rushed at any price. So for a screen print, embroidery, cutouts, or a mix that includes any of them, the answer to \"can you do it faster?\" is \"let me ask June\", never a yes and never a price.\n\nOn DTF, for a fee, depending on what is already in the queue:\n\n- Same day: +70% (the most rush ever costs)\n- Next business day: +50%\n- 2 business days: +35%\n- 3 business days: +20%\n- 4 business days: +10%\n\nThe quote form sets the rush from the **Needed by** date you enter, and only when every item is DTF, so get the real date from the customer. Never promise a rush date before June confirms it can be done."],
+  ["- **A tight date on DTF, embroidery, signs or cutouts:** rush, offered honestly, only after checking with June. Screen printing and SinaLite items cannot be rushed", "- **A DTF order with a tight date:** rush, offered honestly, only after checking with June. Nothing else can be rushed"],
+  ["- Put in the needed-by date. The form adds rush if the date needs it and every item can be rushed (DTF, embroidery, signs and cutouts; not screen printing or SinaLite items), and says why", "- Put in the needed-by date. The form adds rush if the date needs it and every item is DTF (nothing else can be rushed), and says why"],
+  ["Check the production board and ask June. DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days (3 for embroidery or 50+ pieces), and only when there is room. Put the date in the quote and the form adds the rush fee.", "Check the production board and ask June. Only DTF can be rushed, and only when there is room. Put the date in the quote and the form adds the rush fee on DTF."],
   /* 2026-10-13: only DTF can be rushed (owner, 2026-10-12). */
   ["Only **DTF** can be rushed. Screen printing, embroidery and cutouts cannot be rushed at any price. So for a screen print, embroidery, cutouts, or a mix that includes any of them, the answer to \"can you do it faster?\" is \"let me ask June\", never a yes and never a price.\n\nOn DTF, for a fee, depending on what is already in the queue:",
    "Only **embroidery** can be rushed: it is the one thing we make in house. Screen printing and DTF are made for us by a partner in 7 to 10 business days, and they sell no rush at any price. So for a screen print, DTF, or a mix that includes either, the answer to \"can you do it faster?\" is \"let me ask June\", never a yes and never a price.\n\nOn embroidery, for a fee, depending on what is on the machine:"],
@@ -310,26 +316,59 @@ function salesRoleOf(r) {
 // A single combined course avoids duplicated Team basics, lesson IDs and
 // final sign-offs. Original lesson/quiz keys and the primary ready key stay
 // intact: assigning a second duty never deletes training or earned pay.
+//
+// Each duty is a `part` (owner, 2026-11-18: Myra trains "side by side"): a
+// module waits only for the modules before it in its own part (and for Team
+// basics), so one duty's exam never holds the other duty shut. The second
+// duty ends in its own practical assessment and its own ready sign-off
+// (PART_READY). For June's Tees + COS Sales that one is the track's ready key
+// (tracks.js `ready`), so apparel commission starts when June signs off
+// apparel sales, never on a software sign-off. Design + Marketing keeps the
+// course's own final ready, so nobody already on it loses ready or pay; that
+// final ready waits for every lesson and for the Design sign-off
+// (training.js progress).
+const PART_READY = {
+  'sales-software': { key: 'signoff:apparel-ready', type: 'signoff', minutes: 0, partReady: true, short: 'the June’s Tees sign-off',
+    title: 'Ready to send small June’s Tees quotes and messages on their own',
+    hint: 'The last step of the June’s Tees half. Apparel commission starts here, on quotes you create from now on. June decides when to move you up.' },
+  'design-marketing': { key: 'signoff:design-ready', type: 'signoff', minutes: 0, partReady: true, short: 'the Design sign-off',
+    title: 'Design work signed off',
+    hint: 'The last step of the Design half: June checks your proofs and design work. Your final ready sign-off waits for it. June decides when to move you up.' },
+};
 const dualCourses = new Map();
 function dualCourse(track) {
   if (dualCourses.has(track)) return dualCourses.get(track);
   const isSales = track === 'sales-software';
   const primary = isSales ? SOFTWARE_CORE : SALES_CORE;
   const secondary = isSales ? SALES_CORE : DESIGN_CORE;
+  const secondaryPart = isSales ? 'sales' : 'design';
   const secondaryFinal = {
     key: `${secondary.key}:assessment`, title: `${secondary.title}: practical assessment`,
     goal: `Demonstrate the ${secondary.title.toLowerCase()} work before working independently.`,
-    lessons: [], quiz: secondary.final.quiz, buffer: 5,
-    practice: [], // The combined final sign-off covers both duties; no early release here.
+    lessons: [], quiz: secondary.final.quiz, buffer: 5, part: secondaryPart,
+    practice: [PART_READY[track]],
   };
   const team = SOFTWARE_CORE.modules[0];
+  const as = (part) => (m) => ({ ...m, part });
+  // Content's c4 (editing) is left out on purpose: in this role the designer
+  // captures or requests raw footage and the video editor edits it (tracks.js).
   const core = isSales
-    ? [team, ...SALES_CORE.modules, secondaryFinal, ...SOFTWARE_CORE.modules.filter(m => m.key !== 'team')]
-    : [team, ...DESIGN_CORE.modules.filter(m => m.key !== 'team'), secondaryFinal,
-        ...CONTENT_CORE.modules.filter(m => ['c2', 'c3', 'c5', 'c6', 'c7', 'c8'].includes(m.key)), ...SALES_CORE.modules];
+    ? [team, ...SALES_CORE.modules.map(as('sales')), secondaryFinal, ...SOFTWARE_CORE.modules.filter(m => m.key !== 'team').map(as('software'))]
+    : [team, ...DESIGN_CORE.modules.filter(m => m.key !== 'team').map(as('design')), secondaryFinal,
+        ...CONTENT_CORE.modules.filter(m => ['c2', 'c3', 'c5', 'c6', 'c7', 'c8'].includes(m.key)).map(as('content')),
+        ...SALES_CORE.modules.map(as('sales'))];
   const c = {
     ...primary, key: track, title: isSales ? 'June’s Tees + COS Sales' : 'Design + Marketing & Light Sales', track,
-    modules: core.map((m, i) => ({ ...m, key: `${i}:${m.key}` })), final: primary.final,
+    modules: core.map((m, i) => ({ ...m, key: `${i}:${m.key}` })),
+    /* On June's Tees + COS the software ready no longer ends training or
+       starts commission (the apparel sign-off does), so it says so (code
+       review). Same key, so a ready already given is kept. */
+    final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:ready'
+      ? { ...x, title: 'Ready to sell COS software on your own',
+          hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }
+      : x)) } : primary.final,
+    // The closing exam and sign-offs belong to the first duty's part.
+    finalPart: isSales ? 'software' : 'sales',
   };
   dualCourses.set(track, c);
   return c;
@@ -361,4 +400,4 @@ function glossary() {
   return out;
 }
 
-module.exports = { COURSES, SALES_ROLES, salesRoleOf, coursesFor, lessonArticles, glossary };
+module.exports = { COURSES, SALES_ROLES, PART_READY, salesRoleOf, coursesFor, lessonArticles, glossary };

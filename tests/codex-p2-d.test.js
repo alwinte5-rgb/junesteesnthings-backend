@@ -7,7 +7,8 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const after = (a, n = 1500) => { const i = src.indexOf(a); assert.ok(i > -1, a); return src.slice(i, i + n); };
 
 test('#129 drafts: cancelling keeps them private, no payment, no customer message, not counted as waiting', () => {
-  assert.match(after("app.post('/admin/quote/:code/cancel'", 3000), /status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END/);
+  assert.match(after("app.post('/admin/quote/:code/cancel'", 2000), /await applyQuoteCancel\(/);
+  assert.match(after('async function applyQuoteCancel(', 3000), /status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END/);
   assert.match(after("app.post('/admin/quote/:code/mark-paid'", 2500), /if \(q\.status === 'draft'\) return res\.redirect/);
   assert.match(after('async function moveJobToStage(', 1500), /if \(\['draft', 'held'\]\.includes\(String\(before\.status \|\| ''\)\)\) notify = false;/);
   assert.match(src, /gQuotes\.filter\(\(q\) => q\.status !== 'draft'\)\.length\} waiting on the customer/);

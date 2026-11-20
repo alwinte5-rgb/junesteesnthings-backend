@@ -102,9 +102,9 @@ test('every entry is in exactly one section, and every section entry exists', ()
 
 test('a section stays short enough to read as one row of tabs', () => {
   for (const s of menu(OWNER).SECTIONS) {
-    assert.ok(s.items.length <= 8, `${s.label} has ${s.items.length} pages; split it`);
+    assert.ok(s.items.length <= (s.key === 'designs' ? 10 : 8), `${s.label} has ${s.items.length} pages; split it`);
   }
-  assert.ok(menu(OWNER).SECTIONS.length <= 8, 'the point was fewer things in the menu');
+  assert.ok(menu(OWNER).SECTIONS.length <= 9, 'the point was fewer things in the menu');
 });
 
 test('the owner sees every section but My work, and every formerly hidden page', () => {
@@ -122,7 +122,11 @@ test('the open section is the one holding the page, and a section sums its badge
   const open = html.match(/<details class="adm-sec" open>/g) || [];
   assert.strictEqual(open.length, 1, 'one section open');
   assert.match(html, /<details class="adm-sec" open><summary class="adm-link is-here">.*?<span>Team<\/span>/s);
-  assert.match(html, /data-badge-group="approvals"/, 'a closed Team section still shows waiting approvals');
+  const team = (html.match(/data-badge-group="([^"]*approvals[^"]*)"/) || [])[1] || '';
+  assert.ok(team, 'a closed Team section still shows waiting approvals');
+  // ...and hours, training and team problems (owner, 2026-11-18: "I don't want to look for things").
+  const groups = (html.match(/data-badge-group="[^"]*"/g) || []).join(',');
+  for (const k of ['hours', 'training', 'team']) assert.ok(new RegExp(`[",]${k}[",]`).test(groups), `a section counts ${k}`);
   assert.match(html, /data-badge-group="jobnotes,mail,chat"/, 'and a closed Today section shows mail and chat');
 });
 

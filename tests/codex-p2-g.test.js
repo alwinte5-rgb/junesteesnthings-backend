@@ -15,10 +15,22 @@ test('#159 replies: unchecked ones hidden from helpers, staff notes never reach 
 test('#159 the rush reply promises no rush before the method is known', () => {
   const r = after("shortcut: 'rush'", 900);
   assert.doesNotMatch(r, /rush it for an extra fee/);
-  assert.match(r, /Only DTF can be rushed: screen printing, embroidery and cutouts cannot/);
+  assert.match(r, /DTF, embroidery, signs and cutouts can be rushed, never sooner than 2 business days \(3 for embroidery or 50\+ pieces\); screen printing, business cards, flyers and SinaLite items cannot/, '2026-11-16');
   // A live copy at the embroidery-only wording, or the first one, still updates.
-  const fix = after("const r = KB_ADDED.find((x) => x.shortcut === 'rush');", 2400);
-  assert.match(fix, /if \(r\) \{ r\.was\.push\(r\.body\); r\.body = current; \}/);
+  /* Run the real update block on the reply as it is today: every older live
+     wording (DTF only, embroidery only, the first one) must be in `was`, and
+     the body must stay the current text. */
+  const at = src.indexOf("const r = KB_ADDED.find((x) => x.shortcut === 'rush');");
+  const block = src.slice(at, src.indexOf('r.body = current; }', at) + 'r.body = current; }'.length);
+  const body = r.slice(r.indexOf('body: `') + 7, r.indexOf('` },')).replace(/` \+\n`/g, '').replace(/\\n/g, '\n');
+  const reply = { shortcut: 'rush', body };
+  new Function('KB_ADDED', block)([reply]);
+  assert.strictEqual(reply.body, body, 'the current text stays');
+  const note = (w) => reply.was.some((x) => x.includes(w));
+  assert.ok(note('Only DTF can be rushed: screen printing, embroidery and cutouts cannot.'), 'the DTF-only copy updates');
+  assert.ok(note('Only embroidery can be rushed: screen printing and DTF are made by our partner'), 'the embroidery-only copy updates');
+  assert.ok(note('we may be able to rush it for an extra fee'), 'and the first wording');
+  assert.ok(reply.was.every((x) => x !== body));
 });
 test('#159 a reply too long for a text says so when chosen', () => {
   assert.match(src, /and a text holds 300: shorten it, or send it as an email\./);

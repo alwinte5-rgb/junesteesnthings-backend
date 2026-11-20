@@ -485,7 +485,8 @@ test('every job comes from one list (tracks.js): a new track gets its channel, p
   assert.ok(!TRAINING.LESSON_PREFIXES.includes('Practice'), 'a one-off "Word word: " title is not a course prefix');
   assert.ok(TRAINING.LESSON_PREFIXES.includes('Software sales course') && TRAINING.LESSON_PREFIXES.includes('Team basics'));
   // Moving up after training: sales Training -> Supervised, Design -> Designer, and nothing else.
-  assert.deepStrictEqual(TR.NEXT_PRESET, { training: 'supervised', design: 'designer' });
+  assert.deepStrictEqual(TR.NEXT_PRESET, { training: 'supervised', design: 'designer',
+    'dual-sales': 'dual-sales-trained', 'design-marketing': 'design-marketing-trained' });
   // Every path, run from the source: sales, one per sales role, then every other track.
   assert.deepStrictEqual(trainingPaths().filter((x) => !x.role).map((x) => x.key), keys);
 });
