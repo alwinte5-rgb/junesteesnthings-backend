@@ -119,11 +119,11 @@ test('changing a helper\'s path also sets that path\'s permissions unless June u
 test('nobody already trained on June\'s Tees + COS loses ready or commission', () => {
   const rk = T.readyKeyFor('sales-software');
   // A software or design ready never ends training here by itself: a designer moved onto the path is not trained for apparel.
-  assert.equal(T.endsTraining(rk, 'signoff:ready', '2026-11-01T00:00:00Z'), false);
-  assert.equal(T.endsTraining(rk, 'signoff:apparel-ready', '2026-11-01T00:00:00Z'), true);
+  assert.equal(T.endsTraining(rk, 'signoff:ready', '2026-11-01T00:00:00Z', false), false);
+  assert.equal(T.endsTraining(rk, 'signoff:apparel-ready', '2026-11-01T00:00:00Z', false), true);
   // Other paths: unchanged (the old Sales ready from before role courses still counts).
-  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', '2026-10-01T00:00:00Z'), true);
-  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', '2026-10-20T00:00:00Z'), false);
+  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', '2026-10-01T00:00:00Z', false), true);
+  assert.equal(T.endsTraining('signoff:closer-ready', 'signoff:ready', '2026-10-20T00:00:00Z', false), false);
   // Those already signed ready on the path are given the apparel sign-off once, at startup, with the same date and signer.
   const at = SRC.indexOf("'once:apparel-ready-from-ready'");
   assert.ok(at > 0, 'the one-time grant exists');
@@ -200,7 +200,7 @@ test('every back-office page a course sends people to exists', () => {
 });
 
 test('each course ends at its own ready key, so a move between paths never borrows one (#569)', () => {
-  const ends = (track, key) => T.endsTraining(T.readyKeyFor(track), key, '2026-11-15T00:00:00Z');
+  const ends = (track, key) => T.endsTraining(T.readyKeyFor(track), key, '2026-11-15T00:00:00Z', false);
   const done = (track, key) => T.progress(new Map([[key, { done_at: '2026-11-15T00:00:00Z' }]]), {}, undefined, track)
     .steps.filter((s) => s.done).map((s) => s.key);
   // Design -> Design + Marketing: the design half is signed, the path is not finished.
@@ -237,15 +237,15 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   assert.doesNotMatch(stmt, /DELETE/, 'nothing is deleted (owner, 2026-11-20)');
   assert.ok(SRC.indexOf("'once:apparel-ready-from-ready'") < at, 'after the apparel grant, which reads the old key');
   assert.equal(T.OLD_READY_KEY, 'signoff:old-ready');
-  for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01'), false, `the record ends nothing on ${t}`);
+  for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01', false), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
   assert.match(stmt, /stuck AS \(/, 'a ready left in place is reported, not skipped silently');
 });
 
 test('a Sales ready from before role courses counts only on the Sales paths it was given for (#569)', () => {
   const old = '2026-10-01T00:00:00Z';
-  for (const r of [null, ...Object.keys(T.SALES_ROLES)]) assert.equal(T.endsTraining(T.readyKeyFor('sales', r), 'signoff:ready', old), true, `sales/${r}`);
-  for (const t of ['design', 'design-marketing', 'sales-software', 'software', 'content']) assert.equal(T.endsTraining(T.readyKeyFor(t), 'signoff:ready', old), false, t);
+  for (const r of [null, ...Object.keys(T.SALES_ROLES)]) assert.equal(T.endsTraining(T.readyKeyFor('sales', r), 'signoff:ready', old, false), true, `sales/${r}`);
+  for (const t of ['design', 'design-marketing', 'sales-software', 'software', 'content']) assert.equal(T.endsTraining(T.readyKeyFor(t), 'signoff:ready', old, false), false, t);
   assert.match(T.readyRowSql('t', '$2'), /AND \$2::text IN \('signoff:ready', 'signoff:leadgen-ready', 'signoff:closer-ready', 'signoff:accounts-ready'\)/);
   assert.deepEqual(T.legacyReadyPaths(), ['signoff:ready', ...Object.keys(T.SALES_ROLES).map((r) => T.readyKeyFor('sales', r))], 'from the roles, not a list by hand');
 });
@@ -253,7 +253,7 @@ test('a Sales ready from before role courses counts only on the Sales paths it w
 test('a ready copied off another path never counts as the old Sales ready on a role path, in any order (#569 review)', () => {
   const old = '2026-10-01T00:00:00Z';
   const closer = T.readyKeyFor('sales', 'closer');
-  assert.equal(T.endsTraining(closer, T.READY_KEY, old), true, 'a real pre-role-course Sales ready still ends a role');
+  assert.equal(T.endsTraining(closer, T.READY_KEY, old, false), true, 'a real pre-role-course Sales ready still ends a role');
   assert.equal(T.endsTraining(closer, T.READY_KEY, old, true), false, 'not when they hold the copied record');
   assert.equal(T.endsTraining(T.readyKeyFor('sales'), T.READY_KEY, old, true), true, 'plain Sales: it is the path\'s own ready, commission from its date');
   const ticks = (rows) => new Map(rows.map(([k, at]) => [k, { step_key: k, done_at: at, signed_by: 'june' }]));
@@ -266,5 +266,6 @@ test('a ready copied off another path never counts as the old Sales ready on a r
   const at = SRC.indexOf('TRAINING.carriedReady(s.training_track, track)');
   assert.doesNotMatch(SRC.slice(at, SRC.indexOf("'COMMIT'", at)), /GREATEST/, 'no made-up date: commission keeps when it was signed');
   assert.match(SRC, /TRAINING\.endsTraining\(p\.readyKey, s\.key, s\.doneAt, !!p\.copied\)/, 'the Undo box reads the same rule');
-  assert.match(SRC, /o\.key === TRAINING\.OLD_READY_KEY/, 'and the session');
+  assert.match(SRC, /OLD_READY_KEY\)/, 'and the session');
+  assert.throws(() => T.endsTraining(closer, T.READY_KEY, old), /pass copied/, 'leaving it out fails loudly, not open');
 });

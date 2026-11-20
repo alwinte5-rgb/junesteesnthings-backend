@@ -1905,13 +1905,13 @@ async function initStaffTables() {
          already held OLD_READY_KEY. Not expected (the key is new here), so it
          is reported rather than skipped silently (code review). */
       stuck AS (
-        SELECT DISTINCT t.staff_id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
+        SELECT DISTINCT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
          WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
            AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4))
-      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept, (SELECT count(*) FROM stuck)::int AS stuck`,
+      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept, (SELECT array_agg(id ORDER BY id) FROM stuck) AS stuck`,
       [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
-    if (r.stuck) console.warn(`training (#569): ${r.stuck} helper(s) kept signoff:ready because they already had ${TRAINING.OLD_READY_KEY}: check their training by hand`);
+    if (r.stuck) console.warn(`training (#569): staff ${r.stuck.join(', ')} kept signoff:ready because they already had ${TRAINING.OLD_READY_KEY}; an old Sales ready of theirs no longer ends a sales role's course: check them by hand`);
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
@@ -3982,10 +3982,11 @@ async function staffByEmail(email) {
                WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - interval '5 minutes')`, [s.id])
     .catch(() => {});
   const flags = s.flags || [];
+  const readyRows = s.ready_rows || [];
+  const copied = readyRows.some((o) => o.key === TRAINING.OLD_READY_KEY);
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
-           inTraining: !(s.ready_rows || []).some((r) => TRAINING.endsTraining(
-             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), r.key, r.at,
-             (s.ready_rows || []).some((o) => o.key === TRAINING.OLD_READY_KEY))),
+           inTraining: !readyRows.some((r) => TRAINING.endsTraining(
+             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), r.key, r.at, copied)),
            track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),

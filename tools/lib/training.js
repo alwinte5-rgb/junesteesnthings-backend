@@ -127,7 +127,9 @@ function legacyReadyPaths() {
    Sales from another course. It then counts as the old pre-role-course Sales
    ready on no role path, whatever order the path and role were set in (code
    review: a date clamp at carry time depended on the order of clicks). */
-function endsTraining(readyKey, key, doneAt, copied = false) {
+function endsTraining(readyKey, key, doneAt, copied) {
+  /* Required, so a new caller cannot fall back to the looser rule (code review). */
+  if (typeof copied !== 'boolean') throw new Error('endsTraining: pass copied (true or false)');
   if (key === readyKey) return true;
   return key === READY_KEY && !copied && legacyReadyPaths().includes(readyKey) && !!doneAt && new Date(doneAt).getTime() < LEGACY_BEFORE_MS;
 }
