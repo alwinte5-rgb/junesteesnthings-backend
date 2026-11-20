@@ -230,6 +230,19 @@ test('approving is claimed first, so a double press cannot send twice', () => {
   assert.ok(r.indexOf("'processing'") < r.indexOf('sendJobMessage'));
 });
 
+test('Remove takes a request off the list without sending it or telling the helper', () => {
+  const r = route("app.post('/admin/approvals/:id', requireAdmin");
+  const rm = r.indexOf("if (decision === 'remove')");
+  assert.ok(rm > r.indexOf("SET status = 'processing'"), 'claimed first, like every decision');
+  assert.ok(rm < r.indexOf('releaseHeldQuote') && rm < r.indexOf('sendJobMessage') && rm < r.indexOf('sendLeadEmail'),
+    'returns before anything can be sent');
+  assert.match(r, /SET status = 'removed', decided_at = NOW\(\), decision_note = NULL/);
+  /* Helpers are told only about approved and sent-back requests. */
+  assert.match(src, /WHERE status IN \('approved', 'rejected'\) AND decided_at > NOW\(\)/);
+  /* Both places that decide requests offer it. */
+  assert.strictEqual((src.match(/name="decision" value="remove"/g) || []).length, 2);
+});
+
 test('a helper in training writes a message; it is held, not sent', () => {
   const r = route("app.post('/admin/quote/:code/message', requireAdmin");
   assert.ok(r.indexOf("actorLevel('customers.message') === 'approval'") < r.indexOf('sendJobMessage('));
