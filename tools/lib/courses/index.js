@@ -336,8 +336,8 @@ const PART_READY = {
     title: 'Design work signed off',
     hint: 'The last step of the Design half: June checks your proofs and design work. Your final ready sign-off waits for it. June decides when to move you up.' },
 };
-/* Replace the one step with this key, and fail loudly at load if there is
-   none: a silent miss would leave the path ending on the Sales course's ready
+/* Replace the one step with this key, and fail loudly if there is none (the
+   Design + Marketing course is built at load below, so it fails at boot): a silent miss would leave the path ending on the Sales course's ready
    and reopen #569 (code review). */
 function renameOnce(steps, key, fn) {
   if (steps.filter((x) => x.key === key).length !== 1) throw new Error(`expected one ${key} to rename`);
@@ -413,5 +413,8 @@ function glossary() {
   for (const c of Object.values(COURSES)) for (const [k, v] of Object.entries(c.glossary || {})) if (!out[k]) out[k] = v;
   return out;
 }
+
+// Built now, so a course edit that breaks it stops the boot, not a page (code review).
+dualCourse('design-marketing');
 
 module.exports = { COURSES, SALES_ROLES, PART_READY, salesRoleOf, coursesFor, lessonArticles, glossary };

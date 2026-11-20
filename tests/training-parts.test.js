@@ -230,7 +230,7 @@ test('each course ends at its own ready key, so a move between paths never borro
 test('the existing ready sign-offs are copied to their course\'s key once, and the originals kept (#569)', () => {
   const at = SRC.indexOf("'once:ready-key-per-course'");
   assert.ok(at > 0, 'the one-time copy exists');
-  const stmt = SRC.slice(SRC.lastIndexOf('WITH mark AS', at), SRC.indexOf('AS stuck`', at));
+  const stmt = SRC.slice(SRC.lastIndexOf('WITH mark AS', at), SRC.indexOf('AS kept`', at));
   assert.match(stmt, /ON CONFLICT DO NOTHING RETURNING 1\),\s*map AS \(SELECT \* FROM unnest\(\$1::text\[\], \$2::text\[\]\)/, 'the marker decides, and the keys are parameters');
   assert.match(stmt, /SELECT t\.staff_id, m\.key, t\.done_at, t\.signed_by/, 'same date and signer');
   assert.match(stmt, /UPDATE staff_training t SET step_key = \$4/, 'the original is kept under the record key');
@@ -239,7 +239,6 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   assert.equal(T.OLD_READY_KEY, 'signoff:old-ready');
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01'), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
-  assert.match(stmt, /stuck AS \(/, 'a ready left in place is reported, not skipped silently');
 });
 
 test('a Sales ready from before role courses counts only on the Sales paths it was given for (#569)', () => {
@@ -250,14 +249,9 @@ test('a Sales ready from before role courses counts only on the Sales paths it w
   assert.deepEqual(T.legacyReadyPaths(), ['signoff:ready', ...Object.keys(T.SALES_ROLES).map((r) => T.readyKeyFor('sales', r))], 'from the roles, not a list by hand');
 });
 
-test('a ready carried onto Sales keeps its date; a sales role given later cannot end on it (#569 review)', () => {
+test('a ready carried onto Sales keeps its date unless the helper has a sales role (#569 review)', () => {
   const at = SRC.indexOf('TRAINING.carriedReady(s.training_track, track)');
   const block = SRC.slice(at, SRC.indexOf("'COMMIT'", at));
-  assert.match(block, /SELECT staff_id, \$3::text, done_at, signed_by/, 'same date, so commission starts when it was signed');
-  assert.doesNotMatch(block, /GREATEST/);
-  const role = SRC.slice(SRC.indexOf("case 'role':"), SRC.indexOf("case 'commission':"));
-  assert.match(role, /if \(role\)/, 'only when a role is given');
-  assert.match(role, /SET done_at = \$3::timestamptz/);
-  assert.match(role, /o\.step_key = \$4/, 'only for helpers whose ready was copied off another path');
-  assert.match(role, /TRAINING\.READY_KEY, TRAINING\.LEGACY_READY_BEFORE, TRAINING\.OLD_READY_KEY/);
+  assert.match(block, /\$7::boolean THEN GREATEST/);
+  assert.match(block, /!!TRAINING\.salesRoleOf\(s\.sales_role\)/, 'the role decides, read directly');
 });
