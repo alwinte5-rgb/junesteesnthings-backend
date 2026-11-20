@@ -87,7 +87,10 @@ function textLead({ jobs = [], open = [], known = [] } = {}) {
     return { rows: [] };
   } };
   const ctx = vm.createContext({ pool });
-  vm.runInContext(liftFn('textToLead') + ';this.f = textToLead;', ctx);
+  /* textToLead reads the shared phone match (#499) from the file around it. */
+  const samePhone = src.match(/^const SAME_PHONE_SQL = `[^`]*`;$/m);
+  assert.ok(samePhone, 'SAME_PHONE_SQL not found');
+  vm.runInContext(samePhone[0] + liftFn('textToLead') + ';this.f = textToLead;', ctx);
   return { f: ctx.f, calls };
 }
 
@@ -120,5 +123,6 @@ test('a known name is used rather than the number', async () => {
 });
 
 test('phone matching compares digits, with the backslash surviving the template string', () => {
-  assert.match(liftFn('textToLead'), /regexp_replace\(COALESCE\(phone, ''\), '\\\\D', '', 'g'\)/);
+  assert.match(liftFn('textToLead'), /\bSAME_PHONE_SQL\b/);
+  assert.match(src.match(/^const SAME_PHONE_SQL = .*$/m)[0], /regexp_replace\(COALESCE\(phone, ''\), '\\\\D', '', 'g'\)/);
 });
