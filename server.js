@@ -28617,7 +28617,7 @@ async function sendLeadFollowUps(now = Date.now()) {
         /* Twilio refused it, or texting is not set up right now: tried again
            next hour, not counted as "nobody can be reached". */
         failed++;
-        reportError('lead-followup', new Error(`follow-up ${n} text to lead ${l.id} was not accepted by Twilio`)).catch(() => {});
+        reportError('lead-followup', new Error(`follow-up ${n} text to lead ${l.id} ${status === 'unconfigured' ? 'not sent: texting is not set up' : 'was not accepted by Twilio'}`)).catch(() => {});
       }
     }
     if (sentBy.length) {
