@@ -5032,12 +5032,13 @@ async function relayChatReply(to, words, sid, forwards = []) {
      thing she was told about, so a reply meant for the last texter stops
      here too: the refusal names that texter's code (code review, 2026-11-20). */
   const texter = forwards.find((f) => !RELAY.isChat(f) && RELAY.codeOf(f));
-  const tawk = `Answer it in the tawk app.${texter ? ` If you meant ${texter.name || VOICE.pretty(normalizeUsPhone(texter.phone))}, start with ${RELAY.codeOf(texter)}.` : ''}`;
+  const meant = texter ? ` If you meant ${texter.name || VOICE.pretty(normalizeUsPhone(texter.phone))}, start with ${RELAY.codeOf(texter)}.` : '';
+  const tawk = `Answer it in the tawk app.${meant}`;
   if (!chatLead) return sendOwnerSms(`Not sent: that was a website chat with no enquiry on file. ${tawk}`);
   const { rows: [l] } = await pool.query(
     `SELECT id, name, email, phone, source, finder_run_id, sale_type_reason, dismissed_at, dismiss_reason
        FROM submissions WHERE id = $1`, [chatLead]);
-  if (!l) return sendOwnerSms(`Not sent: that enquiry is gone. ${tawk}`);
+  if (!l) return sendOwnerSms(`Not sent: that enquiry is gone.${meant}`);
   const chat = l.source === 'chat' || l.source === 'offline';
   const who = `${smsPlain(l.name, 40) || (chat ? 'the chat visitor' : 'the lead')} (L${chatLead})`;
   /* Let go on purpose (spam, went elsewhere): not written to from a phone
@@ -5049,7 +5050,8 @@ async function relayChatReply(to, words, sid, forwards = []) {
   const ways = chatReplyWays(l);
   if (!ways.length) {
     return sendOwnerSms(chat ? `Not sent: ${who} left no email or phone in the chat. ${tawk}`
-      : `Not sent: ${who} has no email or phone on file. Add one on the Leads page.`);
+      : isFoundLead(l) && normalizeUsPhone(l.phone) ? `Not sent: ${who} was found online, so it is never texted, and it has no email. Add their email on the Leads page.${meant}`
+      : `Not sent: ${who} has no email or phone on file. Add one on the Leads page.${meant}`);
   }
   let dup = false;
   const done = [];
@@ -5254,12 +5256,50 @@ async function carryLeadFiles(code, leadId) {
   return n;
 }
 
+/** Whose phone this is: their latest job, else their open lead from the
+ *  last 120 days. {quote_code, lead_id, name}, empty when neither (or the
+ *  lookup failed, which is reported). One rule for a number the owner typed
+ *  and for a caller (textRinging). */
+async function phoneOwner(phone) {
+  const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+  if (digits.length !== 10) return {};
+  try {
+    const { rows: [job] } = await pool.query(
+      `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`, [digits]);
+    if (job) return { quote_code: job.code, name: job.name || '' };
+    const { rows: [lead] } = await pool.query(
+      `SELECT id, name FROM submissions WHERE ${SAME_PHONE_SQL} AND dismissed_at IS NULL
+          AND created_at > NOW() - INTERVAL '120 days' ORDER BY created_at DESC, id DESC LIMIT 1`, [digits]);
+    return lead ? { lead_id: lead.id, name: lead.name || '' } : {};
+  } catch (e) {
+    console.error('phone owner lookup failed:', e.message);
+    reportError('twilio:relay-lookup', e).catch(() => {});
+    return {};
+  }
+}
+
+/* A lead named in a "still waiting" text is what her reply answers only for
+   this long after it (code review, 2026-11-20): after that, a reply in the
+   middle of a conversation with someone else is theirs again. */
+const NUDGE_REPLY_MS = 10 * 60 * 1000;
+
 /** Send the owner's reply to the customer it was meant for (RELAY), record it
  *  on their job or lead, and tell the owner what happened. */
 async function relayOwnerReply(text, sid, ownerMedia = []) {
-  const { rows: forwards } = await pool.query(
+  const { rows: allForwards } = await pool.query(
     `SELECT id, phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
-      WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC LIMIT 50`);
+      WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC, id DESC LIMIT 50`);
+  /* A record with no phone is a website chat, or a lead named in a "still
+     waiting" text; the second only counts for NUDGE_REPLY_MS. */
+  const chatLeadIds = [...new Set(allForwards.filter((f) => RELAY.isChat(f) && f.lead_id).map((f) => Number(f.lead_id)))];
+  const sources = chatLeadIds.length ? new Map((await pool.query('SELECT id, source FROM submissions WHERE id = ANY($1::int[])', [chatLeadIds])
+    .catch(() => ({ rows: [] }))).rows.map((r) => [Number(r.id), r.source])) : new Map();
+  const forwards = allForwards.filter((f) => {
+    if (!RELAY.isChat(f)) return true;
+    const src = f.lead_id ? sources.get(Number(f.lead_id)) : 'chat';
+    f.chat = src === 'chat' || src === 'offline' || !f.lead_id;
+    return f.chat || Date.now() - new Date(f.created_at).getTime() <= NUDGE_REPLY_MS;
+  });
   /* A link sent on its own (a phone sends the link beside the words as a
      text of its own) goes where the owner's previous text went, never to the
      last texter (owner, 2026-11-19). Followed links ('relaylink:') are not
@@ -5296,25 +5336,11 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
     if (!VOICE.callable(typed)) return sendOwnerSms(`Not sent: ${VOICE.pretty(typed)} is a premium-rate or overseas number. Text them from your phone if you mean to.`);
   }
   if (pick.typed) {
-    /* Nobody on file from their texts: filed on their latest job when they
-       have one, so the job page shows it. */
-    const job = await pool.query(
-      `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`,
-      [to.phone.replace(/\D/g, '').slice(-10)])
-      .then((r) => r.rows[0] || null)
-      .catch((e) => { console.error('typed number job lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
-    if (job) to = { ...to, quote_code: job.code, name: job.name || '' };
-    else {
-      /* Or on their open lead (a web form, a call): their answer then lands
-         on it too, rather than starting a second lead (2026-11-19). */
-      const lead = await pool.query(
-        `SELECT id, name FROM submissions WHERE ${SAME_PHONE_SQL} AND dismissed_at IS NULL
-            AND created_at > NOW() - INTERVAL '120 days' ORDER BY created_at DESC LIMIT 1`,
-        [to.phone.replace(/\D/g, '').slice(-10)])
-        .then((r) => r.rows[0] || null)
-        .catch((e) => { console.error('typed number lead lookup failed:', e.message); reportError('twilio:relay-lookup', e).catch(() => {}); return null; });
-      if (lead) to = { ...to, lead_id: lead.id, name: lead.name || '' };
-    }
+    /* Nobody on file from their texts: filed on their latest job, or their
+       open lead (2026-11-19), so the reply and their answer land there. */
+    const own = await phoneOwner(to.phone);
+    if (own.quote_code) to = { ...to, quote_code: own.quote_code, name: own.name || '' };
+    else if (own.lead_id) to = { ...to, lead_id: own.lead_id, name: own.name || '' };
   }
   const code = RELAY.codeOf(to);
   const label = `${to.name || VOICE.pretty(normalizeUsPhone(to.phone) || to.phone)}${code ? ` (${code})` : ''}`;
@@ -6005,17 +6031,13 @@ async function textRinging(from, reason, name) {
   const sent = await sendOwnerSms(VOICE.ringText({ from, reason, name }))
     .catch((e) => { console.error('ring text failed:', e.message); return false; });
   const caller = normalizeUsPhone(from);
-  if (!sent || !caller || !/^\+1\d{10}$/.test(caller) || !VOICE.callable(caller)) return;
+  if (!sent || !caller || !VOICE.callable(caller)) return;
   try {
-    const digits = caller.replace(/\D/g, '').slice(-10);
-    const { rows: [job] } = await pool.query(
-      `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`, [digits]);
-    const { rows: [lead] } = job ? { rows: [] } : await pool.query(
-      `SELECT id, name FROM submissions WHERE ${SAME_PHONE_SQL} AND dismissed_at IS NULL
-          AND created_at > NOW() - INTERVAL '120 days' ORDER BY created_at DESC LIMIT 1`, [digits]);
-    const nm = (job && job.name) || (lead && lead.name) || String(name || '').replace(/[^\w .,'&-]/g, '').trim();
+    if (await blockedCaller(caller)) return;
+    const own = await phoneOwner(caller);
+    const nm = own.name || String(name || '').replace(/[^\w .,'&-]/g, '').trim();
     await pool.query(`INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name) VALUES ($1, $2, $3, $4)`,
-      [caller, job ? job.code : null, !job && lead ? lead.id : null, smsPlain(nm, 60) || null]);
+      [caller, own.quote_code || null, own.lead_id || null, smsPlain(nm, 60) || null]);
   } catch (e) {
     console.error('ring forward not recorded:', e.message);
     reportError('twilio:forward', e).catch(() => {});
@@ -28717,7 +28739,7 @@ async function nudgeUnansweredLeads(now = Date.now()) {
     /* What her reply from her phone answers (relayChatReply): the leads
        named, with no phone, so each is answered by email and text through
        its lead. Recorded together, so with more than one she is asked which. */
-    const named = [...claimed.second, ...claimed.first];
+    const named = [...claimed.second, ...claimed.first].slice(0, NUDGE.NAMED);
     await pool.query(
       `INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name)
        SELECT '', NULL, x.id, x.name FROM unnest($1::int[], $2::text[]) AS x(id, name)`,

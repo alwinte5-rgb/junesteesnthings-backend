@@ -67,11 +67,11 @@ test('one text for all of them: first names, source, age, never a number or emai
   const body = N.nudgeText({ first: [b], second: [a] }, { now: thu10, sourceLabel: (s) => ({ form: 'Website form', phone: 'Phone call' })[s],
     link: 'https://www.jtees.net/admin/leads' });
   assert.strictEqual(body, "June's Tees: 2 leads are still waiting for a reply: Ana L1 (Website form, 25h), Bo L2 (Phone call, 3h). " +
-    'Over a day old: reply today or they go elsewhere. Start a reply with their code to answer one. https://www.jtees.net/admin/leads');
+    'Over a day old: reply today or they go elsewhere. Reply within 10 minutes starting with their code to answer one. https://www.jtees.net/admin/leads');
   assert.doesNotMatch(body, /ana@x\.com|7735550101|Reyes/);
   assert.strictEqual(N.nudgeText({ first: [], second: [] }), '');
   const many = Array.from({ length: 7 }, (_, i) => lead({ id: i, name: 'P' + i }));
-  assert.match(N.nudgeText({ first: many, second: [] }, { now: WED_11 }), /\+3 more\. Start a reply with their code to answer one\.$/);
+  assert.match(N.nudgeText({ first: many, second: [] }, { now: WED_11 }), /\+3 more\. Reply within 10 minutes starting with their code to answer one\.$/);
   assert.ok(N.nudgeText({ first: many, second: [] }, { now: WED_11 }).length <= 320);
 });
 
