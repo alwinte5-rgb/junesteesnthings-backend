@@ -62,7 +62,7 @@ test('the Archive confirm never puts a name inside script text', () => {
 test('My Day: urgent first, empty sections folded into one line, counts that open their section', () => {
   const day = src.slice(src.indexOf("app.get('/admin/my-day'"), src.indexOf('/* ── Training ──', src.indexOf("app.get('/admin/my-day'")));
   const order = ['Latest note from the owner', 'Leads waiting for a reply', 'Follow-ups due', 'The designer has a question',
-    'Final art to approve', 'Artwork to do', 'Approved, but not emailed', 'Tasks (', 'Jobs with a next step',
+    'Final art to approve', 'Artwork to do', 'title: MY_DAY_TO_SEND', 'Tasks (', 'Jobs with a next step',
     'Waiting on the customer', 'Waiting on the owner', 'Completed this week', "'My earnings'", 'Your training:'];
   const at = order.map((t) => day.indexOf(t));
   at.forEach((n, i) => assert.notStrictEqual(n, -1, order[i]));

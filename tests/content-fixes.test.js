@@ -19,8 +19,10 @@ const all = (key) => JSON.stringify(COURSES.COURSES[key].modules.map((m) => [m.l
 
 test('My Day lists an approved quote only when its email did not go, so it is never sent twice', () => {
   const at = src.indexOf("WHERE a.kind = 'quote' AND a.status = 'approved' AND a.requested_by = $1");
-  assert.match(src.slice(at, at + 600), /AND q\.emailed_at IS NULL/);
-  assert.match(src, /title: 'Approved, but not emailed: send these yourself', short: 'To send', n: released\.rows\.length,/);
+  assert.match(src.slice(at, at + 600), /AND \$\{QUOTE_TO_SEND_SQL\}/);
+  assert.match(src, /const QUOTE_TO_SEND_SQL = `[^`]*AND q\.emailed_at IS NULL`/);
+  assert.match(src, /const MY_DAY_TO_SEND = 'Approved, but not emailed: send these yourself';/);
+  assert.match(src, /title: MY_DAY_TO_SEND, short: 'To send', n: released\.rows\.length,/);
   assert.doesNotMatch(all('sales-core'), /copy the message and send it/);
 });
 

@@ -22634,18 +22634,23 @@ app.post('/admin/quote/:code/email', requireAdmin, async (req, res) => {
   if (actorLevel('quotes.view') !== 'on') return res.status(403).send('Not available to your account.');
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  /* My Day sends from its To send list and comes back to it; `once` refuses a
+     quote already emailed (a stale page, or June sent it meanwhile). The job
+     page's own button may resend on purpose and sends neither. */
+  const body = req.body || {};
+  const backTo = safeAdminPath(body.back, `/admin/production/${code}`);
   try {
     const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
     if (!q) return res.redirect('/admin/quotes');
-    const back = `/admin/production/${code}`;
+    if (body.once === '1' && q.emailed_at) return back(res, backTo, 'ok', `Quote ${code} was already emailed, so it was not sent again.`);
     const refused = quoteSendRefusal(q, 'email');
-    if (refused) return res.redirect(`${back}?err=${encodeURIComponent(refused)}`);
+    if (refused) return back(res, backTo, 'err', refused);
     const r = await emailQuote(q);
-    return res.redirect(`${back}?${r.ok ? 'ok=' + encodeURIComponent('Quote emailed to ' + r.to + '.')
-      : 'err=' + encodeURIComponent('The email did not go: ' + r.error + '. Text them the link instead.')}`);
+    return r.ok ? back(res, backTo, 'ok', `Quote ${code} emailed to ${r.to}.`)
+      : back(res, backTo, 'err', `The email did not go: ${r.error}. Text them the link instead.`);
   } catch (err) {
     console.error('quote email route failed:', err.message);
-    res.redirect(`/admin/production/${code}?err=${encodeURIComponent('The email did not go. Please try again.')}`);
+    return back(res, backTo, 'err', 'The email did not go. Please try again.');
   }
 });
 
@@ -42328,6 +42333,47 @@ async function sendChatAlerts() {
    deploy does not bring up months of history. */
 const NOTIFY_LOOKBACK_DAYS = 3;
 const APPROVAL_WORDS = { quote: 'a quote', message: 'a message to a customer', lead_email: 'an email to a lead', kb: 'a playbook change' };
+
+/* A My Day section's anchor is made from its title; the approval notice links
+   to the "To send" one, so both read the title from here. Route patterns, not
+   real paths, go to STAFF.mayUseRoute (it matches req.route.path). */
+const MY_DAY_TO_SEND = 'Approved, but not emailed: send these yourself';
+function myDaySecKey(title) {
+  return String(title).replace(/<[^>]*>|\([^)]*\)|[^a-z ]/gi, '').trim().toLowerCase().replace(/ +/g, '-').slice(0, 40);
+}
+
+/* An approved quote is the helper's to email by hand while this holds: live
+   with the customer, not accepted, paid or cancelled, and never emailed. The
+   "To send" list and the approval outcome read this one test. */
+const QUOTE_TO_SEND_SQL = `q.status IN ('sent', 'viewed') AND q.accepted_at IS NULL AND q.cancelled_at IS NULL
+  AND COALESCE(q.paid_amount, 0) <= 0 AND q.emailed_at IS NULL`;
+
+/** What an approval did, in words for the helper, and where to see it
+ *  (owner, 2026-11-20: "they get a notification but nothing happens"). Her
+ *  Approve SENDS the email or message itself, so the helper is told it went
+ *  and taken to it. `a` carries quote_emailed_at and quote_to_send for a quote.
+ *  The words stay true later (a notice is written once and never rewritten);
+ *  only `live` (My Day, read fresh) links to the To send list, because a
+ *  stored notice's link would outlive the quote's place on it. */
+function approvalOutcome(a, helper, live = false) {
+  const may = (route) => STAFF.mayUseRoute(helper, 'GET', route);
+  const code = String(a.subject_id || '');
+  const job = `/admin/production/${encodeURIComponent(code)}`;
+  const jobOr = (hash = '') => (may('/admin/production/:code') ? `${job}${hash}` : '/admin/my-day');
+  if (a.kind === 'lead_email') {
+    /* status=all: a lead that has since moved on to quoted, won or lost is
+       still on the page to land on. */
+    return { what: '. It was sent to them.', link: may('/admin/leads') ? `/admin/leads?status=all#lead-${intIn(code) || ''}` : '/admin/my-day' };
+  }
+  if (a.kind === 'message') return { what: '. It was sent to the customer.', link: jobOr('#messages') };
+  if (a.kind === 'quote') {
+    if (a.quote_emailed_at) return { what: `: ${code} was emailed to the customer.`, link: jobOr() };
+    return { what: `: ${code} is live, but the email to the customer did not go when it was approved.`,
+      link: live && a.quote_to_send ? `/admin/my-day#sec-${myDaySecKey(MY_DAY_TO_SEND)}` : jobOr() };
+  }
+  if (a.kind === 'kb') return { what: '. It is in the playbook now.', link: '/admin/my-day' };
+  return { what: '', link: '/admin/my-day' };
+}
 let notifyRunning = false;
 let notifyAgain = false;
 let notifyLastAt = 0;
@@ -42707,13 +42753,18 @@ async function staffNotices(roster, leads) {
   const out = [];
   const active = new Map(roster.filter((r) => r.active && !r.archived_at).map((r) => [r.id, r]));
   const dec = await notifyPart('decisions', pool.query(
-    `SELECT id, kind, requested_by, status, decision_note FROM staff_approvals
-      WHERE status IN ('approved', 'rejected') AND decided_at > NOW() - make_interval(days => $1) ORDER BY id DESC LIMIT 200`, [NOTIFY_LOOKBACK_DAYS]));
+    `SELECT a.id, a.kind, a.subject_id, a.requested_by, a.status, a.decision_note, q.emailed_at AS quote_emailed_at,
+            COALESCE(${QUOTE_TO_SEND_SQL}, false) AS quote_to_send
+       FROM staff_approvals a LEFT JOIN quotes q ON a.kind = 'quote' AND q.code = a.subject_id
+      WHERE a.status IN ('approved', 'rejected') AND a.decided_at > NOW() - make_interval(days => $1) ORDER BY a.id DESC LIMIT 200`, [NOTIFY_LOOKBACK_DAYS]));
   for (const a of dec ? dec.rows : []) {
-    if (!active.has(a.requested_by)) continue;
-    out.push({ recipient: `staff:${a.requested_by}`, kind: 'decided', ref: String(a.id), link: '/admin/my-day',
+    const r = active.get(a.requested_by);
+    if (!r) continue;
+    const helper = { kind: 'staff', id: r.id, perms: r.perms };
+    const done = a.status === 'approved' ? approvalOutcome(a, helper) : { what: '', link: '/admin/my-day' };
+    out.push({ recipient: `staff:${a.requested_by}`, kind: 'decided', ref: String(a.id), link: done.link,
       title: `June ${a.status === 'approved' ? 'approved' : 'sent back'} ${APPROVAL_WORDS[a.kind] || 'your request'}${
-        a.status === 'rejected' && a.decision_note ? `: ${a.decision_note}` : ''}` });
+        a.status === 'rejected' && a.decision_note ? `: ${a.decision_note}` : ''}${done.what}` });
   }
   if (leads) {
     const since = Date.now() - NOTIFY_LOOKBACK_DAYS * 86400000;
@@ -43046,7 +43097,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const roster = await staffRoster();
     /* A helper's next work is handed out before the page is read. */
     if (me) await taskFlowFor(me).catch((e) => console.error('task flow on My Day failed:', e.message));
-    const [leads, tasks, mine, released, liveList] = await Promise.all([
+    const [leads, tasks, mine, released, liveList, decided] = await Promise.all([
       can('leads.view') ? unansweredLeads() : Promise.resolve([]),
       pool.query(`SELECT *, ${TASK_PROJECT_COLS} FROM staff_tasks WHERE done_at IS NULL AND ($1::int IS NULL OR assigned_to = $1 OR assigned_to IS NULL)
                    AND ${TASK_STEP_NOW}
@@ -43057,12 +43108,17 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       me ? pool.query(`SELECT q.* FROM staff_approvals a JOIN quotes q ON q.code = a.subject_id
                         WHERE a.kind = 'quote' AND a.status = 'approved' AND a.requested_by = $1
                           AND a.decided_at > NOW() - interval '7 days'
-                          AND q.status IN ('sent', 'viewed') AND q.accepted_at IS NULL AND q.cancelled_at IS NULL
                           -- Approving emails the quote (releaseHeldQuote); only one that did
                           -- not go (no address, or the send failed) is left to send by hand.
-                          AND q.emailed_at IS NULL
+                          AND ${QUOTE_TO_SEND_SQL}
                         ORDER BY a.decided_at DESC`, [me]) : Promise.resolve({ rows: [] }),
       can('quotes.view') ? liveJobs() : Promise.resolve([]),
+      /* What June approved lately, and what it did (owner, 2026-11-20). */
+      me ? pool.query(`SELECT a.id, a.kind, a.subject_id, a.decided_at, q.emailed_at AS quote_emailed_at,
+                              COALESCE(${QUOTE_TO_SEND_SQL}, false) AS quote_to_send
+                         FROM staff_approvals a LEFT JOIN quotes q ON a.kind = 'quote' AND q.code = a.subject_id
+                        WHERE a.requested_by = $1 AND a.status = 'approved' AND a.decided_at > NOW() - interval '7 days'
+                        ORDER BY a.decided_at DESC LIMIT 20`, [me]) : Promise.resolve({ rows: [] }),
     ]);
     /* "This week" is the shop's Monday onward, the scorecard's week; seven
        rolling days showed last Friday on a Thursday (Codex #201). */
@@ -43083,6 +43139,9 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
     const waiting = leads.filter((l) => me == null || l.assigned_to == null || l.assigned_to === me)
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const nextSteps = liveList.map((q) => ({ q, cl: quoteChecklist(q) })).filter((x) => x.cl.next).slice(0, 15);
+    /* The quote email route's own gate (its route permission) and the check
+       inside it (quotes.view on), not a copy of either. */
+    const canEmailQuote = STAFF.mayUseRoute(actor, 'POST', '/admin/quote/:code/email') && actorLevel('quotes.view') === 'on';
     const today = new Date().toISOString().slice(0, 10);
     // A helper's training until it is done, and the owner's latest note (two weeks).
     const art = await artQueues(actor);
@@ -43096,7 +43155,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
 
     const mail = await mailDashboard(actor, 6).catch((e) => { console.error('my day mailbox failed:', e.message); return null; });
     /* Every section folds away; the browser remembers which, per section. */
-    const secKey = (title) => String(title).replace(/<[^>]*>|\([^)]*\)|[^a-z ]/gi, '').trim().toLowerCase().replace(/ +/g, '-').slice(0, 40);
+    const secKey = myDaySecKey;
     const section = (title, inner, empty) => `<details class="card md-sec" open data-sec="${escEmail(secKey(title))}" id="sec-${escEmail(secKey(title))}">
       <summary><b>${title}</b></summary>${inner || `<p class="muted">${empty}</p>`}</details>`;
     const startedBy = (t) => nameOf(roster, t.started_by);
@@ -43155,11 +43214,24 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
             inner: () => artQueueRows(art.approve) },
           { title: `Artwork to do (${art.todo.length})`, short: 'Artwork', n: art.todo.length,
             show: art.todo.length > 0 || (STAFF.levelOf(actor, 'art.work') === 'on' && me != null), inner: () => artQueueRows(art.todo) },
-          { title: 'Approved, but not emailed: send these yourself', short: 'To send', n: released.rows.length, show: me != null,
+          { title: MY_DAY_TO_SEND, short: 'To send', n: released.rows.length, show: me != null,
             inner: () => released.rows.map((q) => `
-        <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b>${escEmail(q.code)}</b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
-          <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div></span>
+        <div class="row-i" style="flex-wrap:wrap"><span class="row-main"><b><a href="/admin/production/${escEmail(q.code)}">${escEmail(q.code)}</a></b> ${escEmail(q.name || '')} &middot; ${money(q.total)}
+          <div class="msg" id="rel-${escEmail(q.code)}" style="white-space:pre-wrap">${escEmail(quoteMessages(q).initial)}</div>
+          ${/* The quote email, sent from here (owner, 2026-11-20: approved, and then "nothing happens"). */ ''}
+          ${!String(q.email || '').trim() ? '<div class="row-sub">No email on this quote. Copy the message and text it to them from the job page.</div>'
+            : quoteSendRefusal(q, 'email') ? `<div class="row-sub">${escEmail(quoteSendRefusal(q, 'email'))}</div>`
+            : canEmailQuote ? `<form method="POST" action="/admin/quote/${escEmail(q.code)}/email" style="margin:8px 0 0"
+                onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Sending...'">
+                <input type="hidden" name="once" value="1"><input type="hidden" name="back" value="/admin/my-day#sec-${escEmail(myDaySecKey(MY_DAY_TO_SEND))}">
+                <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Email it to ${escEmail(q.email)}</button></form>`
+            : '<div class="row-sub">Ask June to email it: your account cannot send quotes.</div>'}</span>
           <span class="row-end"><button type="button" class="btn btn-ghost" onclick="jtCopy('rel-${escEmail(q.code)}')">Copy</button></span></div>`).join('') },
+          { title: `Approved lately (${decided.rows.length})`, n: decided.rows.length, show: me != null, inner: () => decided.rows.map((a) => {
+            const o = approvalOutcome(a, actor, true);
+            return `<div class="row-i" style="flex-wrap:wrap"><span class="row-main" style="white-space:normal"><b>June approved ${escEmail(APPROVAL_WORDS[a.kind] || 'your request')}</b>${escEmail(o.what)}
+          <div class="row-sub">${escEmail(whenShort(a.decided_at))}</div></span>
+          <span class="row-end"><a class="btn btn-ghost" href="${escEmail(o.link)}">Open</a></span></div>`; }).join('') },
           { title: `Projects (${projects.open})`, short: 'Projects', n: projects.open, show: projects.open > 0,
             inner: () => `${PROJECT_CSS}<p class="muted" style="margin:0 0 8px">Big work split into steps of about two hours. Do the pink step; the next one opens when it is completed.</p>${projects.html}` },
           { title: `Tasks (${tasks.rows.length})`, short: 'Tasks', n: tasks.rows.length, show: true, inner: () => taskGroups(tasks.rows, taskRow) },
@@ -43198,6 +43270,9 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       <script>(function(){try{document.querySelectorAll('details.md-sec').forEach(function(d){
         var k='md:'+d.getAttribute('data-sec');if(localStorage.getItem(k)==='0')d.open=false;
         d.addEventListener('toggle',function(){try{localStorage.setItem(k,d.open?'1':'0');}catch(e){}});});
+        /* A link to a section (#sec-..., from a notice or Approved lately) opens it even if it was folded away. */
+        function openHash(){var t=location.hash&&document.getElementById(location.hash.slice(1));if(t&&t.tagName==='DETAILS')t.open=true;}
+        openHash();window.addEventListener('hashchange',openHash);
         /* A count at the top opens its section even if it was folded away. */
         document.querySelectorAll('.md-needs a').forEach(function(a){a.addEventListener('click',function(){
           var d=document.getElementById(a.getAttribute('href').slice(1));if(d)d.open=true;});});}catch(e){}})();</script>`, 'myday'));

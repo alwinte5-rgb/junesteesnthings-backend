@@ -92,7 +92,7 @@ test('a helper hears about their own requests and their own leads only, and not 
   const staff = fn('async function staffNotices(');
   assert.match(staff, /recipient: `staff:\$\{a\.requested_by\}`/);
   assert.match(staff, /l\.assigned_to != null && active\.get/);
-  assert.match(staff, /if \(!active\.has\(a\.requested_by\)\) continue;/);
+  assert.match(staff, /const r = active\.get\(a\.requested_by\);\s*if \(!r\) continue;/);
   assert.match(fn('async function notifySweep('), /staffRoster\(\{ activeOnly: true \}\)/);
 });
 
