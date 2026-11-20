@@ -41,7 +41,11 @@ function extractBody(src, key) {
   assert.fail('unbalanced braces while extracting ' + key);
 }
 
-const BODY = extractBody(fs.readFileSync(APP, 'utf8'), 'enforce_min : function () {');
+const APP_SRC = fs.readFileSync(APP, 'utf8');
+const BODY = extractBody(APP_SRC, 'enforce_min : function () {');
+/* enforce_min prefers standard DTF as the fallback (owner, 2026-11-02) and asks
+   the real dtf_kind which row that is, so the harness carries the real one. */
+const dtf_kind = new Function('p', extractBody(APP_SRC, 'dtf_kind : function (p) {'));
 
 const SCREEN = { id: 22, title: 'Screen Printing', calculate: { min_qty: 50 } };
 const DTF = { id: 1, title: 'DTF Printing', calculate: {} };
@@ -50,7 +54,7 @@ function harness(qty) {
   const notices = [];
   const lumise = {
     data: { printings: [SCREEN, DTF] },
-    cart: { qty: qty, printing: { current: SCREEN.id, min_notice: null } },
+    cart: { qty: qty, printing: { current: SCREEN.id, min_notice: null, dtf_kind } },
     fn: { notice: (m) => notices.push(m), dejson: (s) => JSON.parse(s) }
   };
   const $ = () => ({ prop() { return this; } });
@@ -97,12 +101,15 @@ test('a changing fallback does not announce the same shortfall twice', () => {
   /* The second popup that survived the first fix. An empty size grid counts as
      one piece, so an early pass can qualify for a different fallback than the
      pass after the grid fills. Keyed on the fallback, that read as a new
-     shortfall and spoke again. */
+     shortfall and spoke again. Standard DTF is always the fallback where a
+     product has it (owner, 2026-11-02), so this is a product without it: the
+     fallback is then the first method the quantity qualifies for. */
   const EMB = { id: 7, title: 'Embroidery', calculate: { min_qty: 6 } };
+  const SUB = { id: 9, title: 'Sublimation', calculate: {} };
   const notices = [];
   const lumise = {
-    data: { printings: [SCREEN, EMB, DTF] },
-    cart: { qty: 1, printing: { current: SCREEN.id, min_notice: null } },
+    data: { printings: [SCREEN, EMB, SUB] },
+    cart: { qty: 1, printing: { current: SCREEN.id, min_notice: null, dtf_kind } },
     fn: { notice: (m) => notices.push(m), dejson: (s) => JSON.parse(s) }
   };
   const $ = () => ({ prop() { return this; } });
@@ -110,8 +117,8 @@ test('a changing fallback does not announce the same shortfall twice', () => {
     'return function () {' + BODY + '};')(lumise, $);
 
   lumise.cart.printing.current = SCREEN.id;
-  enforce_min();                                   // qty 1 -> falls back to DTF
-  assert.strictEqual(lumise.cart.printing.current, DTF.id);
+  enforce_min();                                   // qty 1 -> falls back to sublimation
+  assert.strictEqual(lumise.cart.printing.current, SUB.id);
 
   lumise.cart.qty = 12;                            // grid fills in
   lumise.cart.printing.current = SCREEN.id;
@@ -141,4 +148,16 @@ test('an empty quantity grid is still treated as one piece, not as qualifying', 
   const h = harness(0);
   assert.strictEqual(h.pass(), true);
   assert.strictEqual(h.notices.length, 1);
+});
+
+test('standard DTF is the fallback whenever the product has it (owner, 2026-11-02)', () => {
+  const EMB = { id: 7, title: 'Embroidery', calculate: { min_qty: 6 } };
+  const lumise = {
+    data: { printings: [SCREEN, EMB, DTF] },
+    cart: { qty: 12, printing: { current: SCREEN.id, min_notice: null, dtf_kind } },
+    fn: { notice: () => {}, dejson: (s) => JSON.parse(s) }
+  };
+  const enforce_min = new Function('lumise', '$', 'return function () {' + BODY + '};')(lumise, () => ({ prop() { return this; } }));
+  enforce_min();
+  assert.strictEqual(lumise.cart.printing.current, DTF.id, 'embroidery qualifies too, but DTF is the default');
 });

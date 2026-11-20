@@ -86,7 +86,8 @@ function textLead({ jobs = [], open = [], known = [] } = {}) {
     if (/name NOT LIKE/.test(sql)) return { rows: known };
     return { rows: [] };
   } };
-  const ctx = vm.createContext({ pool });
+  /* LEADFU: a text back reopens a lead the follow-ups let go (#544). */
+  const ctx = vm.createContext({ pool, LEADFU: require('../tools/lib/lead-followups') });
   /* textToLead reads the shared phone match (#499) from the file around it. */
   const samePhone = src.match(/^const SAME_PHONE_SQL = `[^`]*`;$/m);
   assert.ok(samePhone, 'SAME_PHONE_SQL not found');
@@ -111,7 +112,8 @@ test('a text from a customer with a job goes to the job, not Leads', async () =>
 
 test('a second text while the lead is open is a note on it, not a second lead', async () => {
   const { f, calls } = textLead({ open: [{ id: 5 }] });
-  assert.deepStrictEqual({ ...(await f('+17735550100', 'Also need 20 hats', 'SM3')) }, { lead: 5 });
+  assert.deepStrictEqual({ ...(await f('+17735550100', 'Also need 20 hats', 'SM3')) }, { lead: 5, reopened: false },
+    'an open lead is not reopened (#544 reopens only one the follow-ups let go)');
   assert.ok(calls.some((c) => /INSERT INTO lead_notes/.test(c.sql) && c.args[0] === 5));
   assert.ok(!calls.some((c) => /INSERT INTO submissions/.test(c.sql)));
 });

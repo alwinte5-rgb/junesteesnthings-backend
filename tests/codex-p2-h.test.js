@@ -119,7 +119,7 @@ test('#204 "[X]" is an owner gap only as a deadline', () => {
   assert.strictEqual(TRAINING.fillGap('under [X] business days; need [X] shirts', '[X]', '5'), 'under 5 business days; need [X] shirts');
 });
 test('#221 design leads: a long number is refused, and the previous dedupe bucket is checked', () => {
-  const r = after("app.post('/api/design-lead'", 3600);
+  const r = after("app.post('/api/design-lead'", 6000);
   assert.match(r, /rawPhone\.length === 11 && rawPhone\[0\] === '1' \? rawPhone\.slice\(1\) : rawPhone/);
   assert.match(r, /\[keyAt\(nowBucket - 1\)\]/);
 });

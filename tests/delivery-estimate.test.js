@@ -202,23 +202,20 @@ test('the designer does not promise a rush the shop cannot buy', () => {
      product page that "rush is often possible". The promise outlived the
      product because the two halves are separate repos.
 
-     Embroidery is the exception and the reason this is gated rather than
-     deleted: it is done in house and Anchorfish's own rush ladder says it
-     applies to embroidery only. */
+     Owner, 2026-11-12: a sooner date is now a rush fee the customer sees and
+     agrees to before paying (jt-holiday-rush.php), on everything except
+     SinaLite print, which is never rushed. The line has to say how a rush is
+     bought, and say nothing about one on SinaLite. */
   const auth = readDesigner('jt-auth.php');
 
   assert.doesNotMatch(auth, /rush is often possible\.<\/span>/,
     'the unconditional promise is back');
-  assert.match(auth, /function jt_can_rush/,
-    'the rule must be one named function, not a phrase repeated in copy');
-  assert.match(auth, /embroider/i,
-    'and it must gate on embroidery, the only work the shop rushes itself');
-
-  /* The gate has to actually reach the copy: a helper nothing calls is how the
-     promise survived the first time. */
   const html = auth.slice(auth.indexOf('function jt_delivery_html'));
-  assert.match(html.slice(0, 1400), /jt_can_rush\(\$method\)/,
-    'jt_delivery_html must ask jt_can_rush before offering a rush');
+  const body = html.slice(0, html.indexOf('\n}\n') + 2);
+  assert.match(body, /\$rush = \$method === 'sinalite' \? '' :/,
+    'SinaLite is never offered a rush');
+  assert.match(body, /a rush fee is shown for you to agree to before you pay/,
+    'and the rush is one the customer agrees to, not a promise');
 });
 
 /* Digitizing days.
