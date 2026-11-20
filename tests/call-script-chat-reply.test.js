@@ -112,7 +112,7 @@ test('two chats at once are two people: the owner is asked which', () => {
   ];
   const pick = RELAY.pickTarget(forwards, 'hello', CODE, NOW);
   assert.equal(pick.ask.length, 2);
-  assert.equal(RELAY.askText(pick.ask), 'Not sent: 2 customers wrote just now. Start your reply with their code: L330 for Whitney (website chat), L331 for Dana (website chat).');
+  assert.equal(RELAY.askText(pick.ask), 'Not sent: 2 customers wrote just now. Start your reply with their code: L330 for Whitney, L331 for Dana.');
 });
 
 test('a chat with no lead is never answerable by code, and says to use tawk', () => {
@@ -193,4 +193,27 @@ test('the chat reply is silent on a repeat, refuses a let-go lead, and names the
   assert.match(chat, /If you meant \$\{/);
   const relay = fnBody('async function relayOwnerReply(');
   assert.match(relay, /lastChatReply && Date\.now\(\) - lastChatReply\.at <= RELAY\.FOLLOW_MS/, 'a link follows a chat reply');
+});
+
+/* ── #575: the ringing and "still waiting" texts are answerable too ────── */
+
+test('the "Ringing you now" text records the caller as what her reply answers', () => {
+  const ring = fnBody('async function textRinging(');
+  assert.match(ring, /INSERT INTO owner_text_forwards \(phone, quote_code, lead_id, name\) VALUES \(\$1, \$2, \$3, \$4\)/);
+  assert.match(ring, /VOICE\.callable\(caller\)/, 'never a premium or overseas number');
+  assert.ok(ring.indexOf('if (!sent') < ring.indexOf('INSERT'), 'recorded only when she was told');
+});
+
+test('the "still waiting" text records each lead named, and gives their codes', () => {
+  const nudge = fnBody('async function nudgeUnansweredLeads(');
+  assert.match(nudge, /SELECT '', NULL, x\.id, x\.name FROM unnest\(\$1::int\[\], \$2::text\[\]\)/);
+  const N = require('../tools/lib/lead-nudges');
+  const now = Date.parse('2026-10-08T15:00:00Z');
+  const one = N.nudgeText({ first: [], second: [{ id: 7, name: 'Cara Diaz', source: 'form', created_at: new Date(now - 25 * 3600000).toISOString() }] }, { now });
+  assert.match(one, /Cara L7 \(form, 25h\)/);
+  assert.match(one, /Reply here to answer them\.$/);
+});
+
+test('a lead found online is only ever emailed from a phone reply', () => {
+  assert.match(fnBody('function chatReplyWays('), /!isFoundLead\(l\)/);
 });

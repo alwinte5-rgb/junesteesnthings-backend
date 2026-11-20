@@ -5010,19 +5010,22 @@ function chatReplyWays(l) {
   const ways = [];
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(l.email || '').trim())) ways.push('email');
   const p = normalizeUsPhone(l.phone);
-  if (p && VOICE.callable(p)) ways.push('text');
+  /* A number found online is never texted (sales course lg3). */
+  if (p && VOICE.callable(p) && !isFoundLead(l)) ways.push('text');
   return ways;
 }
 
-/** The owner's reply to a website chat, from her phone (owner, 2026-11-20:
- *  "email and phone"): emailed when the chat left an email, texted when it
- *  left a phone, both when it left both. Recorded on the lead as any email
- *  or text from its card is, so their answer lands back on it. */
 /* The chat she last answered from her phone, so the link her phone sends
    as a text of its own follows it there, as it does after a text reply.
    In memory: it only matters for two minutes. */
 let lastChatReply = null;
 
+/** The owner's reply from her phone to a lead she was told about with no
+ *  number to reply to: a website chat, or a lead named in a "still waiting"
+ *  text (owner, 2026-11-20: "email and phone"). Emailed when the lead has an
+ *  email, texted when it has a phone, both when it has both; a lead found
+ *  online is only ever emailed. Recorded on the lead as any email or text
+ *  from its card is, so their answer lands back on it. */
 async function relayChatReply(to, words, sid, forwards = []) {
   const chatLead = Number(to.lead_id) || null;
   /* A website chat that cannot be answered from here is still the newest
@@ -5031,9 +5034,12 @@ async function relayChatReply(to, words, sid, forwards = []) {
   const texter = forwards.find((f) => !RELAY.isChat(f) && RELAY.codeOf(f));
   const tawk = `Answer it in the tawk app.${texter ? ` If you meant ${texter.name || VOICE.pretty(normalizeUsPhone(texter.phone))}, start with ${RELAY.codeOf(texter)}.` : ''}`;
   if (!chatLead) return sendOwnerSms(`Not sent: that was a website chat with no enquiry on file. ${tawk}`);
-  const { rows: [l] } = await pool.query('SELECT id, name, email, phone, dismissed_at, dismiss_reason FROM submissions WHERE id = $1', [chatLead]);
-  if (!l) return sendOwnerSms(`Not sent: that website chat's enquiry is gone. ${tawk}`);
-  const who = `${smsPlain(l.name, 40) || 'the chat visitor'} (L${chatLead})`;
+  const { rows: [l] } = await pool.query(
+    `SELECT id, name, email, phone, source, finder_run_id, sale_type_reason, dismissed_at, dismiss_reason
+       FROM submissions WHERE id = $1`, [chatLead]);
+  if (!l) return sendOwnerSms(`Not sent: that enquiry is gone. ${tawk}`);
+  const chat = l.source === 'chat' || l.source === 'offline';
+  const who = `${smsPlain(l.name, 40) || (chat ? 'the chat visitor' : 'the lead')} (L${chatLead})`;
   /* Let go on purpose (spam, went elsewhere): not written to from a phone
      reply. A chat let go only for leaving no contact is still answerable
      once its transcript brought one. */
@@ -5041,7 +5047,10 @@ async function relayChatReply(to, words, sid, forwards = []) {
     return sendOwnerSms(`Not sent: you let ${who} go. Reopen it on the Leads page if you mean to answer them.`);
   }
   const ways = chatReplyWays(l);
-  if (!ways.length) return sendOwnerSms(`Not sent: ${who} left no email or phone in the chat. ${tawk}`);
+  if (!ways.length) {
+    return sendOwnerSms(chat ? `Not sent: ${who} left no email or phone in the chat. ${tawk}`
+      : `Not sent: ${who} has no email or phone on file. Add one on the Leads page.`);
+  }
   let dup = false;
   const done = [];
   const failed = [];
@@ -5988,9 +5997,30 @@ const callDetails = (req) => ({
   shop: normalizeUsPhone(process.env.TWILIO_PHONE_NUMBER || ''),
 });
 
-/* Text the owner who is calling, as their cell rings. */
-const textRinging = (from, reason, name) => sendOwnerSms(VOICE.ringText({ from, reason, name }))
-  .catch((e) => console.error('ring text failed:', e.message));
+/* Text the owner who is calling, as their cell rings, and record the caller
+   as what her next reply from her phone answers (owner, 2026-11-20: a reply
+   under this text went to the last customer who had texted). On their job
+   or open lead when they have one, so the reply is filed there. */
+async function textRinging(from, reason, name) {
+  const sent = await sendOwnerSms(VOICE.ringText({ from, reason, name }))
+    .catch((e) => { console.error('ring text failed:', e.message); return false; });
+  const caller = normalizeUsPhone(from);
+  if (!sent || !caller || !/^\+1\d{10}$/.test(caller) || !VOICE.callable(caller)) return;
+  try {
+    const digits = caller.replace(/\D/g, '').slice(-10);
+    const { rows: [job] } = await pool.query(
+      `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`, [digits]);
+    const { rows: [lead] } = job ? { rows: [] } : await pool.query(
+      `SELECT id, name FROM submissions WHERE ${SAME_PHONE_SQL} AND dismissed_at IS NULL
+          AND created_at > NOW() - INTERVAL '120 days' ORDER BY created_at DESC LIMIT 1`, [digits]);
+    const nm = (job && job.name) || (lead && lead.name) || String(name || '').replace(/[^\w .,'&-]/g, '').trim();
+    await pool.query(`INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name) VALUES ($1, $2, $3, $4)`,
+      [caller, job ? job.code : null, !job && lead ? lead.id : null, smsPlain(nm, 60) || null]);
+  } catch (e) {
+    console.error('ring forward not recorded:', e.message);
+    reportError('twilio:forward', e).catch(() => {});
+  }
+}
 
 app.post(VOICE.PATHS.incoming, async (req, res) => {
   if (!twilioVoiceOk(req, res)) return;
@@ -28683,6 +28713,17 @@ async function nudgeUnansweredLeads(now = Date.now()) {
   /* Texted when Twilio is set up; otherwise (or if the text fails) the same
      words by email, so the nudge is never just a log line. */
   const sent = await sendOwnerSms(body).catch((e) => { console.error('lead nudge text failed:', e.message); return false; });
+  if (sent) {
+    /* What her reply from her phone answers (relayChatReply): the leads
+       named, with no phone, so each is answered by email and text through
+       its lead. Recorded together, so with more than one she is asked which. */
+    const named = [...claimed.second, ...claimed.first];
+    await pool.query(
+      `INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name)
+       SELECT '', NULL, x.id, x.name FROM unnest($1::int[], $2::text[]) AS x(id, name)`,
+      [named.map((l) => l.id), named.map((l) => smsPlain(String(l.name || '').split(/\s+/)[0], 40) || null)])
+      .catch((e) => { console.error('nudge forward not recorded:', e.message); reportError('twilio:forward', e).catch(() => {}); });
+  }
   if (!sent) {
     await alertShop(`⏰ ${got.size} lead${got.size === 1 ? '' : 's'} still waiting for a reply`,
       `<p style="font-size:15px">${escEmail(body)}</p>

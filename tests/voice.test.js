@@ -83,9 +83,9 @@ test('the incoming route passes the call details to the prompt', () => {
   const route = src.slice(src.indexOf('app.post(VOICE.PATHS.incoming'), src.indexOf('app.post(VOICE.PATHS.menu'));
   assert.match(route, /twilioVoiceOk\(req, res\)/);
   assert.match(route, /const call = callDetails\(req\);/);
-  const details = src.slice(src.indexOf('const callDetails'), src.indexOf('const textRinging'));
+  const details = src.slice(src.indexOf('const callDetails'), src.indexOf('async function textRinging'));
   assert.match(details, /open: VOICE\.isOpen\(\)/);
-  assert.match(src.slice(src.indexOf('const textRinging'), src.indexOf('app.post(VOICE.PATHS.incoming')), /sendOwnerSms\(VOICE\.ringText\(\{ from, reason, name \}\)\)/);
+  assert.match(src.slice(src.indexOf('async function textRinging'), src.indexOf('app.post(VOICE.PATHS.incoming')), /sendOwnerSms\(VOICE\.ringText\(\{ from, reason, name \}\)\)/);
   assert.match(route, /VOICE\.incomingTwiml\(\{ \.\.\.call, base: TWILIO_VOICE_BASE \}\)/);
 });
 
