@@ -121,17 +121,18 @@ function pickTarget(forwards, text, codeRe, now = Date.now(), previous = null) {
   const seen = new Set();
   for (const f of recent) {
     if (new Date(latest.created_at).getTime() - new Date(f.created_at).getTime() > CLASH_MS) break;
-    /* One person once: by phone, and by their job or lead code, so a chat
-       visitor who then texts is not listed twice. */
-    const keys = [personKey(f), codeOf(f)].filter(Boolean);
-    if (keys.some((x) => seen.has(x))) continue;
-    keys.forEach((x) => seen.add(x));
+    /* One person once: texts by phone (two phones on one job are still two
+       people to ask about), chats by their lead; a chat and a text on the
+       same lead are the chat visitor who then texted, one person. */
+    const c = codeOf(f);
+    if (seen.has(personKey(f)) || (c && seen.has((isChat(f) ? 'text:' : 'chat:') + c))) continue;
+    seen.add(personKey(f));
+    if (c) seen.add((isChat(f) ? 'chat:' : 'text:') + c);
     clash.push(f);
   }
   return clash.length > 1 ? { ask: clash.slice(0, 4) } : { to: latest, body: whole };
 }
 
-/** The owner's prompt when the reply could go to more than one customer. */
 /** Who a forward is from. A website chat's has no phone (isChat): it is
  *  told apart by its lead, so two chats at once are two people, not one. */
 function isChat(f) {
@@ -141,6 +142,7 @@ function personKey(f) {
   return isChat(f) ? 'chat:' + (codeOf(f) || f.id) : f.phone;
 }
 
+/** The owner's prompt when the reply could go to more than one customer. */
 function askText(list) {
   return `Not sent: ${list.length} customers wrote just now. Start your reply with their code: ` +
     list.map((f) => !isChat(f) ? `${codeOf(f)} for ${f.name || 'the ' + String(f.phone).slice(-4) + ' number'}`

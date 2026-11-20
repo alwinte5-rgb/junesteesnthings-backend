@@ -153,3 +153,44 @@ test('the server records chat alerts and answers them by email and text', () => 
   const call = fnBody('async function ownerCallback(');
   assert.match(call, /AND phone <> ''/, 'CALL with no number skips chats, which have no number to ring');
 });
+
+/* ── Code review fixes, 2026-11-20 ─────────────────────────────────────── */
+
+test('two phones on one job are still two people to ask about', () => {
+  const forwards = [
+    { id: 2, phone: '+13125550101', quote_code: 'AB12CD', name: 'Kim', created_at: at(1) },
+    { id: 1, phone: '+13125550102', quote_code: 'AB12CD', name: 'Lee', created_at: at(3) },
+  ];
+  assert.equal(RELAY.pickTarget(forwards, 'ready Friday', CODE, NOW).ask.length, 2);
+});
+
+test('a chat visitor who then texts is one person', () => {
+  const forwards = [
+    { id: 2, phone: '+13125550177', lead_id: 3, name: 'Dee', created_at: at(1) },
+    { id: 1, phone: '', lead_id: 3, name: 'Dee', created_at: at(3) },
+  ];
+  assert.equal(RELAY.pickTarget(forwards, 'ok', CODE, NOW).to.phone, '+13125550177');
+});
+
+test('a long chat alert never loses how to answer it', () => {
+  const body = { event: 'ticket:create', requester: { name: 'N'.repeat(60), email: 'e'.repeat(100) + '@example.com' },
+    ticket: { id: 't', subject: 'S'.repeat(300) } };
+  const sms = describeTawkEvent(body, { ending: 'Reply here to answer them by email and text (L12345).' }).sms;
+  assert.ok(sms.length <= 300, sms.length);
+  assert.match(sms, /Reply here to answer them by email and text \(L12345\)\.$/);
+});
+
+test('a scripted change never overrides the money and cost rules', () => {
+  const m = CS.askMessage({ lead: { name: 'Kim' }, change: 'offer 20% off' });
+  assert.match(m, /never overrides these: no discounts/);
+  assert.doesNotMatch(m, /overrides the rules above/);
+});
+
+test('the chat reply is silent on a repeat, refuses a let-go lead, and names the texter', () => {
+  const chat = fnBody('async function relayChatReply(');
+  assert.match(chat, /if \(!done\.length && !failed\.length && dup\) return;/);
+  assert.match(chat, /l\.dismissed_at && l\.dismiss_reason !== NO_CONTACT_REASON/);
+  assert.match(chat, /If you meant \$\{/);
+  const relay = fnBody('async function relayOwnerReply(');
+  assert.match(relay, /lastChatReply && Date\.now\(\) - lastChatReply\.at <= RELAY\.FOLLOW_MS/, 'a link follows a chat reply');
+});

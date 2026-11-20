@@ -33,10 +33,13 @@ function describeTawkEvent(body, { ending = 'Reply in the tawk app.' } = {}) {
 
   const kind = isTicket ? 'offline message' : 'chat';
   const subject = `New ${kind} from ${name}${text ? `: ${clip(text, 60)}` : ''}`;
+  /* The ending says how to answer (and the lead's code): it is never the
+     part cut off, so the rest gives way to it. */
+  const end = clip(ending, 80);
   const sms = clip(
-    `June's Tees: new ${kind} from ${name}${email ? ` (${email})` : ''}${text ? ` — "${clip(text, 90)}"` : ''}. ${clip(ending, 80)}`,
-    300,
-  );
+    `June's Tees: new ${kind} from ${name}${email ? ` (${email})` : ''}${text ? ` — "${clip(text, 90)}"` : ''}.`,
+    299 - end.length,
+  ) + ' ' + end;
   return { event, kind, name, email, where, text, subject, sms, chatId: b.chatId || null };
 }
 

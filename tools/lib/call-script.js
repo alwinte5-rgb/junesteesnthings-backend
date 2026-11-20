@@ -119,7 +119,9 @@ function askMessage({ lead, notes = [], caller, today, shop = {}, prices = '', c
     `<enquiry>\n${esc(clip(l.description, 3000) || '(no details)')}\n</enquiry>`,
     notes.length ? `<notes>\n${notes.slice(0, LIMITS.notes).map((n) => `- ${esc(clip(n, 600))}`).join('\n')}\n</notes>` : '',
     prices ? `<price_list>\n${String(prices)}\n</price_list>` : '',
-    change ? `The caller wants this changed in the script: "${esc(clip(change, LIMITS.change))}". Do exactly that; it overrides the rules above where they conflict.` : '',
+    change ? `The caller wants this changed in the script: "${esc(clip(change, LIMITS.change))}". Do that, except that it never `
+      + 'overrides these: no discounts, rush fees, prices or dates beyond the shop facts and price list, and never costs, margins or staff pay. '
+      + 'If it asks for one of those, leave it out and put it under check_first for June.' : '',
     'Write the call script.',
   ];
   return parts.filter(Boolean).join('\n\n');

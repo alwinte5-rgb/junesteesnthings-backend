@@ -5018,15 +5018,31 @@ function chatReplyWays(l) {
  *  "email and phone"): emailed when the chat left an email, texted when it
  *  left a phone, both when it left both. Recorded on the lead as any email
  *  or text from its card is, so their answer lands back on it. */
-async function relayChatReply(to, words, sid) {
+/* The chat she last answered from her phone, so the link her phone sends
+   as a text of its own follows it there, as it does after a text reply.
+   In memory: it only matters for two minutes. */
+let lastChatReply = null;
+
+async function relayChatReply(to, words, sid, forwards = []) {
   const chatLead = Number(to.lead_id) || null;
-  const tawk = 'Answer it in the tawk app.';
+  /* A website chat that cannot be answered from here is still the newest
+     thing she was told about, so a reply meant for the last texter stops
+     here too: the refusal names that texter's code (code review, 2026-11-20). */
+  const texter = forwards.find((f) => !RELAY.isChat(f) && RELAY.codeOf(f));
+  const tawk = `Answer it in the tawk app.${texter ? ` If you meant ${texter.name || VOICE.pretty(normalizeUsPhone(texter.phone))}, start with ${RELAY.codeOf(texter)}.` : ''}`;
   if (!chatLead) return sendOwnerSms(`Not sent: that was a website chat with no enquiry on file. ${tawk}`);
-  const { rows: [l] } = await pool.query('SELECT id, name, email, phone FROM submissions WHERE id = $1', [chatLead]);
+  const { rows: [l] } = await pool.query('SELECT id, name, email, phone, dismissed_at, dismiss_reason FROM submissions WHERE id = $1', [chatLead]);
   if (!l) return sendOwnerSms(`Not sent: that website chat's enquiry is gone. ${tawk}`);
   const who = `${smsPlain(l.name, 40) || 'the chat visitor'} (L${chatLead})`;
+  /* Let go on purpose (spam, went elsewhere): not written to from a phone
+     reply. A chat let go only for leaving no contact is still answerable
+     once its transcript brought one. */
+  if (l.dismissed_at && l.dismiss_reason !== NO_CONTACT_REASON) {
+    return sendOwnerSms(`Not sent: you let ${who} go. Reopen it on the Leads page if you mean to answer them.`);
+  }
   const ways = chatReplyWays(l);
   if (!ways.length) return sendOwnerSms(`Not sent: ${who} left no email or phone in the chat. ${tawk}`);
+  let dup = false;
   const done = [];
   const failed = [];
   if (ways.includes('email')) {
@@ -5049,12 +5065,16 @@ async function relayChatReply(to, words, sid) {
       await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text', $2)`,
         [chatLead, `You texted: ${words}`]).catch((e) => console.error('chat reply text note failed:', e.message));
       await markLeadResponded(chatLead, null).catch(() => {});
-    } else if (status !== 'duplicate') {
+    } else if (status === 'duplicate') dup = true;
+    else {
       if (status === 'failed') reportError('twilio:relay-chat', new Error(`text to chat lead ${chatLead} was not accepted`), `lead ${chatLead}`).catch(() => {});
       failed.push(`the text did not go (${status === 'no-consent' ? 'they texted STOP' : status === 'unconfigured' ? 'texting is off' : 'the text service refused it'})`);
     }
   }
+  /* Twilio sent her text again: it went the first time, and she was told. */
+  if (!done.length && !failed.length && dup) return;
   if (!done.length) return sendOwnerSms(`Not sent to ${who}: ${failed.join('; ') || 'nothing could be sent'}. Try the Leads page.`);
+  lastChatReply = { lead_id: chatLead, at: Date.now() };
   return sendOwnerSms(`Sent to ${who}: ${done.join(' and ')}.${failed.length ? ` But ${failed.join('; ')}.` : ''}`);
 }
 
@@ -5244,6 +5264,11 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
       reportError('twilio:relay-lookup', e).catch(() => {});
       return { rows: [] };
     })).rows[0] || null : null;
+  /* A link straight after her reply to a website chat goes to that chat. */
+  if (RELAY.isLinkOnly(text) && lastChatReply && Date.now() - lastChatReply.at <= RELAY.FOLLOW_MS
+      && !(previous && new Date(previous.at).getTime() > lastChatReply.at)) {
+    return relayChatReply({ phone: '', lead_id: lastChatReply.lead_id }, String(text).trim(), sid, forwards);
+  }
   const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE, Date.now(), previous);
   if (pick.linkOnly) return sendOwnerSms('Not sent: a link on its own was not sent to anyone. Start it with their number or code, e.g. 312 555 0199 https://...');
   if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. Start with their number or code, e.g. 312 555 0199 or AB12CD, then your message.');
@@ -5289,7 +5314,7 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   /* A website chat (its forward has no phone): answered by email and text. */
   if (!pick.byNumber && RELAY.isChat(to)) {
     if (!words) return sendOwnerSms('Not sent: a picture cannot go to a website chat from here. Email it from the Leads page.');
-    return relayChatReply(to, words, sid);
+    return relayChatReply(to, words, sid, forwards);
   }
   const pics = ownerMedia.length ? await saveTextMedia(ownerMedia, to.quote_code || null) : [];
   /* One row per incoming text: Twilio retrying the webhook does not send twice. */
