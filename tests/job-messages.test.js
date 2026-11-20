@@ -495,7 +495,7 @@ test('the owner replying to a forwarded text answers that customer from the shop
 test('two customers within ten minutes: nobody is guessed at; a code picks one, and a word like Thanks is not a code', async () => {
   const both = await inboundText({ from: '+17738491854', body: 'Yes we can', forwards: [kim, ann] });
   assert.strictEqual(both.sent.length, 0);
-  assert.match(both.ownerTexts[0], /^Not sent: 2 customers texted just now\. Start your reply with their code: AB12CD for Kim Lee, FARYDGZMRY for Ann Cole\.$/);
+  assert.match(both.ownerTexts[0], /^Not sent: 2 customers wrote just now\. Start your reply with their code: AB12CD for Kim Lee, FARYDGZMRY for Ann Cole\.$/);
   const coded = await inboundText({ from: '+17738491854', body: 'farydgzmry: ready Friday', forwards: [kim, ann] });
   assert.deepStrictEqual(coded.sent, [['+13125550111', "June's Tees: ready Friday"]]);
   const thanks = await inboundText({ from: '+17738491854', body: 'Thanks so much Kim', forwards: [kim] });
