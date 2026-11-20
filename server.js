@@ -29795,6 +29795,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 180px">
           <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
           <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
+          <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
         </form>`}</span></div>`),
     ...((mail && mail.unreadThreads) || []).map((t) => `<a class="row-i" href="/admin/mailbox/${Number(t.id)}">
       <span class="ico ico-amber">${icon('mail')}</span>
@@ -35219,6 +35220,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
         <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
+        <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
       </form></div>`;
     res.send(adminPage('Approvals', `
       ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.')}
@@ -35324,7 +35326,8 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
      path only (safeAdminPath, as the edit route beside this uses). */
   const backTo = safeAdminPath((req.body || {}).back, '/admin/approvals');
   const id = intIn(req.params.id);
-  const decision = req.body && req.body.decision === 'approve' ? 'approve' : 'reject';
+  const asked = req.body && req.body.decision;
+  const decision = asked === 'approve' || asked === 'remove' ? asked : 'reject';
   const note = text(req.body && req.body.note, 500) || null;
   if (!id) return res.redirect(backTo);
   /* Claimed before anything is sent, so a double press cannot send twice. */
@@ -35344,6 +35347,16 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
     return back(res, backTo, 'err', 'That message was edited after you opened this page. Read the new wording, then approve again.');
   }
   try {
+    /* Remove: off the list, nothing sent, and the helper is not told (only
+       approved and sent-back requests notify them or show on My Day). No
+       note is kept, so it never shows to them as feedback. A held quote stays
+       held: the customer still cannot see it. */
+    if (decision === 'remove') {
+      await pool.query(`UPDATE staff_approvals SET status = 'removed', decided_at = NOW(), decision_note = NULL WHERE id = $1`, [id]);
+      return back(res, backTo, 'ok', a.kind === 'quote'
+        ? `Removed. Nothing was sent, and quote ${a.subject_id} stays hidden from the customer.`
+        : 'Removed. Nothing was sent.');
+    }
     if (decision === 'reject') {
       await finish('rejected');
       return back(res, backTo, 'ok', 'Sent back with your note.');
