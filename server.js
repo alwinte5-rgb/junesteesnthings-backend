@@ -1899,12 +1899,19 @@ async function initStaffTables() {
         UPDATE staff_training t SET step_key = $4
           FROM staff s, map m
          WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track AND t.step_key = $3
-           -- Cannot match (the key is new here); it only keeps a key clash from stopping startup.
            AND NOT EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
-        RETURNING 1)
-      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept`,
+        RETURNING 1),
+      /* A signoff:ready the line above left in place because the helper
+         already held OLD_READY_KEY. Not expected (the key is new here), so it
+         is reported rather than skipped silently (code review). */
+      stuck AS (
+        SELECT DISTINCT t.staff_id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
+         WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
+           AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4))
+      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept, (SELECT count(*) FROM stuck)::int AS stuck`,
       [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
+    if (r.stuck) console.warn(`training (#569): ${r.stuck} helper(s) kept signoff:ready because they already had ${TRAINING.OLD_READY_KEY}: check their training by hand`);
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
@@ -3977,7 +3984,8 @@ async function staffByEmail(email) {
   const flags = s.flags || [];
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
            inTraining: !(s.ready_rows || []).some((r) => TRAINING.endsTraining(
-             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), r.key, r.at)),
+             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), r.key, r.at,
+             (s.ready_rows || []).some((o) => o.key === TRAINING.OLD_READY_KEY))),
            track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
@@ -34993,15 +35001,15 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
           if (carry) {
             ({ rowCount: carried } = await client.query(
               /* Same date and signer, so commission starts when it was
-                 signed. Except onto Sales for a helper who has a sales role
-                 (closer, lead gen, accounts): there it is dated no earlier
-                 than LEGACY_READY_BEFORE, since an older Sales ready also
-                 ends that role's course, which they never did (code review). */
+                 signed. An old (pre-role-course) date does not end a sales
+                 role's course for them: they hold OLD_READY_KEY, and
+                 TRAINING.endsTraining / readyRowSql leave such a ready to the
+                 plain Sales path (code review). */
               `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
-               SELECT staff_id, $3::text, CASE WHEN $3::text = $5::text AND $7::boolean THEN GREATEST(done_at, $6::timestamptz) ELSE done_at END, signed_by
+               SELECT staff_id, $3::text, done_at, signed_by
                  FROM staff_training WHERE staff_id = $1 AND step_key = $2
                   AND EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$4')})
-               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE, !!TRAINING.salesRoleOf(s.sales_role)]));
+               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady]));
           }
           await client.query('COMMIT');
         } catch (e) {
@@ -43643,7 +43651,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
     /* The sign-off whose Undo can keep the commission window: the one that
        ended training (TRAINING.endsTraining). */
-    const endsTraining = (s) => TRAINING.endsTraining(p.readyKey, s.key, s.doneAt);
+    const endsTraining = (s) => TRAINING.endsTraining(p.readyKey, s.key, s.doneAt, !!p.copied);
     const stepRow = (s) => {
       const lessonHref = s.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(s.key.slice('lesson:'.length))}` : '';
       const link = s.locked && !owner ? escEmail(s.title)

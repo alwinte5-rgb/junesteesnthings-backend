@@ -122,15 +122,21 @@ function legacyReadyPaths() {
 }
 /** Did this sign-off (key, given at doneAt) end training on a path whose
  *  ready key is readyKey? The one rule for JS; readyRowSql is the same in SQL. */
-function endsTraining(readyKey, key, doneAt) {
+/* `copied`: the helper holds OLD_READY_KEY, so a ready of theirs was copied
+   off another path (#569) and their Sales ready may have been carried onto
+   Sales from another course. It then counts as the old pre-role-course Sales
+   ready on no role path, whatever order the path and role were set in (code
+   review: a date clamp at carry time depended on the order of clicks). */
+function endsTraining(readyKey, key, doneAt, copied = false) {
   if (key === readyKey) return true;
-  return key === READY_KEY && legacyReadyPaths().includes(readyKey) && !!doneAt && new Date(doneAt).getTime() < LEGACY_BEFORE_MS;
+  return key === READY_KEY && !copied && legacyReadyPaths().includes(readyKey) && !!doneAt && new Date(doneAt).getTime() < LEGACY_BEFORE_MS;
 }
 /** SQL for "this staff_training row ended training", where `param` holds the
  *  path's ready key. Only checked constants are written into the text. */
 function readyRowSql(alias, param) {
   return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz`
-    + ` AND ${param}::text IN (${legacyReadyPaths().map((k) => `'${k}'`).join(', ')})))`;
+    + ` AND ${param}::text IN (${legacyReadyPaths().map((k) => `'${k}'`).join(', ')})`
+    + ` AND NOT EXISTS (SELECT 1 FROM staff_training ${alias}_old WHERE ${alias}_old.staff_id = ${alias}.staff_id AND ${alias}_old.step_key = '${OLD_READY_KEY}')))`;
 }
 /** The sign-off a helper keeps when moved between paths: { from, to } when
  *  a sign-off from the old path's course is training on the new one under
@@ -155,7 +161,7 @@ const RENAMED_READY = {
 };
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
-  return !!p && p.steps.some((s) => s.done && endsTraining(p.readyKey, s.key, s.doneAt));
+  return !!p && p.steps.some((s) => s.done && endsTraining(p.readyKey, s.key, s.doneAt, !!p.copied));
 }
 
 function readyKeyOfPath(track, role) {
@@ -305,6 +311,8 @@ function progress(ticks, facts = {}, features = FEATURES, track = DEFAULT_TRACK,
   const done = work.filter((s) => s.done).length;
   return { steps, done, total: work.length, next: work.filter((s) => !s.done && !s.locked).slice(0, 3),
            complete: done === work.length,
+           // Holds OLD_READY_KEY: an old Sales ready counts on no role path (endsTraining).
+           copied: ticks.has(OLD_READY_KEY),
            minutes: { expected: steps.reduce((n, s) => n + (Number(s.minutes) || 0), 0),
                       took: steps.reduce((n, s) => n + (s.took || 0), 0) } };
 }
