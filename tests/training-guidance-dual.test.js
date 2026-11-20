@@ -22,16 +22,20 @@ test('dual roles preserve original learning records and the existing commission-
  for(const [dual,primary] of [['sales-software','software'],['design-marketing','sales']]) {
   const original=T.visibleSteps(undefined,primary).filter(s=>s.type!=='buffer');
   const combined=T.visibleSteps(undefined,dual);
-  for(const s of original) assert.ok(combined.some(n=>n.key===s.key), `${dual}: lost ${s.key}`);
+  // The closing sign-offs are the one exception: each course has its own (#569), renamed once at startup.
+  const own={'signoff:handoff':'signoff:marketing-handoff','signoff:ready':'signoff:marketing-ready'};
+  for(const s of original) assert.ok(combined.some(n=>n.key===(dual==='design-marketing'&&own[s.key]||s.key)), `${dual}: lost ${s.key}`);
   // June's Tees + COS Sales ends in its own apparel sign-off (owner, 2026-11-18): the
   // commission in the system is apparel commission, so it starts when apparel is
-  // signed off, never on a software sign-off. Design + Marketing keeps the primary's.
-  assert.equal(T.readyKeyFor(dual), dual === 'sales-software' ? 'signoff:apparel-ready' : T.readyKeyFor(primary));
-  const ticks=new Map([['signoff:ready',{done_at:'2026-10-28T15:32:00Z'}]]);
+  // signed off, never on a software sign-off. Design + Marketing closes on the
+  // Sales course's sign-off under its own key (#569; renamed once at startup).
+  assert.equal(T.readyKeyFor(dual), dual === 'sales-software' ? 'signoff:apparel-ready' : 'signoff:marketing-ready');
+  const closing = dual === 'sales-software' ? 'signoff:software-ready' : 'signoff:marketing-ready';
+  const ticks=new Map([[closing,{done_at:'2026-10-28T15:32:00Z'}]]);
   const p=T.progress(ticks,{},undefined,dual);
-  assert.equal(p.steps.find(s=>s.key==='signoff:ready').done,true);
+  assert.equal(p.steps.find(s=>s.key===closing).done,true);
   assert.equal(p.complete,false,'an old signoff does not complete newly added learning');
-  assert.equal(T.progress(new Map(),{},undefined,dual).steps.find(s=>s.key==='signoff:ready').locked,true);
+  assert.equal(T.progress(new Map(),{},undefined,dual).steps.find(s=>s.key===closing).locked,true);
  }
 });
 test('both duty areas are taught without repeating shared team lessons', () => {

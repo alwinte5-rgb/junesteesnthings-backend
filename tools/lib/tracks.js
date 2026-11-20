@@ -17,7 +17,8 @@
            has its own (courses/index.js PART_READY)
    readyCarriedFrom the paths whose ready (signoff:ready) is this track's
            `ready` too: the Sales course's ready is the apparel sign-off, so a
-           trained Sales helper moved here keeps it (training.js carriedReady)
+           trained Sales helper moved here keeps it, and one moved back to
+           Sales keeps it as signoff:ready (training.js carriedReady)
    channel true when the track gets its own chat channel at startup (made
            once; an archived one counts). Sales has had # Sales from day one
    note    what the course covers, shown on the paths page */

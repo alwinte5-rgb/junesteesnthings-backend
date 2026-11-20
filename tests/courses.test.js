@@ -313,8 +313,8 @@ test('the Content course is the content track\'s path: its own sign-offs, the ow
   assert.ok(TRAINING.TRACKS.content);
   assert.deepStrictEqual(COURSES.coursesFor('content').map((c) => c.key), ['content-core']);
   const keys = TRAINING.visibleSteps(undefined, 'content').map((s) => s.key);
-  for (const k of ['quiz:team-1', 'signoff:content-edit', 'signoff:content-report', 'quiz:content-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
-  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  for (const k of ['quiz:team-1', 'signoff:content-edit', 'signoff:content-report', 'quiz:content-final', 'signoff:content-handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], 'signoff:content-ready');
   // Module 2 stays shut until Team basics is passed.
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'content'), 'lesson:c2-why'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'content'), 'lesson:c2-why'));
@@ -337,8 +337,8 @@ test('the Ads course is the ads track\'s path: its own sign-offs, the owner\'s g
   assert.ok(TRAINING.TRACKS.ads);
   assert.deepStrictEqual(COURSES.coursesFor('ads').map((c) => c.key), ['ads-core']);
   const keys = TRAINING.visibleSteps(undefined, 'ads').map((s) => s.key);
-  for (const k of ['quiz:team-1', 'signoff:ads-tracking', 'signoff:ads-terms', 'signoff:ads-report', 'quiz:ads-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
-  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  for (const k of ['quiz:team-1', 'signoff:ads-tracking', 'signoff:ads-terms', 'signoff:ads-report', 'quiz:ads-final', 'signoff:ads-handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], 'signoff:ads-ready');
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'ads'), 'lesson:a2-judge'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'ads'), 'lesson:a2-judge'));
   // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
@@ -361,8 +361,8 @@ test('the Bookkeeper course is the bookkeeper track\'s path, and a hired bookkee
   assert.strictEqual(TRAINING.trackOf('bookkeeper'), 'bookkeeper', 'the hiring role name is the track name');
   assert.deepStrictEqual(COURSES.coursesFor('bookkeeper').map((c) => c.key), ['books-core']);
   const keys = TRAINING.visibleSteps(undefined, 'bookkeeper').map((s) => s.key);
-  for (const k of ['quiz:team-1', 'signoff:books-receipts', 'signoff:books-tax', 'signoff:books-close', 'quiz:books-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
-  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  for (const k of ['quiz:team-1', 'signoff:books-receipts', 'signoff:books-tax', 'signoff:books-close', 'quiz:books-final', 'signoff:books-handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], 'signoff:books-ready');
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'bookkeeper'), 'lesson:b2-money'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'bookkeeper'), 'lesson:b2-money'));
   // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
@@ -381,8 +381,8 @@ test('the Developer course is the developer track\'s path, and a hired developer
   assert.strictEqual(TRAINING.trackOf('developer'), 'developer', 'the hiring role name is the track name');
   assert.deepStrictEqual(COURSES.coursesFor('developer').map((c) => c.key), ['dev-core']);
   const keys = TRAINING.visibleSteps(undefined, 'developer').map((s) => s.key);
-  for (const k of ['quiz:team-1', 'signoff:dev-rollback', 'signoff:dev-first-pr', 'quiz:dev-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
-  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  for (const k of ['quiz:team-1', 'signoff:dev-rollback', 'signoff:dev-first-pr', 'quiz:dev-final', 'signoff:dev-handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], 'signoff:dev-ready');
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'developer'), 'lesson:v2-stack'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'developer'), 'lesson:v2-stack'));
   // June answered every blank (answers.js); each answered lesson keeps its unanswered body in `was`.
@@ -403,8 +403,8 @@ test('the Developer course is the developer track\'s path, and a hired developer
 
 test('the Design course keeps the old checklist\'s keys, so a designer\'s ticks and passes still count', () => {
   const keys = TRAINING.visibleSteps(new Set(['proofs']), 'design').map((s) => s.key);
-  for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:handoff', 'signoff:ready']) assert.ok(keys.includes(k), k);
-  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  for (const k of ['do:message', 'do:proof', 'quiz:design', 'signoff:art', 'signoff:design-handoff', 'signoff:design-ready']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], 'signoff:design-ready');
   assert.strictEqual(TRAINING.visibleSteps(new Set(['proofs']), 'design').find((s) => s.key === 'do:proof').need, 3);
   // June answered every Design blank (answers.js, 2026-10-13); none is left for her gaps card.
   const gaps = TRAINING.lessonArticles().filter((a) => /^Design course /.test(a.title)).flatMap((a) => TRAINING.ownerGaps(a.body));
@@ -436,8 +436,8 @@ test('the Software sales course is the software track\'s path, and a hired softw
   assert.strictEqual(TRAINING.trackOf('software'), 'software', 'the hiring role name is the track name');
   assert.deepStrictEqual(COURSES.coursesFor('software').map((c) => c.key), ['software-core']);
   const keys = TRAINING.visibleSteps(undefined, 'software').map((s) => s.key);
-  for (const k of ['quiz:team-1', 'signoff:software-list', 'signoff:software-demo', 'signoff:software-trial', 'signoff:software-report', 'quiz:software-final', 'signoff:handoff']) assert.ok(keys.includes(k), k);
-  assert.strictEqual(keys[keys.length - 1], TRAINING.READY_KEY);
+  for (const k of ['quiz:team-1', 'signoff:software-list', 'signoff:software-demo', 'signoff:software-trial', 'signoff:software-report', 'quiz:software-final', 'signoff:software-handoff']) assert.ok(keys.includes(k), k);
+  assert.strictEqual(keys[keys.length - 1], 'signoff:software-ready');
   assert.ok(!TRAINING.stepOpen(TRAINING.progress(new Map(), {}, undefined, 'software'), 'lesson:w2-apps'));
   assert.ok(TRAINING.stepOpen(TRAINING.progress(new Map(), { quizzes: { 'team-1': 1 } }, undefined, 'software'), 'lesson:w2-apps'));
   const arts = TRAINING.lessonArticles().filter((a) => /^Software sales course /.test(a.title));

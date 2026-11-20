@@ -790,9 +790,9 @@ const FINAL = {
     questions: null, // content-core-final.js
   },
   signoffs: [
-    { key: 'signoff:handoff', type: 'signoff', minutes: 0,
+    { key: 'signoff:content-handoff', type: 'signoff', minutes: 0,
       title: 'Knows when to hand a comment or a customer to June', hint: 'Complaints, orders that already exist, takedown requests, prices and discounts. June signs this off after seeing you do it.' },
-    { key: 'signoff:ready', type: 'signoff', minutes: 0,
+    { key: 'signoff:content-ready', type: 'signoff', minutes: 0,
       title: 'Ready to post on their own', hint: 'The last step. June decides when your videos can go up without her checking each one first.' },
   ],
 };

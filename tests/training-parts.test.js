@@ -54,7 +54,7 @@ test('the apparel half ends in its own sign-off, and that is the path\'s ready k
   const steps = T.visibleSteps(undefined, 'sales-software');
   const keys = steps.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length, 'no step key twice');
-  assert.ok(keys.includes('signoff:ready'), 'the software ready sign-off already earned is kept');
+  assert.ok(keys.includes('signoff:software-ready'), 'the software ready sign-off already earned is kept (renamed once, #569)');
   const ar = steps.find((s) => s.key === 'signoff:apparel-ready');
   assert.equal(ar.part, 'sales');
   // It waits for the sales assessment and the sales lessons, never the software ones.
@@ -74,7 +74,7 @@ test('the apparel half ends in its own sign-off, and that is the path\'s ready k
 });
 
 test('Design + Marketing keeps its ready key, adds a design sign-off, and leaves editing to the video editor', () => {
-  assert.equal(T.readyKeyFor('design-marketing'), 'signoff:ready', 'nobody already on it loses ready or pay');
+  assert.equal(T.readyKeyFor('design-marketing'), 'signoff:marketing-ready', 'its own key; anyone on it keeps theirs (renamed once, #569)');
   const steps = T.visibleSteps(undefined, 'design-marketing');
   const keys = steps.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
@@ -140,7 +140,7 @@ test('nobody already trained on June\'s Tees + COS loses ready or commission', (
   const steps = T.progress(new Map([['signoff:apparel-ready', { done_at: '2026-11-01T00:00:00Z' }]]), {}, undefined, 'sales-software').steps;
   assert.equal(T.readyGiven({ steps, readyKey: rk }), true);
   // The software ready says it no longer ends training on this path.
-  assert.match(steps.find((s) => s.key === 'signoff:ready').hint, /not here/);
+  assert.match(steps.find((s) => s.key === 'signoff:software-ready').hint, /not here/);
 });
 
 test('Design + Marketing is not trained until both halves are signed off', () => {

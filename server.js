@@ -343,6 +343,10 @@ function sendPage(req, res, rel, status = 200, fallback = null) {
    express.static below would otherwise serve the .html. /mail15 was the first
    mailer's address (printed on it, and in its QR): it now forwards here, so
    the discount code is never the name of a page. */
+app.use((req, res, next) => {
+  if (PARTNERS.on() || !PARTNERS.isGatedPath(req.path)) return next();
+  return sendPage(req, res, '404.html', 404);
+});
 app.get(['/partners', '/partners.html'], (req, res) => {
   if (!PARTNERS.on()) return sendPage(req, res, '404.html', 404);
   sendPage(req, res, 'partners.html');
@@ -1871,6 +1875,50 @@ async function initStaffTables() {
       FROM staff_training t JOIN staff s ON s.id = t.staff_id
      WHERE EXISTS (SELECT 1 FROM mark) AND s.training_track = 'sales-software' AND t.step_key = 'signoff:ready'
     ON CONFLICT DO NOTHING`);
+  /* Once (#569): every course closed on signoff:handoff and signoff:ready, so
+     a helper moved between paths saw another course's sign-off as given (and
+     Design -> Design + Marketing ended training at once). Each course now has
+     its own keys (TRAINING.courseKeyRenames); a helper's existing ticks move
+     to the keys of the path they are on now, so nobody's training or
+     commission changes. A tick whose new key is already there is left as it
+     was rather than overwritten. A June's Tees + COS ready from before role
+     courses (TRAINING.LEGACY_READY_BEFORE) ended training there; it also gets
+     the apparel sign-off, so it still does. One transaction with its marker:
+     it all happens once, or not at all and runs again on the next start. */
+  {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rowCount: first } = await client.query(
+        `INSERT INTO shop_settings (key, value) VALUES ('once:course-ready-keys', jsonb_build_object('at', NOW()))
+         ON CONFLICT DO NOTHING`);
+      if (first) {
+        await client.query(`
+          INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
+          SELECT t.staff_id, 'signoff:apparel-ready', t.done_at, t.signed_by
+            FROM staff_training t JOIN staff s ON s.id = t.staff_id
+           WHERE s.training_track = 'sales-software' AND t.step_key = $1 AND t.done_at < $2::timestamptz
+          ON CONFLICT DO NOTHING`, [TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE]);
+        let renamed = 0;
+        for (const r of TRAINING.courseKeyRenames()) {
+          const { rowCount } = await client.query(`
+            UPDATE staff_training t SET step_key = $3
+              FROM staff s
+             WHERE s.id = t.staff_id AND s.training_track = $1 AND t.step_key = $2
+               AND NOT EXISTS (SELECT 1 FROM staff_training x WHERE x.staff_id = t.staff_id AND x.step_key = $3)`,
+            [r.track, r.from, r.to]);
+          renamed += rowCount;
+        }
+        if (renamed) console.log(`training: ${renamed} sign-off(s) moved to their course's own key (#569)`);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
      The role adds its own course after the consolidated Sales course. */

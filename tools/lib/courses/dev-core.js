@@ -772,9 +772,9 @@ const FINAL = {
     questions: null, // dev-core-final.js
   },
   signoffs: [
-    { key: 'signoff:handoff', type: 'signoff', minutes: 0,
+    { key: 'signoff:dev-handoff', type: 'signoff', minutes: 0,
       title: 'Knows what is June\'s to decide', hint: 'Customer-facing changes, anything moving money or deleting data, new paid services, priorities. June signs this off after seeing you do it.' },
-    { key: 'signoff:ready', type: 'signoff', minutes: 0,
+    { key: 'signoff:dev-ready', type: 'signoff', minutes: 0,
       title: 'Ready to ship on their own', hint: 'The last step. June decides when your changes go live without her checking each one first.' },
   ],
 };

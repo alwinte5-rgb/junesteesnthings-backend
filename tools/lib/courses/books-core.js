@@ -754,9 +754,9 @@ const FINAL = {
     questions: null, // books-core-final.js
   },
   signoffs: [
-    { key: 'signoff:handoff', type: 'signoff', minutes: 0,
+    { key: 'signoff:books-handoff', type: 'signoff', minutes: 0,
       title: 'Knows what goes to June the same day', hint: 'Disputes, failed payouts, missing or unexplained money, tax deadlines at risk, odd payment requests. June signs this off after seeing you do it.' },
-    { key: 'signoff:ready', type: 'signoff', minutes: 0,
+    { key: 'signoff:books-ready', type: 'signoff', minutes: 0,
       title: 'Ready to close a month on their own', hint: 'The last step. June decides when your close and summary go ahead without her checking each step first.' },
   ],
 };

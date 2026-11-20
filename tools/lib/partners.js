@@ -146,7 +146,22 @@ function sitemapXml(xml, env = process.env) {
   return end < 0 ? xml : xml.slice(0, end) + SITEMAP_ENTRY + xml.slice(end);
 }
 
+/* The addresses that exist only while the program is on. Express matches a
+   route on the raw path, but express.static (and the seasonal page handler)
+   decode it and collapse slashes, so //partners.html or /partners%2Ehtml
+   would slip past the /partners route and get the page. This answers for the
+   path as those handlers will see it. */
+const GATED_PATHS = new Set(['/partners', '/partners.html', '/mail15', '/mail15.html']);
+function isGatedPath(reqPath) {
+  let p = String(reqPath || '');
+  try { p = decodeURIComponent(p); } catch { /* a bad escape is a 400 elsewhere */ }
+  p = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  p = require('node:path').posix.normalize(p).replace(/\/+$/, '').toLowerCase();
+  return GATED_PATHS.has(p);
+}
+
 module.exports = {
   on, sitemapXml, LOCK_DAYS, lockUntil, lockOpen, lockDaysLeft, reorderPromo, reorderItems,
   canEnterCode, PROMO_MESSAGES, promoReasonKey, promoMessage, discountForCode,
+  isGatedPath,
 };

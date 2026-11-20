@@ -119,10 +119,39 @@ function readyRowSql(alias, param) {
 }
 /** The sign-off a helper keeps when moved between paths: { from, to } when
  *  their ready on the old path is the new path's ready under another key
- *  (tracks.js readyCarriedFrom), else null. */
+ *  (tracks.js readyCarriedFrom), else null. It works both ways: Sales to
+ *  June's Tees + COS carries signoff:ready to the apparel sign-off, and back
+ *  again carries the apparel sign-off to signoff:ready (#569). */
 function carriedReady(fromTrack, toTrack) {
-  const t = TRACKS[trackOf(toTrack)];
-  return t && t.ready && (t.readyCarriedFrom || []).includes(trackOf(fromTrack)) ? { from: READY_KEY, to: t.ready } : null;
+  const from = trackOf(fromTrack);
+  const to = trackOf(toTrack);
+  const t = TRACKS[to];
+  const f = TRACKS[from];
+  if (t && t.ready && (t.readyCarriedFrom || []).includes(from)) return { from: READY_KEY, to: t.ready };
+  if (f && f.ready && (f.readyCarriedFrom || []).includes(to)) return { from: f.ready, to: READY_KEY };
+  return null;
+}
+
+/* #569: every course's closing sign-offs were signoff:handoff and
+   signoff:ready, so a helper moved between paths saw another course's
+   sign-off as given here (Design -> Design + Marketing ended training at
+   once). Each course now has its own; Sales keeps the old keys. Existing
+   ticks are renamed once at startup (server.js) by the path the helper is on
+   now, which is the course those ticks were given on as far as anything
+   recorded shows: what each helper sees on their own path does not change.
+   Design + Marketing ends on the Sales course's sign-offs under its own keys
+   (courses/index.js DM_KEYS). */
+const COURSE_KEY_RENAMES = Object.freeze({
+  design: 'design', content: 'content', ads: 'ads', bookkeeper: 'books',
+  developer: 'dev', software: 'software', 'sales-software': 'software',
+  'design-marketing': 'marketing',
+});
+/** [{ track, from, to }] for the one-time rename, in a fixed order. */
+function courseKeyRenames() {
+  return Object.entries(COURSE_KEY_RENAMES).flatMap(([track, c]) => [
+    { track, from: READY_KEY, to: `signoff:${c}-ready` },
+    { track, from: 'signoff:handoff', to: `signoff:${c}-handoff` },
+  ]);
 }
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
@@ -628,7 +657,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, courseKeyRenames, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
