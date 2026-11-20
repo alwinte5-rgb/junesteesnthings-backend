@@ -74,7 +74,7 @@ test('reminders only text in the daytime, Chicago time', () => {
 });
 
 /* textToLead against a fake pool that answers by the SQL it is given. */
-function textLead({ jobs = [], open = [], known = [] } = {}) {
+function textLead({ jobs = [], open = [], known = [], letGo = [] } = {}) {
   const calls = [];
   const pool = { query: async (sql, args) => {
     calls.push({ sql, args });
@@ -83,11 +83,21 @@ function textLead({ jobs = [], open = [], known = [] } = {}) {
     if (/INSERT INTO submissions/.test(sql)) return { rows: [{ id: 77 }] };
     if (/WHERE dedupe_key = \$1/.test(sql)) return { rows: [] };
     if (/source = 'text'/.test(sql)) return { rows: open };
+    /* The reopen: only a lead the follow-ups let go (#544). The fake answers by
+       the guard, so dropping it from the SQL flips the result. */
+    if (/^\s*UPDATE submissions SET dismissed_at = NULL/.test(sql)) {
+      const guarded = /AND dismiss_reason = \$2/.test(sql) && args[1] === 'No reply after two follow-ups';
+      return { rows: [], rowCount: guarded ? (letGo.includes(args[0]) ? 1 : 0) : 1 };
+    }
     if (/name NOT LIKE/.test(sql)) return { rows: known };
     return { rows: [] };
   } };
-  const ctx = vm.createContext({ pool });
-  vm.runInContext(liftFn('textToLead') + ';this.f = textToLead;', ctx);
+  /* LEADFU: a text back reopens a lead the follow-ups let go (#544). */
+  const ctx = vm.createContext({ pool, LEADFU: require('../tools/lib/lead-followups') });
+  /* textToLead reads the shared phone match (#499) from the file around it. */
+  const samePhone = src.match(/^const SAME_PHONE_SQL = `[^`]*`;$/m);
+  assert.ok(samePhone, 'SAME_PHONE_SQL not found');
+  vm.runInContext(samePhone[0] + liftFn('textToLead') + ';this.f = textToLead;', ctx);
   return { f: ctx.f, calls };
 }
 
@@ -108,7 +118,11 @@ test('a text from a customer with a job goes to the job, not Leads', async () =>
 
 test('a second text while the lead is open is a note on it, not a second lead', async () => {
   const { f, calls } = textLead({ open: [{ id: 5 }] });
-  assert.deepStrictEqual({ ...(await f('+17735550100', 'Also need 20 hats', 'SM3')) }, { lead: 5 });
+  assert.deepStrictEqual({ ...(await f('+17735550100', 'Also need 20 hats', 'SM3')) }, { lead: 5, reopened: false },
+    'an open lead is not reopened (#544 reopens only one the follow-ups let go)');
+  const back = textLead({ open: [{ id: 6 }], letGo: [6] });
+  assert.deepStrictEqual({ ...(await back.f('+17735550100', 'still want them', 'SM5')) }, { lead: 6, reopened: true },
+    'a lead the follow-ups let go is back on Leads');
   assert.ok(calls.some((c) => /INSERT INTO lead_notes/.test(c.sql) && c.args[0] === 5));
   assert.ok(!calls.some((c) => /INSERT INTO submissions/.test(c.sql)));
 });
@@ -120,5 +134,6 @@ test('a known name is used rather than the number', async () => {
 });
 
 test('phone matching compares digits, with the backslash surviving the template string', () => {
-  assert.match(liftFn('textToLead'), /regexp_replace\(COALESCE\(phone, ''\), '\\\\D', '', 'g'\)/);
+  assert.match(liftFn('textToLead'), /\bSAME_PHONE_SQL\b/);
+  assert.match(src.match(/^const SAME_PHONE_SQL = .*$/m)[0], /regexp_replace\(COALESCE\(phone, ''\), '\\\\D', '', 'g'\)/);
 });

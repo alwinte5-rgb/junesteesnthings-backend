@@ -93,6 +93,9 @@ test('what a customer writes reaches the shop straight away (owner, 2026-10-19)'
     'New design from the designer', 'Proof changes requested:', 'Change requested — quote', 'subject: a.subject, html, replyTo']) {
     const i = src.indexOf(anchor);
     assert.ok(i > -1, anchor);
-    assert.ok(/urgent: true/.test(src.slice(i - 260, i + 120)), anchor);
+    /* The designer alert is urgent for a quote request and held for a mere
+       save (`urgent: !saved`): the request is what a customer wrote. */
+    const urgent = anchor === 'New design from the designer' ? /urgent: !saved\b/ : /urgent: true/;
+    assert.ok(urgent.test(src.slice(i - 260, i + 120)), anchor);
   }
 });

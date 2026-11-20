@@ -65,7 +65,7 @@ const { tierAt, bandPrice } = fromEngine(['tierAt', 'bandPrice']);
  * both engines were correct.
  */
 function liftCalc() {
-  const start = appjs.indexOf('calc_raw : function (qty) {');
+  const start = appjs.indexOf('calc_raw : function (qty, states, method) {');
   assert.notStrictEqual(start, -1, 'printing.calc_raw not found in app.js');
   let depth = 0;
   for (let i = appjs.indexOf('{', start); i < appjs.length; i++) {

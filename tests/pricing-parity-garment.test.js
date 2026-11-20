@@ -94,7 +94,7 @@ test('the discount applies to the garment, not to the printing', () => {
     'the printing must never be fed through the garment curve');
   /* Whitespace-tolerant: this file uses tabs and CRLF, and a test that breaks on
      reformatting teaches people to stop trusting the suite. */
-  assert.match(cart, /\(\s*\$jt_gnet\s*\+\s*\$print_calc\s*\)/,
+  assert.match(cart, /\$jt_gnet\s*\+\s*\$print_calc\b/,
     'and $print_calc is added after, undiscounted');
 });
 

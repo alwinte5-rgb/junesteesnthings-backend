@@ -233,7 +233,9 @@ test('any stage carrying an image is enough', () => {
 test('the note names the real reason', () => {
   /* "7 colours" would be wrong and confusing on a design whose countable colour
      total is zero. */
-  assert.match(cartPhp, /uses a photo or uploaded image, which has more colou?rs than/);
+  /* Since designer #205: a gradient, a shadow or see-through art counts as a
+     photo too (none can be separated into screens). */
+  assert.match(cartPhp, /uses a photo, a gradient, a shadow or see-through art, which has more colou?rs than/);
   assert.match(cartPhp, /which prints any number of colou?rs/);
 });
 
@@ -305,7 +307,9 @@ test('the refusal points at DTF, the way the designer already does', () => {
 const appJs = readDesigner('core/assets/js/app.js');
 
 test('the editor scales to the minimum when nothing else qualifies', () => {
-  assert.match(appJs, /var min = lumise\.cart\.printing\.min_qty_of\(lumise\.cart\.printing\.current_method\(\)\);\s*\n\s*if \(min > 0 && q < min\) price = price \* \(min \/ q\);/,
+  /* calc() can price a method other than the page's own (a ready-made's front
+     alone, designer #198): the minimum is that method's. */
+  assert.match(appJs, /var price = lumise\.cart\.printing\.calc_raw\(q, states, method\);\s*var min = lumise\.cart\.printing\.min_qty_of\(method[\s\S]{0,160}: lumise\.cart\.printing\.current_method\(\)\);\s*if \(min > 0 && q < min\) price = price \* \(min \/ q\);/,
     'app.js must apply the same min/qty scaling core/cart.php applies');
 });
 
@@ -319,7 +323,7 @@ test('the table walk itself is still untouched', () => {
   /* Both engines wrap the walk rather than editing it — it has early returns
      for non-multi methods, so a correction applied afterwards would miss paths.
      The walk is calc_raw()/printing_calc_raw() and stays vendor code. */
-  assert.match(appJs, /calc_raw : function \(qty\) \{/,
+  assert.match(appJs, /calc_raw : function \(qty, states, method\) \{/,
     'the walk must remain a separate function the wrapper calls');
   assert.match(cartPhp, /private function printing_calc_raw\( \$item, \$qty \)\{/);
 });

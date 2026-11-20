@@ -134,7 +134,7 @@ test('one refusal function serves every surface', () => {
      version of this — the customer has already decided to buy. */
   assert.match(auth, /function jt_promo_block_reason\(/);
   const promo = readDesigner('jt-promo.php');
-  assert.match(promo, /jt_promo_block_reason\(\$match, \$sub, \$email\)/);
+  assert.match(promo, /jt_promo_block_reason\(\$match, \$sub, \$email, \$pieces\)/);
 });
 
 test('the customer is told which rule blocked them', () => {
@@ -385,11 +385,14 @@ test('a code can be scheduled to start later', () => {
 
 test('a minimum item count is enforced with the real cart', () => {
   /* Minimum SPEND and minimum ITEMS are different offers — "any 3 shirts" is
-     not "$60 of shirts". */
-  assert.match(auth, /needs at least ' \. \(int\) \$d\['min_items'\] \. ' items/);
+     not "$60 of shirts". Counted in pieces, not cart lines (designer #164). */
+  assert.match(auth, /'That code needs at least ' \. \$pc\(\$min\)/);
   const conn = readDesigner('php_connector.php');
-  assert.match(conn, /count\(\(array\) \$cart_data\['items'\]\)/,
-    'the order path must pass the real item count');
+  assert.match(conn, /\$jt_pieces = isset\(\$cart_data\['items'\]\)/,
+    'the order path must count the real cart');
+  assert.match(conn, /jt_cart_pieces\(\(array\) \$cart_data\['items'\]\)/, 'in pieces, not cart lines');
+  assert.match(conn, /jt_promo_block_reason\(\$jt_promo_code, \$order_total,[\s\S]{0,120}\$jt_pieces\)/,
+    'and pass that count');
 });
 
 test('every rule shows on the row', () => {

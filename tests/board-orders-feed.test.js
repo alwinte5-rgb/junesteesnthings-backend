@@ -148,8 +148,16 @@ const NAV_BLOCK = (() => {
 test('every nav entry points at a route that exists', () => {
   const hrefs = [...NAV_BLOCK.matchAll(/href:\s*'([^']+)'/g)].map(m => m[1]);
   assert.ok(hrefs.length >= 5, 'the nav should cover the operator pages');
+  /* Routes live in server.js and in the tools/lib modules it registers
+     (studio-controls.js and others). A ?tab= link is the same page. */
+  const lib = path.join(__dirname, '..', 'tools', 'lib');
+  /* Only modules server.js actually registers: a deleted register line is a
+     dead menu entry too. */
+  const routes = src + fs.readdirSync(lib).filter((f) => f.endsWith('.js')
+      && new RegExp(`require\\('\\./tools/lib/${f.replace(/\.js$/, '').replace(/[-.]/g, '\\$&')}'\\)\\.register`).test(src))
+    .map((f) => fs.readFileSync(path.join(lib, f), 'utf8')).join('\n');
   for (const href of hrefs) {
-    assert.ok(src.includes(`app.get('${href}'`),
+    assert.ok(routes.includes(`app.get('${href.split('?')[0]}'`),
       `nav points at ${href}, which no route registers — a dead menu entry is worse than none`);
   }
 });
