@@ -178,3 +178,38 @@ test('a text back to a lead the follow-ups let go reopens it; old customer texts
   assert.ok(!/lead_fu_round_at = first_response_at/.test(src), 'no round backfill');
   assert.match(src, /text_in: 'Their text', email_in: 'Their email'/, 'the shop can log their reply by hand');
 });
+
+/* Review fixes, 2026-11-20. */
+const between = (from, to) => { const a = src.indexOf(from); assert.ok(a >= 0, from); return src.slice(a, src.indexOf(to, a)); };
+const job = between('async function sendLeadFollowUps', '/** The leads nobody has answered');
+
+test('a lead the finder found online is never followed up automatically', () => {
+  assert.match(job, /if \(isFoundLead\(l\)\) continue;\s*const due = LEADFU\.decide/);
+});
+
+test('the automatic email never carries the shop\'s own description, and "Caller" is not a name', () => {
+  const m = F.messages('first', { name: 'Caller', description: 'owner rude on phone, maybe aprons' });
+  assert.doesNotMatch(m.email.body, /rude|aprons/);
+  assert.doesNotMatch(m.text + m.email.body, /Caller/);
+  assert.match(F.messages('first', { name: 'Joe Smith' }).text, /^Hi Joe,/);
+});
+
+test('texting not set up is a failed send to retry; a text already sent this round counts as sent', () => {
+  assert.match(job, /status === 'sent' \|\| status === 'duplicate'/);
+  assert.match(job, /status === 'failed' \|\| status === 'unconfigured'/);
+  assert.match(job, /if \(status === 'sent'\) await pool\.query\(`INSERT INTO lead_notes/, 'one "You texted" note, not one per retry');
+});
+
+test('the card: the bot is never the last contact, and a stopped round is read against the newest word', () => {
+  const q = between('async function leadsWithStatus', '/** Speed to lead');
+  assert.match(q, /kind = ANY\(\$1\) AND NOT auto ORDER BY created_at DESC LIMIT 1\) n\) AS last_contact/);
+  assert.match(q, /CASE WHEN \(s\.lead_fu1_at IS NOT NULL OR s\.lead_fu_round_at IS NOT NULL\)/);
+  const l = lead({ first_response_at: ago(8), lead_fu_fails: 3, lead_fu_round_at: ago(8) });
+  assert.match(F.cardLine(l, null, String), /stopped/);
+  assert.strictEqual(F.cardLine(l, ours(1), String), '', 'the shop wrote again: a new round, not "stopped"');
+});
+
+test('a redelivered email never reopens a lead: the reopen waits for a fresh note', () => {
+  const k = between('async function keepInboundEmail', '/** ');
+  assert.ok(k.indexOf('fresh = rowCount > 0') < k.indexOf('if (fresh && leadRow && leadRow.dismissed_at)'));
+});

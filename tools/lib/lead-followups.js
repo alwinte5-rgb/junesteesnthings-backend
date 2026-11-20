@@ -97,13 +97,19 @@ function decide(l, last, now, normalizePhone) {
 const smsBody = LEADMAIL.textBody;
 
 /** The text and the email for follow-up 1 or 2. */
+/* "Caller" is what Log a call saves when no name was given: not a name. */
+const realName = (name) => (/^\s*caller\s*$/i.test(String(name || '')) ? '' : name);
+
 function messages(step, l, { signer = 'June', shop = "June's Tees" } = {}) {
-  const first = LEADMAIL.firstName(l && l.name);
+  const name = realName(l && l.name);
+  const first = LEADMAIL.firstName(name);
   const hi = first ? `Hi ${first}` : 'Hi';
   if (step === 'first') {
     return {
       text: `${hi}, just following up on your request. Are you still looking to get this made? Reply here with any details and we'll put your quote together.`,
-      email: LEADMAIL.followUp(l, { signer, shop }),
+      /* Without the description: on a lead added by hand or a logged call it
+         is the shop's own note, and this email goes out unread. */
+      email: LEADMAIL.followUp({ ...l, name, description: '' }, { signer, shop }),
     };
   }
   return {

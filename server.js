@@ -5481,17 +5481,6 @@ async function keepInboundEmail(m) {
     if (rows.length) leadRow = rows[0];
   }
   if (leadRow) lead = leadRow.id;
-  /* A lead the follow-ups let go, answered: back on Leads. One the shop let go
-     by hand stays let go; the reply is kept on it and the alert says so. */
-  let reopened = false, closed = false;
-  if (leadRow && leadRow.dismissed_at) {
-    if (leadRow.dismiss_reason === LEADFU.LET_GO_REASON) {
-      const r = await pool.query(
-        `UPDATE submissions SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
-          WHERE id = $1 AND dismiss_reason = $2`, [lead, LEADFU.LET_GO_REASON]);
-      reopened = r.rowCount > 0;
-    } else closed = true;
-  }
   let fresh = true;
   if (lead) {
     /* Kept as 'email_in' (their email, not one the shop sent): it pauses the
@@ -5521,6 +5510,19 @@ async function keepInboundEmail(m) {
     if (recentInbound.has(m.id)) fresh = false;
     recentInbound.add(m.id);
     if (recentInbound.size > 500) recentInbound.delete(recentInbound.values().next().value);
+  }
+  /* A lead the follow-ups let go, answered: back on Leads. Only for a reply
+     kept just now: Brevo sending the same message again must not reopen a
+     lead the shop has since let go. One the shop let go
+     by hand stays let go; the reply is kept on it and the alert says so. */
+  let reopened = false, closed = false;
+  if (fresh && leadRow && leadRow.dismissed_at) {
+    if (leadRow.dismiss_reason === LEADFU.LET_GO_REASON) {
+      const r = await pool.query(
+        `UPDATE submissions SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
+          WHERE id = $1 AND dismiss_reason = $2`, [lead, LEADFU.LET_GO_REASON]);
+      reopened = r.rowCount > 0;
+    } else closed = true;
   }
   if (!fresh) return false;
   /* The shop's inbox still gets every reply, as it did before: replying to
@@ -28480,9 +28482,9 @@ async function leadsWithStatus() {
             (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND ${LEAD_QUOTE_LIVE}
               ORDER BY q.created_at LIMIT 1) AS matched_quote,
             (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
-              WHERE submission_id = s.id AND kind = ANY($1) ORDER BY created_at DESC LIMIT 1) n) AS last_contact,
+              WHERE submission_id = s.id AND kind = ANY($1) AND NOT auto ORDER BY created_at DESC LIMIT 1) n) AS last_contact,
             -- only where the card can show a follow-up line, not for every lead ever
-            CASE WHEN s.lead_fu1_at IS NOT NULL AND s.dismissed_at IS NULL THEN ${leadLastWordSql(2)} END AS last_word
+            CASE WHEN (s.lead_fu1_at IS NOT NULL OR s.lead_fu_round_at IS NOT NULL) AND s.dismissed_at IS NULL THEN ${leadLastWordSql(2)} END AS last_word
        FROM submissions s
       ORDER BY s.created_at DESC`, [CONTACT_KINDS, LEADFU.CONVERSATION_KINDS]);
   /* 'contacted': someone has answered them (a call, email, text or chat was
@@ -28549,6 +28551,10 @@ async function sendLeadFollowUps(now = Date.now()) {
   const done = { first: 0, second: 0, let_go: 0, retry: 0 };
   for (const row of leads) {
     const l = { ...row, lead_status: 'contacted' };
+    /* A lead the finder found online never asked us for anything: its number is
+       never texted (isFoundLead), and "following up on your request" would be
+       untrue by email too. Those are followed up by hand. */
+    if (isFoundLead(l)) continue;
     const due = LEADFU.decide(l, l.last_word || null, now, normalizeUsPhone);
     if (!due) continue;
     /* Our last word, to the millisecond. Postgres keeps microseconds, so the
@@ -28600,12 +28606,16 @@ async function sendLeadFollowUps(now = Date.now()) {
          consent, only STOP stops it (staffSent). One ref per lead per round. */
       const status = await sendCustomerSms({ phone: l.phone, kind: 'transactional', staffSent: true,
         ref: `lead-fu${n}:${l.id}:${anchor.getTime()}`, msg: { template: `lead-followup-${n}`, body: LEADFU.smsBody(msg.text) } });
-      if (status === 'sent') {
+      /* 'duplicate': this round's text is already sent or sending (the dedupe
+         index skips failed rows), so it reached them, or is about to. */
+      if (status === 'sent' || status === 'duplicate') {
         sentBy.push('text');
         /* "You texted:" so their answer comes back onto this lead (textToLead). */
-        await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, auto) VALUES ($1, 'text', $2, TRUE)`,
+        if (status === 'sent') await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, auto) VALUES ($1, 'text', $2, TRUE)`,
           [l.id, `You texted: ${msg.text}`]).catch((e) => reportError('lead-followup', e, `lead ${l.id} note`).catch(() => {}));
-      } else if (status === 'failed') {
+      } else if (status === 'failed' || status === 'unconfigured') {
+        /* Twilio refused it, or texting is not set up right now: tried again
+           next hour, not counted as "nobody can be reached". */
         failed++;
         reportError('lead-followup', new Error(`follow-up ${n} text to lead ${l.id} was not accepted by Twilio`)).catch(() => {});
       }
@@ -37340,7 +37350,7 @@ async function jobNotesCard(code) {
     staffRoster(),
   ]);
   return `<div class="card" id="notes"><b>Notes</b>
-    ${rows.map((n) => `<div class="row-i"><span class="row-main">${pill(n.kind === 'customer_note' ? 'Customer note' : (n.kind === 'email_in' ? 'Their email' : n.kind === 'text_in' ? 'Their text' : NOTE_KINDS[n.kind] || n.kind), 'neutral')}
+    ${rows.map((n) => `<div class="row-i"><span class="row-main">${pill(n.kind === 'customer_note' ? 'Customer note' : (NOTE_KINDS[n.kind] || n.kind), 'neutral')}
       <span style="white-space:pre-wrap">${escEmail(n.body)}</span>
       <div class="row-sub">${escEmail(nameOf(roster, n.staff_id))} &middot; ${escEmail(whenShort(n.created_at))}</div></span></div>`).join('')
       || '<p class="muted">No notes yet.</p>'}
@@ -37445,7 +37455,7 @@ function leadWorkPanel(l, notes, roster, actor) {
       l.next_follow_up_on ? ` &middot; follow up ${escEmail(fmtDate(l.next_follow_up_on))}` : ''}${
       l.platform ? ` &middot; ${escEmail(l.platform)}` : ''}</summary>
     ${l.profile_url ? `<p><a href="${escEmail(l.profile_url)}" target="_blank" rel="noopener noreferrer">Open their profile</a></p>` : ''}
-    ${notes.map((n) => `<div class="row-sub" style="white-space:pre-wrap">${pill(n.kind === 'customer_note' ? 'Customer note' : (n.kind === 'email_in' ? 'Their email' : n.kind === 'text_in' ? 'Their text' : NOTE_KINDS[n.kind] || n.kind), 'neutral')}
+    ${notes.map((n) => `<div class="row-sub" style="white-space:pre-wrap">${pill(n.kind === 'customer_note' ? 'Customer note' : (NOTE_KINDS[n.kind] || n.kind), 'neutral')}
       ${escEmail(n.body)} <span class="muted">— ${escEmail(nameOf(roster, n.staff_id))}, ${escEmail(whenShort(n.created_at))}</span></div>`).join('')}
     <form method="post" action="/admin/lead/${l.id}/note" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
       <input type="hidden" name="back" value="/admin/leads">
