@@ -15,8 +15,9 @@ function clip(s, n) {
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
-// Returns null for events that should not alert (e.g. chat:end).
-function describeTawkEvent(body) {
+// Returns null for events that should not alert (e.g. chat:end). `ending` is
+// the text's last sentence: how the owner can answer (by default, in tawk).
+function describeTawkEvent(body, { ending = 'Reply in the tawk app.' } = {}) {
   const b = body || {};
   const event = String(b.event || '');
   if (event !== 'chat:start' && event !== 'ticket:create') return null;
@@ -32,10 +33,13 @@ function describeTawkEvent(body) {
 
   const kind = isTicket ? 'offline message' : 'chat';
   const subject = `New ${kind} from ${name}${text ? `: ${clip(text, 60)}` : ''}`;
+  /* The ending says how to answer (and the lead's code): it is never the
+     part cut off, so the rest gives way to it. */
+  const end = clip(ending, 80);
   const sms = clip(
-    `June's Tees: new ${kind} from ${name}${email ? ` (${email})` : ''}${text ? ` — "${clip(text, 90)}"` : ''}. Reply in the tawk app.`,
-    300,
-  );
+    `June's Tees: new ${kind} from ${name}${email ? ` (${email})` : ''}${text ? ` — "${clip(text, 90)}"` : ''}.`,
+    299 - end.length,
+  ) + ' ' + end;
   return { event, kind, name, email, where, text, subject, sms, chatId: b.chatId || null };
 }
 

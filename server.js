@@ -74,6 +74,7 @@ const { Readable, pipeline } = require('node:stream');
 const REVREPLY = require('./tools/lib/review-replies');
 const REPLYCOACH = require('./tools/lib/reply-coach');
 const LEADPRICES = require('./tools/lib/lead-prices');
+const CALLSCRIPT = require('./tools/lib/call-script');
 const FINDER = require('./tools/lib/lead-finder');
 const SOFTLEADS = require('./tools/lib/software-leads');
 const STARTERTASKS = require('./tools/lib/task-starters');
@@ -4980,8 +4981,101 @@ function alertOwnerOfChat(body) {
     <p><a href="https://dashboard.tawk.to/">Open tawk.to to reply</a> — or answer from the tawk app.</p>`;
   sendEmail({ to: NOTIFY_EMAIL, subject: a.subject, html, replyTo: a.email || undefined, urgent: true })   // a customer wrote: never held
     .catch(err => console.error('chat alert email failed:', err.message));
-  sendOwnerSms(a.sms)
-    .catch(err => console.error('chat alert sms failed:', err.message));
+}
+
+/** The chat alert by text, sent once the chat is kept as a lead, and recorded
+ *  as what the owner's next reply from her phone answers (owner, 2026-11-20:
+ *  her reply to a chat went to the last customer who had TEXTED, because a
+ *  chat alert was never recorded). The record has no phone, which is how
+ *  relayOwnerReply knows it is a chat: it answers the chat's lead by email
+ *  and by text, whichever it left, or says to use the tawk app. Recorded
+ *  even with no lead, so a reply can never fall through to a texter. */
+async function textOwnerOfChat(body, leadId) {
+  if (!describeTawkEvent(body)) return;
+  const reach = leadId ? await pool.query('SELECT email, phone FROM submissions WHERE id = $1', [leadId])
+    .then((r) => r.rows[0] || null).catch(() => null) : null;
+  const ways = chatReplyWays(reach);
+  const a = describeTawkEvent(body, { ending: ways.length
+    ? `Reply here to answer them by ${ways.join(' and ')} (L${Number(leadId)}).` : 'Reply in the tawk app.' });
+  const sent = await sendOwnerSms(a.sms).catch((err) => { console.error('chat alert sms failed:', err.message); return false; });
+  if (!sent) return;
+  await pool.query(`INSERT INTO owner_text_forwards (phone, quote_code, lead_id, name) VALUES ('', NULL, $1, $2)`,
+    [leadId || null, smsPlain(/^V\d{8,}$/.test(a.name) ? 'Chat visitor' : a.name, 60) || null])
+    .catch((e) => { console.error('chat forward not recorded:', e.message); reportError('twilio:forward', e).catch(() => {}); });
+}
+
+/** How a chat's lead can be answered from the owner's phone: 'email', 'text'. */
+function chatReplyWays(l) {
+  if (!l) return [];
+  const ways = [];
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(l.email || '').trim())) ways.push('email');
+  const p = normalizeUsPhone(l.phone);
+  if (p && VOICE.callable(p)) ways.push('text');
+  return ways;
+}
+
+/** The owner's reply to a website chat, from her phone (owner, 2026-11-20:
+ *  "email and phone"): emailed when the chat left an email, texted when it
+ *  left a phone, both when it left both. Recorded on the lead as any email
+ *  or text from its card is, so their answer lands back on it. */
+/* The chat she last answered from her phone, so the link her phone sends
+   as a text of its own follows it there, as it does after a text reply.
+   In memory: it only matters for two minutes. */
+let lastChatReply = null;
+
+async function relayChatReply(to, words, sid, forwards = []) {
+  const chatLead = Number(to.lead_id) || null;
+  /* A website chat that cannot be answered from here is still the newest
+     thing she was told about, so a reply meant for the last texter stops
+     here too: the refusal names that texter's code (code review, 2026-11-20). */
+  const texter = forwards.find((f) => !RELAY.isChat(f) && RELAY.codeOf(f));
+  const tawk = `Answer it in the tawk app.${texter ? ` If you meant ${texter.name || VOICE.pretty(normalizeUsPhone(texter.phone))}, start with ${RELAY.codeOf(texter)}.` : ''}`;
+  if (!chatLead) return sendOwnerSms(`Not sent: that was a website chat with no enquiry on file. ${tawk}`);
+  const { rows: [l] } = await pool.query('SELECT id, name, email, phone, dismissed_at, dismiss_reason FROM submissions WHERE id = $1', [chatLead]);
+  if (!l) return sendOwnerSms(`Not sent: that website chat's enquiry is gone. ${tawk}`);
+  const who = `${smsPlain(l.name, 40) || 'the chat visitor'} (L${chatLead})`;
+  /* Let go on purpose (spam, went elsewhere): not written to from a phone
+     reply. A chat let go only for leaving no contact is still answerable
+     once its transcript brought one. */
+  if (l.dismissed_at && l.dismiss_reason !== NO_CONTACT_REASON) {
+    return sendOwnerSms(`Not sent: you let ${who} go. Reopen it on the Leads page if you mean to answer them.`);
+  }
+  const ways = chatReplyWays(l);
+  if (!ways.length) return sendOwnerSms(`Not sent: ${who} left no email or phone in the chat. ${tawk}`);
+  let dup = false;
+  const done = [];
+  const failed = [];
+  if (ways.includes('email')) {
+    try {
+      const out = await sendLeadEmail(chatLead, { subject: `Your message to ${SHOP_NAME}`,
+        text: `${words}\n\n${SHOP_SIGNER}\n${SHOP_NAME}\n${SHOP_PHONE}` }, null);
+      done.push(`emailed ${out.to}${out.already ? ' (already sent)' : ''}`);
+    } catch (e) {
+      console.error(`chat reply email to lead ${chatLead} failed:`, e.message);
+      reportError('twilio:relay-chat', e, `lead ${chatLead}`).catch(() => {});
+      failed.push('the email did not send');
+    }
+  }
+  if (ways.includes('text')) {
+    const body = `June's Tees: ${words}${/https?:\/\/|jtees\.net/i.test(words) ? '' : ' jtees.net'} Reply STOP to opt out.`;
+    const status = await sendCustomerSms({ phone: l.phone, kind: 'transactional', staffSent: true,
+      ref: `relaychat:${chatLead}:${sid || Date.now()}`, msg: { template: 'lead-text', body } });
+    if (status === 'sent') {
+      done.push(`texted ${l.phone}`);
+      await pool.query(`INSERT INTO lead_notes (submission_id, kind, body) VALUES ($1, 'text', $2)`,
+        [chatLead, `You texted: ${words}`]).catch((e) => console.error('chat reply text note failed:', e.message));
+      await markLeadResponded(chatLead, null).catch(() => {});
+    } else if (status === 'duplicate') dup = true;
+    else {
+      if (status === 'failed') reportError('twilio:relay-chat', new Error(`text to chat lead ${chatLead} was not accepted`), `lead ${chatLead}`).catch(() => {});
+      failed.push(`the text did not go (${status === 'no-consent' ? 'they texted STOP' : status === 'unconfigured' ? 'texting is off' : 'the text service refused it'})`);
+    }
+  }
+  /* Twilio sent her text again: it went the first time, and she was told. */
+  if (!done.length && !failed.length && dup) return;
+  if (!done.length) return sendOwnerSms(`Not sent to ${who}: ${failed.join('; ') || 'nothing could be sent'}. Try the Leads page.`);
+  lastChatReply = { lead_id: chatLead, at: Date.now() };
+  return sendOwnerSms(`Sent to ${who}: ${done.join(' and ')}.${failed.length ? ` But ${failed.join('; ')}.` : ''}`);
 }
 
 // ── Twilio inbound texts ──────────────────────────────────────────────────────
@@ -5155,7 +5249,7 @@ async function carryLeadFiles(code, leadId) {
  *  on their job or lead, and tell the owner what happened. */
 async function relayOwnerReply(text, sid, ownerMedia = []) {
   const { rows: forwards } = await pool.query(
-    `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
+    `SELECT id, phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
       WHERE created_at > NOW() - interval '30 days' ORDER BY created_at DESC LIMIT 50`);
   /* A link sent on its own (a phone sends the link beside the words as a
      text of its own) goes where the owner's previous text went, never to the
@@ -5170,6 +5264,11 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
       reportError('twilio:relay-lookup', e).catch(() => {});
       return { rows: [] };
     })).rows[0] || null : null;
+  /* A link straight after her reply to a website chat goes to that chat. */
+  if (RELAY.isLinkOnly(text) && lastChatReply && Date.now() - lastChatReply.at <= RELAY.FOLLOW_MS
+      && !(previous && new Date(previous.at).getTime() > lastChatReply.at)) {
+    return relayChatReply({ phone: '', lead_id: lastChatReply.lead_id }, String(text).trim(), sid, forwards);
+  }
   const pick = RELAY.pickTarget(forwards, text, QUOTE_CODE_RE, Date.now(), previous);
   if (pick.linkOnly) return sendOwnerSms('Not sent: a link on its own was not sent to anyone. Start it with their number or code, e.g. 312 555 0199 https://...');
   if (pick.none) return sendOwnerSms('Not sent: no customer has texted in the last day. Start with their number or code, e.g. 312 555 0199 or AB12CD, then your message.');
@@ -5212,6 +5311,11 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   const label = `${to.name || VOICE.pretty(normalizeUsPhone(to.phone) || to.phone)}${code ? ` (${code})` : ''}`;
   const words = smsPlain(String(pick.body).replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 600);
   if (!words && !ownerMedia.length) return sendOwnerSms(`Not sent to ${label}: the message was empty.`);
+  /* A website chat (its forward has no phone): answered by email and text. */
+  if (!pick.byNumber && RELAY.isChat(to)) {
+    if (!words) return sendOwnerSms('Not sent: a picture cannot go to a website chat from here. Email it from the Leads page.');
+    return relayChatReply(to, words, sid, forwards);
+  }
   const pics = ownerMedia.length ? await saveTextMedia(ownerMedia, to.quote_code || null) : [];
   /* One row per incoming text: Twilio retrying the webhook does not send twice. */
   const { rows: [row] } = await pool.query(
@@ -5774,7 +5878,7 @@ async function ownerCallback(cmd) {
     /* The same window and clash rule as text replies (text-relay.js). */
     const { rows } = await pool.query(
       `SELECT phone, quote_code, lead_id, name, created_at FROM owner_text_forwards
-        WHERE created_at > NOW() - interval '1 day' ORDER BY created_at DESC LIMIT 50`);
+        WHERE created_at > NOW() - interval '1 day' AND phone <> '' ORDER BY created_at DESC LIMIT 50`);
     const pick = RELAY.pickTarget(rows, '', QUOTE_CODE_RE);
     if (pick.ask) {
       return sendOwnerSms('Not calling: ' + pick.ask.length + ' people got in touch just now. Text CALL and the number: ' +
@@ -6054,6 +6158,11 @@ app.post('/webhooks/tawk', async (req, res) => {
       reportError('tawk-lead', err, `${lead.source} ${lead.ref}`).catch(() => {});
     }
   }
+  /* The text to the owner, once the lead exists, so her reply can reach it.
+     A repeated event finds the lead it made the first time. */
+  const chatLeadId = leadId || (lead ? await pool.query('SELECT id FROM submissions WHERE dedupe_key = $1', [lead.ref])
+    .then((r) => (r.rows[0] ? r.rows[0].id : null)).catch(() => null) : null);
+  await textOwnerOfChat(req.body, chatLeadId).catch((e) => console.error('chat alert text failed:', e.message));
 
   // chat:* events carry `visitor`; ticket:create carries `requester`
   const { event, visitor, requester } = req.body;
@@ -28435,6 +28544,59 @@ app.post('/admin/api/lead/:id/suggest-followup', requireAdmin, async (req, res) 
     return res.status(502).json({ error: REPLYCOACH.failureMessage(err) });
   }
 });
+/** Why this lead cannot be phoned from a script, or '' when it can. The card
+ *  and the route below both ask: a number found online is never called
+ *  (sales course lg3), and there must be a US number to call. */
+function leadCallBlock(l) {
+  if (!l) return 'No such enquiry.';
+  if (isFoundLead(l)) return 'We never call a number found online. Email them instead.';
+  if (!normalizeUsPhone(l.phone)) return 'No US phone number on file, so there is nobody to call.';
+  return '';
+}
+
+/* "Call script" on a lead's card (owner, 2026-11-20): Claude writes what to
+   say on the phone to this lead, in short, easy-to-say English for the
+   team in the Philippines (tools/lib/call-script.js). Nothing is called or
+   sent; the same people who may write to a lead may ask for one. */
+app.post('/admin/api/lead/:id/call-script', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const id = intIn(req.params.id);
+  if (!id) return res.status(404).json({ error: 'No such enquiry.' });
+  const actor = currentActor() || OWNER_ACTOR;
+  if (actor.kind === 'staff' && (actorLevel('customers.message') === 'off' || actorLevel('leads.view') !== 'on')) {
+    return res.status(403).json({ error: 'Leads go through the owner for now.' });
+  }
+  const who = actor.kind === 'staff' ? 's' + actor.id : 'owner';
+  const now = Date.now();
+  const recent = (replyAsks.get(who) || []).filter((t) => now - t < 60 * 1000);
+  if (recent.length >= 10) return res.status(429).json({ error: 'That is a lot of Claude requests in a minute. Wait a moment.' });
+  replyAsks.set(who, [...recent, now]);
+  try {
+    const { rows: [l] } = await pool.query(
+      'SELECT id, name, phone, description, source, finder_run_id, sale_type_reason FROM submissions WHERE id = $1', [id]);
+    const block = leadCallBlock(l);
+    if (block) return res.status(l ? 400 : 404).json({ error: block });
+    const { rows: notes } = await pool.query(
+      `SELECT kind, body FROM lead_notes WHERE submission_id = $1 ORDER BY created_at DESC LIMIT 20`, [id]);
+    const prices = LEADPRICES.priceSheet(await getCatalog().catch(() => null), l.description, {
+      blankTiers: BLANK_TIERS, screenFee: SCREEN_FEES_LIVE ? SCREEN_FEE_RATE : 0, addons: ADDONS });
+    const change = String((req.body || {}).change || '').replace(/\s+/g, ' ').trim().slice(0, CALLSCRIPT.LIMITS.change);
+    const out = await CALLSCRIPT.writeCallScript({
+      lead: { name: l.name, description: l.description,
+              source: String((LEAD_SOURCES[l.source] || LEAD_SOURCES.form)[0]) },
+      notes: notes.map((n) => `${CONTACT_KINDS.includes(n.kind) ? n.kind : 'internal note'}: ${n.body}`),
+      caller: CALLSCRIPT.callerFirstName(actor),
+      today: new Date().toLocaleDateString('en-US', { timeZone: SHOP_TZ, weekday: 'long', month: 'long', day: 'numeric' }),
+      shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})` },
+      prices, change });
+    return res.json({ phone: l.phone, script: out });
+  } catch (err) {
+    console.error(`call script for lead ${id} failed:`, err.message);
+    if (err.code !== 'refusal') reportError('claude-call-script', err, `lead ${id}`).catch(() => {});
+    return res.status(502).json({ error: CALLSCRIPT.failureMessage(err) });
+  }
+});
+
 app.post('/admin/api/quote/:code/review-message', requireAdmin, claudeRoute('review'));
 
 app.get('/admin/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
@@ -28794,6 +28956,8 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
              onclick="var f=document.getElementById('em-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Email them</button>
           <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
              onclick="var f=document.getElementById('tx-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Text them</button>
+          <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
+             onclick="var f=document.getElementById('cs-${l.id}');f.style.display=f.style.display==='block'?'none':'block'">Call script</button>
           <form method="POST" action="/admin/lead/${l.id}/dismiss" style="display:inline">
             <input type="hidden" name="reason" value="Too late — past the date they needed it">${backField}
             <button type="submit" class="btn btn-ghost" style="padding:8px 16px;font-size:13px">Too late</button>
@@ -28818,8 +28982,54 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
             <button type="submit" class="btn" style="padding:7px 16px;font-size:13px">Save email</button>
           </form>` : '<p class="muted" style="margin:0;font-size:12.5px">This lead is someone else\'s. Ask June to add their email.</p>'}
         </div>`}
-        ${leadTextArea(l, backField)}`}
+        ${leadTextArea(l, backField)}
+        ${leadCallScriptBox(l)}`}
       </div>`;
+}
+
+/** The "Call script" box on a lead's card: Claude writes what to say on the
+ *  phone (POST /admin/api/lead/:id/call-script) only when asked. A lead that
+ *  cannot be called says why, like the Email and Text boxes. What Claude
+ *  writes is put on the page as text, never as HTML. */
+function leadCallScriptBox(l) {
+  const wrap = (inner) => `<div id="cs-${l.id}" style="display:none;margin-top:10px;background:#f7f9fc;border:1px solid #e3e8f2;border-radius:10px;padding:12px">${inner}</div>`;
+  const block = leadCallBlock(l);
+  if (block) return wrap(`<p style="margin:0;font-size:13px"><b>No call script.</b> ${escEmail(block)}</p>`);
+  return wrap(`
+      <p class="muted" style="margin:0 0 8px;font-size:12.5px">Claude reads this lead and writes what to say when you call ${escEmail(l.phone)}: short, easy words to say out loud. Read it before you call.</p>
+      <div style="margin:0 0 8px"><button type="button" class="btn" data-csgo style="padding:6px 14px;font-size:12.5px;background:#5b3fb0">Write the call script</button>
+        <span class="muted" data-csst style="font-size:12px;margin-left:6px"></span></div>
+      <div data-csout style="font-size:14px;line-height:1.5"></div>
+      <div data-csrow style="display:none;gap:6px;flex-wrap:wrap;margin:8px 0 0;align-items:center">
+        <input data-cschange maxlength="${CALLSCRIPT.LIMITS.change}" placeholder="Tell Claude what to change, e.g. shorter, they need it by Friday" style="flex:1 1 260px;padding:7px;font-size:13px">
+        <button type="button" class="btn" data-csredo style="padding:6px 14px;font-size:12.5px;background:#5b3fb0">Rewrite</button></div>
+      <script>(function(){var box=document.getElementById('cs-${l.id}');if(!box)return;
+        var go=box.querySelector('[data-csgo]'),st=box.querySelector('[data-csst]'),out=box.querySelector('[data-csout]'),
+            row=box.querySelector('[data-csrow]'),ch=box.querySelector('[data-cschange]'),rd=box.querySelector('[data-csredo]');
+        function el(tag,text,css){var e=document.createElement(tag);if(text)e.textContent=text;if(css)e.style.cssText=css;return e;}
+        function part(title,lines){if(!lines||!lines.length)return;out.appendChild(el('div',title,'font-weight:700;margin:10px 0 2px;font-size:12.5px;text-transform:uppercase;color:#5b3fb0'));
+          lines.forEach(function(t){out.appendChild(el('p',t,'margin:0 0 4px'));});}
+        function show(s){out.textContent='';
+          if(s.name_say)out.appendChild(el('p','Say their name: '+s.name_say,'margin:0 0 6px;font-style:italic'));
+          part('1. Start',[s.opening,s.check_time].filter(Boolean));
+          part('2. Ask',(s.questions||[]).map(function(q){return '• '+q;}));
+          part('3. Price',s.price?[s.price]:[]);
+          var r=s.if_they_say||[];if(r.length){out.appendChild(el('div','If they say...','font-weight:700;margin:10px 0 2px;font-size:12.5px;text-transform:uppercase;color:#5b3fb0'));
+            r.forEach(function(x){var p=el('p','','margin:0 0 6px');p.appendChild(el('b','"'+x.they_say+'"'));p.appendChild(el('span',' → '+x.you_say));out.appendChild(p);});}
+          part('4. Close',s.close?[s.close]:[]);
+          part('No answer? Leave this message',s.voicemail?[s.voicemail]:[]);
+          if((s.check_first||[]).length)part('Check with June first',s.check_first.map(function(q){return '• '+q;}));
+          row.style.display='flex';}
+        function ask(change){if(go.disabled)return;go.disabled=true;rd.disabled=true;
+          st.textContent=change?'Claude is rewriting it...':'Claude is writing the script...';
+          fetch('/admin/api/lead/${l.id}/call-script',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({change:change||''})})
+          .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+          .then(function(x){go.disabled=false;rd.disabled=false;if(!x.ok||!x.d.script){st.textContent=(x.d&&x.d.error)||'No script this time. Try again.';return;}
+            show(x.d.script);go.textContent='Write it again';if(change)ch.value='';st.textContent='Read it through once before you call.';})
+          .catch(function(){go.disabled=false;rd.disabled=false;st.textContent='Could not reach the server. Try again.';});}
+        go.addEventListener('click',function(){ask('');});
+        rd.addEventListener('click',function(){var c=ch.value.trim();if(!c){st.textContent='Type what to change first.';ch.focus();return;}ask(c);});
+        ch.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();rd.click();}});})();</script>`);
 }
 
 /** Is this a lead a salesperson found (the AI finder, or "I found this

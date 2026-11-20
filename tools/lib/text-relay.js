@@ -121,17 +121,33 @@ function pickTarget(forwards, text, codeRe, now = Date.now(), previous = null) {
   const seen = new Set();
   for (const f of recent) {
     if (new Date(latest.created_at).getTime() - new Date(f.created_at).getTime() > CLASH_MS) break;
-    if (seen.has(f.phone)) continue;
-    seen.add(f.phone);
+    /* One person once: texts by phone (two phones on one job are still two
+       people to ask about), chats by their lead; a chat and a text on the
+       same lead are the chat visitor who then texted, one person. */
+    const c = codeOf(f);
+    if (seen.has(personKey(f)) || (c && seen.has((isChat(f) ? 'text:' : 'chat:') + c))) continue;
+    seen.add(personKey(f));
+    if (c) seen.add((isChat(f) ? 'chat:' : 'text:') + c);
     clash.push(f);
   }
   return clash.length > 1 ? { ask: clash.slice(0, 4) } : { to: latest, body: whole };
 }
 
-/** The owner's prompt when the reply could go to more than one customer. */
-function askText(list) {
-  return `Not sent: ${list.length} customers texted just now. Start your reply with their code: ` +
-    list.map((f) => `${codeOf(f)} for ${f.name || 'the ' + String(f.phone).slice(-4) + ' number'}`).join(', ') + '.';
+/** Who a forward is from. A website chat's has no phone (isChat): it is
+ *  told apart by its lead, so two chats at once are two people, not one. */
+function isChat(f) {
+  return !!f && !String(f.phone || '').trim();
+}
+function personKey(f) {
+  return isChat(f) ? 'chat:' + (codeOf(f) || f.id) : f.phone;
 }
 
-module.exports = { WINDOW_MS, CLASH_MS, FOLLOW_MS, codeOf, parseReply, parseNumber, isLinkOnly, pickTarget, askText };
+/** The owner's prompt when the reply could go to more than one customer. */
+function askText(list) {
+  return `Not sent: ${list.length} customers wrote just now. Start your reply with their code: ` +
+    list.map((f) => !isChat(f) ? `${codeOf(f)} for ${f.name || 'the ' + String(f.phone).slice(-4) + ' number'}`
+      : codeOf(f) ? `${codeOf(f)} for ${f.name || 'the website chat'} (website chat)`
+      : `not ${f.name || 'the website chat'} (answer that chat in the tawk app)`).join(', ') + '.';
+}
+
+module.exports = { WINDOW_MS, CLASH_MS, FOLLOW_MS, codeOf, isChat, parseReply, parseNumber, isLinkOnly, pickTarget, askText };

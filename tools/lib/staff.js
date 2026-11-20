@@ -535,6 +535,7 @@ const ROUTES = {
   /* Ask Claude for a suggested reply on the job page (2026-10-06). */
   'POST /admin/api/quote/:code/suggest-reply': 'customers.message',
   'POST /admin/api/lead/:id/suggest-followup': 'customers.message',
+  'POST /admin/api/lead/:id/call-script': 'customers.message',
   /* Claude reads a message for accuracy and tone before it is sent. */
   'POST /admin/api/quote/:code/review-message': 'customers.message',
   'POST /admin/quote/:code/art/decide': 'owner',
