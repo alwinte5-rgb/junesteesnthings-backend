@@ -19,6 +19,7 @@
    Each opens with the Team basics module (shared-team.js), the same module
    object in every course: its quiz and lessons are registered once. */
 
+const { TRACKS } = require('../tracks');
 const SALES_CORE = require('./sales-core');
 const SALES_LEADGEN = require('./sales-leadgen');
 const SALES_CLOSER = require('./sales-closer');
@@ -371,8 +372,8 @@ function dualCourse(track) {
     final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:software-ready'
       ? { ...x, title: 'Ready to sell COS software on your own',
           hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }
-      : x)) } : { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:ready'
-      ? { ...x, key: 'signoff:marketing-ready', title: 'Ready to work on their own: design, marketing and light sales',
+      : x)) } : { ...primary.final, signoffs: primary.final.signoffs.map((x, i, all) => (i === all.length - 1
+      ? { ...x, key: TRACKS['design-marketing'].ready, title: 'Ready to work on their own: design, marketing and light sales',
           hint: 'The last step. It waits for every lesson, every quiz and the Design sign-off. June decides when to move you up.' }
       : x)) },
     // The closing exam and sign-offs belong to the first duty's part.

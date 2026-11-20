@@ -109,8 +109,6 @@ function readyKeyFor(track = DEFAULT_TRACK, role = null) {
    sign-off were given that sign-off once at startup (server.js), so no rule
    here depends on which path a sign-off was given on (code review). */
 const LEGACY_BEFORE_MS = new Date(LEGACY_READY_BEFORE).getTime();
-/** Did this sign-off (key, given at doneAt) end training on a path whose
- *  ready key is readyKey? The one rule for JS; readyRowSql is the same in SQL. */
 /* The Sales paths' ready keys, from the roles themselves (code review): a new
    sales role gets the rule without anyone remembering this list. */
 let legacyPaths = null;
@@ -122,6 +120,8 @@ function legacyReadyPaths() {
   }
   return legacyPaths;
 }
+/** Did this sign-off (key, given at doneAt) end training on a path whose
+ *  ready key is readyKey? The one rule for JS; readyRowSql is the same in SQL. */
 function endsTraining(readyKey, key, doneAt) {
   if (key === readyKey) return true;
   return key === READY_KEY && legacyReadyPaths().includes(readyKey) && !!doneAt && new Date(doneAt).getTime() < LEGACY_BEFORE_MS;
@@ -130,7 +130,7 @@ function endsTraining(readyKey, key, doneAt) {
  *  path's ready key. Only checked constants are written into the text. */
 function readyRowSql(alias, param) {
   return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz`
-    + ` AND ${param} IN (${legacyReadyPaths().map((k) => `'${k}'`).join(', ')})))`;
+    + ` AND ${param}::text IN (${legacyReadyPaths().map((k) => `'${k}'`).join(', ')})))`;
 }
 /** The sign-off a helper keeps when moved between paths: { from, to } when
  *  a sign-off from the old path's course is training on the new one under
@@ -153,6 +153,16 @@ const RENAMED_READY = {
   bookkeeper: 'signoff:books-ready', developer: 'signoff:dev-ready', software: 'signoff:software-ready',
   'sales-software': 'signoff:software-ready', 'design-marketing': 'signoff:marketing-ready',
 };
+/* Also given once, beside RENAMED_READY: Design + Marketing's ready was
+   signed before its Design sign-off existed (PART_READY, #568), and on that
+   path the final waits for it, so those already signed get it too, as the
+   apparel sign-off was given once on June's Tees + COS (code review: a
+   designer moved there and back to Design must not lose Design-trained). */
+const RENAMED_READY_ALSO = { 'design-marketing': 'signoff:design-ready' };
+/** [track, key] pairs the one-time copy gives a path's existing signoff:ready. */
+function renamedReadyPairs() {
+  return [...Object.entries(RENAMED_READY), ...Object.entries(RENAMED_READY_ALSO)];
+}
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
   return !!p && p.steps.some((s) => s.done && endsTraining(p.readyKey, s.key, s.doneAt));
@@ -657,7 +667,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { RENAMED_READY, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { RENAMED_READY, RENAMED_READY_ALSO, renamedReadyPairs, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
