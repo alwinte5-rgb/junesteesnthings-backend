@@ -336,6 +336,13 @@ const PART_READY = {
     title: 'Design work signed off',
     hint: 'The last step of the Design half: June checks your proofs and design work. Your final ready sign-off waits for it. June decides when to move you up.' },
 };
+/* Replace the one step with this key, and fail loudly at load if there is
+   none: a silent miss would leave the path ending on the Sales course's ready
+   and reopen #569 (code review). */
+function renameOnce(steps, key, fn) {
+  if (steps.filter((x) => x.key === key).length !== 1) throw new Error(`expected one ${key} to rename`);
+  return steps.map((x) => (x.key === key ? fn(x) : x));
+}
 const dualCourses = new Map();
 function dualCourse(track) {
   if (dualCourses.has(track)) return dualCourses.get(track);
@@ -372,10 +379,8 @@ function dualCourse(track) {
     final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:software-ready'
       ? { ...x, title: 'Ready to sell COS software on your own',
           hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }
-      : x)) } : { ...primary.final, signoffs: primary.final.signoffs.map((x, i, all) => (i === all.length - 1
-      ? { ...x, key: TRACKS['design-marketing'].ready, title: 'Ready to work on their own: design, marketing and light sales',
-          hint: 'The last step. It waits for every lesson, every quiz and the Design sign-off. June decides when to move you up.' }
-      : x)) },
+      : x)) } : { ...primary.final, signoffs: renameOnce(primary.final.signoffs, 'signoff:ready', (x) => ({ ...x, key: TRACKS['design-marketing'].ready, title: 'Ready to work on their own: design, marketing and light sales',
+          hint: 'The last step. It waits for every lesson, every quiz and the Design sign-off. June decides when to move you up.' })) },
     // The closing exam and sign-offs belong to the first duty's part.
     finalPart: isSales ? 'software' : 'sales',
   };

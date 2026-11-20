@@ -1883,7 +1883,7 @@ async function initStaffTables() {
      makes it run once, in the same statement, so a helper moved onto a path
      later is not touched. The keys are parameters. */
   {
-    const renamed = TRAINING.renamedReadyPairs();
+    const renamed = Object.entries(TRAINING.RENAMED_READY);
     const { rows: [r] } = await pool.query(`
       WITH mark AS (
         INSERT INTO shop_settings (key, value) VALUES ('once:ready-key-per-course', jsonb_build_object('at', NOW()))
@@ -1902,8 +1902,8 @@ async function initStaffTables() {
            AND NOT EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
         RETURNING 1),
       /* A signoff:ready left in place because the helper already holds an
-         OLD_READY_KEY row: it ends no training on these paths, but it is
-         reported rather than skipped silently (code review). */
+         OLD_READY_KEY row (none can exist before this runs, the key is new
+         here): reported rather than skipped silently (code review). */
       stuck AS (
         SELECT DISTINCT t.staff_id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
          WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
@@ -1911,7 +1911,7 @@ async function initStaffTables() {
       SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept, (SELECT count(*) FROM stuck)::int AS stuck`,
       [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
-    if (r.stuck) console.warn(`training (#569): ${r.stuck} helper(s) kept signoff:ready because they already had ${TRAINING.OLD_READY_KEY}; it ends no training on their path`);
+    if (r.stuck) console.warn(`training (#569): ${r.stuck} helper(s) kept signoff:ready because they already had ${TRAINING.OLD_READY_KEY}; it would still end training on Sales, check them by hand`);
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
@@ -34999,18 +34999,16 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
           }
           if (carry) {
             ({ rowCount: carried } = await client.query(
-              /* Carried onto Sales with a sales role (closer, lead gen,
-                 accounts), it is dated no earlier than LEGACY_READY_BEFORE:
-                 an older date would make it the pre-role-course Sales ready,
-                 which also ends that role's training the helper never did.
-                 With no role it keeps its own date, so commission starts
-                 when it was signed, not later (code review). */
+              /* Same date and signer, so commission starts when it was
+                 signed. A carried Sales ready dated before
+                 LEGACY_READY_BEFORE would also end a sales role's training
+                 the helper never did: the role handler below moves it to
+                 that date when a role is given (code review). */
               `INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
-               SELECT staff_id, $3::text, CASE WHEN $3::text = $5::text AND $7::boolean THEN GREATEST(done_at, $6::timestamptz) ELSE done_at END, signed_by
+               SELECT staff_id, $3::text, done_at, signed_by
                  FROM staff_training WHERE staff_id = $1 AND step_key = $2
                   AND EXISTS (SELECT 1 FROM staff_training t WHERE t.staff_id = $1 AND ${readyRow('t', '$4')})
-               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE,
-                TRAINING.readyKeyFor(track, TRAINING.salesRoleOf(s.sales_role)) !== TRAINING.READY_KEY]));
+               ON CONFLICT DO NOTHING`, [id, carry.from, carry.to, oldReady]));
           }
           await client.query('COMMIT');
         } catch (e) {
@@ -35041,6 +35039,19 @@ app.post('/admin/staff/:id', requireAdmin, async (req, res) => {
       case 'role': {
         const role = TRAINING.salesRoleOf(String(b.sales_role || ''));
         await pool.query('UPDATE staff SET sales_role = $2 WHERE id = $1', [id, role]);
+        /* A Sales ready from before role courses also ends a role's training
+           (TRAINING.endsTraining). A helper holding TRAINING.OLD_READY_KEY
+           had their ready copied off another path (#569), so a Sales ready
+           they hold now was carried, not given on Sales before role courses:
+           given a role, it is moved to LEGACY_READY_BEFORE so it does not end
+           a role course they never did (code review). */
+        if (role) {
+          await pool.query(
+            `UPDATE staff_training SET done_at = $3::timestamptz
+              WHERE staff_id = $1 AND step_key = $2 AND done_at < $3::timestamptz
+                AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = $1 AND o.step_key = $4)`,
+            [id, TRAINING.READY_KEY, TRAINING.LEGACY_READY_BEFORE, TRAINING.OLD_READY_KEY]);
+        }
         return back(res, `/admin/staff#staff-${id}`, 'ok', role
           ? `${s.name} is now ${TRAINING.SALES_ROLES[role].label}. Their role course follows the Sales course.`
           : `${s.name} does all sales work (no role yet).`);

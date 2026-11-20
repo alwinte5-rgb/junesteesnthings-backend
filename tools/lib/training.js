@@ -153,16 +153,6 @@ const RENAMED_READY = {
   bookkeeper: 'signoff:books-ready', developer: 'signoff:dev-ready', software: 'signoff:software-ready',
   'sales-software': 'signoff:software-ready', 'design-marketing': 'signoff:marketing-ready',
 };
-/* Also given once, beside RENAMED_READY: Design + Marketing's ready was
-   signed before its Design sign-off existed (PART_READY, #568), and on that
-   path the final waits for it, so those already signed get it too, as the
-   apparel sign-off was given once on June's Tees + COS (code review: a
-   designer moved there and back to Design must not lose Design-trained). */
-const RENAMED_READY_ALSO = { 'design-marketing': 'signoff:design-ready' };
-/** [track, key] pairs the one-time copy gives a path's existing signoff:ready. */
-function renamedReadyPairs() {
-  return [...Object.entries(RENAMED_READY), ...Object.entries(RENAMED_READY_ALSO)];
-}
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
   return !!p && p.steps.some((s) => s.done && endsTraining(p.readyKey, s.key, s.doneAt));
@@ -667,7 +657,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { RENAMED_READY, RENAMED_READY_ALSO, renamedReadyPairs, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { RENAMED_READY, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

@@ -239,9 +239,6 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   assert.equal(T.OLD_READY_KEY, 'signoff:old-ready');
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01'), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
-  assert.deepEqual(T.renamedReadyPairs().filter(([t]) => t === 'design-marketing').map(([, k]) => k).sort(), ['signoff:design-ready', 'signoff:marketing-ready'],
-    'Design + Marketing also gets its Design sign-off, so a designer moved back to Design stays trained (review)');
-  assert.ok(T.visibleSteps(undefined, 'design-marketing').some((x) => x.key === T.RENAMED_READY_ALSO['design-marketing']), 'a real step on that path');
   assert.match(stmt, /stuck AS \(/, 'a ready left in place is reported, not skipped silently');
 });
 
@@ -253,9 +250,14 @@ test('a Sales ready from before role courses counts only on the Sales paths it w
   assert.deepEqual(T.legacyReadyPaths(), ['signoff:ready', ...Object.keys(T.SALES_ROLES).map((r) => T.readyKeyFor('sales', r))], 'from the roles, not a list by hand');
 });
 
-test('a ready carried onto Sales is never older than the role courses, so it cannot end a role (#569 review)', () => {
+test('a ready carried onto Sales keeps its date; a sales role given later cannot end on it (#569 review)', () => {
   const at = SRC.indexOf('TRAINING.carriedReady(s.training_track, track)');
-  const block = SRC.slice(at, SRC.indexOf("await client.query('COMMIT')", at));
-  assert.match(block, /CASE WHEN \$3::text = \$5::text AND \$7::boolean THEN GREATEST\(done_at, \$6::timestamptz\) ELSE done_at END/);
-  assert.match(block, /\[id, carry\.from, carry\.to, oldReady, TRAINING\.READY_KEY, TRAINING\.LEGACY_READY_BEFORE,\s*TRAINING\.readyKeyFor\(track, TRAINING\.salesRoleOf\(s\.sales_role\)\) !== TRAINING\.READY_KEY\]/, 'moved later only with a sales role, so commission keeps its date otherwise');
+  const block = SRC.slice(at, SRC.indexOf("'COMMIT'", at));
+  assert.match(block, /SELECT staff_id, \$3::text, done_at, signed_by/, 'same date, so commission starts when it was signed');
+  assert.doesNotMatch(block, /GREATEST/);
+  const role = SRC.slice(SRC.indexOf("case 'role':"), SRC.indexOf("case 'commission':"));
+  assert.match(role, /if \(role\)/, 'only when a role is given');
+  assert.match(role, /SET done_at = \$3::timestamptz/);
+  assert.match(role, /o\.step_key = \$4/, 'only for helpers whose ready was copied off another path');
+  assert.match(role, /TRAINING\.READY_KEY, TRAINING\.LEGACY_READY_BEFORE, TRAINING\.OLD_READY_KEY/);
 });
