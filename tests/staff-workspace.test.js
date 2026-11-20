@@ -238,7 +238,7 @@ test('Remove takes a request off the list without sending it or telling the help
     'returns before anything can be sent');
   assert.match(r, /SET status = 'removed', decided_at = NOW\(\), decision_note = NULL/);
   /* Helpers are told only about approved and sent-back requests. */
-  assert.match(src, /WHERE status IN \('approved', 'rejected'\) AND decided_at > NOW\(\)/);
+  assert.match(src, /WHERE a\.status IN \('approved', 'rejected'\) AND a\.decided_at > NOW\(\)/);
   /* Both places that decide requests offer it. */
   assert.strictEqual((src.match(/name="decision" value="remove"/g) || []).length, 2);
 });
