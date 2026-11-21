@@ -1,0 +1,27 @@
+# Runs the test suite on every pull request and on main, so a PR cannot merge
+# with tests failing (#469: #467 merged with occasion-pages.test.js red).
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # The designer (lumise-designer) is a private repo CI cannot clone, so
+      # the parity tests that read its source (tests/designer-dir.js) run
+      # locally only; every other test file runs here.
+      - run: npm run test:ci

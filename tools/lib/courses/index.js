@@ -316,6 +316,8 @@ function salesRoleOf(r) {
 // A single combined course avoids duplicated Team basics, lesson IDs and
 // final sign-offs. Original lesson/quiz keys and the primary ready key stay
 // intact: assigning a second duty never deletes training or earned pay.
+// Each course's closing sign-offs have their own keys (#569): only Sales
+// keeps signoff:ready, so a tick on one course never shows on another's half.
 //
 // Each duty is a `part` (owner, 2026-11-18: Myra trains "side by side"): a
 // module waits only for the modules before it in its own part (and for Team
@@ -335,6 +337,7 @@ const PART_READY = {
     title: 'Design work signed off',
     hint: 'The last step of the Design half: June checks your proofs and design work. Your final ready sign-off waits for it. June decides when to move you up.' },
 };
+const DM_KEYS = { 'signoff:handoff': 'signoff:marketing-handoff', 'signoff:ready': 'signoff:marketing-ready' };
 const dualCourses = new Map();
 function dualCourse(track) {
   if (dualCourses.has(track)) return dualCourses.get(track);
@@ -363,10 +366,14 @@ function dualCourse(track) {
     /* On June's Tees + COS the software ready no longer ends training or
        starts commission (the apparel sign-off does), so it says so (code
        review). Same key, so a ready already given is kept. */
-    final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:ready'
+    final: isSales ? { ...primary.final, signoffs: primary.final.signoffs.map((x) => (x.key === 'signoff:software-ready'
       ? { ...x, title: 'Ready to sell COS software on your own',
           hint: 'The last step of the software half: June decides when you contact prospects and run demos without her checking first. Training ends and apparel commission starts at the June’s Tees sign-off, not here.' }
-      : x)) } : primary.final,
+      : x)) }
+      /* Design + Marketing closes on the Sales course's sign-offs under its
+         own keys (#569), so a trained Sales helper moved here is not already
+         signed ready, and one moved off keeps nothing that is not theirs. */
+      : { ...primary.final, signoffs: primary.final.signoffs.map((x) => (DM_KEYS[x.key] ? { ...x, key: DM_KEYS[x.key] } : x)) },
     // The closing exam and sign-offs belong to the first duty's part.
     finalPart: isSales ? 'software' : 'sales',
   };

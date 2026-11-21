@@ -19,7 +19,7 @@ const fnOf = (sig) => src.slice(src.indexOf(sig), src.indexOf('\n}\n', src.index
 
 test('the ready key is the last ready on the path', () => {
   assert.strictEqual(TRAINING.readyKeyFor('sales', null), TRAINING.READY_KEY);
-  assert.strictEqual(TRAINING.readyKeyFor('design', null), TRAINING.READY_KEY);
+  assert.strictEqual(TRAINING.readyKeyFor('design', null), 'signoff:designer-ready');
   for (const role of ['closer', 'leadgen', 'accounts']) {
     const key = TRAINING.readyKeyFor('sales', role);
     assert.strictEqual(key, `signoff:${role === 'accounts' ? 'accounts' : role}-ready`);

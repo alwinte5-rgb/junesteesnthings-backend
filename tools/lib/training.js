@@ -117,12 +117,54 @@ function endsTraining(readyKey, key, doneAt) {
 function readyRowSql(alias, param) {
   return `(${alias}.step_key = ${param} OR (${alias}.step_key = '${READY_KEY}' AND ${alias}.done_at < '${LEGACY_READY_BEFORE}'::timestamptz))`;
 }
-/** The sign-off a helper keeps when moved between paths: { from, to } when
- *  their ready on the old path is the new path's ready under another key
- *  (tracks.js readyCarriedFrom), else null. */
+/* The sign-offs a helper keeps when moved between paths, when their training
+   on the old path had ended: the same skill signed off on both, under each
+   path's own key, copied with its date and signer (server.js, the Staff
+   page's path change). [from key, to key] pairs.
+     Sales -> June's Tees + COS: the Sales ready is the apparel sign-off.
+     June's Tees + COS -> Sales: and back again; the apparel sign-off covers
+       the Sales handoff too, so June is not asked for it a second time.
+     Design -> Design + Marketing: a trained designer has the Design half.
+     Design + Marketing -> Sales: it closes on the Sales course's sign-offs.
+   Not the other way round: one half of a combined path never makes a trained
+   Design or Sales helper on its own (#569, code review). */
+const CARRIES = [
+  { from: 'sales', to: 'sales-software', keys: [[READY_KEY, 'signoff:apparel-ready']] },
+  { from: 'sales-software', to: 'sales', keys: [['signoff:apparel-ready', READY_KEY], ['signoff:apparel-ready', 'signoff:handoff']] },
+  { from: 'design', to: 'design-marketing', keys: [['signoff:designer-ready', 'signoff:design-ready']] },
+  { from: 'design-marketing', to: 'sales', keys: [['signoff:marketing-ready', READY_KEY], ['signoff:marketing-handoff', 'signoff:handoff']] },
+];
+/** [{ from, to }] the sign-offs carried on this move, or []. */
+function carriedSignoffs(fromTrack, toTrack) {
+  const c = CARRIES.find((x) => x.from === trackOf(fromTrack) && x.to === trackOf(toTrack));
+  return c ? c.keys.map(([from, to]) => ({ from, to })) : [];
+}
+/** The ready carried on this move ({ from, to }), or null. */
 function carriedReady(fromTrack, toTrack) {
-  const t = TRACKS[trackOf(toTrack)];
-  return t && t.ready && (t.readyCarriedFrom || []).includes(trackOf(fromTrack)) ? { from: READY_KEY, to: t.ready } : null;
+  return carriedSignoffs(fromTrack, toTrack)[0] || null;
+}
+
+/* #569: every course's closing sign-offs were signoff:handoff and
+   signoff:ready, so a helper moved between paths saw another course's
+   sign-off as given here (Design -> Design + Marketing ended training at
+   once). Each course now has its own; Sales keeps the old keys. Existing
+   ticks are renamed at startup (server.js) by the path they were given on:
+   the one before the first recorded path change after the tick, else the
+   path the helper is on now. What each helper sees on their own path does
+   not change.
+   Design + Marketing ends on the Sales course's sign-offs under its own keys
+   (courses/index.js DM_KEYS). */
+const COURSE_KEY_RENAMES = Object.freeze({
+  design: 'designer', content: 'content', ads: 'ads', bookkeeper: 'books',
+  developer: 'dev', software: 'software', 'sales-software': 'software',
+  'design-marketing': 'marketing',
+});
+/** [{ track, from, to }] for the one-time rename, in a fixed order. */
+function courseKeyRenames() {
+  return Object.entries(COURSE_KEY_RENAMES).flatMap(([track, c]) => [
+    { track, from: READY_KEY, to: `signoff:${c}-ready` },
+    { track, from: 'signoff:handoff', to: `signoff:${c}-handoff` },
+  ]);
 }
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
@@ -628,7 +670,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, carriedSignoffs, courseKeyRenames, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };
