@@ -1890,6 +1890,8 @@ async function initStaffTables() {
      later is not touched. The keys are parameters. */
   {
     const renamed = Object.entries(TRAINING.RENAMED_READY);
+    // The marker row, one parameter for both places that read it (code review).
+    const READY_COPY_MARK = 'once:ready-key-per-course';
     const { rows: [r] } = await pool.query(`
       WITH map AS (SELECT * FROM unnest($1::text[], $2::text[]) AS m(track, key)),
       -- Helpers on a covered path already holding the record key: the rename
@@ -1898,10 +1900,10 @@ async function initStaffTables() {
       held AS (
         SELECT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
          WHERE t.step_key = $3 AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
-           AND NOT EXISTS (SELECT 1 FROM shop_settings WHERE key = 'once:ready-key-per-course')),
+           AND NOT EXISTS (SELECT 1 FROM shop_settings WHERE key = $5)),
       mark AS (
         INSERT INTO shop_settings (key, value)
-        SELECT 'once:ready-key-per-course', jsonb_build_object('at', NOW(), 'left_in_place', COALESCE((SELECT jsonb_agg(id ORDER BY id) FROM held), '[]'::jsonb))
+        SELECT $5::text, jsonb_build_object('at', NOW(), 'left_in_place', COALESCE((SELECT jsonb_agg(id ORDER BY id) FROM held), '[]'::jsonb))
         ON CONFLICT DO NOTHING RETURNING value->'left_in_place' AS left_in_place),
       copied AS (
         INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
@@ -1917,10 +1919,10 @@ async function initStaffTables() {
         RETURNING 1)
       SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept,
              (SELECT left_in_place FROM mark) AS skipped`,
-      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
+      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY, READY_COPY_MARK]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
     if (r.skipped && r.skipped.length) {
-      console.warn(`training (#569): ${r.skipped.map((id) => `/admin/staff#staff-${id}`).join(', ')} already held ${TRAINING.OLD_READY_KEY}, so their ${TRAINING.READY_KEY} was left in place (their course's key was given if they did not have it); moved to Sales it would end their Sales training, so check them by hand. Listed under left_in_place on shop setting once:ready-key-per-course.`);
+      console.warn(`training (#569): ${r.skipped.map((id) => `/admin/staff#staff-${id}`).join(', ')} already held ${TRAINING.OLD_READY_KEY}, so their ${TRAINING.READY_KEY} was left in place (their course's key was given if they did not have it); moved to Sales it would end their Sales training, so check them by hand. Listed under left_in_place on shop setting ${READY_COPY_MARK}.`);
     }
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
