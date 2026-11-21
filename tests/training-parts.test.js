@@ -241,11 +241,19 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01', false), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
   assert.match(stmt, /NOT IN \(SELECT id FROM held\)/, 'the rename leaves exactly those, and they are named, never silently left');
-  assert.match(stmt, /held AS \([\s\S]*o\.step_key = \$4\)\),\s*mark AS \(/, 'who the rename leaves is read first, by the record key');
+  assert.match(stmt, /held AS \([\s\S]*o\.step_key = \$4\)[\s\S]*\),\s*mark AS \(/, 'who the rename leaves is read first, by the record key');
   assert.match(stmt, /'left_in_place', COALESCE\(\(SELECT jsonb_agg\(id ORDER BY id\) FROM held\)/, 'and kept on the marker row in the same statement');
+  assert.match(stmt, /\(SELECT left_in_place FROM mark\)/, 'the log reads the same list back');
   const like = SRC.match(/t\.step_key LIKE '([^']+)'\), '\[\]'::json\) AS ready_rows/);
-  assert.equal(like && like[1], 'signoff:%ready', 'the session reads ready_rows LIKE signoff:%ready');
-  assert.ok(T.OLD_READY_KEY.startsWith('signoff:') && T.OLD_READY_KEY.endsWith('ready'), 'which includes the record, so the session sees copied');
+  assert.ok(like, 'the session reads ready_rows with a LIKE');
+  // LIKE as Postgres reads it: % any run, _ one character, backslash escapes the next.
+  let re = '';
+  for (let i = 0; i < like[1].length; i++) {
+    const c = like[1][i];
+    if (c === '\\' && i + 1 < like[1].length) re += like[1][++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    else re += c === '%' ? '.*' : c === '_' ? '.' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  assert.match(T.OLD_READY_KEY, new RegExp(`^${re}$`), 'and that LIKE includes the record, so the session sees copied');
 });
 
 test('a Sales ready from before role courses counts only on the Sales paths it was given for (#569)', () => {

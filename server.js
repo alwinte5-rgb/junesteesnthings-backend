@@ -1882,10 +1882,10 @@ async function initStaffTables() {
      Nothing is deleted. Sales keeps signoff:ready as its key. A helper who
      already held OLD_READY_KEY (not expected: the key is new here) is given
      their course's key but keeps signoff:ready, since it cannot also be kept
-     as the record: one clash never stops the copy for everyone, and those
-     helpers are named in the log and on the marker row, written in the same
-     statement (code review). Any
-     other failure stops startup, as every table step here does. A marker row
+     as the record: one clash never stops the copy for everyone. The marker
+     row lists them as left_in_place (empty when nobody was), written in the
+     same statement, and the log names them (code review). Any other failure
+     stops startup, as every table step here does. A marker row
      makes it run once, in the same statement, so a helper moved onto a path
      later is not touched. The keys are parameters. */
   {
@@ -1897,11 +1897,12 @@ async function initStaffTables() {
       -- changes, and kept on the marker row in this same statement.
       held AS (
         SELECT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
-         WHERE t.step_key = $3 AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)),
+         WHERE t.step_key = $3 AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
+           AND NOT EXISTS (SELECT 1 FROM shop_settings WHERE key = 'once:ready-key-per-course')),
       mark AS (
         INSERT INTO shop_settings (key, value)
         SELECT 'once:ready-key-per-course', jsonb_build_object('at', NOW(), 'left_in_place', COALESCE((SELECT jsonb_agg(id ORDER BY id) FROM held), '[]'::jsonb))
-        ON CONFLICT DO NOTHING RETURNING 1),
+        ON CONFLICT DO NOTHING RETURNING value->'left_in_place' AS left_in_place),
       copied AS (
         INSERT INTO staff_training (staff_id, step_key, done_at, signed_by)
         SELECT t.staff_id, m.key, t.done_at, t.signed_by
@@ -1915,10 +1916,10 @@ async function initStaffTables() {
            AND t.staff_id NOT IN (SELECT id FROM held)
         RETURNING 1)
       SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept,
-             CASE WHEN EXISTS (SELECT 1 FROM mark) THEN (SELECT array_agg(id ORDER BY id) FROM held) END AS skipped`,
+             (SELECT left_in_place FROM mark) AS skipped`,
       [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
-    if (r.skipped) {
+    if (r.skipped && r.skipped.length) {
       console.warn(`training (#569): ${r.skipped.map((id) => `/admin/staff#staff-${id}`).join(', ')} already held ${TRAINING.OLD_READY_KEY}, so their ${TRAINING.READY_KEY} was left in place (their course's key was given if they did not have it); moved to Sales it would end their Sales training, so check them by hand. Listed under left_in_place on shop setting once:ready-key-per-course.`);
     }
   }
