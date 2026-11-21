@@ -240,9 +240,11 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01', false), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
   assert.match(stmt, /skipped AS \(/, 'a helper the rename skips is named, never silently left');
-  const like = SRC.match(/AS ready_rows/) && SRC.match(/t\.step_key LIKE '(signoff:%ready)'\), '\[\]'::json\) AS ready_rows/);
+  assert.match(SRC, /left_in_place/, 'and kept on the marker row');
+  const like = SRC.match(/t\.step_key LIKE '([^']+)'\), '\[\]'::json\) AS ready_rows/);
   assert.ok(like, 'the session reads ready_rows with a LIKE');
-  assert.match(T.OLD_READY_KEY, new RegExp(`^${like[1].replace('%', '.*')}$`), 'and that LIKE includes the record, so the session sees copied');
+  const likeRe = new RegExp(`^${[...like[1]].map((c) => (c === '%' ? '.*' : c === '_' ? '.' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`);
+  assert.match(T.OLD_READY_KEY, likeRe, 'and that LIKE includes the record, so the session sees copied');
 });
 
 test('a Sales ready from before role courses counts only on the Sales paths it was given for (#569)', () => {

@@ -1880,10 +1880,11 @@ async function initStaffTables() {
      their current path's key, same date and signer, and the original is kept
      as TRAINING.OLD_READY_KEY, a record that ends training on no path.
      Nothing is deleted. Sales keeps signoff:ready as its key. A helper who
-     already held OLD_READY_KEY (not expected: the key is new here) still gets
-     the copy, keeps signoff:ready and is named in the log, so the copy never
-     fails or half runs over one helper (code review). Any other failure stops
-     startup, as every table step here does. A marker row
+     already held OLD_READY_KEY (not expected: the key is new here) is given
+     their course's key but keeps signoff:ready, since it cannot also be kept
+     as the record: one clash never stops the copy for everyone, and those
+     helpers are named in the log and on the marker row (code review). Any
+     other failure stops startup, as every table step here does. A marker row
      makes it run once, in the same statement, so a helper moved onto a path
      later is not touched. The keys are parameters. */
   {
@@ -1904,17 +1905,21 @@ async function initStaffTables() {
           FROM staff s, map m
          WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track AND t.step_key = $3
            AND NOT EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
-        RETURNING 1),
-      -- Skipped by the line above: named below, so the owner can look.
+        RETURNING t.staff_id),
+      -- Those on a covered path whose signoff:ready the rename left (they held
+      -- the record key already): the same rows, less the ones kept renamed.
       skipped AS (
-        SELECT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
-         WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
-           AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4))
+        SELECT DISTINCT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
+         WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3 AND t.staff_id NOT IN (SELECT staff_id FROM kept))
       SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept,
-             (SELECT array_agg(DISTINCT id) FROM skipped) AS skipped`,
+             (SELECT array_agg(id ORDER BY id) FROM skipped) AS skipped`,
       [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
-    if (r.skipped) console.warn(`training (#569): ${r.skipped.map((id) => `/admin/staff#staff-${id}`).join(', ')} already held ${TRAINING.OLD_READY_KEY}, so their signoff:ready was copied to their course's key but left in place; moved to Sales it would end their Sales training, so check them by hand`);
+    if (r.skipped) {
+      /* Kept on the marker row too, so it outlives the startup log. */
+      await pool.query(`UPDATE shop_settings SET value = value || jsonb_build_object('left_in_place', $1::int[]) WHERE key = 'once:ready-key-per-course'`, [r.skipped]);
+      console.warn(`training (#569): ${r.skipped.map((id) => `/admin/staff#staff-${id}`).join(', ')} already held ${TRAINING.OLD_READY_KEY}, so their ${TRAINING.READY_KEY} was left in place (their course's key was given if they did not have it); moved to Sales it would end their Sales training, so check them by hand. Listed under left_in_place on shop setting once:ready-key-per-course.`);
+    }
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
