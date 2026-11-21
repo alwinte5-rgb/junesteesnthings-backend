@@ -230,8 +230,9 @@ test('each course ends at its own ready key, so a move between paths never borro
 test('the existing ready sign-offs are copied to their course\'s key once, and the originals kept (#569)', () => {
   const at = SRC.indexOf("'once:ready-key-per-course'");
   assert.ok(at > 0, 'the one-time copy exists');
-  const stmt = SRC.slice(SRC.lastIndexOf('WITH mark AS', at), SRC.indexOf('AS skipped`', at));
-  assert.match(stmt, /ON CONFLICT DO NOTHING RETURNING 1\),\s*map AS \(SELECT \* FROM unnest\(\$1::text\[\], \$2::text\[\]\)/, 'the marker decides, and the keys are parameters');
+  const stmt = SRC.slice(SRC.lastIndexOf('WITH map AS', at), SRC.indexOf('AS skipped`', at));
+  assert.match(stmt, /^WITH map AS \(SELECT \* FROM unnest\(\$1::text\[\], \$2::text\[\]\)/, 'the keys are parameters');
+  assert.match(stmt, /mark AS \([\s\S]*ON CONFLICT DO NOTHING RETURNING 1\)/, 'and the marker decides');
   assert.match(stmt, /SELECT t\.staff_id, m\.key, t\.done_at, t\.signed_by/, 'same date and signer');
   assert.match(stmt, /UPDATE staff_training t SET step_key = \$4/, 'the original is kept under the record key');
   assert.doesNotMatch(stmt, /DELETE/, 'nothing is deleted (owner, 2026-11-20)');
@@ -239,12 +240,12 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   assert.equal(T.OLD_READY_KEY, 'signoff:old-ready');
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01', false), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
-  assert.match(stmt, /skipped AS \(/, 'a helper the rename skips is named, never silently left');
-  assert.match(SRC, /left_in_place/, 'and kept on the marker row');
+  assert.match(stmt, /NOT IN \(SELECT id FROM held\)/, 'the rename leaves exactly those, and they are named, never silently left');
+  assert.match(stmt, /held AS \([\s\S]*o\.step_key = \$4\)\),\s*mark AS \(/, 'who the rename leaves is read first, by the record key');
+  assert.match(stmt, /'left_in_place', COALESCE\(\(SELECT jsonb_agg\(id ORDER BY id\) FROM held\)/, 'and kept on the marker row in the same statement');
   const like = SRC.match(/t\.step_key LIKE '([^']+)'\), '\[\]'::json\) AS ready_rows/);
-  assert.ok(like, 'the session reads ready_rows with a LIKE');
-  const likeRe = new RegExp(`^${[...like[1]].map((c) => (c === '%' ? '.*' : c === '_' ? '.' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`);
-  assert.match(T.OLD_READY_KEY, likeRe, 'and that LIKE includes the record, so the session sees copied');
+  assert.equal(like && like[1], 'signoff:%ready', 'the session reads ready_rows LIKE signoff:%ready');
+  assert.ok(T.OLD_READY_KEY.startsWith('signoff:') && T.OLD_READY_KEY.endsWith('ready'), 'which includes the record, so the session sees copied');
 });
 
 test('a Sales ready from before role courses counts only on the Sales paths it was given for (#569)', () => {
