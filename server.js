@@ -1879,18 +1879,16 @@ async function initStaffTables() {
      "Copy, keep old"): a helper's existing signoff:ready is given again under
      their current path's key, same date and signer, and the original is kept
      as TRAINING.OLD_READY_KEY, a record that ends training on no path.
-     Nothing is deleted. Sales keeps signoff:ready as its key. OLD_READY_KEY
-     is new with this copy, so no helper can hold it already; if one ever did,
-     the rename clashes, the whole statement (marker included) fails, the
-     error is logged and startup goes on, so nothing is half done (code
-     review). A marker row
+     Nothing is deleted. Sales keeps signoff:ready as its key. A helper who
+     already held OLD_READY_KEY (not expected: the key is new here) still gets
+     the copy, keeps signoff:ready and is named in the log, so the copy never
+     fails or half runs over one helper (code review). Any other failure stops
+     startup, as every table step here does. A marker row
      makes it run once, in the same statement, so a helper moved onto a path
      later is not touched. The keys are parameters. */
   {
     const renamed = Object.entries(TRAINING.RENAMED_READY);
-    /* One statement: a failure changes nothing (marker included) and the
-       rest of startup goes on; the error is logged to look at by hand. */
-    const r = await pool.query(`
+    const { rows: [r] } = await pool.query(`
       WITH mark AS (
         INSERT INTO shop_settings (key, value) VALUES ('once:ready-key-per-course', jsonb_build_object('at', NOW()))
         ON CONFLICT DO NOTHING RETURNING 1),
@@ -1905,11 +1903,18 @@ async function initStaffTables() {
         UPDATE staff_training t SET step_key = $4
           FROM staff s, map m
          WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track AND t.step_key = $3
-        RETURNING 1)
-      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept`,
-      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY])
-      .then((x) => x.rows[0], (e) => { console.error('training (#569) ready copy failed, nothing changed:', e.message); return {}; });
+           AND NOT EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
+        RETURNING 1),
+      -- Skipped by the line above: named below, so the owner can look.
+      skipped AS (
+        SELECT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
+         WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
+           AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4))
+      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept,
+             (SELECT array_agg(DISTINCT id) FROM skipped) AS skipped`,
+      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
+    if (r.skipped) console.warn(`training (#569): ${r.skipped.map((id) => `/admin/staff#staff-${id}`).join(', ')} already held ${TRAINING.OLD_READY_KEY}, so their signoff:ready was copied to their course's key but left in place; moved to Sales it would end their Sales training, so check them by hand`);
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.

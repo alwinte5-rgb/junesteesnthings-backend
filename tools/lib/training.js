@@ -171,11 +171,11 @@ const RENAMED_READY = {
   bookkeeper: 'signoff:books-ready', developer: 'signoff:dev-ready', software: 'signoff:software-ready',
   'sales-software': 'signoff:software-ready', 'design-marketing': 'signoff:marketing-ready',
 };
-/** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 /** Did this step of this progress (trainingFor) end training? */
 function stepEndsTraining(p, s) {
   return endsTraining(p.readyKey, s.key, s.doneAt, !!p.copied);
 }
+/** Has this progress (trainingFor: steps + readyKey) reached its ready? */
 function readyGiven(p) {
   return !!p && p.steps.some((s) => s.done && stepEndsTraining(p, s));
 }

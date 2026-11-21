@@ -230,7 +230,7 @@ test('each course ends at its own ready key, so a move between paths never borro
 test('the existing ready sign-offs are copied to their course\'s key once, and the originals kept (#569)', () => {
   const at = SRC.indexOf("'once:ready-key-per-course'");
   assert.ok(at > 0, 'the one-time copy exists');
-  const stmt = SRC.slice(SRC.lastIndexOf('WITH mark AS', at), SRC.indexOf('AS kept`', at));
+  const stmt = SRC.slice(SRC.lastIndexOf('WITH mark AS', at), SRC.indexOf('AS skipped`', at));
   assert.match(stmt, /ON CONFLICT DO NOTHING RETURNING 1\),\s*map AS \(SELECT \* FROM unnest\(\$1::text\[\], \$2::text\[\]\)/, 'the marker decides, and the keys are parameters');
   assert.match(stmt, /SELECT t\.staff_id, m\.key, t\.done_at, t\.signed_by/, 'same date and signer');
   assert.match(stmt, /UPDATE staff_training t SET step_key = \$4/, 'the original is kept under the record key');
@@ -239,8 +239,10 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   assert.equal(T.OLD_READY_KEY, 'signoff:old-ready');
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01', false), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
-  assert.doesNotMatch(stmt, /NOT EXISTS \(SELECT 1 FROM staff_training o/, 'no silent skip: a clash fails the whole copy, nothing half done');
-  assert.ok('signoff:old-ready'.startsWith('signoff:') && T.OLD_READY_KEY.endsWith('ready'), 'the session reads ready_rows LIKE signoff:%ready, which must include the record');
+  assert.match(stmt, /skipped AS \(/, 'a helper the rename skips is named, never silently left');
+  const like = SRC.match(/AS ready_rows/) && SRC.match(/t\.step_key LIKE '(signoff:%ready)'\), '\[\]'::json\) AS ready_rows/);
+  assert.ok(like, 'the session reads ready_rows with a LIKE');
+  assert.match(T.OLD_READY_KEY, new RegExp(`^${like[1].replace('%', '.*')}$`), 'and that LIKE includes the record, so the session sees copied');
 });
 
 test('a Sales ready from before role courses counts only on the Sales paths it was given for (#569)', () => {
