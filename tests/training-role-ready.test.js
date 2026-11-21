@@ -37,7 +37,7 @@ test('commission, the session and restarts all read the path\'s ready key, with 
   assert.equal(TRAINING.endsTraining('signoff:closer-ready', TRAINING.READY_KEY, '2026-10-20T00:00:00Z', false), false);
   assert.match(fnOf('async function commissionStartsAt('), /readyRow\('t', '\$2'\)[\s\S]*await readyKeyOf\(staffId\)/);
   const who = fnOf('async function staffByEmail(');
-  assert.match(who, /TRAINING\.endsTraining\(/);
+  assert.match(who, /TRAINING\.endedTraining\(/);
   assert.match(src, /FROM staff_training t WHERE t\.staff_id = \$1 AND \$\{readyRow\('t', '\$2'\)\}\n\s+ORDER BY t\.done_at\n\s+ON CONFLICT DO NOTHING`, \[staffId, await readyKeyOf\(staffId\)\]/, 'a restart keeps the window of whichever ready ended training');
   assert.ok(new Date(TRAINING.LEGACY_READY_BEFORE) > new Date('2026-10-13T00:00:00Z'));
 });

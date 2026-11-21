@@ -128,10 +128,20 @@ function legacyReadyPaths() {
    ready on no role path, whatever order the path and role were set in (code
    review: a date clamp at carry time depended on the order of clicks). */
 function endsTraining(readyKey, key, doneAt, copied) {
-  /* Required, so a new caller cannot fall back to the looser rule (code review). */
-  if (typeof copied !== 'boolean') throw new Error('endsTraining: pass copied (true or false)');
+  /* Left out, it fails closed (counts as copied, so an old Sales ready ends no
+     role course) and says so, rather than open or with a throw on every
+     staff request (code review). */
+  if (typeof copied !== 'boolean') { console.warn('endsTraining: copied not given; treated as true'); copied = true; }
   if (key === readyKey) return true;
   return key === READY_KEY && !copied && legacyReadyPaths().includes(readyKey) && !!doneAt && new Date(doneAt).getTime() < LEGACY_BEFORE_MS;
+}
+/** Did any of these rows ({ key, at }: a helper's ready sign-offs, their
+ *  OLD_READY_KEY record included) end training on a path whose ready key is
+ *  readyKey? The session reads this; readyGiven and readyRowSql are the same
+ *  rule over progress and SQL. */
+function endedTraining(readyKey, rows) {
+  const copied = rows.some((r) => r.key === OLD_READY_KEY);
+  return rows.some((r) => endsTraining(readyKey, r.key, r.at, copied));
 }
 /** SQL for "this staff_training row ended training", where `param` holds the
  *  path's ready key. Only checked constants are written into the text. */
@@ -667,7 +677,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { RENAMED_READY, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { endedTraining, RENAMED_READY, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

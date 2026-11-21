@@ -1900,18 +1900,25 @@ async function initStaffTables() {
           FROM staff s, map m
          WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track AND t.step_key = $3
            AND NOT EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
-        RETURNING 1),
-      /* A signoff:ready the line above left in place because the helper
-         already held OLD_READY_KEY. Not expected (the key is new here), so it
-         is reported rather than skipped silently (code review). */
-      stuck AS (
-        SELECT DISTINCT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
-         WHERE EXISTS (SELECT 1 FROM mark) AND t.step_key = $3
-           AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4))
-      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept, (SELECT array_agg(id ORDER BY id) FROM stuck) AS stuck`,
+        RETURNING 1)
+      SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept`,
       [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
-    if (r.stuck) console.warn(`training (#569): staff ${r.stuck.join(', ')} kept signoff:ready because they already had ${TRAINING.OLD_READY_KEY}; an old Sales ready of theirs no longer ends a sales role's course: check them by hand`);
+  }
+  /* Every boot (code review: once was easy to miss): a helper holding both
+     signoff:ready and OLD_READY_KEY while on a path the copy covered. The
+     copy above leaves such a signoff:ready in place (it could not keep it as
+     the record), and on plain Sales it would end training outright, so the
+     owner checks them before moving them there. Not expected: the key is new
+     with the copy. Ids only in the log; the link finds them. */
+  {
+    const { rows: stuck } = await pool.query(`
+      SELECT DISTINCT s.id FROM staff s
+        JOIN staff_training t ON t.staff_id = s.id AND t.step_key = $2
+        JOIN staff_training o ON o.staff_id = s.id AND o.step_key = $3
+       WHERE s.training_track = ANY($1::text[]) ORDER BY s.id`,
+      [Object.keys(TRAINING.RENAMED_READY), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
+    if (stuck.length) console.warn(`training (#569): ${stuck.map((x) => `/admin/staff#staff-${x.id}`).join(', ')} still hold signoff:ready beside ${TRAINING.OLD_READY_KEY}; moved to Sales it would end their Sales training, so check them by hand first`);
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
@@ -3982,11 +3989,9 @@ async function staffByEmail(email) {
                WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - interval '5 minutes')`, [s.id])
     .catch(() => {});
   const flags = s.flags || [];
-  const readyRows = s.ready_rows || [];
-  const copied = readyRows.some((o) => o.key === TRAINING.OLD_READY_KEY);
   return { kind: 'staff', id: s.id, name: s.name, email: s.email, perms: s.perms || {},
-           inTraining: !readyRows.some((r) => TRAINING.endsTraining(
-             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), r.key, r.at, copied)),
+           inTraining: !TRAINING.endedTraining(
+             TRAINING.readyKeyFor(TRAINING.trackOf(s.training_track), TRAINING.salesRoleOf(s.sales_role)), s.ready_rows || []),
            track: TRAINING.trackOf(s.training_track),
            role: TRAINING.salesRoleOf(s.sales_role),
            tipsOff: new Set(flags.filter((f) => f.startsWith('tip:')).map((f) => f.slice(4))),
