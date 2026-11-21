@@ -239,7 +239,8 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   assert.equal(T.OLD_READY_KEY, 'signoff:old-ready');
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01', false), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
-  assert.match(SRC, /still hold signoff:ready beside/, 'a ready left in place is reported on every boot, not skipped silently');
+  assert.doesNotMatch(stmt, /NOT EXISTS \(SELECT 1 FROM staff_training o/, 'no silent skip: a clash fails the whole copy, nothing half done');
+  assert.ok('signoff:old-ready'.startsWith('signoff:') && T.OLD_READY_KEY.endsWith('ready'), 'the session reads ready_rows LIKE signoff:%ready, which must include the record');
 });
 
 test('a Sales ready from before role courses counts only on the Sales paths it was given for (#569)', () => {
@@ -265,9 +266,11 @@ test('a ready copied off another path never counts as the old Sales ready on a r
   assert.match(T.readyRowSql('t', '$2'), /NOT EXISTS \(SELECT 1 FROM staff_training t_old WHERE t_old\.staff_id = t\.staff_id AND t_old\.step_key = 'signoff:old-ready'\)/, 'the same rule in SQL');
   const at = SRC.indexOf('TRAINING.carriedReady(s.training_track, track)');
   assert.doesNotMatch(SRC.slice(at, SRC.indexOf("'COMMIT'", at)), /GREATEST/, 'no made-up date: commission keeps when it was signed');
-  assert.match(SRC, /TRAINING\.endsTraining\(p\.readyKey, s\.key, s\.doneAt, !!p\.copied\)/, 'the Undo box reads the same rule');
   assert.match(SRC, /inTraining: !TRAINING\.endedTraining\(/, 'and the session, through the shared rule');
   assert.equal(T.endedTraining(closer, [{ key: T.READY_KEY, at: old }, { key: T.OLD_READY_KEY, at: old }]), false);
   assert.equal(T.endedTraining(closer, [{ key: T.READY_KEY, at: old }]), true);
-  assert.equal(T.endsTraining(closer, T.READY_KEY, old), false, 'left out, it fails closed (copied)');
+  assert.throws(() => T.endsTraining(closer, T.READY_KEY, old), /pass copied/, 'left out, a test fails');
+  assert.match(SRC, /TRAINING\.stepEndsTraining\(p, s\)/, 'the Undo box works copied out from progress, not by hand');
+  assert.doesNotMatch(SRC, /TRAINING\.endsTraining\(/, 'server code never calls the bare rule');
+  assert.equal(T.stepEndsTraining({ readyKey: closer, copied: true }, { key: T.READY_KEY, doneAt: old }), false);
 });

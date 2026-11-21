@@ -128,10 +128,10 @@ function legacyReadyPaths() {
    ready on no role path, whatever order the path and role were set in (code
    review: a date clamp at carry time depended on the order of clicks). */
 function endsTraining(readyKey, key, doneAt, copied) {
-  /* Left out, it fails closed (counts as copied, so an old Sales ready ends no
-     role course) and says so, rather than open or with a throw on every
-     staff request (code review). */
-  if (typeof copied !== 'boolean') { console.warn('endsTraining: copied not given; treated as true'); copied = true; }
+  /* Required. Server code does not call this directly: it uses endedTraining
+     (rows), readyGiven or stepEndsTraining (progress), which work `copied`
+     out themselves, so a missing one is a bug a test catches (code review). */
+  if (typeof copied !== 'boolean') throw new Error('endsTraining: pass copied (true or false)');
   if (key === readyKey) return true;
   return key === READY_KEY && !copied && legacyReadyPaths().includes(readyKey) && !!doneAt && new Date(doneAt).getTime() < LEGACY_BEFORE_MS;
 }
@@ -172,8 +172,12 @@ const RENAMED_READY = {
   'sales-software': 'signoff:software-ready', 'design-marketing': 'signoff:marketing-ready',
 };
 /** Has this progress (trainingFor: steps + readyKey) reached its ready? */
+/** Did this step of this progress (trainingFor) end training? */
+function stepEndsTraining(p, s) {
+  return endsTraining(p.readyKey, s.key, s.doneAt, !!p.copied);
+}
 function readyGiven(p) {
-  return !!p && p.steps.some((s) => s.done && endsTraining(p.readyKey, s.key, s.doneAt, !!p.copied));
+  return !!p && p.steps.some((s) => s.done && stepEndsTraining(p, s));
 }
 
 function readyKeyOfPath(track, role) {
@@ -677,7 +681,7 @@ function fillGap(text, token, answer, nth) {
   return parts.slice(0, nth + 1).join(token) + a + parts.slice(nth + 1).join(token);
 }
 
-module.exports = { endedTraining, RENAMED_READY, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
+module.exports = { endedTraining, stepEndsTraining, RENAMED_READY, OLD_READY_KEY, legacyReadyPaths, FEATURES, LESSON_PREFIXES, TRACKS, DEFAULT_TRACK, trackOf, STEPS, READY_KEY, LEGACY_READY_BEFORE, readyKeyFor, endsTraining, readyRowSql, readyGiven, carriedReady, signOrder, readOrder, quizSeconds, readQuizToken, QUIZ_TIMING_SINCE, picksFromPositions, PAGE_TIPS, QUIZZES, quizForPage, gradeQuiz, quizHash, answerLog, timeSpent, hm,
   visibleSteps, stepByKey, mayTick, progress, stepOpen, placeholders, ownerGaps, fillGap, dayCount, passMark, courseSteps, lessonPages,
   COURSES: COURSES.COURSES, SALES_ROLES: COURSES.SALES_ROLES, salesRoleOf: COURSES.salesRoleOf,
   lessonArticles: COURSES.lessonArticles, glossary: COURSES.glossary };

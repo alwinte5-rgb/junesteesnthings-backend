@@ -1879,12 +1879,18 @@ async function initStaffTables() {
      "Copy, keep old"): a helper's existing signoff:ready is given again under
      their current path's key, same date and signer, and the original is kept
      as TRAINING.OLD_READY_KEY, a record that ends training on no path.
-     Nothing is deleted. Sales keeps signoff:ready as its key. A marker row
+     Nothing is deleted. Sales keeps signoff:ready as its key. OLD_READY_KEY
+     is new with this copy, so no helper can hold it already; if one ever did,
+     the rename clashes, the whole statement (marker included) fails, the
+     error is logged and startup goes on, so nothing is half done (code
+     review). A marker row
      makes it run once, in the same statement, so a helper moved onto a path
      later is not touched. The keys are parameters. */
   {
     const renamed = Object.entries(TRAINING.RENAMED_READY);
-    const { rows: [r] } = await pool.query(`
+    /* One statement: a failure changes nothing (marker included) and the
+       rest of startup goes on; the error is logged to look at by hand. */
+    const r = await pool.query(`
       WITH mark AS (
         INSERT INTO shop_settings (key, value) VALUES ('once:ready-key-per-course', jsonb_build_object('at', NOW()))
         ON CONFLICT DO NOTHING RETURNING 1),
@@ -1899,26 +1905,11 @@ async function initStaffTables() {
         UPDATE staff_training t SET step_key = $4
           FROM staff s, map m
          WHERE EXISTS (SELECT 1 FROM mark) AND s.id = t.staff_id AND m.track = s.training_track AND t.step_key = $3
-           AND NOT EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
         RETURNING 1)
       SELECT (SELECT count(*) FROM copied)::int AS copied, (SELECT count(*) FROM kept)::int AS kept`,
-      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
+      [renamed.map(([t]) => t), renamed.map(([, k]) => k), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY])
+      .then((x) => x.rows[0], (e) => { console.error('training (#569) ready copy failed, nothing changed:', e.message); return {}; });
     if (r.copied || r.kept) console.log(`training (#569): ${r.copied} ready sign-off(s) given their course's own key; ${r.kept} original(s) kept as ${TRAINING.OLD_READY_KEY}`);
-  }
-  /* Every boot (code review: once was easy to miss): a helper holding both
-     signoff:ready and OLD_READY_KEY while on a path the copy covered. The
-     copy above leaves such a signoff:ready in place (it could not keep it as
-     the record), and on plain Sales it would end training outright, so the
-     owner checks them before moving them there. Not expected: the key is new
-     with the copy. Ids only in the log; the link finds them. */
-  {
-    const { rows: stuck } = await pool.query(`
-      SELECT DISTINCT s.id FROM staff s
-        JOIN staff_training t ON t.staff_id = s.id AND t.step_key = $2
-        JOIN staff_training o ON o.staff_id = s.id AND o.step_key = $3
-       WHERE s.training_track = ANY($1::text[]) ORDER BY s.id`,
-      [Object.keys(TRAINING.RENAMED_READY), TRAINING.READY_KEY, TRAINING.OLD_READY_KEY]);
-    if (stuck.length) console.warn(`training (#569): ${stuck.map((x) => `/admin/staff#staff-${x.id}`).join(', ')} still hold signoff:ready beside ${TRAINING.OLD_READY_KEY}; moved to Sales it would end their Sales training, so check them by hand first`);
   }
   /* Which of the three sales jobs a salesperson holds (TRAINING.SALES_ROLES):
      NULL until the owner assigns one, and everyone does all of it until then.
@@ -43657,7 +43648,7 @@ app.get('/admin/training', requireAdmin, async (req, res) => {
     const mins = (n) => (n >= 60 ? `${Math.floor(n / 60)}h${n % 60 ? ` ${n % 60}m` : ''}` : `${n}m`);
     /* The sign-off whose Undo can keep the commission window: the one that
        ended training (TRAINING.endsTraining). */
-    const endsTraining = (s) => TRAINING.endsTraining(p.readyKey, s.key, s.doneAt, !!p.copied);
+    const endsTraining = (s) => TRAINING.stepEndsTraining(p, s);
     const stepRow = (s) => {
       const lessonHref = s.type === 'lesson' ? `/admin/training/lesson/${encodeURIComponent(s.key.slice('lesson:'.length))}` : '';
       const link = s.locked && !owner ? escEmail(s.title)
