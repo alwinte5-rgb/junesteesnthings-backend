@@ -21,4 +21,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm test
+      # The designer (lumise-designer) is a private repo CI cannot clone, so
+      # the parity tests that read its source (tests/designer-dir.js) run
+      # locally only; every other test file runs here.
+      - run: npm run test:ci
