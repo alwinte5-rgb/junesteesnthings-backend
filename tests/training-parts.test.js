@@ -228,11 +228,11 @@ test('each course ends at its own ready key, so a move between paths never borro
 });
 
 test('the existing ready sign-offs are copied to their course\'s key once, and the originals kept (#569)', () => {
-  const at = SRC.indexOf("READY_COPY_MARK = 'once:ready-key-per-course'");
+  const at = SRC.indexOf("'once:ready-key-per-course'");
   assert.ok(at > 0, 'the one-time copy exists');
   const stmt = SRC.slice(SRC.indexOf('WITH map AS', at), SRC.indexOf('AS skipped`', at));
   assert.match(stmt, /^WITH map AS \(SELECT \* FROM unnest\(\$1::text\[\], \$2::text\[\]\)/, 'the keys are parameters');
-  assert.match(stmt, /mark AS \([\s\S]*ON CONFLICT DO NOTHING RETURNING 1\)/, 'and the marker decides');
+  assert.match(stmt, /mark AS \([^]*?ON CONFLICT DO NOTHING RETURNING value->'left_in_place' AS left_in_place\),\s*copied AS/, 'and the marker decides');
   assert.match(stmt, /SELECT t\.staff_id, m\.key, t\.done_at, t\.signed_by/, 'same date and signer');
   assert.match(stmt, /UPDATE staff_training t SET step_key = \$4/, 'the original is kept under the record key');
   assert.doesNotMatch(stmt, /DELETE/, 'nothing is deleted (owner, 2026-11-20)');
@@ -241,7 +241,7 @@ test('the existing ready sign-offs are copied to their course\'s key once, and t
   for (const t of Object.keys(TRACKS)) assert.equal(T.endsTraining(T.readyKeyFor(t), T.OLD_READY_KEY, '2026-01-01', false), false, `the record ends nothing on ${t}`);
   for (const [t, k] of Object.entries(T.RENAMED_READY)) assert.ok(T.readyKeyFor(t) === k || t === 'sales-software', `${t}: ${k}`);
   assert.match(stmt, /NOT IN \(SELECT id FROM held\)/, 'the rename leaves exactly those, and they are named, never silently left');
-  assert.match(stmt, /held AS \([\s\S]*o\.step_key = \$4\)\s*AND NOT EXISTS \(SELECT 1 FROM shop_settings WHERE key = \$5\)\),\s*mark AS \(/, 'who the rename leaves is read first, by the record key');
+  assert.match(stmt, /held AS \([\s\S]*o\.step_key = \$4\)\s*[\s\S]*?AND NOT EXISTS \(SELECT 1 FROM shop_settings WHERE key = \$5::text\)\),\s*mark AS \(/, 'who the rename leaves is read first, by the record key');
   assert.match(stmt, /'left_in_place', COALESCE\(\(SELECT jsonb_agg\(id ORDER BY id\) FROM held\)/, 'and kept on the marker row in the same statement');
   assert.match(stmt, /\(SELECT left_in_place FROM mark\)/, 'the log reads the same list back');
   const like = SRC.match(/t\.step_key LIKE '([^']+)'\), '\[\]'::json\) AS ready_rows/);

@@ -1900,7 +1900,8 @@ async function initStaffTables() {
       held AS (
         SELECT t.staff_id AS id FROM staff_training t JOIN staff s ON s.id = t.staff_id JOIN map m ON m.track = s.training_track
          WHERE t.step_key = $3 AND EXISTS (SELECT 1 FROM staff_training o WHERE o.staff_id = t.staff_id AND o.step_key = $4)
-           AND NOT EXISTS (SELECT 1 FROM shop_settings WHERE key = $5)),
+           -- Saves the scan once the copy has run (mark decides; this only skips work).
+           AND NOT EXISTS (SELECT 1 FROM shop_settings WHERE key = $5::text)),
       mark AS (
         INSERT INTO shop_settings (key, value)
         SELECT $5::text, jsonb_build_object('at', NOW(), 'left_in_place', COALESCE((SELECT jsonb_agg(id ORDER BY id) FROM held), '[]'::jsonb))
