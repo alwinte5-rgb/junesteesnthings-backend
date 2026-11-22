@@ -77,7 +77,10 @@ BLOCKED_PATHS = [
 # noise, which is the fastest way to have it ignored.
 BLOCKED_CONTENT = [
     (r"\bstripe\.[a-z]+\.(create|update|del|cancel|capture|refund)\b"
-     r"|\bcharges?\.create\b|paymentIntents?\.|checkout\.sessions?\.",
+     r"|\bcharges?\.create\b|paymentIntents?\.|checkout\.sessions?\."
+     # The same calls made over REST, with no SDK object to match (Codex, #247).
+     # Any resource: a read made with .get() is the only kind left out.
+     r"|^(?!.*\.get\s*\().*api\.stripe\.com/v1/[a-z_]+",
      "creates or changes a charge"),
     (r"\b(amount|total|price|subtotal)\s*[-+*/]?=\s*(?!.*\b(cents|_cents)\b)"
      r"[^;\n]*\breq\.(body|query|params)\b",
@@ -87,7 +90,7 @@ BLOCKED_CONTENT = [
      "writes to an identity, payment or entitlement table"),
     (r"\bCREATE\s+TABLE\b|\bALTER\s+TABLE\b|\bDROP\s+(TABLE|COLUMN)\b",
      "changes the database schema"),
-    (r"\b(bcrypt|argon2|scrypt)\b|\bjwt\.(sign|verify)\b"
+    (r"\b(bcrypt|argon2|scrypt)\b|\bjwt\.(sign|verify|encode|decode)\b"
      r"|\bsession\.(user|userId)\s*=|\bsetPassword\b",
      "touches authentication"),
     (r"\brequire(Admin|Auth|User|Login)\b\s*[,)]?\s*$"
@@ -117,8 +120,63 @@ def content_reason(added_lines):
                 continue
             if re.search(pattern, line, re.I):
                 seen.add(what)
-                out.append((what, stripped[:120]))
+                out.append((what, redact(stripped)[:120]))
+
+    # Then across lines (Codex P1, #53). `stripe` / `.charges` / `.create(` on
+    # three lines, or `UPDATE` with the table name on the next, matched no
+    # single line and passed. Join the code lines, fold method chains back onto
+    # one line, and attribute any hit to the line it starts on.
+    code = [l for l in added_lines
+            if not l.strip().startswith(("//", "#", "*", "/*"))]
+    joined, starts, pos = [], [], 0
+    for l in code:
+        starts.append(pos)
+        joined.append(l)
+        pos += len(l) + 1
+    text = "\n".join(joined)
+    folded = _CHAIN.sub(lambda m: "\0" * (len(m.group(0)) - 1) + ".", text)
+    for pattern, what in BLOCKED_CONTENT:
+        if what in seen:
+            continue
+        # Case-SENSITIVE here (code review on #53): joined lines include page
+        # copy, and "delete\n accounts" in a paragraph is prose, while SQL
+        # split across a template literal is written `DELETE\n FROM users`.
+        m = re.search(pattern, folded.replace("\0", ""), re.M)
+        if not m:
+            continue
+        # Map the hit back through the removed padding to a source line.
+        hit = _unfold_index(folded, m.start())
+        n = max(i for i, s in enumerate(starts) if s <= hit) if starts else 0
+        seen.add(what)
+        out.append((what, redact(code[n].strip())[:120] if code else ""))
     return out
+
+
+# Whitespace (including newlines) before a `.` continuing a call chain.
+_CHAIN = re.compile(r"\s*\n\s*\.")
+
+
+def _unfold_index(folded, i):
+    """Index in the original text of position `i` in `folded` minus padding."""
+    seen = 0
+    for j, ch in enumerate(folded):
+        if ch == "\0":
+            continue
+        if seen == i:
+            return j
+        seen += 1
+    return len(folded)
+
+
+# A sample is printed into CI logs and a PR comment. Show the line, but never a
+# value that could be a credential (Codex P2, #251): a word of 6+ characters
+# with a digit in it, quoted or not, is cut to its first four. URLs, SQL and
+# names stay readable, so the sample still shows why it was refused.
+_SECRETISH = re.compile(r"(?<![\w/.$-])(?=[A-Za-z0-9_\-+/=]*\d)[A-Za-z0-9_\-+/=]{6,}")
+
+
+def redact(line):
+    return _SECRETISH.sub(lambda m: m.group(0)[:4] + "...", line)
 
 
 # The templates. These hold variable NAMES and no values, they are meant to be
@@ -155,11 +213,29 @@ FORBIDDEN_FILES = [
 # So the exemption above is conditional on this: names, comments and blank
 # values pass; anything that looks like a real value does not.
 ENV_PLACEHOLDER = re.compile(
-    r"^(|<.*>|\{\{.*\}\}|\$\{?[A-Z_]+\}?|your[-_ ].*|xxx+|\.\.\.|changeme|"
+    r"^(|<.*>|\{\{.*\}\}|(?:choose|replace|generate|paste|enter|insert)[-_ ].*|"
+    r"[\w.+-]+@(?:your|my)?domain\.\w+|[\w.+-]+@yourdomain\.\w+|"
+    r"(?:[a-z]+_)*(?:live_|test_)?x{4,}|[a-z]{1,4}_x{4,}\w*|\$\{?[A-Z_]+\}?|your[-_ ].*|xxx+|\.\.\.|changeme|"
     r"change[-_ ]me|todo|tbd|replace[-_ ]me|placeholder|example|dummy|"
     r"local-dev-only.*|.*\.example\.com.*|postgres(ql)?://user:pass@localhost.*|"
     r"true|false|\d+|operator|development|production|test|localhost.*|"
     r"https?://localhost.*|https?://127\.0\.0\.1.*)$", re.I)
+
+
+# A port or a timeout is a number, and so is a Twilio auth token or a numeric
+# API PIN. Digits pass as a placeholder only when short, or when the key is not
+# shaped like a credential (Codex P2, #251).
+SECRET_KEY_NAME = re.compile(r"(SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|PIN)$", re.I)
+# A PIN is commonly a short test default; anything else shaped like a
+# credential has no business holding digits at all — `PASSWORD=123456` was
+# passing on the length floor alone (Codex P1, #53).
+_PIN_ONLY = re.compile(r"PIN$", re.I)
+
+
+def _numeric_secret(key, value):
+    if not (value.isdigit() and SECRET_KEY_NAME.search(key)):
+        return False
+    return len(value) > 6 if _PIN_ONLY.search(key) else len(value) >= 4
 
 
 def env_template_values(text):
@@ -180,7 +256,7 @@ def env_template_values(text):
         key, _, value = stripped.partition("=")
         key = key.replace("export ", "").strip()
         value = value.strip().strip("'\"")
-        if ENV_PLACEHOLDER.match(value):
+        if ENV_PLACEHOLDER.match(value) and not _numeric_secret(key, value):
             continue
         out.append((n, key))
     return out
@@ -297,7 +373,8 @@ def as_markdown():
         "Nobody can see it and no later session can find it. Only what reaches",
         "the remote exists.",
         "",
-        "Before you finish, confirm it: `git push -u origin <branch>` and then",
+        "Before you finish, confirm it: `git push -u <remote> <branch>`, where",
+        "`<remote>` is what `git remote` lists (see below), and then",
         "open the PR. If the push fails, say so in your final message and say",
         "what it would have contained — a failure you report is recoverable, a",
         "commit that silently died with the container is not.",
@@ -430,10 +507,15 @@ def as_markdown():
         "",
         "That comment is reachable even when your sandbox is not, and there is",
         "a Publish button that turns those blocks into a real branch and pull",
+        "request. Complete contents only — an excerpt or a description cannot",
+        "be published, and the file dies with your container.",
+        "",
         "**For anything that is not plain text, declare its size** on the",
         "fence line so a truncated payload is refused rather than shipped:",
         "",
         "    ```file:base64:apps/web/public/icon.png bytes=2004",
+        "    iVBORw0KGgo…",
+        "    ```",
         "",
         "A base64 favicon was once cut off in transit. It decoded to a valid",
         "file header pointing at image data that was not there, committed",
@@ -441,9 +523,6 @@ def as_markdown():
         "than a failed delivery: a failure gets fixed, a blank icon ships.",
         "Prefer a format that stays small — an SVG is usually under 3 KB and",
         "the problem does not arise.",
-        "",
-        "request. Complete contents only — an excerpt or a description cannot",
-        "be published, and the file dies with your container.",
         "",
         "### Match what is already there",
         "",
