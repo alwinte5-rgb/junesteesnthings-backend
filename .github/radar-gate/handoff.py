@@ -32,6 +32,7 @@ reads well, and is not connected to anything. Every rule below was earned:
 This is a static reviewer. It reports what to look at; it never merges.
 """
 
+import collections
 import fnmatch
 import json
 import os
@@ -80,16 +81,32 @@ DATA_GLOBS = ["*.json", "package-lock.json", "*.lock", "*.md"]
 # nobody could change without the gate refusing the change, which is how a
 # suite stops being maintained. A fixture inside the pattern engine's tests is
 # a specimen, not a leak.
-SELF = {"handoff.py", "boundary.py", "test_gate.py"}
+#
+# Exact paths, not basenames (Codex P2, #53): matching any file NAMED
+# test_gate.py exempted `src/test_gate.py` in every repo from every rule,
+# including the hardcoded-secret one. The source lives at the project-radar
+# root and, vendored, under .github/radar-gate/ — nowhere else is the gate.
+SELF = {"handoff.py", "boundary.py", "tests/test_gate.py"}
 SELF_DIRS = {".github/radar-gate"}
+
+
+def _in_radar_repo():
+    """Is the repo under review project-radar itself? Only there do the root
+    names in SELF hold the gate; in any other repo a root `boundary.py` is the
+    repo's own code and gets every rule (code review on #53)."""
+    root = os.environ.get("RADAR_REPO") or os.getcwd()
+    return (os.path.isfile(os.path.join(root, "agentsync.py"))
+            and os.path.isfile(os.path.join(root, "handoff.py")))
 
 
 def is_self(rel):
     """True for the gate's own source, wherever it has been vendored."""
     p = rel.replace("\\", "/")
-    return (os.path.basename(p) in SELF
-            or any(p.startswith(d + "/") or "/" + d + "/" in p
-                   for d in SELF_DIRS))
+    if p.startswith("./"):
+        p = p[2:]
+    if any(p.startswith(d + "/") or "/" + d + "/" in p for d in SELF_DIRS):
+        return True
+    return p in SELF and _in_radar_repo()
 
 # Regenerated on every scan. They always differ and always will, so reporting
 # them as conflicts is pure noise — the scan is the authority, not the delivery.
@@ -110,8 +127,11 @@ def walk(root):
 # ──────────────────────────── the diff as a delivery ─────────────────────────
 
 def git_out(args, repo):
+    # errors="replace": a branch that adds a photo makes `git show` print raw
+    # JPEG bytes, and strict decoding crashed the whole gate on byte 0xFF
+    # (lumise-designer #106, 2026-10-17) — a crash reads as a failed check.
     out = subprocess.run(["git", "-C", repo] + args,
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, errors="replace")
     if out.returncode != 0:
         raise RuntimeError((out.stderr or out.stdout).strip() or
                            "git %s failed" % " ".join(args))
@@ -172,6 +192,15 @@ def files_from_diff(base, head, repo):
     return files
 
 
+def is_binary(text):
+    """A file git printed as bytes, not text: a NUL, or bytes that would not
+    decode (git_out swaps those for U+FFFD). Its contents are not read for
+    secrets — random image bytes are not a credential, and matching on them
+    only invents false alarms."""
+    head = text[:8000]
+    return "\x00" in head or "\ufffd" in head
+
+
 def forbidden_in_diff(base, head, repo):
     """Refusal sweep over the raw path list.
 
@@ -187,10 +216,10 @@ def forbidden_in_diff(base, head, repo):
         # names and no values, and the name alone cannot tell you which it is.
         try:
             text = git_out(["show", "%s:%s" % (head, rel)], repo)
-        except (RuntimeError, UnicodeDecodeError):
-            # Deleted, unreadable, or binary (a .jpg is not text): judged on
-            # its path alone, like a file that cannot be read.
+        except RuntimeError:
             text = None
+        if text is not None and is_binary(text):
+            text = None                   # judged by its name, like a deleted file
         what = boundary.forbidden_reason(rel, text)
         if what:
             out.append((rel, what))
@@ -253,6 +282,10 @@ def content_out_of_bounds(base, head, repo):
         # Already refused on its path; saying it twice helps nobody.
         if boundary.blocked_reason(rel):
             continue
+        # A file refused outright (.env, a key) is reported by name only:
+        # quoting its lines would publish what it holds (Codex P2, #251).
+        if boundary.forbidden_reason(rel, "\n".join(lines)):
+            continue
         for what, sample in boundary.content_reason(lines):
             out.append((rel, what, sample))
     return out
@@ -278,11 +311,40 @@ def hits(text, pattern):
 
 # ─────────────────────────────────── rules ───────────────────────────────────
 
-def rule_unwired_exports(files):
+def outside_uses_at(repo, head):
+    """Callers of a name anywhere in the repo at `head`, as a lookup function.
+
+    A pull request's diff holds only the files it touched, so editing the
+    module that DEFINES `createBillingPortalSession` made it look uncalled
+    though billing/page.tsx calls it (COS PR #90). Asks git, so it reads the
+    commit under review rather than whatever is checked out. Prose and data
+    files are not call sites, and neither is the `export function` line.
+    """
+    def uses(name):
+        out = subprocess.run(
+            ["git", "-C", repo, "grep", "-n", "-w", "-I", "-e", name, head],
+            capture_output=True, text=True, errors="replace")
+        count = 0
+        for line in out.stdout.splitlines():
+            # "<head>:<path>:<lineno>:<text>"
+            parts = line.split(":", 3)
+            if len(parts) < 4 or is_data(parts[1]) or is_self(parts[1]):
+                continue
+            if re.search(r"\bfunction\s+%s\b" % re.escape(name), parts[3]):
+                continue                      # the definition is not a use
+            count += 1
+        return count
+    return uses
+
+
+def rule_unwired_exports(files, outside_uses=None):
     """Rule 1. A function defined and exported but called nowhere.
 
     Restricted to names that gate access — a dead formatter is untidy, a dead
     `requireUser` is an open door.
+
+    `outside_uses(name)` counts callers beyond `files`; a diff review passes it
+    because the changed files are not the whole program.
     """
     found = []
     gatekeeper = re.compile(
@@ -309,6 +371,8 @@ def rule_unwired_exports(files):
                 uses += len(re.findall(r"\b%s\s*\(" % re.escape(name), text)) - 1
             else:
                 uses += len(re.findall(r"\b%s\b" % re.escape(name), text))
+        if uses <= 0 and outside_uses is not None:
+            uses += outside_uses(name)
         if uses <= 0:
             found.append((CRITICAL, where, 0,
                           "`%s` is exported but never called" % name,
@@ -379,6 +443,18 @@ FROM_ENV = re.compile(
     r"ENV\[|Deno\.env|config\(\)|settings\.|getenv\(")
 
 
+# A declaration is not an assignment of a secret. pydantic's
+# `cloudinary_api_secret: str = ""` (COS PR #87) holds a TYPE and an empty
+# default that is filled from the environment; so does a bare
+# `api_secret: string`. A typed field given a real literal still matches,
+# because the check below only exempts the annotation, the empty default and
+# None.
+NOT_A_VALUE = re.compile(
+    r"(?:api_secret|apiSecret)\??\s*:\s*"
+    r"(?:Optional\[\w+\]|str|string|String|Any|None|SecretStr)\s*"
+    r"(?:$|[;,)}]|=\s*(?:\"\"|''|None|null|undefined)\s*[;,)}]?\s*$)")
+
+
 def rule_secrets(files):
     found = []
     pats = [
@@ -394,7 +470,8 @@ def rule_secrets(files):
     for path, rel, text in files:
         for pat, msg, env_exempt in pats:
             for lineno, line in hits(text, pat):
-                if env_exempt and FROM_ENV.search(line):
+                if env_exempt and (FROM_ENV.search(line)
+                                   or NOT_A_VALUE.search(line)):
                     continue
                 found.append((CRITICAL, rel, lineno, msg, line[:90]))
     return found
@@ -506,6 +583,35 @@ def rule_boundary(files):
                           "boundary. Drop the file from the branch and "
                           "re-request, or reassign it to a task that may "
                           "touch it."))
+    return found
+
+
+def rule_boundary_content(files, target):
+    """Rule 5b. What a delivered file adds that its path did not admit to.
+
+    Diff mode has always read the added lines (content_out_of_bounds); folder
+    mode checked paths only, so a delivered server.js carrying a charge passed
+    (Codex P2, #251). A folder has no history, so "added" is every line the
+    target's copy of the file does not already have.
+    """
+    found = []
+    for path, rel, text in files:
+        if is_self(rel) or is_data(rel) or boundary.blocked_reason(rel) or boundary.forbidden_reason(rel):
+            continue
+        counterpart = os.path.join(target, rel)
+        # Counted, not a set: a second copy of a charge call the target
+        # already has is still an added line (code review).
+        before = collections.Counter(read(counterpart).splitlines()) if os.path.isfile(counterpart) else collections.Counter()
+        added = []
+        for line in text.splitlines():
+            if before[line] > 0:
+                before[line] -= 1
+            else:
+                added.append(line)
+        for what, sample in boundary.content_reason(added):
+            found.append((CRITICAL, rel, 0, "out of bounds -- %s" % what,
+                          "%s. The boundary is about what the change does, "
+                          "not where it lives." % sample))
     return found
 
 
@@ -624,6 +730,7 @@ RULE_OF = {
     "runs a subprocess": "shell_exec",
     "local HTTP server": "local_server",
     "is exported but never called": "unwired",
+    "api_secret assigned": "secrets",
 }
 
 
@@ -634,7 +741,8 @@ def rule_name(what):
     return None
 
 
-def review(delivery_root, target_root, files=None, accepted_from=None):
+def review(delivery_root, target_root, files=None, accepted_from=None,
+           outside_uses=None):
     """Review the delta, not the tree.
 
     The first version scanned every delivered file and reported our own
@@ -668,11 +776,16 @@ def review(delivery_root, target_root, files=None, accepted_from=None):
     findings = []
     for rule in RULES:
         try:
-            findings.extend(rule(files))
+            findings.extend(rule(files, outside_uses)
+                            if rule is rule_unwired_exports else rule(files))
         except Exception as exc:               # a broken rule must not stop the
             findings.append((MODERATE, "(reviewer)", 0,   # rest of the review
                              "rule %s failed: %s" % (rule.__name__, exc), ""))
     findings.extend(rule_new_dependencies(files, target_root))
+    # Folder mode only: a diff already reads its added lines against the base
+    # commit (content_out_of_bounds), and the working tree is not the base.
+    if not diff_mode:
+        findings.extend(rule_boundary_content(files, target_root))
 
     # Two rules exist only because a folder has no history. Git does both
     # better: `rule_reverts` compares file mtimes to guess whether a delivery
@@ -830,6 +943,19 @@ def review_diff(base, head, repo):
         print("  `fetch-depth: 0`, or the base commit is simply not present.\n")
         return 3
 
+    # A committed credential outranks everything else (Codex P1, #53): it
+    # must be removed and rotated, and a content refusal printed first used
+    # to end the run before the author was ever told the secret was there.
+    if blocked:
+        print("\nREFUSED -- this branch contains files that must never be "
+              "committed:\n")
+        for rel, what in blocked:
+            print("  %-48s %s" % (rel, what))
+        print("\n  Remove them, rotate anything that was exposed, and force-push")
+        print("  a history without them. Deleting the file in a later commit")
+        print("  leaves it in the history, where it is still a live secret.\n")
+        return 2
+
     # What the path did not admit to. A repo with one big server.js matches no
     # path pattern, so without this the boundary is decoration there — and that
     # is the repo actually taking money.
@@ -850,18 +976,9 @@ def review_diff(base, head, repo):
               "leave it out.\n")
         return 1
 
-    if blocked:
-        print("\nREFUSED -- this branch contains files that must never be "
-              "committed:\n")
-        for rel, what in blocked:
-            print("  %-48s %s" % (rel, what))
-        print("\n  Remove them, rotate anything that was exposed, and force-push")
-        print("  a history without them. Deleting the file in a later commit")
-        print("  leaves it in the history, where it is still a live secret.\n")
-        return 2
-
     files = files_from_diff(base, head, repo)
-    _, findings, _, skipped = review(repo, repo, files=files)
+    _, findings, _, skipped = review(
+        repo, repo, files=files, outside_uses=outside_uses_at(repo, head))
 
     counted = "%d changed file(s) in %s...%s" % (
         len(files), base[:12], head[:12])
@@ -910,7 +1027,7 @@ def main(argv):
         try:
             out = subprocess.run(
                 ["gh", "pr", "view", number, "--json",
-                 "baseRefName,headRefOid,headRefName"],
+                 "baseRefName,headRefOid,headRefName,number"],
                 capture_output=True, text=True, cwd=repo, timeout=60)
         except (OSError, subprocess.SubprocessError) as exc:
             print("could not run `gh`: %s" % exc)
@@ -921,8 +1038,19 @@ def main(argv):
         meta = json.loads(out.stdout)
         remote = github_remote(repo)
         base = "%s/%s" % (remote, meta["baseRefName"])
-        subprocess.run(["git", "-C", repo, "fetch", "--quiet", remote,
-                        meta["baseRefName"]], capture_output=True)
+        # Fetch the base AND the pull request's head, and stop if either
+        # fails: reviewing a stale base, or a head that is not here, reviews
+        # the wrong range and says nothing about it (Codex, #247 and #251).
+        # `+`: a base that was force-pushed (a leaked secret removed, as this
+        # gate asks) still updates. The number is GitHub's own, an int, so a
+        # branch name or URL given to --pr never reaches a refspec.
+        for ref in ("+%s:refs/remotes/%s/%s" % (meta["baseRefName"], remote, meta["baseRefName"]),
+                    "pull/%d/head" % int(meta["number"])):
+            got = subprocess.run(["git", "-C", repo, "fetch", "--quiet", remote, ref],
+                                 capture_output=True, text=True)
+            if got.returncode != 0:
+                print("could not fetch %s from %s: %s" % (ref, remote, (got.stderr or "").strip()))
+                return 3
         return review_diff(base, meta["headRefOid"], repo)
 
     # ── folder mode ──────────────────────────────────────────────────────
