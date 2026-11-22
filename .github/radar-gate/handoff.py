@@ -735,8 +735,14 @@ RULE_OF = {
 
 
 def rule_name(what):
+    # A boundary finding is named by how it STARTS, never by a phrase found
+    # inside it: some messages quote the offending code line, so a comment
+    # reading "out of bounds" turned a subprocess-in-a-handler finding into a
+    # waivable boundary one (security review, 2026-11-22).
+    if what.startswith("out of bounds"):
+        return "boundary"
     for prefix, name in RULE_OF.items():
-        if what.startswith(prefix) or prefix in what:
+        if name != "boundary" and (what.startswith(prefix) or prefix in what):
             return name
     return None
 
@@ -933,6 +939,25 @@ def change_summary(base, head, repo):
     return lines
 
 
+CLAUDE_LABEL = "radar:by-claude"
+ALWAYS_ENFORCED = {"computes a charged amount from a client-supplied value"}
+
+
+def claude_pr():
+    """Is this pull request labelled as Claude's? (owner, 2026-11-22)
+
+    The boundary — no API routes, billing, schema or auth — exists for the
+    design agents, which cannot run what they write. Every PR is opened under
+    the owner's account and agents share branch prefixes, so the workflow
+    passes the PR's labels in and Claude labels its own. On a labelled PR the
+    boundary is reported, not enforced, except a charged amount taken from the
+    request (ALWAYS_ENFORCED). Hardcoded secrets, credential files, uncalled
+    access checks and new dependencies still block.
+    """
+    labels = os.environ.get("RADAR_PR_LABELS", "")
+    return CLAUDE_LABEL in [l.strip() for l in labels.split(",")]
+
+
 def review_diff(base, head, repo):
     """The gate as a pull-request check. Exit code is the verdict."""
     try:
@@ -963,6 +988,23 @@ def review_diff(base, head, repo):
         sneaky = content_out_of_bounds(base, head, repo)
     except RuntimeError:
         sneaky = []
+    trusted = claude_pr()
+    if trusted:
+        # One content rule is never legitimate, whoever wrote the PR: a charged
+        # amount taken from the request. It keeps blocking under the label.
+        always = [x for x in sneaky if x[1] in ALWAYS_ENFORCED]
+        waived = [x for x in sneaky if x[1] not in ALWAYS_ENFORCED]
+    else:
+        always, waived = sneaky, []
+    if waived:
+        print("\nNOTED (PR labelled %s, so the design-agent boundary is "
+              "reported, not enforced):\n" % CLAUDE_LABEL)
+        for rel, what, sample in waived:
+            print("  %s" % rel)
+            print("      %s" % what)
+            print("      %s" % sample)
+        print()
+    sneaky = always
     if sneaky:
         print("\nREFUSED -- these lines are outside the boundary, whatever "
               "file they were put in:\n")
@@ -979,6 +1021,12 @@ def review_diff(base, head, repo):
     files = files_from_diff(base, head, repo)
     _, findings, _, skipped = review(
         repo, repo, files=files, outside_uses=outside_uses_at(repo, head))
+    if trusted:
+        findings = [(ACCEPTED, rel, n, what, "PR labelled %s" % CLAUDE_LABEL)
+                    if rule_name(what) == "boundary" and sev != ACCEPTED
+                    else (sev, rel, n, what, why)
+                    for sev, rel, n, what, why in findings]
+        findings.sort(key=lambda f: (RANK.get(f[0], 9), f[1], f[2]))
 
     counted = "%d changed file(s) in %s...%s" % (
         len(files), base[:12], head[:12])
