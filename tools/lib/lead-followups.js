@@ -35,6 +35,10 @@ const LET_GO_REASON = 'No reply after two follow-ups';
  * back on Leads. A lead the shop let go by hand never comes back that way. */
 const OLD_CONTACT_REASON = 'Contacted before the automatic follow-ups; no reply since';
 const OLD_CONTACT_DAYS = 15;
+/* A reply from them this recent that nobody answered is kept out of the
+ * clean-up: it belongs under Answer these. Matches the 60 days an email reply
+ * is matched to its lead by sender. */
+const REPLY_KEPT_DAYS = 60;
 const REOPEN_REASONS = [LET_GO_REASON, OLD_CONTACT_REASON];
 
 const ms = (d) => (d ? new Date(d).getTime() : 0);
@@ -153,4 +157,4 @@ function cardLine(l, last, fmt) {
 }
 
 module.exports = { CONVERSATION_KINDS, MAX_FAILS, anchorOf, sameRound, decide, isInbound, messages, smsBody, cardLine, LET_GO_REASON,
-  OLD_CONTACT_REASON, OLD_CONTACT_DAYS, REOPEN_REASONS, FIRST_AFTER, SECOND_AFTER, LET_GO_AFTER, OLDEST };
+  OLD_CONTACT_REASON, OLD_CONTACT_DAYS, REPLY_KEPT_DAYS, REOPEN_REASONS, FIRST_AFTER, SECOND_AFTER, LET_GO_AFTER, OLDEST };

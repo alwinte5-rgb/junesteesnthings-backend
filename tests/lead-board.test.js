@@ -91,3 +91,39 @@ test('the card says they replied and that it is our turn', () => {
   assert.match(card, /replied \? pill\('They replied', 'amber'\)/);
   assert.match(card, /isFoundLead\(l\) \? pill\('Found by us', 'neutral'\)/);
 });
+
+/* Code review fixes, 2026-11-23. */
+test('the clean-up keeps a recent reply nobody answered, and counts internal notes as work on the lead', () => {
+  assert.match(once, /SELECT MAX\(n\.created_at\) FROM lead_notes n WHERE n\.submission_id = s\.id\)/, 'every note, internal ones too');
+  assert.match(once, /WHERE w\.kind IN \('text_in', 'email_in'\) AND w\.created_at > NOW\(\) - make_interval\(days => \$6::int\)/);
+  assert.match(once, /LEADFU\.REPLY_KEPT_DAYS\]\);/);
+  assert.strictEqual(F.REPLY_KEPT_DAYS, 60);
+});
+
+test('an old contact is reopened by an email from them however old the lead is', () => {
+  const keep = src.slice(src.indexOf('async function keepInboundEmail('), src.indexOf('const recentInbound = new Set();'));
+  assert.match(keep, /AND \(created_at > NOW\(\) - INTERVAL '60 days' OR dismiss_reason = \$3\)/);
+  assert.match(keep, /\[m\.from, LEADFU\.REOPEN_REASONS, LEADFU\.OLD_CONTACT_REASON\]/);
+});
+
+test('a reply is its own bell notice, keyed by when it came', () => {
+  const t = '2026-11-20T10:00:00Z';
+  assert.strictEqual(B.noticeRef({ id: 9, lead_status: 'new' }), '9');
+  assert.strictEqual(B.noticeRef({ id: 9, lead_status: 'contacted', last_word: { kind: 'text_in', created_at: t } }), `9:reply:${Date.parse(t)}`);
+  const owner = src.slice(src.indexOf('async function ownerNotices('), src.indexOf('async function ownerNotices(') + 3000);
+  assert.match(owner, /ref: LEADBOARD\.noticeRef\(l\)/);
+  assert.match(owner, /notifyClearResolved\('owner', 'lead', leads\.map\(LEADBOARD\.noticeRef\)\)/);
+});
+
+test('a replied card can record an answer given outside the system, and keeps the follow-up line', () => {
+  const card = src.slice(src.indexOf('function leadCardHtml('), src.indexOf('function leadCardHtml(') + 5000);
+  assert.match(card, /I answered them outside the system/);
+  assert.match(card, /action="\/admin\/lead\/\$\{Number\(l\.id\)\}\/note"/);
+  assert.match(card, /const contactedLine = replied \? repliedLine \+ fuLine\(\)/);
+});
+
+test('Contacted, waiting on them leaves out leads that wrote back; notes follow the drawn order', () => {
+  const page = src.slice(src.indexOf("app.get('/admin/leads'"), src.indexOf("app.get('/admin/leads'") + 6000);
+  assert.match(page, /st === 'contacted' \? bucket\(l\) === 'contacted'/);
+  assert.match(page, /\[rendered\.slice\(0, 300\)\.map\(\(l\) => l\.id\)\]/);
+});

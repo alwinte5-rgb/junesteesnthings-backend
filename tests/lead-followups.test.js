@@ -170,7 +170,8 @@ test('auto-replies and bounces are not a person answering', () => {
 test('a text back to a lead the follow-ups let go reopens it; old customer texts become text_in once', () => {
   const ttl = src.slice(src.indexOf('async function textToLead('), src.indexOf('/* Their name, if they have ever given it to us'));
   assert.match(ttl, /AND \(s\.dismissed_at IS NULL OR s\.dismiss_reason = ANY\(\$2\)\)/);
-  assert.match(ttl, /\[digits, LEADFU\.REOPEN_REASONS\]/);
+  assert.match(ttl, /\[digits, LEADFU\.REOPEN_REASONS, LEADFU\.OLD_CONTACT_REASON\]/);
+  assert.match(ttl, /\*\/\s+OR s\.dismiss_reason = \$3\s+OR EXISTS/, 'an old contact is matched by number alone');
   assert.match(ttl, /SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL\s+WHERE id = \$1 AND dismiss_reason = ANY\(\$2\)/);
   assert.match(src, /WITH claim AS \(INSERT INTO once_fixes \(name\) VALUES \('lead-notes-text-in'\) ON CONFLICT DO NOTHING RETURNING 1\)\s+UPDATE lead_notes SET kind = 'text_in' WHERE EXISTS \(SELECT 1 FROM claim\)/, 'the backfill runs exactly once, at deploy');
   assert.match(src, /return \{ lead: open\[0\]\.id, reopened: back\.rowCount > 0 \};/);

@@ -125,7 +125,7 @@ test('the header counts the two live groups separately', () => {
   // drafts counted apart: nobody waits on a quote they never got (Codex #129)
   assert.match(board, /gQuotes\.filter\(\(q\) => q\.status !== 'draft'\)\.length\}\s*waiting on the customer/);
   assert.match(board, /gOrders\.length\}\s*order/);
-  assert.match(board, /\$\{leads\.length\} new enquir/,
+  assert.match(board, /\$\{leads\.length\} enquir/,
     'unanswered enquiries lead the count — they are the ones that cost money');
 });
 

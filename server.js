@@ -5191,11 +5191,14 @@ async function textToLead(from, text, sid) {
     `SELECT s.id FROM submissions s
       WHERE ${samePhone} AND (s.dismissed_at IS NULL OR s.dismiss_reason = ANY($2))
         AND ((s.source = 'text' AND s.created_at > NOW() - INTERVAL '14 days')
+          /* Let go in the old-contacts clean-up: quiet 15+ days by definition, so
+             the 14-day windows can never hold; their number is enough. */
+          OR s.dismiss_reason = $3
           OR EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = 'text'
                         AND (n.body LIKE 'You texted:%' OR n.body LIKE 'You replied:%') AND n.created_at > NOW() - INTERVAL '14 days'))
       ORDER BY GREATEST(s.created_at, COALESCE((SELECT MAX(n.created_at) FROM lead_notes n
                  WHERE n.submission_id = s.id AND n.kind = 'text' AND (n.body LIKE 'You texted:%' OR n.body LIKE 'You replied:%')), s.created_at)) DESC
-      LIMIT 1`, [digits, LEADFU.REOPEN_REASONS]);
+      LIMIT 1`, [digits, LEADFU.REOPEN_REASONS, LEADFU.OLD_CONTACT_REASON]);
   if (open.length) {
     /* Let go by the follow-ups (or the old-contacts clean-up) and now texting back: on Leads again. */
     const back = await pool.query(`UPDATE submissions SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
@@ -5683,7 +5686,8 @@ async function keepInboundEmail(m) {
     const { rows } = await pool.query(
       `SELECT id, dismissed_at, dismiss_reason FROM submissions WHERE lower(trim(email)) = $1
           AND (dismissed_at IS NULL OR dismiss_reason = ANY($2))
-          AND created_at > NOW() - INTERVAL '60 days' ORDER BY created_at DESC LIMIT 1`, [m.from, LEADFU.REOPEN_REASONS]);
+          AND (created_at > NOW() - INTERVAL '60 days' OR dismiss_reason = $3)
+          ORDER BY created_at DESC LIMIT 1`, [m.from, LEADFU.REOPEN_REASONS, LEADFU.OLD_CONTACT_REASON]);
     if (rows.length) leadRow = rows[0];
   }
   if (leadRow) lead = leadRow.id;
@@ -25333,7 +25337,7 @@ async function renderBoard(VIEW, req, res) {
     const changeCount = (body.match(/Change requested/g) || []).length;
     res.send(adminPage(VIEW === 'work' ? 'Production' : 'Quotes',
       `<h1>${VIEW === 'work' ? 'Production' : 'Quotes'}</h1>
-      <div class="sub">${leads.length ? `<b style="color:#b45309">${leads.length} new enquir${
+      <div class="sub">${leads.length ? `<b style="color:#b45309">${leads.length} enquir${
         leads.length === 1 ? 'y' : 'ies'}</b> &middot; ` : ''}${
         carts.length ? `<b style="color:#1848B8">${carts.length} unfinished cart${
         carts.length === 1 ? '' : 's'}</b> &middot; ` : ''}${
@@ -28961,7 +28965,8 @@ async function sendLeadFollowUps(now = Date.now()) {
  *  follow-ups only pick up a conversation inside their 15-day window, and never
  *  a found lead. Each is let go as LEADFU.OLD_CONTACT_REASON, which a text or
  *  email from them reopens (REOPEN_REASONS). Not touched: a lead with a quote,
- *  an outcome, or a follow-up date someone set for today or later. The claim,
+ *  an outcome, a follow-up date someone set for today or later, any note in the
+ *  window, or a reply from them in the last REPLY_KEPT_DAYS that nobody answered. The claim,
  *  the let-go and the notes are one statement, so it runs whole or not at all. */
 async function letGoOldContactsOnce() {
   try {
@@ -28972,16 +28977,24 @@ async function letGoOldContactsOnce() {
           WHERE EXISTS (SELECT 1 FROM claim)
             AND s.first_response_at IS NOT NULL AND s.dismissed_at IS NULL AND s.outcome IS NULL
             AND (s.next_follow_up_on IS NULL OR s.next_follow_up_on < (NOW() AT TIME ZONE $4::text)::date)
+            -- Quiet: nothing on the lead for OLD_CONTACT_DAYS, internal notes included
+            -- (a helper's "call back after Thanksgiving" is work on it).
             AND GREATEST(s.first_response_at, COALESCE(s.lead_fu1_at, s.first_response_at), COALESCE(s.lead_fu2_at, s.first_response_at),
-                  COALESCE((SELECT MAX(n.created_at) FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = ANY($2)),
+                  COALESCE((SELECT MAX(n.created_at) FROM lead_notes n WHERE n.submission_id = s.id),
                            s.first_response_at)) < NOW() - make_interval(days => $3::int)
+            -- They wrote last, inside the email reopen window: the shop owes them an
+            -- answer, so it goes under Answer these, not into Let go as "no reply".
+            AND NOT EXISTS (SELECT 1 FROM (SELECT kind, created_at FROM lead_notes n WHERE n.submission_id = s.id AND NOT n.auto
+                              AND n.kind = ANY($2) ORDER BY created_at DESC, id DESC LIMIT 1) w
+                             WHERE w.kind IN ('text_in', 'email_in') AND w.created_at > NOW() - make_interval(days => $6::int))
             AND NOT EXISTS (SELECT 1 FROM quotes q WHERE (q.from_submission_id = s.id OR (${LEAD_QUOTE_MATCH}))
                                AND ${LEAD_QUOTE_LIVE})
           RETURNING s.id)
        INSERT INTO lead_notes (submission_id, kind, body, auto)
        SELECT id, 'note', $5::text, TRUE FROM gone`,
       [LEADFU.OLD_CONTACT_REASON, LEADFU.CONVERSATION_KINDS, LEADFU.OLD_CONTACT_DAYS, SHOP_TZ,
-       `Let go in the old-contacts clean-up: ${LEADFU.OLD_CONTACT_REASON.toLowerCase()}. A reply from them puts it back on Leads.`]);
+       `Let go in the old-contacts clean-up: ${LEADFU.OLD_CONTACT_REASON.toLowerCase()}. A reply from them puts it back on Leads.`,
+       LEADFU.REPLY_KEPT_DAYS]);
     if (rowCount) console.log(`leads: let go ${rowCount} old contact${rowCount === 1 ? '' : 's'} (once)`);
   } catch (e) {
     /* Nothing was claimed or changed (one statement); the next boot tries again. */
@@ -28990,8 +29003,11 @@ async function letGoOldContactsOnce() {
 }
 
 /** The leads nobody has answered: not quoted, not let go. Newest first. */
+/* Since 2026-11-23 this is the Leads page's "To answer" (LEADBOARD.toAnswer):
+   enquiries nobody has answered and anyone who wrote back, not found leads.
+   The board, My Day, the bell, the digest and the badge all read it. */
 async function unansweredLeads() {
-  return (await leadsWithStatus()).filter((l) => l.lead_status === 'new');
+  return LEADBOARD.toAnswer(await leadsWithStatus(), isFoundLead);
 }
 
 const LEAD_SOURCES = {
@@ -29027,16 +29043,25 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
   const lc = l.last_contact;
   /* They wrote after our last word: back under Answer these (LEADBOARD). */
   const replied = LEADBOARD.theyReplied(l);
+  /* Answered from the shop's own inbox or phone, the server never sees it: one
+     press records it (an email note, as "I already emailed them" does), and
+     the lead leaves Answer these. */
   const repliedLine = replied ? `<div style="margin-top:6px;font-size:12.5px;color:#b45309;font-weight:600">They replied by ${
-    l.last_word.kind === 'email_in' ? 'email' : 'text'} ${escEmail(whenShort(l.last_word.created_at))} &middot; your turn to answer</div>` : '';
-  const contactedLine = replied ? repliedLine : status === 'contacted' ? `<div style="margin-top:6px;font-size:12.5px;color:#1848B8">${
+    l.last_word.kind === 'email_in' ? 'email' : 'text'} ${escEmail(whenShort(l.last_word.created_at))} &middot; your turn to answer</div>
+    <form method="POST" action="/admin/lead/${Number(l.id)}/note" style="margin:4px 0 0">
+      <input type="hidden" name="kind" value="${l.last_word.kind === 'email_in' ? 'email' : 'text'}">
+      <input type="hidden" name="body" value="Answered their reply from my own ${l.last_word.kind === 'email_in' ? 'inbox' : 'phone'}.">
+      <input type="hidden" name="back" value="${escEmail(back)}">
+      <button type="submit" class="btn btn-ghost" style="padding:4px 12px;font-size:12px" onclick="this.disabled=true;this.form.submit()">I answered them outside the system</button></form>` : '';
+  const fuLine = () => {
+    /* Where the automatic follow-ups are (tools/lib/lead-followups.js). */
+    const fu = LEADFU.cardLine(l, l.last_word || null, (t) => new Date(t).toLocaleDateString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric' }));
+    return fu ? `<div class="muted" style="margin-top:2px;font-size:12px">${escEmail(fu)}</div>` : '';
+  };
+  const contactedLine = replied ? repliedLine + fuLine() : status === 'contacted' ? `<div style="margin-top:6px;font-size:12.5px;color:#1848B8">${
     lc ? `${escEmail({ email: 'Emailed', call: 'Called', text: 'Texted', chat: 'Chatted with', social: 'Messaged' }[lc.kind] || 'Contacted')} ${
       escEmail(whenShort(lc.created_at))}${roster ? ` by ${escEmail(nameOf(roster, lc.staff_id))}` : ''}`
-      : `Answered ${escEmail(whenShort(l.first_response_at))}`} &middot; waiting on them</div>${(() => {
-        /* Where the automatic follow-ups are (tools/lib/lead-followups.js). */
-        const fu = LEADFU.cardLine(l, l.last_word || null, (t) => new Date(t).toLocaleDateString('en-US', { timeZone: SHOP_TZ, month: 'short', day: 'numeric' }));
-        return fu ? `<div class="muted" style="margin-top:2px;font-size:12px">${escEmail(fu)}</div>` : '';
-      })()}` : '';
+      : `Answered ${escEmail(whenShort(l.first_response_at))}`} &middot; waiting on them</div>${fuLine()}` : '';
   const backField = `<input type="hidden" name="back" value="${escEmail(back)}">`;
   return `
       <div class="card" style="border-left:4px solid ${edge}">
@@ -29353,7 +29378,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
     const bucket = (l) => LEADBOARD.bucketOf(l, isFoundLead);
     /* Contacted is everyone we wrote to last; Open leaves them out until they write back. */
     const inStatus = (l, st) => st === 'all' || (st === 'open' ? LEADBOARD.isOpen(l, isFoundLead)
-      : st === 'reach' ? bucket(l) === 'reach_out' : st === 'contacted' ? l.lead_status === 'contacted'
+      : st === 'reach' ? bucket(l) === 'reach_out' : st === 'contacted' ? bucket(l) === 'contacted'
       : st === 'answer' ? bucket(l) === 'answer' : l.lead_status === st);
     const source = SOURCES.includes(String(req.query.source)) ? String(req.query.source) : 'all';
     const q = String(req.query.q || '').trim().slice(0, 80);
@@ -29368,11 +29393,20 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
       .some((v) => String(v || '').toLowerCase().includes(needle)));
     const count = (st, src) => found.filter((l) => inStatus(l, st) && inSource(l, src)).length;
     const shown = found.filter((l) => inStatus(l, status) && inSource(l, source));
+    /* Open is what someone has to act on (owner, 2026-11-23): first everyone
+       the shop owes a reply, the longest waiting first; then the leads the
+       team found and has not contacted. Once someone is contacted they leave
+       Open (Contacted has them) and come back here if they write back. */
+    const toAnswer = LEADBOARD.toAnswer(shown, isFoundLead);
+    const toReach = shown.filter((l) => bucket(l) === 'reach_out');
+    /* The cards in the order they are drawn, so the notes below are read for
+       the ones at the top (the longest waiting), not the newest 300. */
+    const rendered = status === 'open' ? [...toAnswer, ...toReach] : status === 'answer' ? toAnswer : shown;
     /* Who has each lead and what was said to them (the staff workspace). */
     const [roster, { rows: noteRows }] = await Promise.all([
       staffRoster(),
-      shown.length ? pool.query(`SELECT * FROM lead_notes WHERE submission_id = ANY($1) ORDER BY created_at`,
-        [shown.slice(0, 300).map((l) => l.id)]) : Promise.resolve({ rows: [] }),
+      rendered.length ? pool.query(`SELECT * FROM lead_notes WHERE submission_id = ANY($1) ORDER BY created_at`,
+        [rendered.slice(0, 300).map((l) => l.id)]) : Promise.resolve({ rows: [] }),
     ]);
     const notesBy = {};
     for (const n of noteRows) (notesBy[n.submission_id] ||= []).push(n);
@@ -29433,12 +29467,6 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
 
     const grid = (list) => `<div class="grid-cards">${list.map((l) => `<div id="lead-${l.id}">${leadCardHtml(l, { back: '/admin/leads', roster })}${
       leadWorkPanel(l, notesBy[l.id] || [], roster, currentActor())}</div>`).join('')}</div>`;
-    /* Open is what someone has to act on (owner, 2026-11-23): first everyone
-       the shop owes a reply, the longest waiting first; then the leads the
-       team found and has not contacted. Once someone is contacted they leave
-       Open (Contacted has them) and come back here if they write back. */
-    const toAnswer = LEADBOARD.toAnswer(shown, isFoundLead);
-    const toReach = shown.filter((l) => bucket(l) === 'reach_out');
     const contactedCount = count('contacted', source);
     const none = (text) => `<div class="card">${emptyState(text)}</div>`;
     const body = q && !shown.length ? none(`Nothing matches &ldquo;${escEmail(q)}&rdquo;.`)
@@ -29452,7 +29480,7 @@ app.get('/admin/leads', requireAdmin, async (req, res) => {
           <p class="muted" style="margin:14px 0 0">${contactedCount
             ? `<a href="${link({ status: 'contacted' })}">${contactedCount} contacted, waiting on them</a>: off this list until they write back. The automatic follow-ups carry on.`
             : 'Nobody you wrote to is waiting on a reply.'}</p>`
-      : shown.length ? grid(status === 'answer' ? LEADBOARD.toAnswer(shown, isFoundLead) : shown)
+      : rendered.length ? grid(rendered)
       : none(status === 'answer' ? 'Nobody is waiting for a reply.' : status === 'reach' ? 'No found leads waiting for a first message.' : 'Nothing here.');
 
     res.send(adminPage('Leads', `
@@ -29539,7 +29567,7 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
   await Promise.all([
     alerts(),
     /* The same count as "To answer" on Leads (LEADBOARD). */
-    leadsWithStatus().then((l) => { out.leads = LEADBOARD.toAnswer(l, isFoundLead).length; }).catch(() => {}),
+    unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
     /* Approvals: staff requests, plus art, designer questions and library
@@ -42761,10 +42789,11 @@ async function ownerNotices(roster, leads) {
   const out = [];
   if (leads) {
     for (const l of leads) {
-      if (new Date(l.created_at).getTime() < since) continue;
-      out.push({ recipient: 'owner', kind: 'lead', ref: String(l.id), link: '/admin/leads', title: `New lead: ${l.name || 'no name given'}` });
+      if (LEADBOARD.waitedFrom(l) < since) continue;
+      out.push({ recipient: 'owner', kind: 'lead', ref: LEADBOARD.noticeRef(l), link: '/admin/leads',
+        title: LEADBOARD.theyReplied(l) ? `${l.name || 'A lead'} replied` : `New lead: ${l.name || 'no name given'}` });
     }
-    await notifyClearResolved('owner', 'lead', leads.map((l) => String(l.id)));
+    await notifyClearResolved('owner', 'lead', leads.map(LEADBOARD.noticeRef));
   }
   /* Staff approvals stand on their own: they used to wait on the art read
      too, so a failed art query silently dropped every approval. */
@@ -42902,12 +42931,12 @@ async function staffNotices(roster, leads) {
     for (const l of leads) {
       const r = l.assigned_to != null && active.get(Number(l.assigned_to));
       if (!r) continue;
-      theirs.get(r.id).push(String(l.id));
-      if (new Date(l.created_at).getTime() < since) continue;
+      theirs.get(r.id).push(LEADBOARD.noticeRef(l));
+      if (LEADBOARD.waitedFrom(l) < since) continue;
       const helper = { kind: 'staff', id: r.id, perms: r.perms };
-      out.push({ recipient: `staff:${r.id}`, kind: 'lead', ref: String(l.id),
+      out.push({ recipient: `staff:${r.id}`, kind: 'lead', ref: LEADBOARD.noticeRef(l),
         link: STAFF.mayUseRoute(helper, 'GET', '/admin/leads') ? '/admin/leads' : '/admin/my-day',
-        title: `A lead for you: ${l.name || 'no name given'}` });
+        title: LEADBOARD.theyReplied(l) ? `Your lead ${l.name || ''} replied`.replace(/\s+/g, ' ') : `A lead for you: ${l.name || 'no name given'}` });
     }
     for (const [id, refs] of theirs) await notifyClearResolved(`staff:${id}`, 'lead', refs);
   }
@@ -43266,8 +43295,7 @@ app.get('/admin/my-day', requireAdmin, async (req, res) => {
       const [e, incentives, guide] = await Promise.all([earningsFor(st), incentivesFor(me), payGuideHref()]);
       return { e, incentives, guide };
     })().catch((err) => { console.error('my day earnings failed:', err.message); return null; }) : null;
-    const waiting = leads.filter((l) => me == null || l.assigned_to == null || l.assigned_to === me)
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    const waiting = leads.filter((l) => me == null || l.assigned_to == null || l.assigned_to === me);   // longest waiting first (LEADBOARD.toAnswer)
     const nextSteps = liveList.map((q) => ({ q, cl: quoteChecklist(q) })).filter((x) => x.cl.next).slice(0, 15);
     /* The quote email route's own gate (its route permission) and the check
        inside it (quotes.view on), not a copy of either. */

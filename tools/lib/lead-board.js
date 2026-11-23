@@ -47,4 +47,11 @@ function toAnswer(leads, isFound) {
   return (leads || []).filter((l) => bucketOf(l, isFound) === 'answer').sort((a, b) => waitedFrom(a) - waitedFrom(b));
 }
 
-module.exports = { theyReplied, bucketOf, isOpen, waitedFrom, toAnswer };
+/** The bell's key for a lead to answer. A reply is its own notice (keyed by
+ *  when it came), so a lead already notified as new still rings when they
+ *  write back, and answering clears it. */
+function noticeRef(l) {
+  return theyReplied(l) ? `${l.id}:reply:${new Date(l.last_word.created_at).getTime()}` : String(l.id);
+}
+
+module.exports = { theyReplied, bucketOf, isOpen, waitedFrom, toAnswer, noticeRef };
