@@ -23166,6 +23166,7 @@ require('./tools/lib/studio-controls').registerStudioControls(app,{requireAdmin,
 require('./tools/lib/design-library').registerDesignLibrary(app, {
   requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
   requireInternalKey, notifyAdd, sendEmail, NOTIFY_EMAIL, pool, rawBody: express.raw,
+  designChanges: { pool, designersOnRoster, isValidEmail, pinEmail, esc: escEmail, notifyNow },
   /* A design decided here leaves the owner's alert list at once, not on the
      next 5-minute library read. */
   invalidate: () => { _shopCache.at = 0; libraryWaitingCache.at = 0; ownerAlertsCache = null; },
@@ -26948,6 +26949,9 @@ async function autoArtSweep({ force = false } = {}) {
 async function notifyDesignersOfArt(code, move, assignedTo) {
   const designers = (await designersOnRoster()).filter((d) => assignedTo == null || d.id === assignedTo);
   const what = JOBNOTES.ART_NEWS[move] || 'Design work';
+  /* The bell too, with or without an email address on file (2026-11-23). */
+  await notifyAdd(designers.map((d) => ({ recipient: `staff:${d.id}`, kind: 'design', ref: `${code}:${move}:${Date.now()}`,
+    title: `${what}: ${code}`, link: `/admin/design/${code}#art` }))).catch((e) => console.error(`art alert bell ${code} failed:`, e.message));
   await Promise.all(designers.filter((d) => isValidEmail(d.email)).map((d) =>
     pinEmail(d.email, d.name, `${what}: ${code}`, `${escEmail(what)} on job <b>${escEmail(code)}</b>. Press <b>Got it</b> on the job once you have seen it.`,
       `/admin/design/${code}`).catch((e) => console.error(`art alert email ${code} failed:`, e.message))));
@@ -27555,7 +27559,7 @@ async function jobProofsCard(q, query) {
       <input type="hidden" name="url"><input type="hidden" name="name">
       <label class="btn btn-ghost" style="display:inline-block;cursor:pointer">Upload a proof
         <input type="file" accept="${PROOFS.ACCEPT}" data-prooffile style="display:none"></label>
-      <span class="muted" data-proofstat style="margin-left:8px;font-size:13px">JPG, PNG, WebP or PDF, up to 20 MB. The design on the garment color, with the print size.</span>
+      <span class="muted" data-proofstat style="margin-left:8px;font-size:13px">JPG, PNG or WebP up to 20 MB, or PDF up to 10 MB. The design on the garment color, with the print size.</span>
     </form>
     <script>
       (function(){
@@ -27564,14 +27568,19 @@ async function jobProofsCard(q, query) {
         inp.addEventListener('change', function(){
           var file = inp.files && inp.files[0]; if (!file) return;
           if (file.size > ${PROOFS.MAX_FILE_BYTES}) { st.textContent = 'That file is over 20 MB.'; return; }
+          /* Pictures are made smaller before sending; a PDF goes as it is, and the upload service takes 10 MB at most. */
+          if (/pdf$/i.test(file.type || file.name) && file.size > 10000000) { st.textContent = 'That PDF is over 10 MB. Export it smaller, or send it as a JPG or PNG.'; return; }
           st.textContent = 'Uploading…';
           fetch('/admin/api/proof-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
             .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
             .then(function(sig){
               var fd = new FormData();
-              fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
-              fd.append('folder', sig.folder); fd.append('signature', sig.signature);
-              return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/image/upload', { method: 'POST', body: fd });
+              ${PROOFS.FIT_FN}
+              return jtFitProof(file).then(function(fit){
+                fd.append('file', fit, file.name); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+                fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+                return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/image/upload', { method: 'POST', body: fd });
+              });
             })
             .then(function(r){ return r.json(); })
             .then(function(d){
@@ -42546,6 +42555,9 @@ async function libraryWaiting({ studioOff = false } = {}) {
   } catch (e) { fail(`design library could not be read: ${e.message}`); }
   if (!r.ok) fail(`design library answered HTTP ${r.status}`);
   if (!data || !data.ok || !Array.isArray(data.items)) fail('design library sent an unreadable list');
+  /* A design deleted in the designer itself closes its change task and alert here. */
+  await require('./tools/lib/design-changes').pruneGone(pool, data.items)
+    .catch((e) => console.error('design library clean-up failed:', e.message));
   const items = data.items.filter((x) => x && x.status === 'submitted' && Number.isSafeInteger(x.id))
     .map((x) => ({ kind: String(x.kind || ''), id: x.id, name: String(x.name || ''),
       submitted_by: x.settings && x.settings.submitted_by ? String(x.settings.submitted_by).slice(0, 80) : '' }));

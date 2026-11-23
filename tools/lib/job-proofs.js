@@ -87,4 +87,36 @@ function proofsForText(text, proofs, cloud) {
   return { text: words, media };
 }
 
-module.exports = { FOLDER, MAX_PER_JOB, MAX_FILE_BYTES, ACCEPT, MAX_MMS, proofUrlOk, cleanName, thumbOf, proofMessage, mmsUrlOf, proofsForText };
+/* Runs in the browser, pasted into the page's script. A proof is looked at on a
+   phone, but Cloudinary (Free plan) refuses a picture over 25 megapixels or a
+   file over 10 MB, so a print-size mockup could not be sent at all (owner,
+   2026-11-23). A big one is sent as a smaller copy; PDFs and anything the
+   browser cannot open go as they are. No backticks or dollar-brace in here. */
+const FIT_FN = `function jtFitProof(file){
+                if (!/^image\\/(png|jpeg|webp)$/.test(file.type)) return Promise.resolve(file);
+                return new Promise(function(ok){
+                  var u = URL.createObjectURL(file), im = new Image();
+                  im.onerror = function(){ URL.revokeObjectURL(u); ok(file); };
+                  im.onload = function(){
+                    URL.revokeObjectURL(u);
+                    var w = im.naturalWidth, h = im.naturalHeight;
+                    if (w * h <= 24000000 && file.size <= 10000000) return ok(file);
+                    var side = Math.min(4000, Math.max(w, h)), type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+                    (function draw(){
+                      var k = side / Math.max(w, h), c = document.createElement('canvas');
+                      c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+                      var x = c.getContext('2d'); x.drawImage(im, 0, 0, c.width, c.height);
+                      c.toBlob(function(b){
+                        if (!b) return ok(file);
+                        if (b.size > 10000000 && side > 1200) { side = Math.round(side * 0.75); return draw(); }
+                        /* Last try: a detailed PNG that is still too big goes as a JPG. */
+                        if (b.size > 10000000 && type === 'image/png') { type = 'image/jpeg'; return draw(); }
+                        ok(b);
+                      }, type, 0.92);
+                    })();
+                  };
+                  im.src = u;
+                });
+              }`;
+
+module.exports = { FIT_FN, FOLDER, MAX_PER_JOB, MAX_FILE_BYTES, ACCEPT, MAX_MMS, proofUrlOk, cleanName, thumbOf, proofMessage, mmsUrlOf, proofsForText };
