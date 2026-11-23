@@ -61,8 +61,8 @@ test('the send route: checked, claims before it sends, no double send, helpers i
 
 test('Contacted: a lead someone has answered, shown on the card and in its own filter, never hidden by default', () => {
   assert.match(src, /l\.dismissed_at \? 'dismissed' : l\.first_response_at \? 'contacted' : 'new'/);
-  assert.match(src, /: 'open';\n\s+const inStatus/, 'the Leads page opens on Open (waiting + contacted)');
-  assert.match(src, /label: 'Contacted', href: link\(\{ status: 'contacted' \}\)/);
+  assert.match(src, /STATUSES\.includes\(asked\) \? asked : 'open';/, 'the Leads page opens on Open');
+  assert.match(src, /label: 'Contacted, waiting on them', href: link\(\{ status: 'contacted' \}\)/);
   assert.match(src, /pill\('Contacted', 'blue'\)/);
   assert.match(src, /I already emailed them/);
   assert.match(src, /name="kind" value="email"/, 'that press is an email note, which marks them contacted');

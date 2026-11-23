@@ -126,8 +126,10 @@ test('the board, the Leads page, the dashboard and the menu badge share one defi
   const leadsPage = src.slice(src.indexOf("app.get('/admin/leads', requireAdmin"));
   assert.match(leadsPage.slice(0, 2000), /await leadsWithStatus\(\)/, 'the Leads page');
   const counts = src.slice(src.indexOf("app.get('/admin/nav-counts', requireAdmin"));
-  assert.match(counts.slice(0, 2500), /unansweredLeads\(\)/, 'the menu badge');
+  assert.match(counts.slice(0, 2500), /out\.leads = LEADBOARD\.toAnswer\(l, isFoundLead\)\.length/, 'the menu badge counts To answer');
+  assert.match(leadsPage.slice(0, 3000), /const waiting = LEADBOARD\.toAnswer\(all, isFoundLead\)/, 'the Leads page tile counts To answer');
   const dash = src.slice(src.indexOf("app.get('/admin/dashboard', requireAdmin"));
+  assert.match(dash.slice(0, 8000), /const waiting = LEADBOARD\.toAnswer\(leads, isFoundLead\)/, 'the dashboard counts To answer');
   assert.match(dash.slice(0, 4000), /leadsWithStatus\(\)/, 'the dashboard');
   /* Other reads of submissions (a returning-customer lookup, a rep's counts)
      decide nothing about waiting; the linked-quote test that does is one copy. */

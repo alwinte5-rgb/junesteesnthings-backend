@@ -70,11 +70,13 @@ test('the suggestion route: same permission as emailing a lead, rate-limited, no
   assert.doesNotMatch(route, /sendLeadEmail|sendEmail|INSERT/, 'it never sends or records anything');
 });
 
-test('Open leads show two sections: waiting for a reply first, then contacted (owner, 2026-10-22)', () => {
+test('Open is Answer these, then Reach out to these; contacted leads are off it (owner, 2026-11-23)', () => {
   const at = src.indexOf("app.get('/admin/leads'");
   const page = src.slice(at, src.indexOf('\n});', at));
-  const a = page.indexOf('id="to-answer">Waiting for a reply'), b = page.indexOf('id="contacted">Contacted, waiting on them');
-  assert.ok(a > 0 && b > a, 'waiting section comes before contacted');
-  assert.match(page, /const toAnswer = shown\.filter\(\(l\) => l\.lead_status === 'new'\)/);
-  assert.match(page, /const contacted = shown\.filter\(\(l\) => l\.lead_status === 'contacted'\)/);
+  const a = page.indexOf('id="to-answer">Answer these'), b = page.indexOf('id="to-reach">Reach out to these');
+  assert.ok(a > 0 && b > a, 'answer section comes before reach out');
+  assert.match(page, /const toAnswer = LEADBOARD\.toAnswer\(shown, isFoundLead\)/);
+  assert.match(page, /const toReach = shown\.filter\(\(l\) => bucket\(l\) === 'reach_out'\)/);
+  assert.match(page, /st === 'open' \? LEADBOARD\.isOpen\(l, isFoundLead\)/, 'Open is decided by the shared definition');
+  assert.match(page, /contacted, waiting on them<\/a>: off this list until they write back/);
 });
