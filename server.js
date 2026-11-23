@@ -27559,7 +27559,7 @@ async function jobProofsCard(q, query) {
       <input type="hidden" name="url"><input type="hidden" name="name">
       <label class="btn btn-ghost" style="display:inline-block;cursor:pointer">Upload a proof
         <input type="file" accept="${PROOFS.ACCEPT}" data-prooffile style="display:none"></label>
-      <span class="muted" data-proofstat style="margin-left:8px;font-size:13px">JPG, PNG, WebP or PDF, up to 20 MB. The design on the garment color, with the print size.</span>
+      <span class="muted" data-proofstat style="margin-left:8px;font-size:13px">JPG, PNG or WebP up to 20 MB, or PDF up to 10 MB. The design on the garment color, with the print size.</span>
     </form>
     <script>
       (function(){
@@ -27568,6 +27568,8 @@ async function jobProofsCard(q, query) {
         inp.addEventListener('change', function(){
           var file = inp.files && inp.files[0]; if (!file) return;
           if (file.size > ${PROOFS.MAX_FILE_BYTES}) { st.textContent = 'That file is over 20 MB.'; return; }
+          /* Pictures are made smaller before sending; a PDF goes as it is, and the upload service takes 10 MB at most. */
+          if (/pdf$/i.test(file.type || file.name) && file.size > 10000000) { st.textContent = 'That PDF is over 10 MB. Export it smaller, or send it as a JPG or PNG.'; return; }
           st.textContent = 'Uploading…';
           fetch('/admin/api/proof-signature', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
             .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
@@ -42553,6 +42555,9 @@ async function libraryWaiting({ studioOff = false } = {}) {
   } catch (e) { fail(`design library could not be read: ${e.message}`); }
   if (!r.ok) fail(`design library answered HTTP ${r.status}`);
   if (!data || !data.ok || !Array.isArray(data.items)) fail('design library sent an unreadable list');
+  /* A design deleted in the designer itself closes its change task and alert here. */
+  await require('./tools/lib/design-changes').pruneGone(pool, data.items)
+    .catch((e) => console.error('design library clean-up failed:', e.message));
   const items = data.items.filter((x) => x && x.status === 'submitted' && Number.isSafeInteger(x.id))
     .map((x) => ({ kind: String(x.kind || ''), id: x.id, name: String(x.name || ''),
       submitted_by: x.settings && x.settings.submitted_by ? String(x.settings.submitted_by).slice(0, 80) : '' }));

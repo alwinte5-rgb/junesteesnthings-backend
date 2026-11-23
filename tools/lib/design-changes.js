@@ -71,4 +71,23 @@ async function requestChanges(d, { kind, id, name, note, submittedBy }) {
   return { told: to.length, emailed, names: to.map((p) => String(p.name || '').split(' ')[0]).filter(Boolean) };
 }
 
-module.exports = { refOf, designersFor, closeTasks, requestChanges };
+/** Designs that are no longer in the library (deleted from the designer's own
+ *  × button, or a template turned ready-made) leave no open change task and no
+ *  unread approval alert behind. `items` is the studio's full list; an empty
+ *  list is never trusted, so a studio hiccup cannot close everything. */
+async function pruneGone(db, items) {
+  if (!Array.isArray(items) || !items.length) return 0;
+  const keys = items.filter((x) => x && Number.isSafeInteger(x.id)).map((x) => `${x.kind}-${x.id}`);
+  if (!keys.length) return 0;
+  const refs = keys.map((k) => `library-changes-${k}`);
+  const t = await db.query(
+    `UPDATE staff_tasks SET done_at = NOW(), done_note = COALESCE(done_note, 'Closed: the design is no longer in the library')
+      WHERE done_at IS NULL AND brief->>'request_ref' LIKE 'library-changes-%' AND NOT (brief->>'request_ref' = ANY($1::text[]))`, [refs]);
+  const n = await db.query(
+    `UPDATE notifications SET read_at = NOW()
+      WHERE recipient = 'owner' AND kind = 'library' AND read_at IS NULL
+        AND NOT (split_part(ref, ':', CASE WHEN ref LIKE 'poll:%' THEN 2 ELSE 1 END) = ANY($1::text[]))`, [keys]);
+  return (t.rowCount || 0) + (n.rowCount || 0);
+}
+
+module.exports = { refOf, designersFor, closeTasks, requestChanges, pruneGone };

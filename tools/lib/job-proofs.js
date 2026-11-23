@@ -101,7 +101,7 @@ const FIT_FN = `function jtFitProof(file){
                     URL.revokeObjectURL(u);
                     var w = im.naturalWidth, h = im.naturalHeight;
                     if (w * h <= 24000000 && file.size <= 10000000) return ok(file);
-                    var side = Math.min(4000, Math.max(w, h));
+                    var side = Math.min(4000, Math.max(w, h)), type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
                     (function draw(){
                       var k = side / Math.max(w, h), c = document.createElement('canvas');
                       c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
@@ -109,8 +109,10 @@ const FIT_FN = `function jtFitProof(file){
                       c.toBlob(function(b){
                         if (!b) return ok(file);
                         if (b.size > 10000000 && side > 1200) { side = Math.round(side * 0.75); return draw(); }
+                        /* Last try: a detailed PNG that is still too big goes as a JPG. */
+                        if (b.size > 10000000 && type === 'image/png') { type = 'image/jpeg'; return draw(); }
                         ok(b);
-                      }, file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.92);
+                      }, type, 0.92);
                     })();
                   };
                   im.src = u;

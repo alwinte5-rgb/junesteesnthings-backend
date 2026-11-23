@@ -94,7 +94,7 @@ function libraryPageScript() {
   });
   var bulk = document.getElementById('lib-del-all'), all = document.getElementById('lib-all'), msg = document.getElementById('lib-bulk-msg');
   function picked() { return Array.prototype.slice.call(document.querySelectorAll('.lib-pick:checked')).map(function (c) { return c.value; }); }
-  function count() { var n = picked().length; bulk.disabled = !n; bulk.textContent = n ? 'Delete selected (' + n + ')' : 'Delete selected'; bulk.dataset.sure = ''; }
+  function count() { var n = picked().length; clearTimeout(bulk.timer); bulk.disabled = !n; bulk.textContent = n ? 'Delete selected (' + n + ')' : 'Delete selected'; bulk.dataset.sure = ''; }
   function remove(keys, out, done) {
     out.style.color = ''; out.textContent = 'Deleting…';
     var body = new URLSearchParams(); body.append('items', JSON.stringify(keys));
@@ -115,7 +115,7 @@ function libraryPageScript() {
   if (bulk) {
     document.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('lib-pick')) count(); });
     all.addEventListener('change', function () { document.querySelectorAll('.lib-pick').forEach(function (c) { c.checked = all.checked; }); count(); });
-    bulk.addEventListener('click', function () { var keys = picked(); if (!keys.length) return; clearTimeout(bulk.reset);
+    bulk.addEventListener('click', function () { var keys = picked(); if (!keys.length) return;
       sure(bulk, 'Press again to delete ' + keys.length, function () { remove(keys, msg, function () { all.checked = false; }); }); });
   }
   document.addEventListener('click', function (e) {
@@ -247,10 +247,10 @@ function registerDesignLibrary(app, d) {
   app.post('/admin/design-library/delete', requireAdmin, bulkRoute('delete'));
   app.post('/admin/design-library/restore', requireAdmin, bulkRoute('restore'));
   /** A design that is decided: its approval alert is read and an open change request is closed. */
-  async function settled(key) {
+  async function settled(key, closeTask = true) {
     await pool.query("UPDATE notifications SET read_at=NOW() WHERE recipient='owner' AND kind='library' AND read_at IS NULL AND (ref LIKE $1 OR ref=$2)", [key + ':%', 'poll:' + key]);
     const m = /^(\w+)-(\d+)$/.exec(key);
-    await CHANGES.closeTasks(pool, [CHANGES.refOf(m[1], m[2])]);
+    if (closeTask) await CHANGES.closeTasks(pool, [CHANGES.refOf(m[1], m[2])]);
   }
   app.post('/admin/design-library', requireAdmin, async (req,res) => {
     /* The page's script asks for JSON and stays where it is; a plain form post
@@ -285,7 +285,9 @@ function registerDesignLibrary(app, d) {
     /* The studio has saved it. What follows only tells people, so a failure
        here is said as that, never as "not saved". */
     let message = DID[b.action], warn = false;
-    try { if (b.action !== 'save' && b.action !== 'sell') await settled(b.kind+'-'+b.id); }
+    /* Hide and sell leave a change request open: only publishing, archiving,
+       deleting or the designer submitting again answers it. */
+    try { if (b.action !== 'save') await settled(b.kind+'-'+b.id, ['publish', 'archive'].includes(b.action)); }
     catch (e) { console.error('library alerts:', e.message); }
     if (b.action === 'changes') {
       try {

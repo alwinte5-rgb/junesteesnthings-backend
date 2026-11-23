@@ -98,3 +98,12 @@ test('a proof too big for the file storage is sent smaller; the rest are untouch
   const png = await run(6000, 6000, 18e6, 'image/png', [14e6, 8e6]);
   assert.deepEqual(png.drawn, [[4000, 4000, 'image/png'], [3000, 3000, 'image/png']]);
 });
+test('designs gone from the library leave no open task or alert, and an empty list closes nothing', async () => {
+  const seen = []; const db = { query: async (q, p) => { seen.push({ q, p }); return { rowCount: 1 }; } };
+  assert.equal(await CHANGES.pruneGone(db, []), 0);
+  assert.equal(await CHANGES.pruneGone(db, null), 0);
+  assert.equal(seen.length, 0);
+  assert.equal(await CHANGES.pruneGone(db, [{ kind: 'clipart', id: 3 }, { kind: 'template', id: 'x' }]), 2);
+  assert.deepEqual(seen[0].p, [['library-changes-clipart-3']]);
+  assert.deepEqual(seen[1].p, [['clipart-3']]);
+});
