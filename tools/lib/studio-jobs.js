@@ -67,6 +67,10 @@ function jobRow(id, o, kept) {
     status: 'sent', created_at: f.created || k.placed_at || null,
     items: (Array.isArray(f.items) ? f.items : []).map((i) => ({ qty: Number(i && i.qty) || 0, description: String((i && i.name) || 'Item') })),
     total: Number(f.total) || 0, paid_amount: Number(f.paid) || 0, refunded: Number(f.refunded) || 0,
+    /* Whether it was paid at all: the copy kept here answers for an order the
+       feed no longer lists, so it never reads as a checkout left unpaid. */
+    paid: o ? Number(f.paid) > 0 : !!k.paid, left: !!f.left,
+    refunded_full: Number(f.refunded) > 0 && Number(f.refunded) >= Number(f.paid || 0) - 0.005,
     ship_method: String((f.delivery && f.delivery.method) || ''), tracking: String(f.tracking || ''),
     shipped_at: ['shipped', 'complete'].includes(String(f.status || '').toLowerCase()) ? (f.shipped_at || f.updated || f.created || null) : null,
     delivered_at: String(f.status || '').toLowerCase() === 'complete' ? (f.updated || f.created || null) : null,
@@ -75,8 +79,10 @@ function jobRow(id, o, kept) {
 }
 
 /** What is still owed on a studio order. `paid` is what was received, so money
- *  refunded is never shown as owed again (the board's own rule). */
+ *  refunded is never shown as owed again (the board's own rule). Nothing is
+ *  owed on one that was never paid: it is a checkout, not an order yet. */
 function dueOn(job) {
+  if (!(Number(job.paid_amount) > 0)) return 0;
   return Math.round(Math.max(0, Number(job.total || 0) - Number(job.paid_amount || 0)) * 100) / 100;
 }
 

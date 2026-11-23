@@ -237,7 +237,7 @@ test('Remove: only on unpaid orders and left checkouts, and a removed one leaves
 });
 
 test('the Remove route checks the feed, not the form', () => {
-  const route = src.slice(src.indexOf("app.post('/admin/studio/hide', requireAdmin"), src.indexOf("app.post('/admin/studio/:id/delivered'"));
+  const route = (() => { const i = src.indexOf("app.post('/admin/studio/hide', requireAdmin"); return src.slice(i, src.indexOf('\n});', i)); })();
   assert.ok(route.length > 100, 'the route exists and is admin-only');
   assert.match(route, /if \(feed\.error\) return/, 'refused when the studio cannot be checked');
   assert.match(route, /studioRemovable\(o\)/);
@@ -265,12 +265,12 @@ test('Remove messages name what it was, and the route uses the board feed', () =
   assert.match(lib.studioBoardNote({ studio_removed: '9', studio_kind: 'checkout' }), /Left checkout <b>#9<\/b> is off this board/);
   assert.match(lib.studioBoardNote({ studio_err: 'not-removable', studio_id: '2', studio_kind: 'order' }), /Studio order <b>#2<\/b> is still on the board: it has a payment/);
   assert.match(lib.studioBoardNote({ studio_err: 'checkout-gone', studio_id: '9', studio_kind: 'checkout' }), /Left checkout <b>#9<\/b> is no longer/);
-  const route = src.slice(src.indexOf("app.post('/admin/studio/hide', requireAdmin"), src.indexOf("app.post('/admin/studio/:id/delivered'"));
+  const route = (() => { const i = src.indexOf("app.post('/admin/studio/hide', requireAdmin"); return src.slice(i, src.indexOf('\n});', i)); })();
   assert.doesNotMatch(route, /_studioCache\.at = 0/, 'no fresh studio fetch on every Remove');
 });
 
 test('an order missing from the feed is not called paid', () => {
   assert.match(lib.studioBoardNote({ studio_err: 'order-gone', studio_id: '3', studio_kind: 'order' }), /Studio order <b>#3<\/b> is not in the studio/);
-  const route = src.slice(src.indexOf("app.post('/admin/studio/hide', requireAdmin"), src.indexOf("app.post('/admin/studio/:id/delivered'"));
+  const route = (() => { const i = src.indexOf("app.post('/admin/studio/hide', requireAdmin"); return src.slice(i, src.indexOf('\n});', i)); })();
   assert.match(route, /known \? 'not-removable' : 'order-gone'/);
 });

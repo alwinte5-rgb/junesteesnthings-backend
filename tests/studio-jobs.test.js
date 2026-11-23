@@ -46,12 +46,24 @@ test('what can be started: never unpaid, refunded, cancelled, shipped, or waitin
   assert.strictEqual(J.startBlock({ ...o, status: 'cancel' }), 'cancelled');
   assert.strictEqual(J.startBlock({ ...o, status: 'shipped' }), 'out');
   assert.strictEqual(J.startBlock({ ...o, tax_exempt: 'pending' }), 'certificate');
-  for (const w of ['gone', 'unpaid', 'refunded', 'cancelled', 'out', 'certificate', 'failed']) assert.ok(src.includes(`'stage-${w}': '`), `the board has words for ${w}`);
+  for (const w of ['gone', 'unpaid', 'refunded', 'cancelled', 'out', 'certificate', 'failed', 'unreachable']) assert.ok(src.includes(`'stage-${w}': '`), `the board has words for ${w}`);
 });
 
 test('money refunded is never shown as owed', () => {
   assert.strictEqual(J.dueOn({ total: 60, paid_amount: 60, refunded: 60 }), 0);
   assert.strictEqual(J.dueOn({ total: 60, paid_amount: 30 }), 30);
+  assert.strictEqual(J.dueOn({ total: 120, paid_amount: 0 }), 0, 'a left checkout owes nothing');
+});
+
+test('an order the feed no longer lists is not a left checkout; a refunded one says so', () => {
+  const gone = J.jobRow(12, null, { name: 'Kim', paid: true });
+  assert.strictEqual(gone.paid, true);
+  assert.strictEqual(gone.left, false);
+  assert.strictEqual(gone.studio, null);
+  assert.strictEqual(J.jobRow(9, { left: true, status: 'cancel', paid: 0, total: 55 }, null).left, true);
+  assert.strictEqual(J.jobRow(12, { paid: 60, refunded: 60 }, null).refunded_full, true);
+  assert.strictEqual(J.jobRow(12, { paid: 60, refunded: 10 }, null).refunded_full, false);
+  assert.strictEqual(J.jobRow(12, null, null), null);
 });
 
 test('a reply goes to what the shop last wrote about, else the newer', () => {
@@ -82,6 +94,8 @@ test('the owner answering STUDIO-12 from her phone never reaches the last texter
   const p = R.pickTarget(forwards, 'studio-12 thank you', QUOTE_CODE_RE, now);
   assert.strictEqual(p.to.quote_code, 'STUDIO-12');
   assert.strictEqual(p.body, 'thank you');
+  const none = R.pickTarget([forwards[0]], 'STUDIO-12 your shirts are ready', QUOTE_CODE_RE, now);
+  assert.deepStrictEqual(none, { studio: 'STUDIO-12', body: 'your shirts are ready' }, 'no forward: looked up, never sent to the last texter');
 });
 
 test('alerts and permissions: the order page, for whoever sees studio orders', () => {

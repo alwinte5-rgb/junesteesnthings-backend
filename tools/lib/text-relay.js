@@ -89,7 +89,7 @@ const last10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
  * { phone } alone (typed: true).
  * `previous` is the owner's previous text passed on (not a followed link):
  * { phone, quote_code, at } or null.
- * Returns { to, body, byNumber?, typed?, followed? } | { badNumber: true } | { linkOnly: true }
+ * Returns { studio, body } | { to, body, byNumber?, typed?, followed? } | { badNumber: true } | { linkOnly: true }
  *   | { ask: [forward, ...] } | { none: true }.
  */
 function pickTarget(forwards, text, codeRe, now = Date.now(), previous = null) {
@@ -106,6 +106,9 @@ function pickTarget(forwards, text, codeRe, now = Date.now(), previous = null) {
   if (code) {
     const hit = all.find((f) => codeOf(f) === code);
     if (hit) return { to: hit, body };
+    /* A studio order is never an ordinary word: the server finds its buyer, or
+       says there is none. Nobody is guessed at. */
+    if (/^STUDIO-/.test(code)) return { studio: code, body };
   }
   const whole = String(text || '').trim();
   if (isLinkOnly(whole)) {

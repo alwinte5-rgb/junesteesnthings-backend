@@ -5185,7 +5185,7 @@ const SAME_PHONE_SQL = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'
 /** The studio order (STUDIO-<id>) a customer's text or email is about, or ''
  *  when it is not about one: no order of theirs in the last four months, or
  *  they also have a quote and that is the newer, or the one the shop last wrote
- *  to them about. Only an order that was paid, or that the shop has written to
+ *  to them about, or an open enquiry newer than the order. Only an order that was paid, or that the shop has written to
  *  them about: someone who left a checkout and texts is still a new enquiry.
  *  A failed lookup is reported and answers '', the way it was before. */
 async function studioJobFor({ phone = '', email = '' }) {
@@ -5196,24 +5196,34 @@ async function studioJobFor({ phone = '', email = '' }) {
   const key = byPhone ? digits : addr;
   try {
     const { rows: [s] } = await pool.query(
-      `SELECT order_id, COALESCE(placed_at, contacted_at) AS at FROM studio_jobs
+      `SELECT order_id, COALESCE(placed_at, contacted_at) AS at, GREATEST(placed_at, contacted_at) AS active FROM studio_jobs
         WHERE ${byPhone ? 'phone' : 'email'} = $1 AND (paid OR contacted_at > NOW() - INTERVAL '60 days')
           AND GREATEST(placed_at, contacted_at) > NOW() - INTERVAL '120 days'
         ORDER BY GREATEST(placed_at, contacted_at) DESC, order_id DESC LIMIT 1`, [key]);
     if (!s) return '';
+    const code = STUDIOJOBS.keyOf(s.order_id);
     const { rows: [q] } = await pool.query(
       `SELECT code, created_at AS at FROM quotes
         WHERE ${byPhone ? SAME_PHONE_SQL : 'lower(trim(email)) = $1'} ORDER BY created_at DESC LIMIT 1`, [key]);
-    const { rows: [m] } = byPhone
-      ? await pool.query(
-        `SELECT quote_code FROM sms_messages WHERE right(regexp_replace(phone, '\\D', '', 'g'), 10) = $1
-            AND quote_code IS NOT NULL AND status IN ('sent', 'delivered') AND created_at > NOW() - INTERVAL '30 days'
-          ORDER BY created_at DESC LIMIT 1`, [key])
-      : await pool.query(
-        `SELECT quote_code FROM client_emails WHERE lower(trim(to_email)) = $1 AND status = 'sent'
-            AND created_at > NOW() - INTERVAL '30 days' ORDER BY created_at DESC LIMIT 1`, [key]);
-    const picked = STUDIOJOBS.pickJob({ studio: { code: STUDIOJOBS.keyOf(s.order_id), at: s.at }, quote: q || null,
-      lastOut: m ? m.quote_code : '' });
+    /* The last thing the shop sent them about either, by email or text: they
+       answer by whichever is handy. */
+    const { rows: [m] } = await pool.query(
+      `SELECT quote_code, created_at FROM (
+         SELECT quote_code, created_at FROM client_emails WHERE quote_code = ANY($1::text[]) AND status = 'sent'
+         UNION ALL
+         SELECT quote_code, created_at FROM sms_messages WHERE quote_code = ANY($1::text[]) AND status IN ('sent', 'delivered')) o
+        WHERE created_at > NOW() - INTERVAL '30 days' ORDER BY created_at DESC LIMIT 1`, [[code, ...(q ? [q.code] : [])]]);
+    /* An open enquiry of theirs that is newer than anything about the order:
+       they are answering that. Left to the rules for leads. */
+    const { rows: [l] } = await pool.query(
+      `SELECT MAX(GREATEST(s.created_at, COALESCE((SELECT MAX(n.created_at) FROM lead_notes n
+                WHERE n.submission_id = s.id AND n.kind IN ('text', 'email', 'call')), s.created_at))) AS at
+         FROM submissions s
+        WHERE ${byPhone ? SAME_PHONE_SQL : 'lower(trim(email)) = $1'} AND (s.dismissed_at IS NULL OR s.dismiss_reason = $2)
+          AND NOT EXISTS (SELECT 1 FROM quotes q2 WHERE q2.from_submission_id = s.id)`, [key, LEADFU.LET_GO_REASON]);
+    const active = Math.max(new Date(s.active || s.at || 0).getTime(), m && m.quote_code === code ? new Date(m.created_at).getTime() : 0);
+    if (l && l.at && new Date(l.at).getTime() > active) return '';
+    const picked = STUDIOJOBS.pickJob({ studio: { code, at: s.at }, quote: q || null, lastOut: m ? m.quote_code : '' });
     return STUDIOJOBS.idOf(picked) ? picked : '';
   } catch (e) {
     console.error('studio order lookup failed:', e.message);
@@ -5458,6 +5468,14 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   if (pick.badNumber) return sendOwnerSms('Not sent: that does not look like a full 10-digit number. Start with the number, e.g. 312 555 0199 then your message.');
   if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
   let to = pick.to;
+  if (pick.studio) {
+    /* A studio order named by its number, with no text of theirs forwarded
+       yet: to the buyer's own phone, or nobody. Never the last texter. */
+    const { rows: [s] } = await pool.query('SELECT name, phone FROM studio_jobs WHERE order_id = $1', [STUDIOJOBS.idOf(pick.studio)]);
+    const phone = s && normalizeUsPhone(s.phone);
+    if (!phone) return sendOwnerSms(`Not sent: ${s ? `there is no phone number on ${pick.studio}` : `there is no order ${pick.studio}`}.`);
+    to = { phone, quote_code: pick.studio, lead_id: null, name: s.name || '' };
+  }
   if (pick.byNumber) {
     /* A number the owner typed (owner, 2026-11-17: "I want to be able to
        contact who I want"). The same guards as CALL, for every typed number:
@@ -24622,6 +24640,7 @@ const STUDIO_BOARD_ERRORS = {
   'hide-failed': 'is still on the board: saving the removal failed. Try again.',
   failed: 'was not marked delivered: the studio said no. Open it in the studio to see why.',
   'stage-gone': 'is not in the studio’s list right now, so it was not moved. Reload the page and try again.',
+  'stage-unreachable': 'was not moved: the studio could not be reached to check it. Try again in a minute.',
   'stage-out': 'has already shipped or been delivered, so it was not moved.',
   'stage-unpaid': 'has no payment on it, so it was not started.',
   'stage-cancelled': 'is cancelled, so it was not started.',
@@ -24634,7 +24653,8 @@ function studioMovedText(query) {
   const to = { production: 'It is in production now.', start: 'It is back in To start.' };
   if (!Object.hasOwn(to, String(query.studio_moved || ''))) return null;
   const told = String(query.studio_told || '');
-  return { ok: told !== 'failed', text: to[String(query.studio_moved)] + (told === 'sent' ? ' The customer has been told.'
+  return { ok: told !== 'failed' && told !== 'text-only', text: to[String(query.studio_moved)] + (told === 'sent' ? ' The customer has been told.'
+    : told === 'text-only' ? ' The text went, but the email did not.'
     : told === 'failed' ? ' The message to the customer did NOT go: write to them in Messages.' : '') };
 }
 
@@ -24671,7 +24691,7 @@ function studioCard(o, disputes, sent = new Map()) {
   const block = lane === 0 ? STUDIOJOBS.startBlock(o) : '';
   const next = lane === 0
     ? `${block || !mayStage ? '' : `<form method="POST" action="/admin/studio/${id}/stage" class="knext"${
-        askAttrs({ code }, milestoneAsk({ ...STUDIOJOBS.jobRow(id, o, null), production_at: null }, 1, sent.get(code) || new Set()))}>
+        askAttrs({ code }, milestoneAsk({ ...STUDIOJOBS.jobRow(id, o, null), production_at: null }, 1, sent.get(code) || new Set()))} onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
         <input type="hidden" name="stage" value="production"><input type="hidden" name="notify" value="">
         <button type="submit" class="kbtn kbtn-next" title="Work on it has begun">▶ Start production</button></form>`}${ship}`
     : !isOut ? ship
@@ -27904,8 +27924,8 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
     ['Design question', `${hi}! A quick question about your order ${label} before we print it: `],
     ['Running late', `${hi}, just a quick heads-up: order ${label} is running a day or two behind. We're on it and will keep you posted. Thank you so much for your patience!`],
     ['Ready for pickup', `${hi}! Order ${label} is ready for pickup at ${PICKUP_ADDRESS} (${PICKUP_HOURS}). Call or text ${SHOP_PHONE} an hour before, ring the intercom for June's Tees, and come up to the 4th floor lobby.`],
-    ...(due > 0 && Number(q.paid_amount) > 0 ? [['Balance due', `${hi}, order ${label} has a balance of ${money(due)}. Reply here or call ${SHOP_PHONE} and we'll help you pay it. Thank you!`]] : []),
-    ...(!(Number(q.paid_amount) > 0) ? [['Left checkout', `${hi}! We saw you started order ${label} and it was not finished. Can we help with anything? Just reply here or call ${SHOP_PHONE}.`]] : []),
+    ...(due > 0 ? [['Balance due', `${hi}, order ${label} has a balance of ${money(due)}. Reply here or call ${SHOP_PHONE} and we'll help you pay it. Thank you!`]] : []),
+    ...(q.left ? [['Left checkout', `${hi}! We saw you started order ${label} and it was not finished. Can we help with anything? Just reply here or call ${SHOP_PHONE}.`]] : []),
   ] : [
     ['Proof ready', `${hi}! Your proof for order ${code} is ready. Take a look and reply "approved" to go ahead, or tell us what you'd like changed.`],
     ['Running late', `${hi}, just a quick heads-up: order ${code} is running a day or two behind. We're on it and will keep you posted. Thank you so much for your patience!`],
@@ -28782,12 +28802,15 @@ async function claudeJobContext(code, ask, fullView) {
     .then((r) => r.rows).catch(() => [])) : [];
   const t = studioId ? { total: q.total } : quoteTotals(q);
   const due = studioId ? STUDIOJOBS.dueOn(q) : balanceOf(q, t.total);
-  const stage = studioId ? (q.delivered_at ? 'delivered' : q.shipped_at ? 'ready or shipped' : !(Number(q.paid_amount) > 0) ? 'checkout not finished, nothing paid'
+  const stage = studioId ? (!q.studio ? 'not known right now (the studio’s list does not have it): check it before saying where it stands'
+      : q.refunded_full ? 'refunded in full, not being made'
+      : q.delivered_at ? 'delivered' : q.shipped_at ? 'ready or shipped' : q.left ? 'checkout not finished, nothing paid'
+      : !(Number(q.paid_amount) > 0) ? 'placed, not paid yet'
       : q.production_at ? 'in production' : 'paid, not started yet')
     : q.cancelled_at ? 'cancelled' : q.accepted_at || q.paid_at ? JOB_STAGES[jobStageIndex(q)].label
     : 'quote, not accepted yet';
   const job = {
-    code: studioId ? `online order ${STUDIOJOBS.labelOf(code)}` : code, name: q.name, status: studioId ? '' : q.status, stage, today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }),
+    code: studioId ? `online order ${STUDIOJOBS.labelOf(code)}` : code, name: q.name, status: !studioId ? q.status : q.refunded > 0 ? `${money(q.refunded)} refunded` : '', stage, today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }),
     needed_by: q.needed_by || q.target_date, deadline_flexible: q.deadline_flexible,
     proof: q.proof_ok_at ? 'approved' : q.proof_sent_at ? 'sent, waiting for their approval' : '',
     delivery: q.ship_method || '', tracking: q.shipped_at ? q.tracking || '' : '',
@@ -28809,7 +28832,8 @@ async function claudeJobContext(code, ask, fullView) {
                   return MSGFILES.previewUrl(f.url, ext).replace('w_600', 'w_1000'); })
     .filter(Boolean).slice(0, 8);
   job.pictures = pictures.length;
-  return { job, history, playbook, ask, money: fullView, pictures,
+  /* No figures for an order the studio's list does not have: they would all be zero. */
+  return { job, history, playbook, ask, money: fullView && (!studioId || !!q.studio), pictures,
            shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: studioId ? '' : quoteLink(code),
                    delivery: 'free pickup; local delivery in nearby Chicago ZIPs on a day and time they book from their order page, for a fee; shipping by carrier, quoted per order' } };
 }
@@ -33254,9 +33278,17 @@ async function notifyStudioStarted(job) {
   if (rows.length) return 'sent';
   const inner = `<p>Hi${first ? ' ' + escEmail(first) : ''},</p><p>Good news: your order ${STUDIOJOBS.labelOf(job.code)} (${what}) is in production now.
     We'll let you know the moment it's ready.</p>`;
-  await sendClientEmail({ quote: job.code, kind: 'milestone:production', to: job.email,
-    subject: `Your order ${STUDIOJOBS.labelOf(job.code)} is in production`,
-    html: customerEmailHtml("We've started on your order", inner, null), preview: htmlToText(inner) });
+  try {
+    await sendClientEmail({ quote: job.code, kind: 'milestone:production', to: job.email,
+      subject: `Your order ${STUDIOJOBS.labelOf(job.code)} is in production`,
+      html: customerEmailHtml("We've started on your order", inner, null), preview: htmlToText(inner) });
+  } catch (e) {
+    // The text already went: said as that, so nobody writes to them again about it.
+    if (texted !== 'sent' && texted !== 'duplicate') throw e;
+    console.error(`studio order ${id} start email failed:`, e.message);
+    reportError('studio-start', e, `order ${id}`).catch(() => {});
+    return 'text-only';
+  }
   return 'sent';
 }
 
@@ -33271,17 +33303,24 @@ app.post('/admin/studio/:id/stage', requireAdmin, studioParam, async (req, res) 
   const to = (q) => res.redirect(page ? `/admin/studio/${id}?${q}` : `/admin/production?${q}&studio_id=${id}#studio-card-${id}`);
   if (!start && b.stage !== 'start') return res.redirect(page ? `/admin/studio/${id}` : '/admin/production');
   try {
+    /* Read fresh, never the board's copy: an order refunded or cancelled a
+       moment ago must not be started, nor its customer told it was. */
+    _studioCache.at = 0;
     const feed = await fetchStudioOrders();
+    if (feed.error) return to('studio_err=stage-unreachable');
     const o = feed.orders.find((x) => Number(x.id) === id);
     const block = STUDIOJOBS.startBlock(o);
     /* Moving back is refused only once it has gone out. */
     if (start ? block : ['gone', 'out'].includes(block)) return to(`studio_err=stage-${block}`);
-    await pool.query(
-      `INSERT INTO studio_jobs (order_id, production_at) VALUES ($1, CASE WHEN $2::boolean THEN NOW() END)
-       ON CONFLICT (order_id) DO UPDATE SET production_at = CASE WHEN $2::boolean THEN COALESCE(studio_jobs.production_at, NOW()) END`, [id, start]);
+    /* Only the request that started it tells the customer: a second press
+       finds it started and sends nothing. */
+    const { rowCount: changed } = start
+      ? await pool.query(`INSERT INTO studio_jobs (order_id, production_at) VALUES ($1, NOW())
+          ON CONFLICT (order_id) DO UPDATE SET production_at = NOW() WHERE studio_jobs.production_at IS NULL`, [id])
+      : await pool.query('UPDATE studio_jobs SET production_at = NULL WHERE order_id = $1', [id]);
     o.production_at = start ? (o.production_at || new Date().toISOString()) : null;
     let told = '';
-    if (start && String(b.notify) === '1') {
+    if (start && changed && String(b.notify) === '1') {
       told = await notifyStudioStarted(STUDIOJOBS.jobRow(id, o, null)).catch((e) => {
         console.error(`studio order ${id} start notice failed:`, e.message);
         reportError('studio-start', e, `order ${id}`).catch(() => {});
@@ -33321,6 +33360,7 @@ app.get('/admin/studio/:id', requireAdmin, studioParam, async (req, res) => {
     const block = STUDIOJOBS.startBlock(o);
     const started = !!job.production_at;
     const stage = !o ? { label: 'Not in the studio’s list now', color: '#6b7280', bg: '#f3f4f6' }
+      : job.refunded_full ? { label: 'Refunded', color: '#b91c1c', bg: '#fef2f2' }
       : o.left ? { label: 'Left checkout', color: '#8a5a00', bg: '#fff8ed' }
       : lane === 0 ? { label: 'To start', color: '#1848B8', bg: '#eef2fd' } : studioStage(o.status, o.paid);
     const refunded = round2(job.refunded);
@@ -33331,7 +33371,8 @@ app.get('/admin/studio/:id', requireAdmin, studioParam, async (req, res) => {
     /* Remove is not here: it is the board's, for unpaid orders only. */
     const steps = !o || o.left ? '' : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
       ${mayStage && !block && !started ? `<form method="POST" action="/admin/studio/${id}/stage" style="margin:0"${
-        askAttrs(job, milestoneAsk({ ...job, production_at: null }, 1, sent))}>
+        askAttrs(job, milestoneAsk({ ...job, production_at: null }, 1, sent))}
+        onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
         <input type="hidden" name="stage" value="production"><input type="hidden" name="back" value="job"><input type="hidden" name="notify" value="">
         <button type="submit" class="btn">▶ Start production</button></form>` : ''}
       ${mayStage && started && !['out', 'gone'].includes(block) ? `<form method="POST" action="/admin/studio/${id}/stage" style="margin:0">
@@ -33358,13 +33399,13 @@ app.get('/admin/studio/:id', requireAdmin, studioParam, async (req, res) => {
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <span class="chip" style="background:#eef1f8;color:#46505f">Studio</span>
           <span class="chip" style="background:${stage.bg};color:${stage.color}">${escEmail(stage.label)}</span>
-          ${refunded > 0 && o && studioFullyRefunded(o) ? `<span class="chip" style="background:#fef2f2;color:#b91c1c">Refunded ${money(refunded)} &mdash; don&rsquo;t produce</span>`
+          ${job.refunded_full ? `<span class="chip" style="background:#fef2f2;color:#b91c1c">Refunded ${money(refunded)} &mdash; don&rsquo;t produce</span>`
             : refunded > 0 ? `<span class="chip" style="background:#fff8ed;color:#8a5a00">${money(refunded)} refunded</span>` : ''}
           ${disputes ? disputeChip(disputes.byOrder.get(String(id))) : ''}
           ${o ? studioExemptChip(o) : ''}
         </div>
-        <p style="margin:10px 0 0">${job.paid_amount > 0 ? `${money(job.paid_amount)} paid` : 'Nothing paid'}${
-          due > 0 && o ? ` · <b style="color:#b45309">${money(due)} due</b>` : ''}${how ? ` · ${escEmail(how)}` : ''}${
+        <p style="margin:10px 0 0">${!o ? `Payment details are in the studio${job.paid ? ' (it was paid)' : ''}` : job.paid_amount > 0 ? `${money(job.paid_amount)} paid` : 'Nothing paid'}${
+          due > 0 ? ` · <b style="color:#b45309">${money(due)} due</b>` : ''}${how ? ` · ${escEmail(how)}` : ''}${
           address ? ` · ${escEmail(address)}` : ''}${job.tracking ? ` · tracking ${escEmail(job.tracking)}` : ''}${
           job.created_at ? ` · placed ${escEmail(dayShort(job.created_at))}` : ''}</p>
         <p class="muted" style="margin:4px 0 0">${[job.email, job.phone].filter(Boolean).map(escEmail).join(' · ') || 'No email or phone on this order.'}</p>
@@ -35988,7 +36029,7 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
         <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
           <td>${escEmail(nameOf(roster, r.staff_id))}</td>
           <td>${escEmail(r.action)}${r.subject_id ? ` <b>${r.subject_type === 'quote'
-            ? `<a href="/admin/production/${escEmail(r.subject_id)}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
+            ? `<a href="${escEmail(STUDIOJOBS.adminPath(r.subject_id))}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
           <td class="muted">${escEmail(describe(r))}</td></tr>`).join('')}</tbody></table>`
         : emptyState('Nothing in this period.')}</div>`, 'activity'));
   } catch (err) {
