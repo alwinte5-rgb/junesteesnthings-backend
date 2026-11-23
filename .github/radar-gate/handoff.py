@@ -939,7 +939,7 @@ def change_summary(base, head, repo):
     return lines
 
 
-CLAUDE_LABEL = "radar:by-claude"
+CLAUDE_LABEL = "radar:trusted"
 ALWAYS_ENFORCED = {"computes a charged amount from a client-supplied value"}
 
 
