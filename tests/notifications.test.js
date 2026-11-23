@@ -248,7 +248,7 @@ test('a lead answered, an approval decided or a review moderated clears its noti
 });
 
 test('a helper\'s leads look back as far as the owner\'s, not to the beginning', () => {
-  assert.match(fn('async function staffNotices('), /if \(new Date\(l\.created_at\)\.getTime\(\) < since\) continue;/);
+  assert.match(fn('async function staffNotices('), /if \(LEADBOARD\.waitedFrom\(l\) < since\) continue;/);
 });
 
 test('each source fails on its own, and a late job back on time can be late again', () => {

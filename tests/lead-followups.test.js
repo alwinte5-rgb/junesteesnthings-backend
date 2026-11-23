@@ -144,10 +144,10 @@ test('an email reply lands on the lead: address first, sender must match, once p
   assert.match(keep, /if \(!quote && !leadRow && !otherSender && !autoReply && m\.from\) \{\s+const \{ rows \} = await pool\.query\(\s+`SELECT code FROM quotes/, 'mail to a lead is never filed on a job; auto-replies never by sender; a dead lead address falls back');
   assert.match(keep, /!quote && !leadRow && !otherSender && !autoReply && m\.from/);
   assert.match(keep, /const autoReply = INBOUND\.isAutoReply\(m\);/);
-  assert.match(keep, /AND \(dismissed_at IS NULL OR dismiss_reason = \$2\)/, 'a plain email reopens a let-go lead too');
+  assert.match(keep, /AND \(dismissed_at IS NULL OR dismiss_reason = ANY\(\$2\)\)/, 'a plain email reopens a let-go lead too');
   assert.match(keep, /VALUES \(\$1, 'email_in', \$2, \$3\)\s+ON CONFLICT \(inbound_id\) WHERE inbound_id IS NOT NULL DO NOTHING/);
   assert.match(src, /CREATE UNIQUE INDEX IF NOT EXISTS lead_notes_inbound_once ON lead_notes \(inbound_id\) WHERE inbound_id IS NOT NULL/);
-  assert.match(keep, /dismiss_reason === LEADFU\.LET_GO_REASON/);
+  assert.match(keep, /LEADFU\.REOPEN_REASONS\.includes\(leadRow\.dismiss_reason\)/);
   assert.match(src, /replyTo: inboundReady \? INBOUND\.leadReplyAddress\(id, INBOUND_DOMAIN\) : undefined/);
 });
 
@@ -169,12 +169,13 @@ test('auto-replies and bounces are not a person answering', () => {
 
 test('a text back to a lead the follow-ups let go reopens it; old customer texts become text_in once', () => {
   const ttl = src.slice(src.indexOf('async function textToLead('), src.indexOf('/* Their name, if they have ever given it to us'));
-  assert.match(ttl, /AND \(s\.dismissed_at IS NULL OR s\.dismiss_reason = \$2\)/);
-  assert.match(ttl, /\[digits, LEADFU\.LET_GO_REASON\]/);
-  assert.match(ttl, /SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL\s+WHERE id = \$1 AND dismiss_reason = \$2/);
+  assert.match(ttl, /AND \(s\.dismissed_at IS NULL OR s\.dismiss_reason = ANY\(\$2\)\)/);
+  assert.match(ttl, /\[digits, LEADFU\.REOPEN_REASONS, LEADFU\.OLD_CONTACT_REASON\]/);
+  assert.match(ttl, /\*\/\s+OR s\.dismiss_reason = \$3\s+OR EXISTS/, 'an old contact is matched by number alone');
+  assert.match(ttl, /SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL\s+WHERE id = \$1 AND dismiss_reason = ANY\(\$2\)/);
   assert.match(src, /WITH claim AS \(INSERT INTO once_fixes \(name\) VALUES \('lead-notes-text-in'\) ON CONFLICT DO NOTHING RETURNING 1\)\s+UPDATE lead_notes SET kind = 'text_in' WHERE EXISTS \(SELECT 1 FROM claim\)/, 'the backfill runs exactly once, at deploy');
   assert.match(src, /return \{ lead: open\[0\]\.id, reopened: back\.rowCount > 0 \};/);
-  assert.match(src, /lead\.reopened \? 'lead L' \+ Number\(lead\.lead\) \+ ', let go by the follow-ups, back on Leads'/, 'the owner\'s forward says so');
+  assert.match(src, /lead\.reopened \? 'lead L' \+ Number\(lead\.lead\) \+ ', let go automatically, back on Leads'/, 'the owner\'s forward says so');
   assert.ok(!/lead_fu_round_at = first_response_at/.test(src), 'no round backfill');
   assert.match(src, /text_in: 'Their text', email_in: 'Their email'/, 'the shop can log their reply by hand');
 });
@@ -203,7 +204,7 @@ test('texting not set up is a failed send to retry; a text already sent this rou
 test('the card: the bot is never the last contact, and a stopped round is read against the newest word', () => {
   const q = between('async function leadsWithStatus', '/** Speed to lead');
   assert.match(q, /kind = ANY\(\$1\) AND NOT auto ORDER BY created_at DESC LIMIT 1\) n\) AS last_contact/);
-  assert.match(q, /CASE WHEN \(s\.lead_fu1_at IS NOT NULL OR s\.lead_fu_round_at IS NOT NULL\)/);
+  assert.match(q, /CASE WHEN s\.first_response_at IS NOT NULL AND s\.dismissed_at IS NULL THEN/, 'answered open leads only, not every lead ever');
   const l = lead({ first_response_at: ago(8), lead_fu_fails: 3, lead_fu_round_at: ago(8) });
   assert.match(F.cardLine(l, null, String), /stopped/);
   assert.strictEqual(F.cardLine(l, ours(1), String), '', 'the shop wrote again: a new round, not "stopped"');

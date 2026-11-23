@@ -86,7 +86,9 @@ function textLead({ jobs = [], open = [], known = [], letGo = [] } = {}) {
     /* The reopen: only a lead the follow-ups let go (#544). The fake answers by
        the guard, so dropping it from the SQL flips the result. */
     if (/^\s*UPDATE submissions SET dismissed_at = NULL/.test(sql)) {
-      const guarded = /AND dismiss_reason = \$2/.test(sql) && args[1] === 'No reply after two follow-ups';
+      /* Guarded to the reasons a reply may reopen: the follow-ups' let-go and the old-contacts clean-up. */
+      const guarded = /AND dismiss_reason = ANY\(\$2\)/.test(sql) && Array.isArray(args[1])
+        && args[1].includes('No reply after two follow-ups') && !args[1].includes('Not a job');
       return { rows: [], rowCount: guarded ? (letGo.includes(args[0]) ? 1 : 0) : 1 };
     }
     if (/name NOT LIKE/.test(sql)) return { rows: known };

@@ -54,7 +54,8 @@ const MATCH = (() => {
 function leadsDesk(rows) {
   const seen = [];
   const sandbox = { pool: { query: async (sql) => { seen.push(sql); return { rows: rows.map((r) => ({ ...r })) }; } },
-    LEADFU: require('../tools/lib/lead-followups') };
+    LEADFU: require('../tools/lib/lead-followups'), LEADBOARD: require('../tools/lib/lead-board'),
+    isFoundLead: (l) => !!l.finder_run_id };
   vm.createContext(sandbox);
   /* Found by name, whatever its layout, so a reformat reaches the behaviour
      assertions instead of crashing the extraction (Codex #179). */
@@ -113,12 +114,17 @@ test('a lead reads new, contacted, quoted or let go, and only new ones are waiti
     { id: 5, created_at: '2026-09-23', linked_quote: 'GH56JK', matched_quote: null, dismissed_at: '2026-09-24' },
     /* Answered (an email, call or text logged), not quoted yet: the next move is theirs. */
     { id: 6, created_at: '2026-09-22', linked_quote: null, matched_quote: null, dismissed_at: null, first_response_at: '2026-09-22' },
+    /* Answered, and they wrote back: waiting on the shop again (2026-11-23). */
+    { id: 7, created_at: '2026-09-21', linked_quote: null, matched_quote: null, dismissed_at: null, first_response_at: '2026-09-21',
+      last_word: { kind: 'text_in', created_at: '2026-09-28' } },
+    /* Found by the team, never contacted: Reach out, not waiting on a reply. */
+    { id: 8, created_at: '2026-09-20', linked_quote: null, matched_quote: null, dismissed_at: null, finder_run_id: 3 },
   ]);
   const all = await sandbox.leadsWithStatus();
   assert.deepStrictEqual(JSON.parse(JSON.stringify(all.map((l) => [l.id, l.lead_status, l.quote_code]))),
-    [[1, 'new', null], [2, 'quoted', 'AB12CD'], [3, 'quoted', 'EF34GH'], [4, 'dismissed', null], [5, 'quoted', 'GH56JK'], [6, 'contacted', null]]);
+    [[1, 'new', null], [2, 'quoted', 'AB12CD'], [3, 'quoted', 'EF34GH'], [4, 'dismissed', null], [5, 'quoted', 'GH56JK'], [6, 'contacted', null], [7, 'contacted', null], [8, 'new', null]]);
   const waiting = await sandbox.unansweredLeads();
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(waiting.map((l) => l.id))), [1]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(waiting.map((l) => l.id))), [1, 7], 'the new enquiry and the reply, longest waiting first');
 });
 
 test('the board, the Leads page, the dashboard and the menu badge share one definition', () => {
@@ -126,8 +132,11 @@ test('the board, the Leads page, the dashboard and the menu badge share one defi
   const leadsPage = src.slice(src.indexOf("app.get('/admin/leads', requireAdmin"));
   assert.match(leadsPage.slice(0, 2000), /await leadsWithStatus\(\)/, 'the Leads page');
   const counts = src.slice(src.indexOf("app.get('/admin/nav-counts', requireAdmin"));
-  assert.match(counts.slice(0, 2500), /unansweredLeads\(\)/, 'the menu badge');
+  assert.match(counts.slice(0, 2500), /unansweredLeads\(\)\.then\(\(l\) => \{ out\.leads = l\.length; \}\)/, 'the menu badge');
+  assert.match(src, /async function unansweredLeads\(\) \{\n\s+return LEADBOARD\.toAnswer\(await leadsWithStatus\(\), isFoundLead\);/, 'unansweredLeads is To answer');
+  assert.match(leadsPage.slice(0, 6000), /const waiting = LEADBOARD\.toAnswer\(all, isFoundLead\)/, 'the Leads page tile counts To answer');
   const dash = src.slice(src.indexOf("app.get('/admin/dashboard', requireAdmin"));
+  assert.match(dash.slice(0, 8000), /const waiting = LEADBOARD\.toAnswer\(leads, isFoundLead\)/, 'the dashboard counts To answer');
   assert.match(dash.slice(0, 4000), /leadsWithStatus\(\)/, 'the dashboard');
   /* Other reads of submissions (a returning-customer lookup, a rep's counts)
      decide nothing about waiting; the linked-quote test that does is one copy. */
