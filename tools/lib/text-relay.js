@@ -43,6 +43,10 @@ function codeOf(f) {
 /** {code, body}: a leading job or lead code, and the words after it. */
 function parseReply(text, codeRe) {
   const t = String(text || '').trim();
+  /* A studio order: STUDIO-12. Before the job codes, or "STUDIO" alone reads as
+     a six-letter one and the reply goes to the last texter. */
+  const st = /^(studio-[1-9]\d{0,8})\b[\s:,.-]*([\s\S]*)$/i.exec(t);
+  if (st) return { code: st[1].toUpperCase(), body: st[2].trim() };
   const m = /^([A-Za-z0-9]{6}|[A-Za-z0-9]{10}|[Ll]\d{1,9})\b[\s:,.-]*([\s\S]*)$/.exec(t);
   if (m) {
     const c = m[1].toUpperCase();

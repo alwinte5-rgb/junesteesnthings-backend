@@ -37,6 +37,7 @@ function extractConst(anchor) {
   return src.slice(start, src.indexOf('];', start) + 2);
 }
 
+globalThis.__studioBoardJOBS = require('../tools/lib/studio-jobs');
 globalThis.__studioBoardSTAFF = require('../tools/lib/staff');
 const lib = vm.runInThisContext(`(function () {
   const STUDIO_BASE = 'https://design.example';
@@ -48,6 +49,7 @@ const lib = vm.runInThisContext(`(function () {
   const firstTouchLabel = () => '';
   const parseFirstTouch = () => null;
   const STAFF = globalThis.__studioBoardSTAFF;
+  const STUDIOJOBS = globalThis.__studioBoardJOBS;
   const OWNER_ACTOR = { kind: 'owner', id: null, perms: null };
   let actor = null;
   const currentActor = () => actor;
@@ -61,6 +63,9 @@ const lib = vm.runInThisContext(`(function () {
   ${extractFn('studioExemptChip')}
   ${extractFn('studioCard')}
   ${extractFn('studioOrdersSection')}
+  ${extractFn('milestoneAsk')}
+  ${extractFn('askAttrs')}
+  ${extractFn('studioMovedText')}
   ${extractFn('studioBoardNote')}
   const STUDIO_BOARD_ERRORS = ${src.slice(src.indexOf('const STUDIO_BOARD_ERRORS = ') + 'const STUDIO_BOARD_ERRORS = '.length, src.indexOf('};', src.indexOf('const STUDIO_BOARD_ERRORS = ')) + 1)};
   return { studioRemovable, JOB_STAGES, studioStage, studioLane, studioCard, studioOrdersSection, studioBoardNote: (q) => studioBoardNote(q), STUDIO_BOARD_ERRORS,
@@ -140,7 +145,7 @@ test('a failed feed is said, not shown as "nothing waiting"', () => {
 test('the board puts studio cards in the lanes and counts them', () => {
   assert.match(src, /studio: studio\.orders\.filter\(\(o\) => studioLane\(o\) === i\)/);
   assert.match(src, /\$\{c\.jobs\.length \+ c\.studio\.length\}/);
-  assert.match(src, /c\.studio\.map\(\(o\) => studioCard\(o, disputes\)\)/);
+  assert.match(src, /c\.studio\.map\(\(o\) => studioCard\(o, disputes, boardSent\)\)/);
 });
 
 test('Delivered goes through the studio, and the board says only fixed words', () => {

@@ -307,6 +307,20 @@ const ROUTES = {
   'POST /admin/shipping/shipped': 'production.stage',
   'POST /admin/studio/:id/delivered': 'production.stage',
   'POST /admin/studio/hide': 'leads.dismiss',
+  /* A studio order's own page and messages (2026-11-23): the same permissions
+     as a quote job's, and orders.view to open it. Each message route checks
+     orders.view itself as well. */
+  'GET /admin/studio/:id': 'orders.view',
+  'GET /admin/studio/:id/sent-file/:mid/:n': 'orders.view',
+  'GET /admin/studio/:id/reply-file/:mid/:n': 'orders.view',
+  'POST /admin/studio/:id/stage': 'production.stage',
+  'POST /admin/studio/:id/message': 'customers.message',
+  'POST /admin/studio/:id/replies-handled': 'customers.message',
+  'POST /admin/api/studio/:id/suggest-reply': 'customers.message',
+  'POST /admin/api/studio/:id/review-message': 'customers.message',
+  'GET /admin/cut-sheets': 'owner',
+  'POST /admin/cut-sheets/make': 'owner',
+  'GET /admin/cut-sheets/job/:job': 'owner',
   'POST /admin/settings/auto-art': 'owner',
   'POST /admin/shipping/address': 'production.stage',
   'POST /admin/shipping/check': 'production.stage',

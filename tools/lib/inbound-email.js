@@ -13,6 +13,8 @@
  * and the webhook is registered (see ready() in server.js): until then a reply
  * to that address would bounce, so emails keep the shop's own address. */
 
+const STUDIOJOBS = require('./studio-jobs');
+
 const LIMITS = { text: 20000, subject: 300, name: 200, files: 10 };
 
 const clip = (v, n) => String(v == null ? '' : v).replace(/\u0000/g, '').trim().slice(0, n);
@@ -25,6 +27,8 @@ function domainOf(raw) {
 
 /** Where a customer's reply about this job goes. */
 function replyAddress(code, domain) {
+  const studio = STUDIOJOBS.idOf(code);
+  if (studio) return `studio-${studio}@${domain}`;
   return `order-${String(code).toLowerCase()}@${domain}`;
 }
 
@@ -87,6 +91,19 @@ function leadFrom(item, domain) {
   return null;
 }
 
+/** The studio order a message was addressed to (studio-<id>@domain), or 0. */
+function studioFrom(item, domain) {
+  const boxes = [].concat(item && item.To || [], item && item.Cc || [], item && item.Recipients || []);
+  for (const b of boxes) {
+    const addr = String(typeof b === 'string' ? b : b && b.Address || '').trim().toLowerCase();
+    const at = addr.lastIndexOf('@');
+    if (at < 0 || addr.slice(at + 1) !== domain) continue;
+    const m = addr.slice(0, at).match(/^studio-([1-9][0-9]{0,8})$/);
+    if (m) return Number(m[1]);
+  }
+  return 0;
+}
+
 /* Subjects mail systems put on automatic answers. Whole phrases only: "Away
  * game jerseys" or "Delivery status?" from a customer is a real reply. */
 const AUTO_SUBJECT = /^(auto(matic)?[ -]?(reply|response)|autoreply|automatische antwort|automatisch antwoord|out[ -]of[ -](the[ -])?office|ooo\b|undeliverable:|undelivered mail|delivery status notification|mail delivery (failed|subsystem)|returned mail:|autosvar|r[ée]ponse automatique|abwesenheitsnotiz|respuesta autom[aá]tica)/i;
@@ -100,4 +117,4 @@ function isAutoReply(m) {
   return AUTO_SUBJECT.test(subject) || /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply)@/i.test(from);
 }
 
-module.exports = { isAutoReply, LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf, leadReplyAddress, leadFrom };
+module.exports = { isAutoReply, LIMITS, domainOf, replyAddress, codeFrom, shapeItem, itemsOf, leadReplyAddress, leadFrom, studioFrom };

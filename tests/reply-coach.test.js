@@ -85,7 +85,7 @@ test('the routes are wired: signed in, messaging allowed, a designer only on the
   const i = src.indexOf('function claudeRoute(kind)');
   const route = src.slice(i, src.indexOf('\napp.post(', i));
   assert.match(route, /actorLevel\('customers\.message'\) === 'off'/);
-  assert.match(route, /designJobFor\(code/);
+  assert.match(route, /if \(!\(await mayMessageJob\(code\)\)\) return res\.status\(403\)/);
   assert.match(route, /claudeJobContext\(code, ask, fullView\)/);
   assert.match(route, /money: fullView/);
   assert.doesNotMatch(route, /sendJobMessage|sendClientEmail|sendCustomerSms|sendEmail\(/);

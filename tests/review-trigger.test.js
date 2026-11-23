@@ -42,7 +42,7 @@ const HANDLER = (() => {
 })();
 
 test('the shipping notice is sent only for an actual shipment', () => {
-  assert.match(HANDLER, /if \(status === 'shipped'\) await sendEmail\(/,
+  assert.match(HANDLER, /if \(status === 'shipped'\) await sendClientEmail\(/,
     'a `complete` milestone must not tell the customer their order is on the way');
 });
 

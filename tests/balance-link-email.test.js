@@ -100,7 +100,7 @@ test('the endpoint needs the internal key, and reports a failed send', () => {
   assert.match(src, /app\.post\('\/api\/balance-link-email', requireInternalKey,/);
   const at = src.indexOf("app.post('/api/balance-link-email'");
   const route = src.slice(at, src.indexOf('\n});', at));
-  assert.match(route, /sendEmail\(/, 'through the shared sender, so it gets the Resend fallback');
+  assert.match(route, /sendClientEmail\(\{\s+quote: STUDIOJOBS\.keyOf\(v\.orderId\)/, 'through the shared sender, so it gets the Resend fallback');
   assert.match(route, /reportError\('studio:balance-email'/);
   assert.match(route, /escEmail\(v\.link\)/, 'the link is escaped into the HTML');
 });
@@ -110,10 +110,12 @@ test('the endpoint needs the internal key, and reports a failed send', () => {
    read as paid on this board and could go to press. The feed now carries
    `refunded` alongside `paid` (what was received). */
 
+globalThis.__balanceBoardJOBS = require('../tools/lib/studio-jobs');
 globalThis.__balanceBoardSTAFF = require('../tools/lib/staff');
 const board = vm.runInThisContext(`(() => {
   /* Remove is drawn only for someone the route lets in; here, the owner. */
   const STAFF = globalThis.__balanceBoardSTAFF;
+  const STUDIOJOBS = globalThis.__balanceBoardJOBS;
   const OWNER_ACTOR = { kind: 'owner', id: null, perms: null };
   const currentActor = () => null;
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
