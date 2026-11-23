@@ -23166,6 +23166,7 @@ require('./tools/lib/studio-controls').registerStudioControls(app,{requireAdmin,
 require('./tools/lib/design-library').registerDesignLibrary(app, {
   requireAdmin, isOwner, adminPage, pageHeader, esc: escEmail, studioFetch, getCatalog,
   requireInternalKey, notifyAdd, sendEmail, NOTIFY_EMAIL, pool, rawBody: express.raw,
+  designChanges: { pool, designersOnRoster, isValidEmail, pinEmail, esc: escEmail, notifyNow },
   /* A design decided here leaves the owner's alert list at once, not on the
      next 5-minute library read. */
   invalidate: () => { _shopCache.at = 0; libraryWaitingCache.at = 0; ownerAlertsCache = null; },
@@ -26948,6 +26949,9 @@ async function autoArtSweep({ force = false } = {}) {
 async function notifyDesignersOfArt(code, move, assignedTo) {
   const designers = (await designersOnRoster()).filter((d) => assignedTo == null || d.id === assignedTo);
   const what = JOBNOTES.ART_NEWS[move] || 'Design work';
+  /* The bell too, with or without an email address on file (2026-11-23). */
+  await notifyAdd(designers.map((d) => ({ recipient: `staff:${d.id}`, kind: 'design', ref: `${code}:${move}:${Date.now()}`,
+    title: `${what}: ${code}`, link: `/admin/design/${code}#art` }))).catch((e) => console.error(`art alert bell ${code} failed:`, e.message));
   await Promise.all(designers.filter((d) => isValidEmail(d.email)).map((d) =>
     pinEmail(d.email, d.name, `${what}: ${code}`, `${escEmail(what)} on job <b>${escEmail(code)}</b>. Press <b>Got it</b> on the job once you have seen it.`,
       `/admin/design/${code}`).catch((e) => console.error(`art alert email ${code} failed:`, e.message))));
@@ -27569,9 +27573,12 @@ async function jobProofsCard(q, query) {
             .then(function(r){ if (!r.ok) throw new Error('signature'); return r.json(); })
             .then(function(sig){
               var fd = new FormData();
-              fd.append('file', file); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
-              fd.append('folder', sig.folder); fd.append('signature', sig.signature);
-              return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/image/upload', { method: 'POST', body: fd });
+              ${PROOFS.FIT_FN}
+              return jtFitProof(file).then(function(fit){
+                fd.append('file', fit, file.name); fd.append('api_key', sig.apiKey); fd.append('timestamp', sig.timestamp);
+                fd.append('folder', sig.folder); fd.append('signature', sig.signature);
+                return fetch('https://api.cloudinary.com/v1_1/' + sig.cloud + '/image/upload', { method: 'POST', body: fd });
+              });
             })
             .then(function(r){ return r.json(); })
             .then(function(d){

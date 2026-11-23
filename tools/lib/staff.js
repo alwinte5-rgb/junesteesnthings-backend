@@ -596,6 +596,8 @@ const ROUTES = {
   'POST /admin/design-library/master': 'owner',
   'GET /admin/design-library': 'owner',
   'POST /admin/design-library': 'owner',
+  'POST /admin/design-library/delete': 'owner',
+  'POST /admin/design-library/restore': 'owner',
   'GET /admin/approvals': 'owner',
   'POST /admin/approvals/:id': 'owner',
   'POST /admin/approvals/:id/edit': 'any',
