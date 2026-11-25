@@ -132,7 +132,12 @@ function classifyQuote({ reorder = null, lead = null, builder = null, now = Date
     return { sale_type: 'pending', credited_to: lead.rep_id || builder,
       reason: 'The customer named a salesperson; waiting for the owner' };
   }
-  return { sale_type: 'shop', credited_to: builder, reason: lead ? 'From a shop lead' : 'Shop customer' };
+  /* The shop's sale, credited to the shop (0), whoever built the quote
+     (owner, 2026-11-24: "Anything from the shop leads is me. Anything she
+     brings in from searching new leads are hers ... We paid for those
+     leads"). `builder` is kept for the signature; it no longer takes credit. */
+  void builder;
+  return { sale_type: 'shop', credited_to: 0, reason: lead ? 'From a shop lead' : 'Shop customer' };
 }
 
 /** The commission rate for a sale: their rate on their own leads, nothing on

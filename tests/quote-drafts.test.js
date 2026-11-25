@@ -40,7 +40,8 @@ test('sending a draft starts the customer\'s clock, like releasing a held quote'
 });
 
 test('a helper sending a draft goes through the owner\'s approval', () => {
-  assert.match(save, /const keepHeld = \(wasHeld && \(actor\.kind === 'owner' \|\| gate\.held\)\) \|\| \(wasDraft && !draft && gate\.held\);/);
+  /* The owner's save releases a held quote (owner, 2026-11-24: "Mine overrides hers"). */
+  assert.match(save, /const keepHeld = \(wasHeld && gate\.held\) \|\| \(wasDraft && !draft && gate\.held\);/);
   assert.match(save, /held_at = CASE WHEN \$20 THEN COALESCE\(held_at, NOW\(\)\) ELSE NULL END/);
 });
 

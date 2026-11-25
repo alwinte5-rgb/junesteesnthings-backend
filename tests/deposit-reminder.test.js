@@ -53,7 +53,7 @@ test('awaiting deposit: accepted, live, nothing paid', () => {
 
 test('the production card and the money board both say so', () => {
   assert.match(src, /\$\{awaitingDeposit\(q\) \? `<div class="kcard-deposit">💳 Awaiting deposit/);
-  assert.match(src, /awaitingDeposit\(q\) \? 'awaiting deposit' : st/);
+  assert.match(src, /awaitingDeposit\(q\) \? 'awaiting deposit'\s*(?:\/\*[^*]*\*\/\s*)?: st === 'held'/);
   assert.match(src, /awaiting deposit<\/b>/, 'the board header counts them');
 });
 

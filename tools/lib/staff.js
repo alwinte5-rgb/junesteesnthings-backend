@@ -297,6 +297,7 @@ const ROUTES = {
   'POST /admin/quote/:code/cancel': 'quotes.manage',
   'POST /admin/quote/:code/uncancel': 'quotes.manage',
   'POST /admin/quote/:code/reinstate': 'quotes.manage',
+  'POST /admin/quote/:code/follow-up': 'quotes.manage',
 
   'POST /admin/quote/:code/step': 'production.stage',
   'POST /admin/quote/:code/stage': 'production.stage',

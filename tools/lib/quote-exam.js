@@ -130,6 +130,64 @@ const SCENARIOS = [
     expect: { rush: false, line: { method: 'dtf', product: /\b5000\b/, qty: 12, sizes: { L: 12 }, places: ['front', 'left'] } },
     why: '12 pieces in full colour is DTF. Two places, the front and the left sleeve, each priced on its own.',
   },
+  /* More practice (owner, 2026-11-24: "she needs more quote practice"). Each
+     one teaches a trap the first twelve do not. */
+  {
+    id: 'tees-49-dtf', real: false, title: 'One shirt short of screen printing',
+    brief: 'We need 49 Gildan 5000 tees with our one-colour club logo on the front. 15 M, 20 L, 14 XL.',
+    businessDays: 15,
+    expect: { rush: false, line: { method: 'dtf', product: /\b5000\b/, qty: 49, sizes: { M: 15, L: 20, XL: 14 }, places: ['front'] } },
+    why: 'One colour sounds like screen printing, but 49 is under the 50 minimum, so it is DTF. Count the size mix before you pick the decoration. You can mention that one more shirt would make screen printing possible.',
+  },
+  {
+    id: 'tees-screen-changed-qty', real: false, title: 'The customer changes the number',
+    brief: 'Hi, we want 40 Gildan 5000 tees with a 1-colour logo on the front for our block party, all size L. Wait, my neighbour wants in too, so make it 55, all L.',
+    businessDays: 20,
+    expect: { rush: false, line: { method: 'screen', product: /\b5000\b/, qty: 55, sizes: { L: 55 }, places: ['front'], colours: { front: 1 } } },
+    why: 'Read to the end: the order is 55, not 40. At 55 pieces with one colour it is screen printing. The size mix must add up to 55.',
+  },
+  {
+    id: 'tees-dtf-back-only', real: false, title: 'A design on the back only',
+    brief: 'Can you print our full-colour band artwork big on the BACK of 20 Gildan 5000 tees? Nothing on the front. 10 M, 10 L.',
+    businessDays: 12,
+    expect: { rush: false, line: { method: 'dtf', product: /\b5000\b/, qty: 20, sizes: { M: 10, L: 10 }, places: ['back'] } },
+    why: 'Twenty pieces in full colour is DTF. Only the back is printed, so tick the back and leave the front empty. A back-only DTF print is still the main print, and the system prices it that way.',
+  },
+  {
+    id: 'tees-screen-front-sleeve', real: false, title: 'Screen printing on two places, different colours',
+    brief: 'Our church needs 75 Gildan 5000 tees: a 3-colour design on the front and a 1-colour cross on the left sleeve. 25 M, 25 L, 25 XL.',
+    businessDays: 20,
+    expect: { rush: false, line: { method: 'screen', product: /\b5000\b/, qty: 75, sizes: { M: 25, L: 25, XL: 25 }, places: ['front', 'left'], colours: { front: 3, left: 1 } } },
+    why: '75 pieces is screen printing. Each place has its own ink count: 3 on the front, 1 on the left sleeve. Do not add the white base yourself; the system does.',
+  },
+  {
+    id: 'hoodies-dtf-rush', real: false, title: 'Hoodies for a birthday this week',
+    brief: 'It is my sister\'s birthday on Thursday! Can you do 6 black Gildan 18500 hoodies with her photo on the front? 3 M and 3 L.',
+    businessDays: 3,
+    expect: { rush: true, line: { method: 'dtf', product: /18500/, qty: 6, sizes: { M: 3, L: 3 }, places: ['front'] } },
+    why: 'A photo on 6 hoodies is DTF. Thursday is 3 business days away, so it is a rush: set the needed-by date and the form adds it. Confirm the date with June before promising it.',
+  },
+  {
+    id: 'polos-embroidery-sizes', real: false, title: 'Polos for a landscaping crew',
+    brief: 'We need our company logo stitched on the left chest of 16 polos for the crew. 2 M, 6 L, 8 XL.',
+    businessDays: 15,
+    expect: { rush: false, line: { method: 'embroidery', product: /polo/i, qty: 16, sizes: { M: 2, L: 6, XL: 8 }, places: ['front'] } },
+    why: 'A logo stitched on polos is embroidery, on the front (left chest). Enter the size mix exactly as they gave it, and mention the one-time digitizing fee.',
+  },
+  {
+    id: 'cutouts-36in-pack', real: false, title: 'Five giant heads',
+    brief: 'Can we get 5 big head cutouts of the graduates, the really big 36 inch ones? Graduation is in 3 weeks.',
+    businessDays: 15,
+    expect: { rush: false, line: { method: 'cutout', methodRe: /36\s*in.*5.?pack/i, qty: 1 } },
+    why: 'Five 36-inch heads fill one sheet: the 36in 5-pack, quantity 1. There is plenty of time, so no rush.',
+  },
+  {
+    id: 'cutouts-18in-pack', real: false, title: 'Ten heads for a team',
+    brief: 'We want big heads of all 10 starters, about a foot and a half tall, for the playoff game next month.',
+    businessDays: 20,
+    expect: { rush: false, line: { method: 'cutout', methodRe: /18\s*in.*10.?pack/i, qty: 1 } },
+    why: 'A foot and a half is 18 inches. Ten 18-inch heads is exactly one 18in 10-pack, far cheaper than ten singles. One pack, quantity 1, no rush.',
+  },
 ];
 
 const byId = (id) => SCENARIOS.find((s) => s.id === id) || null;

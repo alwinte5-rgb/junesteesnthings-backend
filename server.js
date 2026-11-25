@@ -2230,6 +2230,22 @@ async function initStaffTables() {
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS costs_final_at TIMESTAMPTZ',
   ]) await pool.query(sql);
   await letGoOldContactsOnce();
+  await restorePendingQuoteLeadsOnce();
+  /* Once (owner, 2026-11-24: "All shop leads are always the shops. We paid
+     for those leads"): shop sales credited to the helper who built them go
+     to the shop. Left alone: rep and pending sales, anything with commission
+     paid, and any credit the owner set by hand on the job page. */
+  await pool.query(
+    `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('shop-sales-credit-shop') ON CONFLICT DO NOTHING RETURNING 1)
+     UPDATE quotes q SET credited_to = 0
+      WHERE EXISTS (SELECT 1 FROM claim) AND q.sale_type = 'shop' AND (q.credited_to > 0 OR q.credited_to IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = q.code)
+        AND NOT EXISTS (SELECT 1 FROM staff_activity a WHERE a.subject_id = q.code
+                          AND (a.action = 'POST /admin/quote/:code/credit'
+                               -- the owner's pick on the quote form (setSalesCredit)
+                               OR (a.action = 'sales credit' AND a.staff_id IS NULL)))`)
+    .then((r) => { if (r.rowCount) console.log(`sales credit: ${r.rowCount} shop sale(s) credited to the shop (once)`); })
+    .catch((e) => console.error('shop sales credit fix failed:', e.message));
   /* Hours entered before wages were paid here were paid outside it. Marked
      paid (with no rate, "paid outside") so the first payout does not pay them
      again. Once only. */
@@ -2414,8 +2430,10 @@ async function initStaffTables() {
     )`);
   /* Sales credit not yet decided falls to the helper who sent or built it.
      0 (the owner's own sale) is a decision, so it is never overwritten. */
+  /* Not a shop sale: those are the shop's (owner, 2026-11-24). */
   await pool.query(`UPDATE quotes SET credited_to = COALESCE(sent_by, created_by)
-                     WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL`);
+                     WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL
+                       AND COALESCE(sale_type, 'shop') <> 'shop'`);
   await seedPlaybook();
   await addPlaybookArticles();
   /* Local delivery (tools/lib/delivery.js): zones, windows, bookings. The fee
@@ -16474,7 +16492,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        button (so releasing is always a deliberate act), and a helper's keeps
        it held when their limits still say so. A helper SENDING a draft goes
        through the same gate as a new quote. */
-    const keepHeld = (wasHeld && (actor.kind === 'owner' || gate.held)) || (wasDraft && !draft && gate.held);
+    /* The owner's save is her decision (owner, 2026-11-24: "Mine overrides
+       hers as she is still training"): a held quote she saves comes out of
+       held, the same as Approve; the page then asks how to send it. */
+    const keepHeld = (wasHeld && gate.held) || (wasDraft && !draft && gate.held);
     if (existingQuote && !wasHeld && !wasDraft && gate.held) {
       /* The customer already has this one, so an edit would reach them the
          moment it saved. A helper whose changes need approval leaves a note
@@ -16653,7 +16674,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          "my own sale" and would take it away unseen. The owner can change it
          on the job page afterwards. */
       const want = actor.kind === 'owner' && !derivedCredit ? String(one(b.credit_to) || '').trim() : '';
-      const r = await setSalesCredit(code, want || (staffId && q.credited_to == null ? String(staffId) : ''), actor)
+      /* A helper takes an undecided sale only when it is not the shop's
+         (owner, 2026-11-24); a failed label leaves it for the owner. */
+      const r = await setSalesCredit(code, want || (staffId && q.credited_to == null && derivedCredit ? String(staffId) : ''), actor)
         .catch((e) => ({ ok: false, msg: e.message }));
       if (r.ok && r.to !== undefined) q.credited_to = r.to;
       else if (!r.ok && want) console.warn(`sales credit on ${code} not changed: ${r.msg}`);
@@ -23015,6 +23038,60 @@ function reinstateForm(q, back = '') {
    opened it), and out of "lost" on the deal. Editing and re-saving did this
    too, but re-priced every line on the way. Never a held or draft quote, an
    accepted or a cancelled one (Restore is for those). */
+/* "Follow up now" on the quotes board (owner, 2026-11-24: "is there any way to
+   followup with the quotes after they are sent"). Sends the same follow-up as
+   the automatic one, by text and email, and stamps followed_up_at so the
+   automatic one does not repeat it. Claimed in one UPDATE, so a double click
+   or two people at once send it once; at most one an hour per quote. */
+app.post('/admin/quote/:code/follow-up', requireAdmin, async (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
+  const where = '/admin/quotes#q-' + code;
+  try {
+    const { rows: [prev] } = await pool.query('SELECT followed_up_at, reminders_skipped FROM quotes WHERE code = $1', [code]);
+    if (!prev) return back(res, '/admin/quotes', 'err', 'No such quote.');
+    const { rows } = await pool.query(
+      /* A follow-up sent by hand is a real one: an earlier "skip" of the
+         automatic one no longer describes it (code review). */
+      `UPDATE quotes SET followed_up_at = NOW(),
+              reminders_skipped = array_remove(COALESCE(reminders_skipped, '{}'), 'follow-up')
+        WHERE code = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
+          AND status IN ('sent', 'viewed')
+          AND (sent_to_customer_at IS NOT NULL OR status = 'viewed')
+          AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
+          AND (email <> '' OR COALESCE(phone, '') <> '')
+          AND (followed_up_at IS NULL OR followed_up_at < NOW() - INTERVAL '1 hour'
+               OR 'follow-up' = ANY(COALESCE(reminders_skipped, '{}')))
+        RETURNING *, followed_up_at::text AS claimed_at`, [code]);
+    if (!rows.length) return back(res, where, 'err',
+      'Not sent: that quote is not waiting on the customer, has no email or phone, or was followed up in the last hour.');
+    const r = await sendQuoteFollowUp(rows[0], { again: !!prev.followed_up_at });
+    const said = [r.email === 'sent' ? 'email' : null, r.text === 'sent' ? 'text' : null].filter(Boolean);
+    if (!said.length) {
+      /* Nothing went out: put the stamp back, so the board does not claim a
+         follow-up that never happened. */
+      /* Only if the stamp is still this attempt's: a sweep or another click
+         that did send in the meantime keeps its own (code review). */
+      await pool.query(`UPDATE quotes SET followed_up_at = $2, reminders_skipped = $4
+                         WHERE code = $1 AND followed_up_at::text = $3`,
+        /* Compared as Postgres's own text: a JS Date drops the microseconds
+           NOW() keeps, and would never match (code review). */
+        [code, prev.followed_up_at, rows[0].claimed_at, prev.reminders_skipped || []]);
+      const why = [r.email === 'opted-out' ? 'their email is unsubscribed' : r.email === 'failed' ? 'the email failed' : null,
+        r.text === 'no-consent' ? 'they have not agreed to texts' : r.text === 'failed' ? 'the text failed'
+          : r.text === 'unconfigured' ? 'texting is not set up'
+          : r.text === 'no-phone' ? 'their phone number is not a valid US number'
+          : r.text === 'duplicate' ? 'that text was already sent' : null].filter(Boolean);
+      return back(res, where, 'err', 'Nothing was sent' + (why.length ? ': ' + why.join(', ') : '') + '. Call or text them from your phone.');
+    }
+    console.log(`quote ${code}: followed up by hand (${said.join(' + ')})`);
+    return back(res, where, 'ok', `Followed up with ${rows[0].name || code} by ${said.join(' and ')}.`);
+  } catch (err) {
+    console.error('follow-up failed:', err.message);
+    return back(res, where, 'err', 'Could not send the follow-up. Please try again.');
+  }
+});
+
 app.post('/admin/quote/:code/reinstate', requireAdmin, async (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
@@ -23033,7 +23110,11 @@ app.post('/admin/quote/:code/reinstate', requireAdmin, async (req, res) => {
       `UPDATE quotes SET valid_until = CURRENT_DATE + 14,
               status = CASE WHEN change_request IS NOT NULL AND change_request <> '' THEN 'changes'
                             WHEN viewed_at IS NOT NULL THEN 'viewed' ELSE 'sent' END,
-              followed_up_at = COALESCE(followed_up_at, NOW())
+              followed_up_at = COALESCE(followed_up_at, NOW()),
+              /* Stamped only to hold the automatic one back: recorded as a
+                 skip, so the board does not read it as a follow-up sent. */
+              reminders_skipped = CASE WHEN followed_up_at IS NULL
+                THEN array_append(COALESCE(reminders_skipped, '{}'), 'follow-up') ELSE reminders_skipped END
         WHERE code = $1 AND accepted_at IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
           AND (status = 'expired' OR valid_until < CURRENT_DATE)
         RETURNING *`, [code]);
@@ -24829,6 +24910,58 @@ async function renderBoard(VIEW, req, res) {
       held: '#f5f3ff|#6d28d9', draft: '#f1f5f9|#475569', sent: '#eef1f8|#33415c', viewed: '#fff4e0|#8a5a00', changes: '#fdecea|#b45309',
       accepted: '#e7f6ec|#166534', paid: '#1848B8|#ffffff', expired: '#f3f4f6|#6b7280',
     };
+    /* Every message to or from each unanswered quote's customer, newest per
+       direction, for the card's contact line (owner, 2026-11-24: "who has
+       been contacted"). Emails and texts, automatic and by hand; a failed or
+       unsent one is not contact. Filled before any card is drawn. */
+    const contactBy = new Map();
+    {
+      const codes = rows.filter((q) => !q.accepted_at && !q.cancelled_at).map((q) => q.code);
+      if (codes.length) {
+        const { rows: cr } = await pool.query(
+          `SELECT quote_code,
+                  MAX(created_at) FILTER (WHERE status IN ('sent', 'delivered')) AS last_out,
+                  MAX(created_at) FILTER (WHERE status = 'received') AS last_in
+             FROM (SELECT quote_code, created_at, status FROM client_emails WHERE quote_code = ANY($1)
+                   UNION ALL
+                   SELECT quote_code, created_at, status FROM sms_messages WHERE quote_code = ANY($1) AND template <> 'call') m
+            GROUP BY quote_code`, [codes]).catch((e) => { console.error('board contact lines:', e.message); return { rows: [] }; });
+        for (const r of cr) contactBy.set(r.quote_code, r);
+      }
+    }
+    /* "Sent Nov 22 · opened Nov 23 · followed up Nov 25 · they replied Nov 25". */
+    const contactLine = (q) => {
+      if (q.accepted_at || q.cancelled_at || q.status === 'held' || q.status === 'draft') return '';
+      const c = contactBy.get(q.code) || {};
+      const bits = [];
+      if (q.sent_to_customer_at) bits.push('sent ' + dayShort(q.sent_to_customer_at));
+      bits.push(q.viewed_at ? 'opened ' + dayShort(q.viewed_at) : 'not opened yet');
+      if (reminderSkipped(q, 'follow-up')) bits.push('automatic follow-up skipped');
+      else if (q.followed_up_at) bits.push('<b>followed up ' + dayShort(q.followed_up_at) + '</b>');
+      else bits.push('not followed up yet');
+      if (c.last_out && (!q.followed_up_at || new Date(c.last_out) - new Date(q.followed_up_at) > 3600000)
+          && (!q.sent_to_customer_at || new Date(c.last_out) - new Date(q.sent_to_customer_at) > 3600000)) {
+        bits.push('last message from us ' + dayShort(c.last_out));
+      }
+      if (c.last_in) bits.push('<b style="color:#166534">they replied ' + dayShort(c.last_in) + '</b>');
+      return `<div class="muted" style="margin-top:4px;font-size:12.5px">${bits.join(' &middot; ')}</div>`;
+    };
+    /* The board's own follow-up: the same text and email as the automatic
+       one, sent now. Named by stage, so the owner sees which try this is. */
+    const followUpForm = (q) => {
+      if (q.accepted_at || q.cancelled_at || !['sent', 'viewed'].includes(q.status)) return '';
+      if (!q.email && !q.phone) return '';
+      /* The same tests as the route, so the button never promises a refusal. */
+      if (q.status === 'sent' && !q.sent_to_customer_at) return '';
+      if (q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString())) return '';
+      const label = !followedUp(q) ? 'Follow up now' : daysSince(q.followed_up_at) >= QUIET_DAYS ? 'One last try' : 'Follow up again';
+      const recent = followedUp(q) && daysSince(q.followed_up_at) < 1 / 24;
+      return `<form method="POST" action="/admin/quote/${q.code}/follow-up" style="display:inline"
+                onsubmit="if(!confirm('Send ${escEmail(String(q.name || 'them').replace(/['\\\r\n\u2028\u2029]/g, ' ').slice(0, 60))} the follow-up now, by ${
+                  [q.email ? 'email' : null, q.phone ? 'text' : null].filter(Boolean).join(' and ')}?'))return false;var b=this.querySelector('button');setTimeout(function(){b.disabled=true},0);return true">
+          <button type="submit" class="btn" style="padding:8px 16px;font-size:13px"${recent ? ' disabled title="Followed up in the last hour"' : ''}>${label}</button>
+        </form>`;
+    };
     const quoteCard = (q) => {
       const expired = q.status !== 'accepted' && q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString());
       /* "accepted" and "paid" looked identical, so there was no way to see at a
@@ -24871,11 +25004,14 @@ async function renderBoard(VIEW, req, res) {
               <a href="/admin/production/${q.code}" style="color:#1848B8">${q.code}</a>${q.email || q.phone ? ` &middot;
               <a href="/admin/customer?q=${encodeURIComponent(q.email || q.phone || '')}" style="color:#1848B8">customer</a>` : ''}</div>
             <div style="margin-top:4px">${saleTypePill(q.sale_type || 'shop')}</div>
+            ${contactLine(q)}
           </div>
           <div style="text-align:right;white-space:nowrap">
             <div class="tot" style="font-size:16px">${money(q.total || q.subtotal)}</div>
             <span class="chip" style="background:${awaitingDeposit(q) ? '#fff4e0' : bg};color:${awaitingDeposit(q) ? '#8a5a00' : fg}">${
-              paid ? 'paid ' + money(q.paid_amount) : awaitingDeposit(q) ? 'awaiting deposit' : st}</span>
+              paid ? 'paid ' + money(q.paid_amount) : awaitingDeposit(q) ? 'awaiting deposit'
+                /* "held" meant nothing to the owner (2026-11-24). */
+                : st === 'held' ? 'needs your approval' : st}</span>
           </div>
         </div>
         ${q.cancelled_at
@@ -24890,6 +25026,8 @@ async function renderBoard(VIEW, req, res) {
           : ''}
         ${q.status === 'draft' && !q.cancelled_at ? `<div class="muted" style="margin-top:6px">Draft: the customer cannot
           see it yet. <a href="/admin/quote/${q.code}/edit">Finish it</a></div>` : ''}
+        ${q.status === 'held' && !q.cancelled_at ? `<div class="muted" style="margin-top:6px">A helper made this quote. The
+          customer cannot see it until you approve it. <a href="/admin/approvals">Review and send it</a></div>` : ''}
         ${wantsChange ? `
           <div style="margin-top:10px;background:#eef4ff;border:1px solid #c3d4f8;border-radius:10px;padding:10px 12px">
             <div style="font-weight:700;color:#1848B8;font-size:13px">✏️ Change requested</div>
@@ -24909,7 +25047,8 @@ async function renderBoard(VIEW, req, res) {
             </div>
           </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <a class="btn" style="padding:8px 16px;font-size:13px" href="/admin/production/${q.code}">Open job</a>
+          ${followUpForm(q)}
+          <a class="btn${followUpForm(q) ? ' btn-ghost' : ''}" style="padding:8px 16px;font-size:13px" href="/admin/production/${q.code}">Open job</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/admin/quote/${q.code}/edit">Edit</a>
           <a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}?staff=1" target="_blank" rel="noopener">View as customer</a>
           ${q.status === 'held' || q.status === 'draft' ? '' : `<a class="btn btn-ghost" style="padding:8px 16px;font-size:13px" href="/q/${q.code}/print?staff=1" target="_blank" rel="noopener">Print ${q.accepted_at ? 'invoice' : 'quote'}</a>`}
@@ -25127,6 +25266,24 @@ async function renderBoard(VIEW, req, res) {
       (q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString())));
     const gAccepted = gOpen.filter((q) => !!q.accepted_at);
     const gQuotes = gOpen.filter((q) => !q.accepted_at && !isQuoteExpired(q));
+    /* WAITING ON THE CUSTOMER, by where the follow-up stands (owner,
+       2026-11-24: "I can't tell whats new and what not and who has been
+       contacted"). One list of every unanswered quote is four:
+         not sent   held (a helper's quote waiting for the owner's Approve) or
+                    a draft; the customer cannot open either yet
+         new        sent, not followed up yet (or the automatic one skipped)
+         followed   followed up under QUIET_DAYS ago, no answer
+         quiet      followed up QUIET_DAYS or more ago, still no answer
+       A quote with a change request is waiting on the shop, so it stays in
+       new, where its blue box asks for the edit. */
+    const QUIET_DAYS = 7;
+    const followedUp = (q) => !!q.followed_up_at && !reminderSkipped(q, 'follow-up');
+    const daysSince = (d) => (Date.now() - new Date(d)) / 86400000;
+    const gNotSent = gQuotes.filter((q) => q.status === 'held' || q.status === 'draft');
+    const gLive = gQuotes.filter((q) => q.status !== 'held' && q.status !== 'draft');
+    const gNew = gLive.filter((q) => !followedUp(q) || q.status === 'changes');
+    const gFollowed = gLive.filter((q) => !gNew.includes(q) && daysSince(q.followed_up_at) < QUIET_DAYS);
+    const gQuiet = gLive.filter((q) => !gNew.includes(q) && daysSince(q.followed_up_at) >= QUIET_DAYS);
     const gExpired = gOpen.filter((q) => !q.accepted_at && isQuoteExpired(q));
     const showExpired = String(req.query.expired || '') === '1';
     /* Not rendered on the board any more — kept for the count, so cancelled work
@@ -25271,7 +25428,12 @@ async function renderBoard(VIEW, req, res) {
       group('Unfinished carts', 'started a design, never checked out', carts, cartCard,
             { accent: '#1848B8' }) +
       group('Accepted, waiting on deposit', 'they said yes — nothing paid yet', gAccepted, null, { accent: '#8a5a00' }) +
-      group('Waiting on the customer', 'sent, not accepted yet', gQuotes) +
+      group('Not sent yet', 'held = waiting for your approval before the customer can see it; draft = not finished', gNotSent,
+            null, { accent: '#6d28d9' }) +
+      group('New — not followed up yet', 'sent, no answer, nobody has chased it', gNew) +
+      group('Followed up — no answer yet', 'chased in the last ' + QUIET_DAYS + ' days', gFollowed) +
+      group('Gone quiet', 'followed up ' + QUIET_DAYS + '+ days ago, still no answer — one last try, or close it', gQuiet,
+            null, { accent: '#6b7280' }) +
       (showExpired ? group('Expired', 'not accepted in time — Reinstate one to give them 14 more days at the same prices', gExpired) : '') +
       (gExpired.length ? `<p class="muted" style="margin:4px 0 0;font-size:12.5px">${showExpired
         ? `<a href="?">Hide the ${gExpired.length} expired quote${gExpired.length === 1 ? '' : 's'}</a>`
@@ -25348,9 +25510,12 @@ async function renderBoard(VIEW, req, res) {
         carts.length === 1 ? '' : 's'}</b> &middot; ` : ''}${
         /* Drafts sit in this group to be found, but nobody is waiting on a
            quote they never got (Codex #129). */
-        gQuotes.filter((q) => q.status !== 'draft').length} waiting on the customer${(() => {
-          const d = gQuotes.filter((q) => q.status === 'draft').length;
-          return d ? ` (+${d} draft${d === 1 ? '' : 's'})` : '';
+        gLive.length} waiting on the customer${
+          (() => { const n = gLive.filter((q) => !followedUp(q)).length;
+            return n ? ` (<b>${n} not followed up</b>)` : ''; })()}${(() => {
+          /* Held and drafts: nobody is waiting on a quote they never got (Codex #129). */
+          const d = gNotSent.length;
+          return d ? ` &middot; ${d} not sent yet` : '';
         })()} &middot; ${
         gOrders.length} order${gOrders.length === 1 ? '' : 's'} in hand${(() => {
           const n = rows.filter(q => !q.delivered_at && awaitingDeposit(q)).length;
@@ -25374,7 +25539,11 @@ async function renderBoard(VIEW, req, res) {
         return (QUOTE_CODE_RE.test(applied) ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">
             The Stripe payment is on quote <b>${applied}</b> now.</div>` : '') +
           (failed ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${escEmail(failed)}</div>` : '') + textNote
-          + studioBoardNote(req.query);
+          + studioBoardNote(req.query)
+          /* The ok/err a quote action sends back (Follow up now, Reinstate):
+             the board never showed them, so Reinstate's "good until" note was
+             lost (2026-11-24). */
+          + flash(req.query);
       })()}
       <p style="margin-bottom:14px">
         <a class="btn" href="/admin/quote/new">New quote</a>
@@ -28760,6 +28929,12 @@ app.get('/admin/production', requireAdmin, (req, res) => renderBoard('work',  re
    read as answered. The test checks the SQL Postgres receives, not this text. */
 /* A quote that counts for a lead: anything but held and draft. */
 const LEAD_QUOTE_LIVE = `q.status NOT IN ('held', 'draft')`;
+/* A quote the shop still owes the customer: a helper's held for the owner's
+   approval, or a draft. Its lead stays on the board under Answer these and is
+   never let go automatically (owner, 2026-11-24: "the salesperson quotes
+   should not have a lead leave the board. I still have to respond or approve
+   her quotes"). */
+const LEAD_QUOTE_PENDING = `q.status IN ('held', 'draft') AND q.cancelled_at IS NULL`;
 const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email))
                OR (length(regexp_replace(COALESCE(q.phone,''), '\\D', '', 'g')) >= 10
                    AND right(regexp_replace(COALESCE(q.phone,''), '\\D', '', 'g'), 10)
@@ -28784,6 +28959,8 @@ async function leadsWithStatus() {
               ORDER BY q.created_at DESC LIMIT 1) AS linked_quote,
             (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND ${LEAD_QUOTE_LIVE}
               ORDER BY q.created_at LIMIT 1) AS matched_quote,
+            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING}
+              ORDER BY q.created_at DESC LIMIT 1) AS pending_quote,
             (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
               WHERE submission_id = s.id AND kind = ANY($1) AND NOT auto ORDER BY created_at DESC LIMIT 1) n) AS last_contact,
             -- open leads someone has answered: the card's follow-up line, and whether
@@ -28861,6 +29038,8 @@ async function sendLeadFollowUps(now = Date.now()) {
                        s.first_response_at)) > NOW() - INTERVAL '15 days'
         AND NOT EXISTS (SELECT 1 FROM quotes q WHERE (q.from_submission_id = s.id OR (${LEAD_QUOTE_MATCH}))
                            AND ${LEAD_QUOTE_LIVE})
+        -- a helper's quote waiting for the owner: the owner answers it, not the sweep
+        AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING})
 `,
     [LEADFU.CONVERSATION_KINDS]);
   const done = { first: 0, second: 0, let_go: 0, retry: 0 };
@@ -28884,7 +29063,8 @@ async function sendLeadFollowUps(now = Date.now()) {
     if (due.step === 'let_go') {
       const { rowCount } = await pool.query(
         `UPDATE submissions SET dismissed_at = NOW(), dismiss_reason = $4, outcome = 'no_reply'
-          WHERE id = $1 AND lead_fu2_at IS NOT NULL AND ${quiet}`, [l.id, anchor, LEADFU.CONVERSATION_KINDS, LEADFU.LET_GO_REASON]);
+          WHERE id = $1 AND lead_fu2_at IS NOT NULL AND ${quiet}
+            AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = $1 AND ${LEAD_QUOTE_PENDING})`, [l.id, anchor, LEADFU.CONVERSATION_KINDS, LEADFU.LET_GO_REASON]);
       if (rowCount) {
         done.let_go++;
         await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, auto) VALUES ($1, 'note', $2, TRUE)`,
@@ -28981,6 +29161,29 @@ async function sendLeadFollowUps(now = Date.now()) {
  *  an outcome, a follow-up date someone set for today or later, any note in the
  *  window, or a reply from them in the last REPLY_KEPT_DAYS that nobody answered. The claim,
  *  the let-go and the notes are one statement, so it runs whole or not at all. */
+/** Once (2026-11-24): the old-contacts clean-up and the automatic let-go
+ *  counted only quotes the customer had, so leads whose quote was a helper's,
+ *  held for the owner's approval, were let go as "no reply" while the quote
+ *  waited. Those come back to the board; nothing a person dismissed is touched. */
+async function restorePendingQuoteLeadsOnce() {
+  try {
+    const { rowCount } = await pool.query(
+      `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('leads-restore-pending-quote') ON CONFLICT DO NOTHING RETURNING 1),
+       back AS (
+         UPDATE submissions s SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
+          WHERE EXISTS (SELECT 1 FROM claim) AND s.dismissed_at IS NOT NULL
+            AND s.dismiss_reason IN ($1::text, $2::text)
+            AND EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING})
+          RETURNING s.id)
+       INSERT INTO lead_notes (submission_id, kind, body, auto)
+       SELECT id, 'note', 'Back on Leads: a quote for it is waiting for the owner (it had been let go automatically).', TRUE FROM back`,
+      [LEADFU.OLD_CONTACT_REASON, LEADFU.LET_GO_REASON]);
+    if (rowCount) console.log(`leads: ${rowCount} let go with a quote waiting, back on the board (once)`);
+  } catch (e) {
+    console.error('pending-quote lead restore failed:', e.message);
+  }
+}
+
 async function letGoOldContactsOnce() {
   try {
     const { rowCount } = await pool.query(
@@ -29002,6 +29205,7 @@ async function letGoOldContactsOnce() {
                              WHERE w.kind IN ('text_in', 'email_in') AND w.created_at > NOW() - make_interval(days => $6::int))
             AND NOT EXISTS (SELECT 1 FROM quotes q WHERE (q.from_submission_id = s.id OR (${LEAD_QUOTE_MATCH}))
                                AND ${LEAD_QUOTE_LIVE})
+            AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING})
           RETURNING s.id)
        INSERT INTO lead_notes (submission_id, kind, body, auto)
        SELECT id, 'note', $5::text, TRUE FROM gone`,
@@ -29142,6 +29346,11 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
         ${l.photo_url ? `<div style="margin-top:8px"><a href="${escEmail(l.photo_url)}" target="_blank" rel="noopener">
           <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
                style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
+        ${status !== 'quoted' && status !== 'dismissed' && l.pending_quote ? `
+        <div style="margin-top:10px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:10px 12px;font-size:13px">
+          <b style="color:#6d28d9">A quote is waiting for you</b>: ${escEmail(l.pending_quote)} is held or a draft, so the
+          customer has not seen it. <a href="/admin/quote/${escEmail(l.pending_quote)}/edit">Open it</a> &middot;
+          <a href="/admin/approvals">Approvals</a></div>` : ''}
         ${status === 'quoted' ? `
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
            href="/admin/quote/${escEmail(l.quote_code)}/edit">Open quote ${escEmail(l.quote_code)} &rarr;</a>
@@ -31741,48 +31950,65 @@ async function sendQuoteFollowUps() {
           -- never the first thing a customer hears: only a quote that was sent
           -- to them, or that they have opened (2026-10-06)
           AND (sent_to_customer_at IS NOT NULL OR status = 'viewed')
-          AND created_at <= NOW() - ($1 || ' days')::interval
+          -- counted from when the customer GOT it: a quote drafted or held for
+          -- days must not be chased the hour it is sent (code review)
+          AND COALESCE(sent_to_customer_at, viewed_at, created_at) <= NOW() - ($1 || ' days')::interval
           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
           AND (email <> '' OR COALESCE(phone, '') <> '')
         LIMIT 20`, [String(days)]);
 
     for (const q of rows) {
-      // Mark first: a send that throws must not re-fire every hour.
-      await pool.query('UPDATE quotes SET followed_up_at=NOW() WHERE id=$1', [q.id]);
-      /* A text as well as the email (2026-10-05): their own consent, kept per
-         phone, decides the text; the email list's opt-out decides the email. */
-      if (q.phone) {
-        sendCustomerSms({ phone: q.phone, kind: 'transactional', ref: 'quote:' + q.code, quote: q.code,
-          msg: SMS.quoteFollowup({ code: q.code, first: q.name, link: quoteLink(q.code) }) })
-          .catch((e) => console.error('quote follow-up text failed', q.code, e.message));
-      }
-      if (!q.email || await isUnsubscribed(q.email)) continue;
-
-      const msgs = quoteMessages(q);
-      const t = quoteTotals(q);
-      try {
-        await sendClientEmail({ quote: q.code, kind: 'follow-up',
-          to: q.email,
-          subject: `Still thinking it over? Quote ${q.code}`,
-          html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
-            <h2 style="color:#1848B8">Just checking in</h2>
-            <p style="color:#374151;line-height:1.6">${escEmail(msgs.followup.split('\n')[0])}</p>
-            <p style="text-align:center;margin:22px 0">
-              <a href="${quoteLink(q.code)}" style="background:#1848B8;color:#fff;padding:13px 28px;
-                 border-radius:100px;text-decoration:none;font-weight:700">View your quote — ${money(t.total)}</a></p>
-            <p style="color:#374151;line-height:1.6">Happy to adjust quantities, colours or sizes — just reply
-               or text ${SHOP_PHONE}. If the timing is wrong, no problem at all.</p>
-            <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER} &middot; ${SHOP_PHONE}</p>
-          </div>`,
-        });
-        console.log('quote follow-up sent:', q.code, q.email);
-      } catch (e) {
-        console.error('quote follow-up failed', q.code, e.message);
-      }
+      /* Mark first: a send that throws must not re-fire every hour. Claimed:
+         the board's Follow up now may have sent it since the SELECT. */
+      const { rowCount } = await pool.query('UPDATE quotes SET followed_up_at=NOW() WHERE id=$1 AND followed_up_at IS NULL', [q.id]);
+      if (!rowCount) continue;
+      await sendQuoteFollowUp(q);
     }
   } catch (e) {
     console.error('quote follow-up sweep failed:', e.message);
   }
+}
+
+/* One quote's follow-up, by text and email: the automatic one above, and the
+   board's "Follow up now" (owner, 2026-11-24). Their own consent decides the
+   text; the email list's opt-out decides the email. `again`: a follow-up sent
+   by hand gets its own text ref, because sms_messages keeps one text per
+   (phone, ref, template) and a second follow-up would be dropped as a
+   duplicate. Returns what happened to each, so the board can say it. */
+async function sendQuoteFollowUp(q, { again = false } = {}) {
+  const out = { text: 'none', email: 'none' };
+  if (q.phone) {
+    out.text = await sendCustomerSms({ phone: q.phone, kind: 'transactional',
+      ref: 'quote:' + q.code + (again ? ':fu' + Date.now().toString(36) : ''), quote: q.code,
+      msg: SMS.quoteFollowup({ code: q.code, first: q.name, link: quoteLink(q.code) }) })
+      .catch((e) => { console.error('quote follow-up text failed', q.code, e.message); return 'failed'; });
+  }
+  if (!q.email) return out;
+  if (await isUnsubscribed(q.email)) { out.email = 'opted-out'; return out; }
+  const msgs = quoteMessages(q);
+  const t = quoteTotals(q);
+  try {
+    await sendClientEmail({ quote: q.code, kind: 'follow-up',
+      to: q.email,
+      subject: `Still thinking it over? Quote ${q.code}`,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto">
+        <h2 style="color:#1848B8">Just checking in</h2>
+        <p style="color:#374151;line-height:1.6">${escEmail(msgs.followup.split('\n')[0])}</p>
+        <p style="text-align:center;margin:22px 0">
+          <a href="${quoteLink(q.code)}" style="background:#1848B8;color:#fff;padding:13px 28px;
+             border-radius:100px;text-decoration:none;font-weight:700">View your quote — ${money(t.total)}</a></p>
+        <p style="color:#374151;line-height:1.6">Happy to adjust quantities, colours or sizes — just reply
+           or text ${SHOP_PHONE}. If the timing is wrong, no problem at all.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:22px">${SHOP_NAME} &middot; ${SHOP_SIGNER} &middot; ${SHOP_PHONE}</p>
+      </div>`,
+    });
+    out.email = 'sent';
+    console.log('quote follow-up sent:', q.code, q.email);
+  } catch (e) {
+    out.email = 'failed';
+    console.error('quote follow-up failed', q.code, e.message);
+  }
+  return out;
 }
 
 /* Accepted but never paid. This is the expensive one — the customer has said
