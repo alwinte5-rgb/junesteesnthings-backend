@@ -37,7 +37,10 @@ const SL = require('./lib/sinalite');
 
 const PRODUCTS = Object.entries(JSON.parse(fs.readFileSync(SL.DATA_FILE, 'utf8')).products || {})
   .map(([key, p]) => ({ key, name: p.name, aliases: Array.isArray(p.aliases) ? p.aliases : [],
-    description: p.description || p.note || p.label }));
+    description: p.description || p.note || p.label, retired: !!p.retired }));
+/* A retired product's row is tagged this, so jt-catalog.php leaves it off the
+   quote form; a re-run must never switch it back to 'sinalite'. */
+const RETIRED = 'sinalite-retired';
 
 module.exports = { PRODUCTS };
 if (require.main !== module) return;
@@ -78,7 +81,7 @@ for (const p of PRODUCTS) {
 }
 /* A same-named row that is not ours is somebody's real product. */
 for (const r of rows) {
-  if (r.supplier !== 'sinalite') {
+  if (r.supplier !== 'sinalite' && r.supplier !== RETIRED) {
     console.error('!! "' + r.name + '" exists as #' + r.id + ' and is not a SinaLite item — refusing');
     process.exit(1);
   }
@@ -101,8 +104,10 @@ for (const p of PRODUCTS) {
     /* An active row is sold in the designer (add-label-product.js wrote its
        customer description): keep that, only rename it. */
     mysql(url, 'UPDATE lumise_products SET name=' + sq(p.name) + ', description=IF(active=1, description, ' + sq(p.description) + ')' +
-      ", supplier='sinalite', price=0, updated=NOW() WHERE id=" + Number(h.id) + ';');
-  } else {
+      ', supplier=' + sq(p.retired ? RETIRED : 'sinalite') + (p.retired ? ', active=0' : '') +
+      ', price=0, updated=NOW() WHERE id=' + Number(h.id) + ';');
+  } else if (!p.retired) {
+    /* A retired product with no row stays without one. */
     mysql(url, 'INSERT INTO lumise_products (name,description,price,supplier_cost,supplier,stages,attributes,' +
       'printings,thumbnail_url,active,`order`,author,created,updated) VALUES (' +
       sq(p.name) + ',' + sq(p.description) + ",0,0,'sinalite'," + sq(enjson({})) + ',' + sq(enjson({})) +

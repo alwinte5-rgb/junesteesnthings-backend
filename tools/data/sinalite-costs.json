@@ -1114,6 +1114,7 @@
     },
     "mug": {
       "name": "Ceramic Mugs — 11oz, printed",
+      "retired": true,
       "label": "Ceramic Mugs",
       "group": "Drinkware",
       "design": null,

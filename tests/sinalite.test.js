@@ -447,3 +447,15 @@ test('the live SinaLite table is regular prices, never sale prices (owner, 2026-
   const cap = fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-capture.js'), 'utf8');
   assert.match(cap, /regular price ' \+ box\.textContent \+ ' unreadable or below/, 'a regular price below the shown one stops the capture');
 });
+
+test('the SinaLite mug is retired: off the quote form, still priced for quotes that hold it (owner, 2026-11-25)', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const d = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'data', 'sinalite-costs.json'), 'utf8'));
+  assert.strictEqual(d.products.mug.retired, true);
+  assert.strictEqual(require('../tools/sinalite-assemble.js').META.mug.retired, true, 'a re-capture keeps it retired');
+  assert.ok(SL.table().families.mug, 'saved quotes with it still price');
+  const w = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-sinalite-products.js'), 'utf8');
+  assert.match(w, /const RETIRED = 'sinalite-retired';/);
+  assert.match(w, /sq\(p\.retired \? RETIRED : 'sinalite'\)/, 'a re-run never switches it back on');
+  assert.match(w, /\} else if \(!p\.retired\) \{/, 'and never recreates it');
+});
