@@ -2230,6 +2230,20 @@ async function initStaffTables() {
     'ALTER TABLE quotes ADD COLUMN IF NOT EXISTS costs_final_at TIMESTAMPTZ',
   ]) await pool.query(sql);
   await letGoOldContactsOnce();
+  await restorePendingQuoteLeadsOnce();
+  /* Once (owner, 2026-11-24: "All shop leads are always the shops. We paid
+     for those leads"): shop sales credited to the helper who built them go
+     to the shop. Left alone: rep and pending sales, anything with commission
+     paid, and any credit the owner set by hand on the job page. */
+  await pool.query(
+    `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('shop-sales-credit-shop') ON CONFLICT DO NOTHING RETURNING 1)
+     UPDATE quotes q SET credited_to = 0
+      WHERE EXISTS (SELECT 1 FROM claim) AND q.sale_type = 'shop' AND q.credited_to > 0
+        AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = q.code)
+        AND NOT EXISTS (SELECT 1 FROM staff_activity a WHERE a.subject_id = q.code
+                          AND a.action = 'POST /admin/quote/:code/credit')`)
+    .then((r) => { if (r.rowCount) console.log(`sales credit: ${r.rowCount} shop sale(s) credited to the shop (once)`); })
+    .catch((e) => console.error('shop sales credit fix failed:', e.message));
   /* Hours entered before wages were paid here were paid outside it. Marked
      paid (with no rate, "paid outside") so the first payout does not pay them
      again. Once only. */
@@ -16473,7 +16487,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        button (so releasing is always a deliberate act), and a helper's keeps
        it held when their limits still say so. A helper SENDING a draft goes
        through the same gate as a new quote. */
-    const keepHeld = (wasHeld && (actor.kind === 'owner' || gate.held)) || (wasDraft && !draft && gate.held);
+    /* The owner's save is her decision (owner, 2026-11-24: "Mine overrides
+       hers as she is still training"): a held quote she saves comes out of
+       held, the same as Approve; the page then asks how to send it. */
+    const keepHeld = (wasHeld && gate.held) || (wasDraft && !draft && gate.held);
     if (existingQuote && !wasHeld && !wasDraft && gate.held) {
       /* The customer already has this one, so an edit would reach them the
          moment it saved. A helper whose changes need approval leaves a note
@@ -28896,6 +28913,12 @@ app.get('/admin/production', requireAdmin, (req, res) => renderBoard('work',  re
    read as answered. The test checks the SQL Postgres receives, not this text. */
 /* A quote that counts for a lead: anything but held and draft. */
 const LEAD_QUOTE_LIVE = `q.status NOT IN ('held', 'draft')`;
+/* A quote the shop still owes the customer: a helper's held for the owner's
+   approval, or a draft. Its lead stays on the board under Answer these and is
+   never let go automatically (owner, 2026-11-24: "the salesperson quotes
+   should not have a lead leave the board. I still have to respond or approve
+   her quotes"). */
+const LEAD_QUOTE_PENDING = `q.status IN ('held', 'draft') AND q.cancelled_at IS NULL`;
 const LEAD_QUOTE_MATCH = `(NULLIF(lower(trim(q.email)),'') = lower(trim(s.email))
                OR (length(regexp_replace(COALESCE(q.phone,''), '\\D', '', 'g')) >= 10
                    AND right(regexp_replace(COALESCE(q.phone,''), '\\D', '', 'g'), 10)
@@ -28920,6 +28943,8 @@ async function leadsWithStatus() {
               ORDER BY q.created_at DESC LIMIT 1) AS linked_quote,
             (SELECT q.code FROM quotes q WHERE ${LEAD_QUOTE_MATCH} AND ${LEAD_QUOTE_LIVE}
               ORDER BY q.created_at LIMIT 1) AS matched_quote,
+            (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING}
+              ORDER BY q.created_at DESC LIMIT 1) AS pending_quote,
             (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
               WHERE submission_id = s.id AND kind = ANY($1) AND NOT auto ORDER BY created_at DESC LIMIT 1) n) AS last_contact,
             -- open leads someone has answered: the card's follow-up line, and whether
@@ -28997,6 +29022,8 @@ async function sendLeadFollowUps(now = Date.now()) {
                        s.first_response_at)) > NOW() - INTERVAL '15 days'
         AND NOT EXISTS (SELECT 1 FROM quotes q WHERE (q.from_submission_id = s.id OR (${LEAD_QUOTE_MATCH}))
                            AND ${LEAD_QUOTE_LIVE})
+        -- a helper's quote waiting for the owner: the owner answers it, not the sweep
+        AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING})
 `,
     [LEADFU.CONVERSATION_KINDS]);
   const done = { first: 0, second: 0, let_go: 0, retry: 0 };
@@ -29020,7 +29047,8 @@ async function sendLeadFollowUps(now = Date.now()) {
     if (due.step === 'let_go') {
       const { rowCount } = await pool.query(
         `UPDATE submissions SET dismissed_at = NOW(), dismiss_reason = $4, outcome = 'no_reply'
-          WHERE id = $1 AND lead_fu2_at IS NOT NULL AND ${quiet}`, [l.id, anchor, LEADFU.CONVERSATION_KINDS, LEADFU.LET_GO_REASON]);
+          WHERE id = $1 AND lead_fu2_at IS NOT NULL AND ${quiet}
+            AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = $1 AND ${LEAD_QUOTE_PENDING})`, [l.id, anchor, LEADFU.CONVERSATION_KINDS, LEADFU.LET_GO_REASON]);
       if (rowCount) {
         done.let_go++;
         await pool.query(`INSERT INTO lead_notes (submission_id, kind, body, auto) VALUES ($1, 'note', $2, TRUE)`,
@@ -29117,6 +29145,29 @@ async function sendLeadFollowUps(now = Date.now()) {
  *  an outcome, a follow-up date someone set for today or later, any note in the
  *  window, or a reply from them in the last REPLY_KEPT_DAYS that nobody answered. The claim,
  *  the let-go and the notes are one statement, so it runs whole or not at all. */
+/** Once (2026-11-24): the old-contacts clean-up and the automatic let-go
+ *  counted only quotes the customer had, so leads whose quote was a helper's,
+ *  held for the owner's approval, were let go as "no reply" while the quote
+ *  waited. Those come back to the board; nothing a person dismissed is touched. */
+async function restorePendingQuoteLeadsOnce() {
+  try {
+    const { rowCount } = await pool.query(
+      `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('leads-restore-pending-quote') ON CONFLICT DO NOTHING RETURNING 1),
+       back AS (
+         UPDATE submissions s SET dismissed_at = NULL, dismiss_reason = NULL, outcome = NULL
+          WHERE EXISTS (SELECT 1 FROM claim) AND s.dismissed_at IS NOT NULL
+            AND s.dismiss_reason IN ($1::text, $2::text)
+            AND EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING})
+          RETURNING s.id)
+       INSERT INTO lead_notes (submission_id, kind, body, auto)
+       SELECT id, 'note', 'Back on Leads: a quote for it is waiting for the owner (it had been let go automatically).', TRUE FROM back`,
+      [LEADFU.OLD_CONTACT_REASON, LEADFU.LET_GO_REASON]);
+    if (rowCount) console.log(`leads: ${rowCount} let go with a quote waiting, back on the board (once)`);
+  } catch (e) {
+    console.error('pending-quote lead restore failed:', e.message);
+  }
+}
+
 async function letGoOldContactsOnce() {
   try {
     const { rowCount } = await pool.query(
@@ -29138,6 +29189,7 @@ async function letGoOldContactsOnce() {
                              WHERE w.kind IN ('text_in', 'email_in') AND w.created_at > NOW() - make_interval(days => $6::int))
             AND NOT EXISTS (SELECT 1 FROM quotes q WHERE (q.from_submission_id = s.id OR (${LEAD_QUOTE_MATCH}))
                                AND ${LEAD_QUOTE_LIVE})
+            AND NOT EXISTS (SELECT 1 FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING})
           RETURNING s.id)
        INSERT INTO lead_notes (submission_id, kind, body, auto)
        SELECT id, 'note', $5::text, TRUE FROM gone`,
@@ -29278,6 +29330,11 @@ function leadCardHtml(l, { back = '/admin/quotes', roster = null } = {}) {
         ${l.photo_url ? `<div style="margin-top:8px"><a href="${escEmail(l.photo_url)}" target="_blank" rel="noopener">
           <img src="${escEmail(l.photo_url)}" alt="" loading="lazy"
                style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e3e8f2"></a></div>` : ''}
+        ${status !== 'quoted' && status !== 'dismissed' && l.pending_quote ? `
+        <div style="margin-top:10px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:10px 12px;font-size:13px">
+          <b style="color:#6d28d9">A quote is waiting for you</b>: ${escEmail(l.pending_quote)} is held or a draft, so the
+          customer has not seen it. <a href="/admin/quote/${escEmail(l.pending_quote)}/edit">Open it</a> &middot;
+          <a href="/admin/approvals">Approvals</a></div>` : ''}
         ${status === 'quoted' ? `
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><a class="btn btn-ghost" style="padding:8px 16px;font-size:13px"
            href="/admin/quote/${escEmail(l.quote_code)}/edit">Open quote ${escEmail(l.quote_code)} &rarr;</a>

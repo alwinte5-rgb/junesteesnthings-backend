@@ -26,6 +26,9 @@ function theyReplied(l) {
 /** The lead's place on the board. `isFound` is server.js isFoundLead. */
 function bucketOf(l, isFound) {
   const st = (l && l.lead_status) || 'new';
+  /* A quote for it is held for the owner or still a draft: the customer has
+     nothing yet, so the shop owes them (owner, 2026-11-24). */
+  if (l && l.pending_quote && st !== 'quoted' && st !== 'dismissed') return 'answer';
   if (st === 'new') return isFound(l) ? 'reach_out' : 'answer';
   if (st === 'contacted') return theyReplied(l) ? 'answer' : 'contacted';
   return st;

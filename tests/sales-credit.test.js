@@ -91,9 +91,10 @@ test('a quote takes the label of the lead it answers', () => {
   assert.deepStrictEqual(CREDIT.classifyQuote({ lead: { sale_type: 'rep', rep_id: 3 }, builder: 9 }),
     { sale_type: 'rep', credited_to: 3, reason: 'Their own lead' });
   const shop = CREDIT.classifyQuote({ lead: { sale_type: 'shop', rep_id: null }, builder: 9 });
-  assert.deepStrictEqual([shop.sale_type, shop.credited_to], ['shop', 9], 'credited to who built it, at the shop rate');
+  /* A shop lead is the shop's sale, whoever built it (owner, 2026-11-24). */
+  assert.deepStrictEqual([shop.sale_type, shop.credited_to], ['shop', 0], 'credited to the shop, not who built it');
   assert.strictEqual(CREDIT.classifyQuote({ lead: { sale_type: 'pending', rep_id: 3 }, builder: 9 }).sale_type, 'pending');
-  assert.deepStrictEqual([CREDIT.classifyQuote({ builder: null }).sale_type, CREDIT.classifyQuote({ builder: null }).credited_to], ['shop', null]);
+  assert.deepStrictEqual([CREDIT.classifyQuote({ builder: null }).sale_type, CREDIT.classifyQuote({ builder: null }).credited_to], ['shop', 0]);
 });
 
 test('a salesperson\'s customer reordering within 12 months stays theirs', () => {
@@ -102,7 +103,7 @@ test('a salesperson\'s customer reordering within 12 months stays theirs', () =>
   const in11 = CREDIT.classifyQuote({ reorder: first(335), lead: { sale_type: 'shop' }, builder: 9, now });
   assert.deepStrictEqual([in11.sale_type, in11.credited_to], ['rep', 3], 'even back through the website');
   const in13 = CREDIT.classifyQuote({ reorder: first(395), lead: null, builder: 9, now });
-  assert.deepStrictEqual([in13.sale_type, in13.credited_to], ['shop', 9]);
+  assert.deepStrictEqual([in13.sale_type, in13.credited_to], ['shop', 0]);
   assert.strictEqual(CREDIT.REORDER_DAYS, 365);
 });
 

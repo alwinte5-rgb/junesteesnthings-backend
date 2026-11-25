@@ -69,7 +69,10 @@ function leadsDesk(rows) {
   const liveAt = src.indexOf('const LEAD_QUOTE_LIVE =');
   assert.notStrictEqual(liveAt, -1, 'LEAD_QUOTE_LIVE is gone: leadsWithStatus reads it');
   const live = src.slice(liveAt, src.indexOf('`;', liveAt) + 2);
-  vm.runInContext([live, MATCH, kinds, lastWord, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
+  const pAt = src.indexOf('const LEAD_QUOTE_PENDING =');
+  assert.notStrictEqual(pAt, -1, 'LEAD_QUOTE_PENDING is gone: leadsWithStatus reads it');
+  const pending = src.slice(pAt, src.indexOf('`;', pAt) + 2);
+  vm.runInContext([live, pending, MATCH, kinds, lastWord, liftFn('leadsWithStatus'), liftFn('unansweredLeads')].join('\n'), sandbox);
   return { sandbox, seen };
 }
 

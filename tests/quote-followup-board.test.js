@@ -84,3 +84,28 @@ test('the board splits waiting quotes by stage, names held plainly, and shows it
   assert.match(board, /\$\{contactLine\(q\)\}/);
   assert.match(board, /\$\{followUpForm\(q\)\}/);
 });
+
+test('a helper\'s held or draft quote keeps its lead on the board until the owner answers (owner, 2026-11-24)', () => {
+  const LB = require('../tools/lib/lead-board');
+  const no = () => false;
+  assert.strictEqual(LB.bucketOf({ lead_status: 'contacted', pending_quote: 'ABCDEF1234' }, no), 'answer');
+  assert.strictEqual(LB.bucketOf({ lead_status: 'new', pending_quote: 'ABCDEF1234' }, () => true), 'answer');
+  assert.strictEqual(LB.bucketOf({ lead_status: 'quoted', pending_quote: 'ABCDEF1234' }, no), 'quoted');
+  assert.strictEqual(LB.bucketOf({ lead_status: 'dismissed', pending_quote: 'ABCDEF1234' }, no), 'dismissed', 'a person\'s dismissal stands');
+  /* Neither automatic let-go takes a lead whose quote waits. */
+  const sweep = after('async function sendLeadFollowUps(', 6000);
+  assert.ok((sweep.match(/\$\{LEAD_QUOTE_PENDING\}/g) || []).length >= 2, 'the follow-up sweep and its let-go skip it');
+  assert.match(after('async function letGoOldContactsOnce(', 3000), /\$\{LEAD_QUOTE_PENDING\}/);
+  assert.match(src, /const LEAD_QUOTE_PENDING = `q\.status IN \('held', 'draft'\) AND q\.cancelled_at IS NULL`;/);
+  /* The ones already let go come back once; a lead a person dismissed does not. */
+  const fix = after('async function restorePendingQuoteLeadsOnce(', 1600);
+  assert.match(fix, /s\.dismiss_reason IN \(\$1::text, \$2::text\)/);
+  assert.match(fix, /\[LEADFU\.OLD_CONTACT_REASON, LEADFU\.LET_GO_REASON\]/);
+});
+
+test('shop-lead sales are the shop\'s; the owner\'s own credit choices and paid commission are left alone', () => {
+  const once = after("('shop-sales-credit-shop')", 900);
+  assert.match(once, /q\.sale_type = 'shop' AND q\.credited_to > 0/);
+  assert.match(once, /commission_payouts/);
+  assert.match(once, /a\.action = 'POST \/admin\/quote\/:code\/credit'/);
+});
