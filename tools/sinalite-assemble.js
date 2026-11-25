@@ -28,6 +28,12 @@ const META = {
     /* Smallest run offered (owner, 2026-10-21: nothing overpriced): 25 cost
        $185 ($7.40 each); 250 is under $1 each. */
     sell_from: 250,
+    /* Any quantity from 250 can be typed (owner, 2026-11-24), not only the set
+       runs. SinaLite still sells set runs, so a quantity between them is
+       priced as the cheapest runs that cover it (eachFor), keeping the x2
+       rule on what the shop actually buys. Not any_qty: that prices between
+       runs below the run bought. */
+    typed_qty: true,
     url: 'https://sinalite.com/en_us/print-products/brochures/100lb-gloss-text.html',
     note: '100lb gloss text, full color, scored and tri-folded (scoring stops the fold cracking). Opens to 8.5" x 11".',
     materials: [{ key: '1s', label: 'Printed one side' }, { key: '2s', label: 'Printed both sides' }],

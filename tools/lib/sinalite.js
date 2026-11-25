@@ -200,8 +200,13 @@ function familyOf(key, p) {
     design_in: Number(p.design_in) || 0,
     /* true: SinaLite takes any quantity (typed box), so a quantity between
        captured tiers pays the tier below's each (each falls as the run grows,
-       so that is never under cost). false: set runs only (eachFor). */
+       so that is never under cost). false: set runs only (eachFor), unless
+       typed_qty below lets any quantity be typed and priced as a run mix. */
     any_qty: !!p.any_qty,
+    /* true: any quantity from the minimum can be typed, though SinaLite sells
+       set runs; it is priced as the cheapest runs that cover it (brochures,
+       owner 2026-11-24). */
+    typed_qty: !!p.typed_qty,
     turnaround: p.turnaround || null, url: p.url || null,
     min: Number.isFinite(min) ? Math.max(min, sellFrom) : null,
     sell_from: sellFrom || null,

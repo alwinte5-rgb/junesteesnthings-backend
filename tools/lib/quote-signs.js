@@ -131,10 +131,14 @@ function priceSign(kind, spec, qty, takeFreight, opts = {}) {
     /* Set runs only (owner, 2026-10-20: "staff quote should only select the
        numbers given"). A quantity between SinaLite's runs is refused, naming
        the runs either side, rather than bought as a mix of runs. Any-quantity
-       items (typed box on SinaLite) still take any number. */
+       items (typed box on SinaLite) still take any number. typed_qty items
+       (brochures, owner 2026-11-24) take any number up to the top run, priced
+       as the cheapest mix of runs that covers it; above the top run they are
+       still quoted by hand. */
     /* opts.grandfather: a line already saved at this quantity before the
        rule, re-saved unchanged, keeps its run-mix price (code review). */
-    if (fam.supplier === 'sinalite' && !fam.any_qty && !opts.grandfather && !offered.some(([rq]) => rq === q)) {
+    const overTop = q > offered[offered.length - 1][0];
+    if (fam.supplier === 'sinalite' && !fam.any_qty && (!fam.typed_qty || overTop) && !opts.grandfather && !offered.some(([rq]) => rq === q)) {
       const n = (x) => x.toLocaleString('en-US');
       const below = offered.filter(([rq]) => rq < q).pop();
       const above = offered.find(([rq]) => rq > q);
@@ -147,7 +151,11 @@ function priceSign(kind, spec, qty, takeFreight, opts = {}) {
        cheapest mix of runs that covers it; an any-quantity item never costs
        more than the next run's total (sinalite.js eachFor). Signs365 stock
        ladders are bands. */
-    const base = fam.supplier === 'sinalite' ? SL.eachFor(ladder, q, fam.any_qty, fam.design_in) : ladderPrice(ladder, q);
+    /* A typed quantity is made of the runs the shop sells (from sell_from),
+       the same runs the customer's quote page prices it with. */
+    const base = fam.supplier === 'sinalite'
+      ? SL.eachFor(fam.typed_qty && !opts.grandfather ? offered : ladder, q, fam.any_qty, fam.design_in)
+      : ladderPrice(ladder, q);
     /* Never arithmetic on a missing price: null is "cannot price", not $0
        (Codex on #293: a quantity past the run cap priced free). */
     if (!(base > 0)) return { ok: false, error: `${size.label} ${fam.label.toLowerCase()} cannot be priced at ${q.toLocaleString('en-US')}; quote it by hand.` };
@@ -228,7 +236,7 @@ function sizerOptions() {
         /* The quantities SinaLite sells, shown under the sizer so nobody has
            to guess a run (owner, 2026-10-15: "there are no quantities"). */
         return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null,
-          runs: fam.runs || [], any_qty: !!fam.any_qty }; })() : {}),
+          runs: fam.runs || [], any_qty: !!fam.any_qty, typed_qty: !!fam.typed_qty }; })() : {}),
       limits: fam.limits || null, sizes: fam.sizes || null,
       materials: fam.materials.map((m) => ({ key: m.key, label: m.label })),
       sheet_upgrades: fam.sheet_upgrades || {},

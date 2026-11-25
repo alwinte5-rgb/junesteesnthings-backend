@@ -13936,9 +13936,10 @@ ${quotePricingSource()}
             /* SinaLite: the runs it sells, and that its shipping to the shop is
                already in the price (owner asked both, 2026-10-15). */
             (o.supplier === 'sinalite' && o.runs && o.runs.length ? '<div class="slruns" style="font-size:12px;color:#3f4a5f;margin:4px 0 0">' +
-              (o.any_qty ? 'Any quantity from ' + o.min.toLocaleString() + '. SinaLite prices: ' : 'SinaLite runs: ') +
+              (o.any_qty || o.typed_qty ? 'Any quantity from ' + o.min.toLocaleString() + '. SinaLite ' + (o.any_qty ? 'prices: ' : 'runs: ') : 'SinaLite runs: ') +
               o.runs.map(function(q){ return q.toLocaleString(); }).join(' · ') +
-              (o.any_qty ? ' (in between, never more than the next one up)' : ' (only these quantities can be quoted)') +
+              (o.any_qty ? ' (in between, never more than the next one up)'
+                : o.typed_qty ? ' (in between, priced as the runs that cover it)' : ' (only these quantities can be quoted)') +
               '. Shipping to the shop is included in the price.</div>' : '') +
             /* No SinaLite table, or one that cannot be read: said where the
                price is made, not only in the morning email. Prices are fixed,
@@ -17255,7 +17256,7 @@ function sinaliteRunsOf(it) {
   const from = Number(fam.sell_from) || 0;
   const sells = Array.isArray(lad) && !(Number(it.qty) < from) ? lad.filter(([q]) => q >= from) : lad;
   return Array.isArray(sells) && sells.length
-    ? { ladder: sells, any: !!fam.any_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
+    ? { ladder: sells, any: !!fam.any_qty, typed: !!fam.typed_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -18249,7 +18250,10 @@ ${quotePricingSource()}
          2026-10-20), so the estimate names the next run up and prices it,
          as it does the minimum. The saved quantity keeps its saved price. */
       function slNext(L, qty){
+        /* typed (brochures, 2026-11-24): any quantity up to the top run is
+           priced as the runs that cover it, exactly as the save prices it. */
         if (!L.runs || L.runs.any || !(qty > 0) || qty === L.runs.qty || slUnder(L, qty)) return null;
+        if (L.runs.typed && qty <= L.runs.ladder[L.runs.ladder.length - 1][0]) return null;
         var lad = L.runs.ladder;
         for (var i = 0; i < lad.length; i++) if (lad[i][0] === qty) return null;
         for (var j = 0; j < lad.length; j++) if (lad[j][0] > qty) return lad[j];
