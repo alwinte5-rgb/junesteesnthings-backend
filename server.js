@@ -23021,16 +23021,20 @@ app.post('/admin/quote/:code/follow-up', requireAdmin, async (req, res) => {
   if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/quotes');
   const where = '/admin/quotes#q-' + code;
   try {
-    const { rows: [prev] } = await pool.query('SELECT followed_up_at FROM quotes WHERE code = $1', [code]);
+    const { rows: [prev] } = await pool.query('SELECT followed_up_at, reminders_skipped FROM quotes WHERE code = $1', [code]);
     if (!prev) return back(res, '/admin/quotes', 'err', 'No such quote.');
     const { rows } = await pool.query(
-      `UPDATE quotes SET followed_up_at = NOW()
+      /* A follow-up sent by hand is a real one: an earlier "skip" of the
+         automatic one no longer describes it (code review). */
+      `UPDATE quotes SET followed_up_at = NOW(),
+              reminders_skipped = array_remove(COALESCE(reminders_skipped, '{}'), 'follow-up')
         WHERE code = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
           AND status IN ('sent', 'viewed')
           AND (sent_to_customer_at IS NOT NULL OR status = 'viewed')
           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
           AND (email <> '' OR COALESCE(phone, '') <> '')
-          AND (followed_up_at IS NULL OR followed_up_at < NOW() - INTERVAL '1 hour')
+          AND (followed_up_at IS NULL OR followed_up_at < NOW() - INTERVAL '1 hour'
+               OR 'follow-up' = ANY(COALESCE(reminders_skipped, '{}')))
         RETURNING *`, [code]);
     if (!rows.length) return back(res, where, 'err',
       'Not sent: that quote is not waiting on the customer, has no email or phone, or was followed up in the last hour.');
@@ -23039,10 +23043,16 @@ app.post('/admin/quote/:code/follow-up', requireAdmin, async (req, res) => {
     if (!said.length) {
       /* Nothing went out: put the stamp back, so the board does not claim a
          follow-up that never happened. */
-      await pool.query('UPDATE quotes SET followed_up_at = $2 WHERE code = $1', [code, prev.followed_up_at]);
+      /* Only if the stamp is still this attempt's: a sweep or another click
+         that did send in the meantime keeps its own (code review). */
+      await pool.query(`UPDATE quotes SET followed_up_at = $2, reminders_skipped = $4
+                         WHERE code = $1 AND followed_up_at = $3`,
+        [code, prev.followed_up_at, rows[0].followed_up_at, prev.reminders_skipped || []]);
       const why = [r.email === 'opted-out' ? 'their email is unsubscribed' : r.email === 'failed' ? 'the email failed' : null,
         r.text === 'no-consent' ? 'they have not agreed to texts' : r.text === 'failed' ? 'the text failed'
-          : r.text === 'unconfigured' ? 'texting is not set up' : null].filter(Boolean);
+          : r.text === 'unconfigured' ? 'texting is not set up'
+          : r.text === 'no-phone' ? 'their phone number is not a valid US number'
+          : r.text === 'duplicate' ? 'that text was already sent' : null].filter(Boolean);
       return back(res, where, 'err', 'Nothing was sent' + (why.length ? ': ' + why.join(', ') : '') + '. Call or text them from your phone.');
     }
     console.log(`quote ${code}: followed up by hand (${said.join(' + ')})`);
@@ -24877,7 +24887,7 @@ async function renderBoard(VIEW, req, res) {
       if (codes.length) {
         const { rows: cr } = await pool.query(
           `SELECT quote_code,
-                  MAX(created_at) FILTER (WHERE status NOT IN ('received', 'failed', 'sending')) AS last_out,
+                  MAX(created_at) FILTER (WHERE status IN ('sent', 'delivered')) AS last_out,
                   MAX(created_at) FILTER (WHERE status = 'received') AS last_in
              FROM (SELECT quote_code, created_at, status FROM client_emails WHERE quote_code = ANY($1)
                    UNION ALL
@@ -24908,8 +24918,11 @@ async function renderBoard(VIEW, req, res) {
     const followUpForm = (q) => {
       if (q.accepted_at || q.cancelled_at || !['sent', 'viewed'].includes(q.status)) return '';
       if (!q.email && !q.phone) return '';
+      /* The same tests as the route, so the button never promises a refusal. */
+      if (q.status === 'sent' && !q.sent_to_customer_at) return '';
+      if (q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString())) return '';
       const label = !followedUp(q) ? 'Follow up now' : daysSince(q.followed_up_at) >= QUIET_DAYS ? 'One last try' : 'Follow up again';
-      const recent = q.followed_up_at && daysSince(q.followed_up_at) < 1 / 24;
+      const recent = followedUp(q) && daysSince(q.followed_up_at) < 1 / 24;
       return `<form method="POST" action="/admin/quote/${q.code}/follow-up" style="display:inline"
                 onsubmit="if(!confirm('Send ${escEmail(String(q.name || 'them').replace(/['\\\r\n\u2028\u2029]/g, ' ').slice(0, 60))} the follow-up now, by ${
                   [q.email ? 'email' : null, q.phone ? 'text' : null].filter(Boolean).join(' and ')}?'))return false;var b=this.querySelector('button');setTimeout(function(){b.disabled=true},0);return true">
@@ -25465,7 +25478,8 @@ async function renderBoard(VIEW, req, res) {
         /* Drafts sit in this group to be found, but nobody is waiting on a
            quote they never got (Codex #129). */
         gLive.length} waiting on the customer${
-          gNew.length ? ` (<b>${gNew.length} not followed up</b>)` : ''}${(() => {
+          (() => { const n = gLive.filter((q) => !followedUp(q)).length;
+            return n ? ` (<b>${n} not followed up</b>)` : ''; })()}${(() => {
           /* Held and drafts: nobody is waiting on a quote they never got (Codex #129). */
           const d = gNotSent.length;
           return d ? ` &middot; ${d} not sent yet` : '';
@@ -31863,14 +31877,18 @@ async function sendQuoteFollowUps() {
           -- never the first thing a customer hears: only a quote that was sent
           -- to them, or that they have opened (2026-10-06)
           AND (sent_to_customer_at IS NOT NULL OR status = 'viewed')
-          AND created_at <= NOW() - ($1 || ' days')::interval
+          -- counted from when the customer GOT it: a quote drafted or held for
+          -- days must not be chased the hour it is sent (code review)
+          AND COALESCE(sent_to_customer_at, viewed_at, created_at) <= NOW() - ($1 || ' days')::interval
           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
           AND (email <> '' OR COALESCE(phone, '') <> '')
         LIMIT 20`, [String(days)]);
 
     for (const q of rows) {
-      // Mark first: a send that throws must not re-fire every hour.
-      await pool.query('UPDATE quotes SET followed_up_at=NOW() WHERE id=$1', [q.id]);
+      /* Mark first: a send that throws must not re-fire every hour. Claimed:
+         the board's Follow up now may have sent it since the SELECT. */
+      const { rowCount } = await pool.query('UPDATE quotes SET followed_up_at=NOW() WHERE id=$1 AND followed_up_at IS NULL', [q.id]);
+      if (!rowCount) continue;
       await sendQuoteFollowUp(q);
     }
   } catch (e) {

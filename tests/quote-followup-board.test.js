@@ -12,7 +12,7 @@ const after = (needle, n) => { const i = src.indexOf(needle); assert.ok(i > -1, 
 const STAFF = require('../tools/lib/staff');
 
 test('the follow-up route is admin-only, staff-gated, claimed once, and honest when nothing went out', () => {
-  const r = after("app.post('/admin/quote/:code/follow-up'", 3000);
+  const r = after("app.post('/admin/quote/:code/follow-up'", 4000);
   assert.match(r, /requireAdmin/);
   assert.match(r, /QUOTE_CODE_RE\.test\(code\)/);
   /* One UPDATE claims it: a double click or two staff send it once. */
@@ -20,8 +20,19 @@ test('the follow-up route is admin-only, staff-gated, claimed once, and honest w
   assert.match(r, /status IN \('sent', 'viewed'\)/);
   assert.match(r, /accepted_at IS NULL AND cancelled_at IS NULL/);
   /* Nothing sent: the stamp goes back, so the board never claims a follow-up. */
-  assert.match(r, /if \(!said\.length\) \{[\s\S]*UPDATE quotes SET followed_up_at = \$2 WHERE code = \$1/);
-  assert.strictEqual(STAFF.ROUTE_PERMS ? STAFF.ROUTE_PERMS['POST /admin/quote/:code/follow-up'] : 'quotes.manage', 'quotes.manage');
+  assert.match(r, /if \(!said\.length\) \{[\s\S]*UPDATE quotes SET followed_up_at = \$2, reminders_skipped = \$4/);
+  assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/follow-up'], 'quotes.manage');
+  /* A hand follow-up clears an earlier skip; a rollback never undoes another send. */
+  assert.match(r, /array_remove\(COALESCE\(reminders_skipped, '\{\}'\), 'follow-up'\)/);
+  assert.match(r, /WHERE code = \$1 AND followed_up_at = \$3/);
+}); 
+
+test('the automatic sweep claims each quote and counts from when it was sent', () => {
+  const sw = after('async function sendQuoteFollowUps(', 2500);
+  assert.match(sw, /WHERE id=\$1 AND followed_up_at IS NULL/);
+  assert.match(sw, /if \(!rowCount\) continue;/);
+  assert.match(sw, /COALESCE\(sent_to_customer_at, viewed_at, created_at\) <= NOW\(\)/);
+  assert.match(src, /FILTER \(WHERE status IN \('sent', 'delivered'\)\) AS last_out/, 'only delivered messages count as contact');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'tools', 'lib', 'staff.js'), 'utf8'),
     /'POST \/admin\/quote\/:code\/follow-up': 'quotes\.manage'/);
 });
