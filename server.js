@@ -24911,7 +24911,7 @@ async function renderBoard(VIEW, req, res) {
       const label = !followedUp(q) ? 'Follow up now' : daysSince(q.followed_up_at) >= QUIET_DAYS ? 'One last try' : 'Follow up again';
       const recent = q.followed_up_at && daysSince(q.followed_up_at) < 1 / 24;
       return `<form method="POST" action="/admin/quote/${q.code}/follow-up" style="display:inline"
-                onsubmit="if(!confirm('Send ${escEmail(String(q.name || 'them').replace(/['\\]/g, ''))} the follow-up now, by ${
+                onsubmit="if(!confirm('Send ${escEmail(String(q.name || 'them').replace(/['\\\r\n\u2028\u2029]/g, ' ').slice(0, 60))} the follow-up now, by ${
                   [q.email ? 'email' : null, q.phone ? 'text' : null].filter(Boolean).join(' and ')}?'))return false;var b=this.querySelector('button');setTimeout(function(){b.disabled=true},0);return true">
           <button type="submit" class="btn" style="padding:8px 16px;font-size:13px"${recent ? ' disabled title="Followed up in the last hour"' : ''}>${label}</button>
         </form>`;
