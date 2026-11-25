@@ -115,7 +115,15 @@ const META = {
      not in these prices — a two-sided job needs that added by hand. */
   mug: {
     name: 'Ceramic Mugs — 11oz, printed', label: 'Ceramic Mugs', group: 'Drinkware',
-    design: null, online: true, any_qty: true,
+    design: null, online: false, any_qty: true,
+    /* Off the quote form's product list (owner, 2026-11-25): the shop prints
+       its own mugs (tools/add-shop-mugs.js, $20.98 for one) and this one
+       priced one mug at $62. The row and family stay for agreed quotes
+       that hold it (server.js withoutRetired). */
+    retired: true,
+    /* What a line holding it becomes: the shop's own mug, so it is priced as
+       the designer prices it (owner, 2026-11-25). */
+    replaced_by: 'White Ceramic Sublimation Mug — 11.8 oz',
     url: 'https://sinalite.com/en_us/promotional-products/mugs/11oz-ceramic-mug.html',
     note: 'White 11oz ceramic mug, full-color sublimation print on one side. No minimum.',
     materials: [{ key: '1side', label: 'Printed one side' }],

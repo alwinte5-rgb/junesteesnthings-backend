@@ -279,21 +279,23 @@ test('a typed-quantity item (pouches) never prices 700 above 1,000, nor under th
 
 test('a price file with a malformed product keeps the last good table (and a huge quantity is refused, not free)', () => {
   const real = fs.readFileSync(SL.DATA_FILE, 'utf8');
+  const copy = path.join(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sinalite-')), 'costs.json');
+  fs.writeFileSync(copy, real);
   const said = []; const orig = console.error; console.error = (m) => said.push(String(m));
   try {
-    SL._setData(null);
-    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() - 5000));
+    SL._setFile(copy);
+    fs.utimesSync(copy, new Date(), new Date(Date.now() - 5000));
     const good = SL.table();
     assert.ok(good.families.calendar, 'the real file loads');
     const bad = JSON.parse(real); delete bad.products.calendar.materials;
-    fs.writeFileSync(SL.DATA_FILE, JSON.stringify(bad));
-    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() + 5000));
+    fs.writeFileSync(copy, JSON.stringify(bad));
+    fs.utimesSync(copy, new Date(), new Date(Date.now() + 5000));
     SL._recheck();
     const t = SL.table();
     assert.ok(t.families.calendar, 'still the last good table');
     assert.match(t.error || '', /calendar is missing materials/);
   } finally {
-    fs.writeFileSync(SL.DATA_FILE, real);
+    SL._setFile(null);
     console.error = orig;
   }
   const QS = require('../tools/lib/quote-signs');
@@ -314,20 +316,22 @@ test('SinaLite lead time (their turnaround + inbound shipping) sets the ready da
 
 test('a re-capture missing one offered size/material is refused; huge quantities do not blow the stack', () => {
   const real = fs.readFileSync(SL.DATA_FILE, 'utf8');
+  const copy = path.join(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sinalite-')), 'costs.json');
+  fs.writeFileSync(copy, real);
   const orig = console.error; console.error = () => {};
   try {
-    SL._setData(null);
-    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() - 9000));
+    SL._setFile(copy);
+    fs.utimesSync(copy, new Date(), new Date(Date.now() - 9000));
     assert.ok(SL.table().families.calendar, 'the real file loads first');
     const bad = JSON.parse(real);
     bad.products.calendar.rows = bad.products.calendar.rows.filter((r) => r.mat !== '24pg_cover');
-    fs.writeFileSync(SL.DATA_FILE, JSON.stringify(bad));
-    fs.utimesSync(SL.DATA_FILE, new Date(), new Date(Date.now() + 9000));
+    fs.writeFileSync(copy, JSON.stringify(bad));
+    fs.utimesSync(copy, new Date(), new Date(Date.now() + 9000));
     SL._recheck();
     const t = SL.table();
     assert.match(t.error || '', /calendar has no prices for 24pg_cover/);
     assert.ok(t.families.calendar.prices['24pg_cover']['8.5x11'][''].length, 'the last good table still prices it');
-  } finally { fs.writeFileSync(SL.DATA_FILE, real); console.error = orig; }
+  } finally { SL._setFile(null); console.error = orig; }
   const L = [[25, 30.39], [50, 16.94], [100, 11.56]];
   assert.ok(SL.eachFor(L, 100000) > 0, 'the cap prices');
   assert.strictEqual(SL.eachFor(L, 100001), null, 'past the cap: not priced');
@@ -447,3 +451,18 @@ test('the live SinaLite table is regular prices, never sale prices (owner, 2026-
   const cap = fs.readFileSync(path.join(__dirname, '..', 'tools', 'sinalite-capture.js'), 'utf8');
   assert.match(cap, /regular price ' \+ box\.textContent \+ ' unreadable or below/, 'a regular price below the shown one stops the capture');
 });
+
+test('the SinaLite mug is retired: off the quote form list, still priced for quotes that hold it (owner, 2026-11-25)', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  assert.strictEqual(require('../tools/sinalite-assemble.js').META.mug.retired, true, 'a re-capture keeps it retired');
+  const fam = SL.table().families.mug;
+  assert.strictEqual(fam.retired, true);
+  assert.ok(fam.prices['1side']['11oz'][''].length, 'saved quotes with it still price');
+  assert.strictEqual(SL.table().families.tumbler.retired, false, 'only the mug');
+  /* Anchored on short markers (AGENTS.md), not the guard expressions. */
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.ok(src.includes('function retiredSinalite(prod)'));
+  assert.strictEqual((src.match(/select\.p option\[data-retired\]/g) || []).length, 3, 'add, duplicate and clearing a line all drop it');
+  assert.strictEqual(require('../tools/sinalite-assemble.js').META.mug.online, false);
+});
+

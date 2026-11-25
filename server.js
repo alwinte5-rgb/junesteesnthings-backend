@@ -12915,7 +12915,14 @@ app.get(['/admin/quote/new', '/admin/quote/:code/edit'], requireAdmin, async (re
      or paid; they still see the ideas, without the Apply button. */
   const upLocked = isEdit && !isOwner() && !!(existing.accepted_at || Number(existing.paid_amount || 0) > 0);
   const goLabel = exam ? 'Check my quote' : isDraft ? 'Finish & get the message' : isEdit ? 'Save changes' : 'Create quote & get the message';
-  const eItems = (E.items && E.items.length) ? E.items : [null];
+  /* Agreed or paid: its lines open as they were agreed, and the all-in rule
+     covers only items added to it since. Otherwise a line holding a retired
+     item opens as what replaced it (the SinaLite mug is the shop's own mug
+     now, at the designer's price). */
+  const agreed = isEdit && !!(existing.accepted_at || Number(existing.paid_amount || 0) > 0);
+  const ALL_IN = allInMethods(catalog, agreed ? E.items : null);
+  const eItems = ((E.items && E.items.length) ? E.items : [null])
+    .map((it) => (agreed ? it : withoutRetired(it, catalog)));
   const val = (v) => v == null ? '' : escEmail(String(v));
   const [eFirst, ...eRest] = String(E.name || '').trim().split(/\s+/);
 
@@ -12939,14 +12946,19 @@ function productGroupOf(name) {
 
   const prodOpts = (sel, cutSel) => {
     const opt = (p) =>
-      `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}>` +
-      `${escEmail(p.name)} — ${money(p.price)}</option>`;
+      `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}${retiredSinalite(p) ? ' data-retired="1"' : ''}>` +
+      `${escEmail(p.name)} — ${ALL_IN[String(p.id)] ? `${money(allInEach(p, ALL_IN[String(p.id)]))} for one, printing included` : money(p.price)}</option>`;
 
     const bucket = new Map(PRODUCT_GROUPS.map(([label]) => [label, []]));
     bucket.set('Everything else', []);
     /* Services by flag, not name: "Business Card Design" would land in Signs. */
     bucket.set(SERVICE_GROUP, []);
-    for (const p of catalog.products) bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
+    /* A retired SinaLite item (the mug, owner 2026-11-25) is not offered for
+       a new pick; only an agreed quote's line still holds it. */
+    for (const p of catalog.products) {
+      if (retiredSinalite(p) && String(p.id) !== String(sel)) continue;
+      bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
+    }
 
     /* A group with nothing in it is not rendered — an empty heading is worse
        than no heading. Within a group the catalogue's own order is kept. */
@@ -13507,6 +13519,37 @@ function productGroupOf(name) {
          the server, which is also what prices the save. */
       var SIGN_KIND = ${JSON.stringify(Object.fromEntries(catalog.products
         .map((p) => [String(p.id), sizedKindOf(p)]).filter((x) => x[1])))};
+      /* Items sold at one all-in price, by product: the decoration that carries it. */
+      var ALL_IN = ${JSON.stringify(Object.fromEntries(Object.entries(ALL_IN).map(([pid, m]) => [pid, String(m.id)])))};
+      var ALL_IN_IDS = Object.keys(ALL_IN).map(function(k){ return ALL_IN[k]; });
+      /* Put the item's own all-in decoration on the line, once: the price covers
+         the printing, so no other place is charged (as in the designer). What it
+         replaced is kept on the row and put back when the product changes to one
+         that is not all-in. The save does the same. */
+      function allInSync(L, prod){
+        if (!prod) return;
+        var want = ALL_IN[String(prod.id)] || '';
+        var rows = Array.prototype.slice.call(L.querySelectorAll('.ploc[data-loc]'));
+        function on(r){ return r.querySelector('.pon').checked; }
+        if (want && rows.length) {
+          var keep = rows.filter(function(r){ return on(r) && r.querySelector('.pm').value === want; })[0] || rows.filter(on)[0] || rows[0];
+          rows.forEach(function(r){
+            var cb = r.querySelector('.pon'), pm = r.querySelector('.pm');
+            if (r.dataset.was === undefined && ALL_IN_IDS.indexOf(pm.value) < 0) r.dataset.was = (cb.checked ? '1:' : '0:') + pm.value;
+            cb.checked = r === keep;
+            pm.value = r === keep ? want : '';
+          });
+          return;
+        }
+        rows.forEach(function(r){
+          var cb = r.querySelector('.pon'), pm = r.querySelector('.pm');
+          if (r.dataset.was !== undefined) {
+            cb.checked = r.dataset.was.charAt(0) === '1';
+            pm.value = r.dataset.was.slice(2);
+            delete r.dataset.was;
+          } else if (ALL_IN_IDS.indexOf(pm.value) > -1) pm.value = '';
+        });
+      }
       var SIGN_OPTS = ${JSON.stringify(QSIGNS.sizerOptions())};
       function isSignProduct(prod){ return !!(prod && SIGN_RE.test(String(prod.name || ''))); }
 
@@ -14073,6 +14116,11 @@ ${quotePricingSource()}
           if (from[i].type === 'checkbox' || from[i].type === 'radio') to[i].checked = from[i].checked;
           else to[i].value = from[i].value;
         }
+        /* A duplicate is a new line: a retired item (the SinaLite mug) is not
+           copied onto it; the copy starts with no product. */
+        copy.querySelectorAll('select.p option[data-retired]').forEach(function(o){
+          if (o.selected) { var ps = o.parentNode.closest('select'); o.remove(); if (ps) ps.value = ''; } else o.remove();
+        });
         /* Listeners do not come with a clone: clear the marks that say they
            were bound, and let bind() and the sizer attach their own. */
         copy.querySelectorAll('[data-qty-bound]').forEach(function(el){ delete el.dataset.qtyBound; });
@@ -14114,6 +14162,9 @@ ${quotePricingSource()}
           /* Tick boxes are UNTICKED, never blanked: a blank value posts "" when
              ticked again, which read as unticked, and every item added after
              was copied from this one (2026-09-30: Optional silently lost). */
+          /* Cleared, the line is a new one: no retired item on offer. */
+          only.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
+          only.querySelectorAll('.ploc[data-was]').forEach(function(r){ delete r.dataset.was; });
           only.querySelectorAll('input,select').forEach(function(el){
             if (el.type === 'checkbox' || el.type === 'radio') el.checked = false;
             else el.value = '';
@@ -14393,6 +14444,7 @@ ${quotePricingSource()}
           var signKind = signKindOf(prod);
           var sgn = L.querySelector('.signnote');
           if (sgn) sgn.style.display = isSign && !signKind ? '' : 'none';
+          if (!cutMeth && !noPrint) allInSync(L, prod);
           var prints = [];
           var firstM = '';
           L.querySelectorAll('.ploc[data-loc]').forEach(function(row){
@@ -14677,7 +14729,7 @@ ${quotePricingSource()}
               bpNote.textContent = 'Catalogue has ' + m2(prod.price) + ' — using your ' + m2(parseFloat(bpEl.value) || 0);
               bpNote.style.color = '#b45309';
             } else {
-              bpNote.textContent = 'Catalogue: ' + m2(prod.price) + ' each' +
+              bpNote.textContent = ALL_IN[String(prod.id)] ? 'One price, printing included' : 'Catalogue: ' + m2(prod.price) + ' each' +
                 (r.blank !== prod.price ? ' → ' + m2(r.blank) + ' at this quantity' : '');
               bpNote.style.color = '#6b7280';
             }
@@ -14916,6 +14968,12 @@ ${quotePricingSource()}
       }
       function addLine(){
         var tpl = document.getElementById('lines').firstElementChild.cloneNode(true);
+        /* A retired item kept on the line it was copied from is not offered
+           on a new one (the SinaLite mug, owner 2026-11-25). Removed before the
+           values are cleared, so the copy starts on no product, not the first. */
+        tpl.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
+        /* The printing an all-in item replaced belongs to the line it was copied from. */
+        tpl.querySelectorAll('.ploc[data-was]').forEach(function(r){ delete r.dataset.was; });
         tpl.querySelectorAll('input,select').forEach(function(el){
           /* \\d, not \d — this whole script lives inside a template literal, so a
              single backslash is eaten before the browser ever sees it. It was,
@@ -15559,8 +15617,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        2026-10-20) still saves unchanged, so fixing a typo never forces the
        customer's agreed quantity to move (code review). */
     const priorSizedQty = new Set();
+    /* An accepted or paid quote's lines, which stand as agreed; null otherwise. */
+    let agreedItems = null;
     if (QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())) {
-      const { rows: [pq] } = await pool.query('SELECT items FROM quotes WHERE code = $1', [String(req.params.code).toUpperCase()]);
+      const { rows: [pq] } = await pool.query('SELECT items, accepted_at, paid_amount FROM quotes WHERE code = $1', [String(req.params.code).toUpperCase()]);
+      if (pq && (pq.accepted_at || Number(pq.paid_amount || 0) > 0)) agreedItems = Array.isArray(pq.items) ? pq.items : [];
       for (const it of (pq && Array.isArray(pq.items) ? pq.items : [])) {
         if (it && it.sign && it.sign.kind) priorSizedQty.add(it.sign.kind + '|' + (Number(it.qty) || 0));
       }
@@ -15657,11 +15718,23 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       String(one(b[`addon_cutout_ship_large${i}`]) || '') === '1';
     const freightUpgraded = [...Array(40).keys()].some((i) => !isOptional(i) && upgradedAt(i));
 
+    /* The shop's all-in items; an agreed quote's own lines stand as agreed. */
+    const allIn = allInMethods(catalog, agreedItems);
+    const allInIds = new Set(Object.values(allIn).map((m) => String(m.id)));
     for (const i of lineOrder) {
-      const desc = String(one(b['description' + i]) || '').trim();
+      let desc = String(one(b['description' + i]) || '').trim();
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
       const optional = isOptional(i);
-      const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
+      let prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
+      /* A retired item (the SinaLite mug) posted by a form left open since
+         before it was retired: the line becomes what replaced it, at the
+         designer's price. With no replacement to be found it is refused, never
+         priced from the retired table. */
+      if (retiredSinalite(prod) && !(agreedItems || []).some((it) => it && String(it.product_id) === String(prod.id))) {
+        const next = retiredReplacement(prod, catalog);
+        if (next && allIn[String(next.id)]) { desc = desc.replace(prod.name, next.name); prod = next; }
+        else signErrors.push({ line: i + 1, what: desc || prod.name, error: 'This item is no longer sold. Pick another product.' });
+      }
       /* PRINT LOCATIONS (the form since 2026-10-06): one row per place —
          front, back, left sleeve, right sleeve — each ticked or not, with its
          own method and ink count. Methods resolve against the CATALOGUE and a
@@ -15680,14 +15753,22 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         prints.push({ loc, method: pm, colours: colourCount(pm, one(b[`pr_c_${loc}${i}`])) });
       }
       if (isService) prints.length = 0;
+      /* An all-in item carries its own decoration, once, as allInSync() puts it
+         on the form; another all-in item's decoration never prices this product. */
+      const ownAllIn = prod ? allIn[String(prod.id)] : null;
+      const notItsOwn = (m) => !!(m && prod && allInIds.has(String(m.id)) && !(ownAllIn && String(m.id) === String(ownAllIn.id)));
+      if (ownAllIn) {
+        const at = prints.find((p) => String(p.method.id) === String(ownAllIn.id)) || prints[0];
+        prints.splice(0, prints.length, { loc: at ? at.loc : 'front', method: ownAllIn, colours: colourCount(ownAllIn, '') });
+      } else for (let k = prints.length - 1; k >= 0; k--) if (notItsOwn(prints[k].method)) prints.splice(k, 1);
       const usePrints = prints.length > 0;
       /* Without locations, the line is priced the way it always was: a cutout
          pack (method alone), a plain typed line, or an older client. */
       const method = isService ? undefined : usePrints ? prints[0].method
-        : catalog.methods.find(m => String(m.id) === String(one(b['method' + i])));
+        : catalog.methods.find(m => String(m.id) === String(one(b['method' + i])) && !notItsOwn(m));
       /* The second decoration on the same garment, for a line without
          locations. Resolved against the CATALOGUE like the first. */
-      const method2 = (usePrints || isService) ? undefined : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])));
+      const method2 = (usePrints || isService) ? undefined : catalog.methods.find(m => String(m.id) === String(one(b['method2' + i])) && !notItsOwn(m));
       /* Count a row as real if ANY field was filled in. Previously a line with
          only a price (or only a size mix) was silently dropped, which for a
          single-line quote produced "Add at least one item" and lost the work. */
@@ -17200,6 +17281,60 @@ function customerLinePricing(items, catalog) {
       precise: customerLineFigures(it).folded > 0,
     };
   });
+}
+
+/** A SinaLite product no longer offered (tools/sinalite-assemble.js
+ *  `retired`; the mug, owner 2026-11-25). An agreed quote keeps it as agreed;
+ *  anywhere else the line becomes its replacement. */
+function retiredSinalite(prod) {
+  return !!prod && prod.supplier === 'sinalite' && !!(SINALITE.table().families[sizedKindOf(prod)] || {}).retired;
+}
+
+/** The catalogue product a retired SinaLite item is replaced by (the shop's
+ *  own mug, priced as the designer prices it; owner, 2026-11-25), or null. */
+function retiredReplacement(prod, catalog) {
+  if (!retiredSinalite(prod)) return null;
+  const name = SINALITE.table().families[sizedKindOf(prod)].replaced_by;
+  return (name && ((catalog && catalog.products) || []).find((p) => p.name === name)) || null;
+}
+
+/** The shop's own items sold at ONE all-in price, printing included
+ *  (tools/add-shop-mugs.js): { product id: method }. Each is a $0 product whose
+ *  single decoration carries the whole price, which is what the designer
+ *  charges. The quote form and the save both put that decoration on the line,
+ *  so a mug is never quoted at $0 or at the plain sublimation price.
+ *  `agreedItems`: an accepted or paid quote's lines. Their items are left out,
+ *  so what was agreed stands and only newly added items follow the rule. */
+function allInMethods(catalog, agreedItems = null) {
+  const out = {};
+  const agreed = new Set((agreedItems || []).filter((it) => it && it.product_id).map((it) => String(it.product_id)));
+  for (const p of (catalog && catalog.products) || []) {
+    if (agreed.has(String(p.id)) || p.supplier !== 'shop' || Number(p.price) > 0 || !Array.isArray(p.printing_ids) || p.printing_ids.length !== 1) continue;
+    const m = ((catalog && catalog.methods) || []).find((x) => String(x.id) === String(p.printing_ids[0]));
+    if (m && m.active && m.use_for_quoting && /^All-in\b/.test(String(m.title || '')) &&
+        Object.keys(m.positions || {}).length) out[String(p.id)] = m;
+  }
+  return out;
+}
+
+/** What one of an all-in item costs, from the engine that prices the line. */
+function allInEach(prod, method) {
+  return priceLine({ product: prod, qty: 1, addons: [], blankTiers: BLANK_TIERS,
+    prints: [{ loc: 'front', method, colours: '' }] }).unit;
+}
+
+/** A saved line as the edit form opens it: one holding a retired item becomes
+ *  its replacement. A price typed on the line stays the price. */
+function withoutRetired(it, catalog) {
+  const old = it && it.product_id ? ((catalog && catalog.products) || []).find((p) => String(p.id) === String(it.product_id)) : null;
+  const next = retiredReplacement(old, catalog);
+  const m = next ? allInMethods(catalog)[String(next.id)] : null;
+  if (!m) return it;   // no price for the replacement: the save refuses the retired item
+  return { ...it, product_id: next.id, method_id: m.id, sign: null, sign_priced: false,
+    prints: [{ loc: 'front', method_id: m.id }], details: it.sign ? (it.details_note || '') : it.details,
+    /* A price the size table gave is not a typed one. */
+    ...(it.sign_priced ? { manual: false, unit_override: null } : {}),
+    description: String(it.description || '').replace(old.name, next.name) };
 }
 
 /** A catalogue product's sized kind. A row tagged supplier = 'sinalite' is
