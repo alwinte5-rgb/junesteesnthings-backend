@@ -2238,10 +2238,12 @@ async function initStaffTables() {
   await pool.query(
     `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('shop-sales-credit-shop') ON CONFLICT DO NOTHING RETURNING 1)
      UPDATE quotes q SET credited_to = 0
-      WHERE EXISTS (SELECT 1 FROM claim) AND q.sale_type = 'shop' AND q.credited_to > 0
+      WHERE EXISTS (SELECT 1 FROM claim) AND q.sale_type = 'shop' AND (q.credited_to > 0 OR q.credited_to IS NULL)
         AND NOT EXISTS (SELECT 1 FROM commission_payouts c WHERE c.quote_code = q.code)
         AND NOT EXISTS (SELECT 1 FROM staff_activity a WHERE a.subject_id = q.code
-                          AND a.action = 'POST /admin/quote/:code/credit')`)
+                          AND (a.action = 'POST /admin/quote/:code/credit'
+                               -- the owner's pick on the quote form (setSalesCredit)
+                               OR (a.action = 'sales credit' AND a.staff_id IS NULL)))`)
     .then((r) => { if (r.rowCount) console.log(`sales credit: ${r.rowCount} shop sale(s) credited to the shop (once)`); })
     .catch((e) => console.error('shop sales credit fix failed:', e.message));
   /* Hours entered before wages were paid here were paid outside it. Marked
@@ -2428,8 +2430,10 @@ async function initStaffTables() {
     )`);
   /* Sales credit not yet decided falls to the helper who sent or built it.
      0 (the owner's own sale) is a decision, so it is never overwritten. */
+  /* Not a shop sale: those are the shop's (owner, 2026-11-24). */
   await pool.query(`UPDATE quotes SET credited_to = COALESCE(sent_by, created_by)
-                     WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL`);
+                     WHERE credited_to IS NULL AND COALESCE(sent_by, created_by) IS NOT NULL
+                       AND COALESCE(sale_type, 'shop') <> 'shop'`);
   await seedPlaybook();
   await addPlaybookArticles();
   /* Local delivery (tools/lib/delivery.js): zones, windows, bookings. The fee
@@ -16669,7 +16673,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
          "my own sale" and would take it away unseen. The owner can change it
          on the job page afterwards. */
       const want = actor.kind === 'owner' && !derivedCredit ? String(one(b.credit_to) || '').trim() : '';
-      const r = await setSalesCredit(code, want || (staffId && q.credited_to == null ? String(staffId) : ''), actor)
+      /* A helper takes an undecided sale only when it is not the shop's
+         (owner, 2026-11-24); a failed label leaves it for the owner. */
+      const r = await setSalesCredit(code, want || (staffId && q.credited_to == null && derivedCredit ? String(staffId) : ''), actor)
         .catch((e) => ({ ok: false, msg: e.message }));
       if (r.ok && r.to !== undefined) q.credited_to = r.to;
       else if (!r.ok && want) console.warn(`sales credit on ${code} not changed: ${r.msg}`);
@@ -23052,7 +23058,7 @@ app.post('/admin/quote/:code/follow-up', requireAdmin, async (req, res) => {
           AND (email <> '' OR COALESCE(phone, '') <> '')
           AND (followed_up_at IS NULL OR followed_up_at < NOW() - INTERVAL '1 hour'
                OR 'follow-up' = ANY(COALESCE(reminders_skipped, '{}')))
-        RETURNING *`, [code]);
+        RETURNING *, followed_up_at::text AS claimed_at`, [code]);
     if (!rows.length) return back(res, where, 'err',
       'Not sent: that quote is not waiting on the customer, has no email or phone, or was followed up in the last hour.');
     const r = await sendQuoteFollowUp(rows[0], { again: !!prev.followed_up_at });
@@ -23063,8 +23069,10 @@ app.post('/admin/quote/:code/follow-up', requireAdmin, async (req, res) => {
       /* Only if the stamp is still this attempt's: a sweep or another click
          that did send in the meantime keeps its own (code review). */
       await pool.query(`UPDATE quotes SET followed_up_at = $2, reminders_skipped = $4
-                         WHERE code = $1 AND followed_up_at = $3`,
-        [code, prev.followed_up_at, rows[0].followed_up_at, prev.reminders_skipped || []]);
+                         WHERE code = $1 AND followed_up_at::text = $3`,
+        /* Compared as Postgres's own text: a JS Date drops the microseconds
+           NOW() keeps, and would never match (code review). */
+        [code, prev.followed_up_at, rows[0].claimed_at, prev.reminders_skipped || []]);
       const why = [r.email === 'opted-out' ? 'their email is unsubscribed' : r.email === 'failed' ? 'the email failed' : null,
         r.text === 'no-consent' ? 'they have not agreed to texts' : r.text === 'failed' ? 'the text failed'
           : r.text === 'unconfigured' ? 'texting is not set up'
@@ -23098,7 +23106,11 @@ app.post('/admin/quote/:code/reinstate', requireAdmin, async (req, res) => {
       `UPDATE quotes SET valid_until = CURRENT_DATE + 14,
               status = CASE WHEN change_request IS NOT NULL AND change_request <> '' THEN 'changes'
                             WHEN viewed_at IS NOT NULL THEN 'viewed' ELSE 'sent' END,
-              followed_up_at = COALESCE(followed_up_at, NOW())
+              followed_up_at = COALESCE(followed_up_at, NOW()),
+              /* Stamped only to hold the automatic one back: recorded as a
+                 skip, so the board does not read it as a follow-up sent. */
+              reminders_skipped = CASE WHEN followed_up_at IS NULL
+                THEN array_append(COALESCE(reminders_skipped, '{}'), 'follow-up') ELSE reminders_skipped END
         WHERE code = $1 AND accepted_at IS NULL AND cancelled_at IS NULL AND status NOT IN ('held', 'draft')
           AND (status = 'expired' OR valid_until < CURRENT_DATE)
         RETURNING *`, [code]);
@@ -24908,7 +24920,7 @@ async function renderBoard(VIEW, req, res) {
                   MAX(created_at) FILTER (WHERE status = 'received') AS last_in
              FROM (SELECT quote_code, created_at, status FROM client_emails WHERE quote_code = ANY($1)
                    UNION ALL
-                   SELECT quote_code, created_at, status FROM sms_messages WHERE quote_code = ANY($1)) m
+                   SELECT quote_code, created_at, status FROM sms_messages WHERE quote_code = ANY($1) AND template <> 'call') m
             GROUP BY quote_code`, [codes]).catch((e) => { console.error('board contact lines:', e.message); return { rows: [] }; });
         for (const r of cr) contactBy.set(r.quote_code, r);
       }

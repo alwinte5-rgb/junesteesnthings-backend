@@ -24,7 +24,8 @@ test('the follow-up route is admin-only, staff-gated, claimed once, and honest w
   assert.strictEqual(STAFF.ROUTES['POST /admin/quote/:code/follow-up'], 'quotes.manage');
   /* A hand follow-up clears an earlier skip; a rollback never undoes another send. */
   assert.match(r, /array_remove\(COALESCE\(reminders_skipped, '\{\}'\), 'follow-up'\)/);
-  assert.match(r, /WHERE code = \$1 AND followed_up_at = \$3/);
+  assert.match(r, /WHERE code = \$1 AND followed_up_at::text = \$3/);
+  assert.match(r, /RETURNING \*, followed_up_at::text AS claimed_at/);
 }); 
 
 test('the automatic sweep claims each quote and counts from when it was sent', () => {
@@ -104,8 +105,15 @@ test('a helper\'s held or draft quote keeps its lead on the board until the owne
 });
 
 test('shop-lead sales are the shop\'s; the owner\'s own credit choices and paid commission are left alone', () => {
-  const once = after("('shop-sales-credit-shop')", 900);
-  assert.match(once, /q\.sale_type = 'shop' AND q\.credited_to > 0/);
+  const once = after("('shop-sales-credit-shop')", 1100);
+  assert.match(once, /q\.sale_type = 'shop' AND \(q\.credited_to > 0 OR q\.credited_to IS NULL\)/);
+  assert.match(once, /a\.action = 'sales credit' AND a\.staff_id IS NULL/);
+  /* The boot backfill and the save never hand a shop sale to a helper. */
+  assert.match(src, /AND COALESCE\(sale_type, 'shop'\) <> 'shop'`\);/);
+  assert.match(src, /staffId && q\.credited_to == null && derivedCredit \? String\(staffId\)/);
+  /* Reinstate records a skip, not a follow-up; calls are not replies. */
+  assert.match(after("app.post('/admin/quote/:code/reinstate'", 2500), /array_append\(COALESCE\(reminders_skipped, '\{\}'\), 'follow-up'\)/);
+  assert.match(src, /FROM sms_messages WHERE quote_code = ANY\(\$1\) AND template <> 'call'/);
   assert.match(once, /commission_payouts/);
   assert.match(once, /a\.action = 'POST \/admin\/quote\/:code\/credit'/);
 });
