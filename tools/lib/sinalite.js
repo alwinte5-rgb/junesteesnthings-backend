@@ -207,6 +207,9 @@ function familyOf(key, p) {
        set runs; it is priced as the cheapest runs that cover it (brochures,
        owner 2026-11-24). */
     typed_qty: !!p.typed_qty,
+    /* true: not offered on the quote form any more; still priced for lines
+       that already hold it (owner, 2026-11-25: the SinaLite mug). */
+    retired: !!p.retired,
     turnaround: p.turnaround || null, url: p.url || null,
     min: Number.isFinite(min) ? Math.max(min, sellFrom) : null,
     sell_from: sellFrom || null,

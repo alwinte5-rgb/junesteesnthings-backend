@@ -448,14 +448,14 @@ test('the live SinaLite table is regular prices, never sale prices (owner, 2026-
   assert.match(cap, /regular price ' \+ box\.textContent \+ ' unreadable or below/, 'a regular price below the shown one stops the capture');
 });
 
-test('the SinaLite mug is retired: off the quote form, still priced for quotes that hold it (owner, 2026-11-25)', () => {
+test('the SinaLite mug is retired: off the quote form list, still priced for quotes that hold it (owner, 2026-11-25)', () => {
   const fs = require('node:fs'), path = require('node:path');
-  const d = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'data', 'sinalite-costs.json'), 'utf8'));
-  assert.strictEqual(d.products.mug.retired, true);
   assert.strictEqual(require('../tools/sinalite-assemble.js').META.mug.retired, true, 'a re-capture keeps it retired');
-  assert.ok(SL.table().families.mug, 'saved quotes with it still price');
-  const w = fs.readFileSync(path.join(__dirname, '..', 'tools', 'add-sinalite-products.js'), 'utf8');
-  assert.match(w, /const RETIRED = 'sinalite-retired';/);
-  assert.match(w, /sq\(p\.retired \? RETIRED : 'sinalite'\)/, 'a re-run never switches it back on');
-  assert.match(w, /\} else if \(!p\.retired\) \{/, 'and never recreates it');
+  const fam = SL.table().families.mug;
+  assert.strictEqual(fam.retired, true);
+  assert.ok(fam.prices['1side']['11oz'][''].length, 'saved quotes with it still price');
+  assert.strictEqual(SL.table().families.tumbler.retired, false, 'only the mug');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const opts = src.slice(src.indexOf('const prodOpts = (sel, cutSel) =>'), src.indexOf('const garments = [...bucket.entries()]'));
+  assert.match(opts, /if \(retired\(p\) && String\(p\.id\) !== String\(sel\)\) continue;/, 'hidden unless it is the line\'s own product');
 });

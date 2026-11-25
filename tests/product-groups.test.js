@@ -74,6 +74,6 @@ test('anything unmatched still gets a home', () => {
 test('the dropdown renders optgroups and skips empty ones', () => {
   assert.match(src, /<optgroup label="/, 'the product list is not grouped');
   const fn = src.slice(src.indexOf('const prodOpts = (sel, cutSel) =>'));
-  assert.match(fn.slice(0, 900), /filter\(\(\[, list\]\) => list\.length\)/,
+  assert.match(fn.slice(0, 1600), /filter\(\(\[, list\]\) => list\.length\)/,
     'an empty group would render as a heading with nothing under it');
 });

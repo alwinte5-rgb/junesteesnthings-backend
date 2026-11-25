@@ -116,10 +116,10 @@ const META = {
   mug: {
     name: 'Ceramic Mugs — 11oz, printed', label: 'Ceramic Mugs', group: 'Drinkware',
     design: null, online: true, any_qty: true,
-    /* Off the quote form (owner, 2026-11-25): the shop prints its own mugs
-       (tools/add-shop-mugs.js, $20.98 for one) and this one priced one mug at
-       $62. Its row is tagged supplier 'sinalite-retired', which jt-catalog.php
-       does not publish; the family stays so quotes already holding it price. */
+    /* Off the quote form's product list (owner, 2026-11-25): the shop prints
+       its own mugs (tools/add-shop-mugs.js, $20.98 for one) and this one
+       priced one mug at $62. The row and family stay, so a quote already
+       holding it shows and re-prices as before (server.js prodOpts). */
     retired: true,
     url: 'https://sinalite.com/en_us/promotional-products/mugs/11oz-ceramic-mug.html',
     note: 'White 11oz ceramic mug, full-color sublimation print on one side. No minimum.',

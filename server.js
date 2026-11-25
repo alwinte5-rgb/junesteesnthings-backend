@@ -12946,7 +12946,14 @@ function productGroupOf(name) {
     bucket.set('Everything else', []);
     /* Services by flag, not name: "Business Card Design" would land in Signs. */
     bucket.set(SERVICE_GROUP, []);
-    for (const p of catalog.products) bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
+    /* A retired SinaLite item (the mug, owner 2026-11-25) is not offered,
+       except on the line that already holds it, so that line still reads and
+       re-prices as saved. */
+    const retired = (p) => p.supplier === 'sinalite' && !!(SINALITE.table().families[sizedKindOf(p)] || {}).retired;
+    for (const p of catalog.products) {
+      if (retired(p) && String(p.id) !== String(sel)) continue;
+      bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
+    }
 
     /* A group with nothing in it is not rendered — an empty heading is worse
        than no heading. Within a group the catalogue's own order is kept. */
