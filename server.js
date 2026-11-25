@@ -8562,10 +8562,7 @@ app.post('/api/reorder', requireInternalKey, async (req, res) => {
     if (open.length) {
       return res.json({ ok: true, code: open[0].code, held: open[0].status === 'held', url: quoteLink(open[0].code), existing: true });
     }
-    /* A line the shop no longer sells (the SinaLite mug, owner 2026-11-25)
-       goes to the shop to re-quote, never out at the old price. */
-    const retiredLine = items.some((i) => i && i.sign && (SINALITE.table().families[i.sign.kind] || {}).retired);
-    const locked = PARTNERS.lockOpen(o.first_paid_at) && !retiredLine;
+    const locked = PARTNERS.lockOpen(o.first_paid_at);
     /* A tax exemption is the certificate holder's, so it carries over only
        when the same person reorders; anyone else on the business is quoted
        with tax, and the shop can apply their certificate if they have one. */
@@ -12949,23 +12946,18 @@ function productGroupOf(name) {
     bucket.set('Everything else', []);
     /* Services by flag, not name: "Business Card Design" would land in Signs. */
     bucket.set(SERVICE_GROUP, []);
-    /* A retired SinaLite item (the mug, owner 2026-11-25) is not offered,
-       except on a saved quote's line that already holds it, so that line
-       still reads and re-prices as saved. A new quote (a reorder, a lead's
-       prefill) never shows it: the save would refuse it. */
-    /* A prefill (a reorder, a lead) naming a retired item: said on the line,
-       never silently blank (code review). */
-    const selRetired = !isEdit && catalog.products.some((p) => String(p.id) === String(sel) && retiredSinalite(p));
+    /* A retired SinaLite item (the mug, owner 2026-11-25) is not offered for
+       a new pick. A line that already holds it (a saved quote, a reorder of
+       one) keeps it and prices as before: it is still priced by the server
+       from the SinaLite table, so a stale form posting it is never cheap. */
     for (const p of catalog.products) {
-      if (retiredSinalite(p) && !(isEdit && String(p.id) === String(sel))) continue;
+      if (retiredSinalite(p) && String(p.id) !== String(sel)) continue;
       bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
     }
 
     /* A group with nothing in it is not rendered — an empty heading is worse
        than no heading. Within a group the catalogue's own order is kept. */
-    const gone = selRetired ? `<option value="" selected disabled>${escEmail(
-      (catalog.products.find((p) => String(p.id) === String(sel)) || {}).name || 'That item')} is no longer sold: pick another</option>` : '';
-    const garments = gone + [...bucket.entries()]
+    const garments = [...bucket.entries()]
       .filter(([, list]) => list.length)
       .map(([label, list]) =>
         `<optgroup label="${escEmail(label)}">${list.map(opt).join('')}</optgroup>`)
@@ -15578,14 +15570,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        2026-10-20) still saves unchanged, so fixing a typo never forces the
        customer's agreed quantity to move (code review). */
     const priorSizedQty = new Set();
-    /* Products this quote was saved with: a retired item stays only on them. */
-    const priorProducts = new Set();
     if (QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())) {
-      const { rows: [pq] } = await pool.query('SELECT items, reorder_of FROM quotes WHERE code = $1', [String(req.params.code).toUpperCase()]);
+      const { rows: [pq] } = await pool.query('SELECT items FROM quotes WHERE code = $1', [String(req.params.code).toUpperCase()]);
       for (const it of (pq && Array.isArray(pq.items) ? pq.items : [])) {
         if (it && it.sign && it.sign.kind) priorSizedQty.add(it.sign.kind + '|' + (Number(it.qty) || 0));
-        /* Not from a reorder: a copy made after retirement is re-quoted. */
-        if (it && it.product_id != null && !pq.reorder_of) priorProducts.add(String(it.product_id));
       }
     }
     /* CONTRACT PRICING (tools/lib/contracts.js). One choice for the whole
@@ -15685,13 +15673,6 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
       const optional = isOptional(i);
       const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
-      /* Retired (the SinaLite mug): refused unless this quote was already
-         saved with it, so a saved quote re-saves as it was. */
-      if (retiredSinalite(prod) && qty > 0 && !priorProducts.has(String(prod.id))) {
-        signErrors.push({ line: i + 1, what: desc || prod.name,
-          error: `${prod.name} is no longer sold. Pick the shop's own mug instead.`, retired: true });
-        continue;
-      }
       /* PRINT LOCATIONS (the form since 2026-10-06): one row per place —
          front, back, left sleeve, right sleeve — each ticked or not, with its
          own method and ink count. Methods resolve against the CATALOGUE and a
@@ -16198,14 +16179,9 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         error: 'Sticker and label prices already include the $25 design. Remove this design line, or the customer pays for design twice.' });
     }
     if (signErrors.length) {
-      const onlyRetired = signErrors.every((e) => e.retired);
-      if (onlyRetired) return res.status(400).send(quotePage('An item is no longer sold', `
-        <div class="card"><div class="warn">Nothing was saved — ${signErrors.map((e) => `item ${e.line}: ${escEmail(e.error)}`).join(' ')}</div>
-          <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p></div>`));
       return res.status(400).send(quotePage('A sign size cannot be made', `
         <div class="card">
-          <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sized item' : 'some sized items'} could not be priced${
-            signErrors.some((e) => e.retired) ? ' or are no longer sold' : ''}.</div>
+          <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sized item' : 'some sized items'} could not be priced.</div>
           <ul class="muted" style="margin:8px 0 0;padding-left:18px">
             ${signErrors.map((o) => `<li>Line ${o.line} — ${escEmail(String(o.what))}: ${escEmail(o.error)}</li>`).join('')}
           </ul>
