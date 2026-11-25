@@ -29792,12 +29792,10 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
-    /* Approvals: staff requests, plus art, designer questions and library
-       designs from the owner's alert list (the sweep's reading, never waited
-       on here); the same list gives the Hours, Training and Team badges. */
-    /* Approvals counts what the Approvals page shows: staff requests and art
-       to approve, read live. Hours, Training and Team come from the owner's
-       alert list (the sweep's reading, never waited on here). */
+    /* Approvals counts what the Approvals page shows: staff requests, art
+       submitted or asking a question, and helpers' held quotes with no
+       request, read live; library designs from the cached studio reading.
+       Hours, Training and Team come from the owner's alert list. */
     isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
                                  + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
                                      WHERE a.status IN ('submitted', 'needs_info') AND q.cancelled_at IS NULL)
@@ -30225,9 +30223,6 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   const apQuoteBy = Object.fromEntries(apQuotes.map((q) => [q.code, q]));
   const apLeadBy = Object.fromEntries(apLeads.map((l) => [String(l.id), l]));
   const apFailed = failed.includes('approval details');
-  /* Held quotes whose request is gone (removed or sent back): on the
-     Approvals page too, so the two lists match (owner, 2026-11-25). */
-  const heldOrphans = owner ? await many(ORPHAN_HELD_SQL, 'held quotes') : [];
 
   /* From your team: each request its own row, decided right here. */
   const teamRows = [
@@ -30249,10 +30244,6 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
           <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
         </form>`}</span></div>`),
-    ...heldOrphans.map((q) => `<a class="row-i" href="/admin/quote/${escEmail(q.code)}/edit">
-      <span class="ico ico-blue">${icon('check')}</span>
-      <span class="row-main"><b>${escEmail(q.created_by ? nameOf(roster, q.created_by) : 'A quote')}: quote ${escEmail(q.code)} is held</b>
-        <div class="row-sub">${escEmail(q.name || '')} &middot; the customer cannot see it &middot; open it to send</div></span></a>`),
     ...((mail && mail.unreadThreads) || []).map((t) => `<a class="row-i" href="/admin/mailbox/${Number(t.id)}">
       <span class="ico ico-amber">${icon('mail')}</span>
       <span class="row-main"><b>${escEmail(t.subject)}</b>
@@ -30286,7 +30277,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   ].join('') : '';
   const ownerExtraCount = owner ? alertGroups.hours.length + alertGroups.training.length
     + alertGroups.team.filter((r) => !r.ref.startsWith('note:')).length : 0;
-  const artFailed = alertFailed.filter((f) => ['art', 'design library', 'team alerts'].includes(f));
+  const artFailed = alertFailed.filter((f) => ['art', 'design library', 'held quotes', 'team alerts'].includes(f));
 
   /* Money in and out, this month and last, from the same reading as Finances. */
   const moneyCol = (m) => `<div style="flex:1 1 240px;min-width:0">
@@ -35551,10 +35542,15 @@ const FOLLOWUP_OUTCOMES = { won_back: 'Won back', refunded: 'Refunded', let_go: 
      designer questions           art requests asking for information
      library designs              designs submitted in the studio
    Read live, each part on its own, so one failing does not hide the others. */
+/* A helper's held quote (created_by set: a partner's reorder is held with no
+   request of its own) with no request open, and not sent back to the helper
+   (their latest request 'rejected': the next move is theirs). */
 const ORPHAN_HELD_SQL = `SELECT q.code, q.name, q.created_by, q.held_at, q.total FROM quotes q
-   WHERE q.status = 'held' AND q.cancelled_at IS NULL
+   WHERE q.status = 'held' AND q.cancelled_at IS NULL AND q.created_by IS NOT NULL
      AND NOT EXISTS (SELECT 1 FROM staff_approvals a WHERE a.kind = 'quote' AND a.subject_id = q.code
                        AND a.status IN ('pending', 'processing'))
+     AND COALESCE((SELECT a.status FROM staff_approvals a WHERE a.kind = 'quote' AND a.subject_id = q.code
+                    ORDER BY a.created_at DESC, a.id DESC LIMIT 1), '') <> 'rejected'
    ORDER BY q.held_at NULLS LAST`;
 const ART_QUESTIONS_SQL = `SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
    WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL ORDER BY a.updated_at`;
@@ -35564,7 +35560,13 @@ async function teamWaitingCard(roster) {
   const [held, questions, library] = await Promise.all([
     read('held quotes', pool.query(ORPHAN_HELD_SQL).then((r) => r.rows)),
     read('designer questions', pool.query(ART_QUESTIONS_SQL).then((r) => r.rows)),
-    read('library designs', libraryWaiting()),
+    /* The studio is never waited on here, as for the badge: the sweep's
+       reading, refreshed behind the page when it is old. */
+    read('library designs', (() => {
+      if (Date.now() - libraryWaitingCache.at >= 5 * 60 * 1000) libraryWaiting().catch(() => {});
+      return libraryWaitingCache.items ? Promise.resolve(libraryWaitingCache.items)
+        : Promise.reject(new Error(libraryWaitingCache.error || 'not read yet'));
+    })()),
   ]);
   const rows = [
     ...(held || []).map((q) => `<div class="row-i"><span class="row-main" style="white-space:normal">
@@ -43024,6 +43026,9 @@ async function readOwnerAlerts() {
   const studioOff = await fetchStudioOrders().then((f) => f.error === 'JT_INTERNAL_KEY not set').catch(() => false);
   const skipped = studioOff ? ['design library'] : [];
   const libraryP = libraryWaiting({ studioOff }).then((library) => OWNER_ALERTS.artAlerts({ library }));
+  /* Helpers' held quotes with no request open (owner, 2026-11-25): in the
+     approvals group, so the dashboard, the bell and the badge agree. */
+  const heldP = pool.query(ORPHAN_HELD_SQL).then(({ rows: held }) => OWNER_ALERTS.heldAlerts(held, roster));
 
   const customersP = Promise.all([
     pool.query(UNANSWERED_REPLIES_SQL),
@@ -43045,7 +43050,7 @@ async function readOwnerAlerts() {
   const parts = await Promise.all([
     part('hours', hoursP, null), part('training', trainingP, null), part('agreements', agreementsP, null),
     part('tasks', tasksP, null), part('job notes', notesP, null), part('art', artP, null),
-    part('design library', libraryP, null), part('customers', customersP, null)]);
+    part('design library', libraryP, null), part('held quotes', heldP, null), part('customers', customersP, null)]);
   for (const p of parts) if (p) rows.push(...p);
   return { rows, failed, skipped, at: Date.now() };
 }
@@ -43105,7 +43110,7 @@ async function ownerNotices(roster, leads) {
      hours, training, team and customers. A kind is cleared only when every
      source behind it was read, so a failed read never reads as "dealt with". */
   if (alerts) {
-    const ALERT_SOURCES = { approval: ['art'], art: ['art'], library: ['design library'], hours: ['hours'],
+    const ALERT_SOURCES = { approval: ['art', 'held quotes'], art: ['art'], library: ['design library'], hours: ['hours'],
       training: ['training'], team: ['agreements', 'tasks', 'job notes'], customer: ['customers'] };
     const { rows: hooked } = await pool.query(
       `SELECT DISTINCT regexp_replace(ref, ':.*$', '') AS key FROM notifications
@@ -43137,7 +43142,7 @@ async function ownerNotices(roster, leads) {
        leaving art refs alone. */
     await pool.query(
       `UPDATE notifications SET read_at = NOW() WHERE recipient = 'owner' AND kind = 'approval' AND read_at IS NULL
-          AND ref NOT LIKE 'art:%' AND NOT (ref = ANY($1::text[]))`, [appr.rows.map((a) => String(a.id))]);
+          AND ref NOT LIKE 'art:%' AND ref NOT LIKE 'held:%' AND NOT (ref = ANY($1::text[]))`, [appr.rows.map((a) => String(a.id))]);
   }
   if (revs) {
     for (const r of revs.rows) {

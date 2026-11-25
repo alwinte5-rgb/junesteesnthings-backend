@@ -201,6 +201,15 @@ function noteAlerts(notes, followups, roster) {
   ];
 }
 
+/** Helpers' held quotes with no request open: the customer cannot see them
+ *  until the owner opens and sends them (owner, 2026-11-25). */
+function heldAlerts(held, roster) {
+  const nameOf = (id) => { const r = (roster || []).find((x) => x.id === Number(id)); return r ? r.name : 'A helper'; };
+  return (held || []).map((q) => ({ group: 'approvals', kind: 'approval', ref: `held:${q.code}`, tone: 'blue', icon: 'check',
+    title: `${nameOf(q.created_by)}'s quote ${q.code} is held`, sub: `${q.name ? q.name + ': ' : ''}the customer cannot see it; open it to send`,
+    href: `/admin/quote/${encodeURIComponent(q.code)}/edit` }));
+}
+
 /** Artwork the owner decides or answers: final art submitted, the designer
  *  asking a question, and library designs submitted on the studio. */
 function artAlerts({ submitted = [], questions = [], library = [] }) {
@@ -248,7 +257,7 @@ function counts(rows) {
   return { hours: g.hours.length, training: g.training.length, team: g.team.length };
 }
 
-module.exports = {
+module.exports = { heldAlerts,
   GROUPS, GROUP_KEYS, weekApproved, hoursAlerts, trainingAlerts, agreementAlert, taskAlerts, noteAlerts,
   artAlerts, customerAlerts, byGroup, counts,
 };

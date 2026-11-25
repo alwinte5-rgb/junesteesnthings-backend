@@ -120,7 +120,7 @@ test('shop-lead sales are the shop\'s; the owner\'s own credit choices and paid 
 
 test('one Approvals page: held quotes with no request, designer questions and library designs join it, and the badge counts them (owner, 2026-11-25)', () => {
   assert.match(src, /const ORPHAN_HELD_SQL = `SELECT q\.code/);
-  const orphan = after('const ORPHAN_HELD_SQL =', 500);
+  const orphan = after('const ORPHAN_HELD_SQL =', 900);
   assert.match(orphan, /q\.status = 'held' AND q\.cancelled_at IS NULL/);
   assert.match(orphan, /a\.status IN \('pending', 'processing'\)/);
   const page = after("app.get('/admin/approvals'", 6000);
@@ -128,5 +128,13 @@ test('one Approvals page: held quotes with no request, designer questions and li
   const card = after('async function teamWaitingCard(', 3500);
   for (const what of ['held quotes', 'designer questions', 'library designs']) assert.ok(card.includes(`read('${what}'`), what);
   assert.match(src, /WHERE a\.status IN \('submitted', 'needs_info'\) AND q\.cancelled_at IS NULL\)\s*\+ \(SELECT COUNT\(\*\) FROM \(\$\{ORPHAN_HELD_SQL\}\) h\) AS n/);
-  assert.match(src, /const heldOrphans = owner \? await many\(ORPHAN_HELD_SQL, 'held quotes'\) : \[\];/);
+  assert.ok(orphan.includes('q.created_by IS NOT NULL'), 'a partner reorder is not a helper request');
+  assert.ok(orphan.includes("<> 'rejected'"), 'a quote sent back waits on the helper, not the owner');
+  /* One list: the alert list carries them to the dashboard and the bell. */
+  assert.ok(src.includes("part('held quotes', heldP, null)"));
+  assert.ok(src.includes("approval: ['art', 'held quotes']"));
+  const OA = require('../tools/lib/owner-alerts');
+  const [row] = OA.heldAlerts([{ code: 'ABCDEF1234', name: 'Ann', created_by: 6 }], [{ id: 6, name: 'Myra' }]);
+  assert.deepStrictEqual([row.group, row.kind, row.ref, row.href], ['approvals', 'approval', 'held:ABCDEF1234', '/admin/quote/ABCDEF1234/edit']);
+  assert.match(row.title, /^Myra's quote ABCDEF1234 is held$/);
 });
