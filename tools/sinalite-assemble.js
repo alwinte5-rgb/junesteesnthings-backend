@@ -121,6 +121,9 @@ const META = {
        priced one mug at $62. The row and family stay, so a quote already
        holding it shows and re-prices as before (server.js prodOpts). */
     retired: true,
+    /* What a line holding it becomes: the shop's own mug, so it is priced as
+       the designer prices it (owner, 2026-11-25). */
+    replaced_by: 'White Ceramic Sublimation Mug — 11.8 oz',
     url: 'https://sinalite.com/en_us/promotional-products/mugs/11oz-ceramic-mug.html',
     note: 'White 11oz ceramic mug, full-color sublimation print on one side. No minimum.',
     materials: [{ key: '1side', label: 'Printed one side' }],

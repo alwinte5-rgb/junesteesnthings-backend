@@ -35,6 +35,7 @@ const fs = require('fs');
 const path = require('path');
 
 const DATA_FILE = path.join(__dirname, '..', 'data', 'sinalite-costs.json');
+let dataFile = DATA_FILE;      // a test may read a copy (_setFile)
 const MARKUP = 2;              // the shop's x2 (tools/lib/markup.js)
 const SHIP_HANDLING = 25;      // added to shipping before rounding (owner rule)
 
@@ -130,11 +131,11 @@ function load() {
   if (cache && Date.now() - checkedAt < 1000) return cache;
   checkedAt = Date.now();
   let mtime = null;
-  try { mtime = fs.statSync(DATA_FILE).mtimeMs; } catch { /* reported below */ }
+  try { mtime = fs.statSync(dataFile).mtimeMs; } catch { /* reported below */ }
   if (cache && mtime === cacheMtime) return cache;
   cacheMtime = mtime;
   try {
-    const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const d = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
     if (!d || typeof d.products !== 'object' || !Object.keys(d.products).length) throw new Error('no products in it');
     /* Build every family from it BEFORE it replaces the last good table: a
        product missing its materials must fail here, not in every quote
@@ -159,7 +160,7 @@ function load() {
     /* Published (pricing-rules, the digest) without the server's file path;
        the log keeps the full detail. */
     loadError = 'SinaLite prices unreadable: ' + e.message;
-    console.error('[sinalite] ' + DATA_FILE + ': ' + loadError + (cache && Object.keys(cache.products || {}).length ? ' — still using the last good table' : ''));
+    console.error('[sinalite] ' + dataFile + ': ' + loadError + (cache && Object.keys(cache.products || {}).length ? ' — still using the last good table' : ''));
     if (!cache) cache = { captured: null, products: {} };
   }
   return cache;
@@ -210,6 +211,8 @@ function familyOf(key, p) {
     /* true: not offered on the quote form any more; still priced for lines
        that already hold it (owner, 2026-11-25: the SinaLite mug). */
     retired: !!p.retired,
+    /* The catalogue product a line holding a retired item becomes. */
+    replaced_by: p.replaced_by || null,
     turnaround: p.turnaround || null, url: p.url || null,
     min: Number.isFinite(min) ? Math.max(min, sellFrom) : null,
     sell_from: sellFrom || null,
@@ -352,7 +355,10 @@ function designerFamilies() {
 /** For tests: swap the data in. */
 /** For tests: look at the file again on the next call. */
 function _recheck() { checkedAt = 0; }
+/** Tests: read another file (none = the real one). The real file is never
+ *  rewritten by a test: other test files read it at the same time. */
+function _setFile(f) { dataFile = f || DATA_FILE; _setData(null); }
 
-function _setData(d) { checkedAt = 0; cache = d; cacheMtime = (() => { try { return fs.statSync(DATA_FILE).mtimeMs; } catch { return null; } })(); loadError = null; }
+function _setData(d) { checkedAt = 0; cache = d; cacheMtime = (() => { try { return fs.statSync(dataFile).mtimeMs; } catch { return null; } })(); loadError = null; }
 
-module.exports = { _recheck, priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, MAX_QTY, table, kindOf, ageDays, stale, familyOf, designerFamilies, DESIGNER, _setData, DATA_FILE };
+module.exports = { _recheck, _setFile, priceEach, shipBilled, ladderFrom, eachFor, leadDays, FALLBACK_LEAD, MAX_QTY, table, kindOf, ageDays, stale, familyOf, designerFamilies, DESIGNER, _setData, DATA_FILE };
