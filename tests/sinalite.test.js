@@ -458,7 +458,7 @@ test('the SinaLite mug is retired: off the quote form list, still priced for quo
   /* Anchored on short markers (AGENTS.md), not the guard expressions. */
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.ok(src.includes('function retiredSinalite(prod)'));
-  assert.ok(src.includes("select.p option[data-retired]"), 'a copied item drops it');
+  assert.strictEqual((src.match(/select\.p option\[data-retired\]/g) || []).length, 3, 'add, duplicate and clearing a line all drop it');
   assert.strictEqual(require('../tools/sinalite-assemble.js').META.mug.online, false);
 });
 

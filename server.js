@@ -14080,6 +14080,11 @@ ${quotePricingSource()}
           if (from[i].type === 'checkbox' || from[i].type === 'radio') to[i].checked = from[i].checked;
           else to[i].value = from[i].value;
         }
+        /* A duplicate is a new line: a retired item (the SinaLite mug) is not
+           copied onto it; the copy starts with no product. */
+        copy.querySelectorAll('select.p option[data-retired]').forEach(function(o){
+          if (o.selected) { var ps = o.parentNode.closest('select'); o.remove(); if (ps) ps.value = ''; } else o.remove();
+        });
         /* Listeners do not come with a clone: clear the marks that say they
            were bound, and let bind() and the sizer attach their own. */
         copy.querySelectorAll('[data-qty-bound]').forEach(function(el){ delete el.dataset.qtyBound; });
@@ -14121,6 +14126,8 @@ ${quotePricingSource()}
           /* Tick boxes are UNTICKED, never blanked: a blank value posts "" when
              ticked again, which read as unticked, and every item added after
              was copied from this one (2026-09-30: Optional silently lost). */
+          /* Cleared, the line is a new one: no retired item on offer. */
+          only.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
           only.querySelectorAll('input,select').forEach(function(el){
             if (el.type === 'checkbox' || el.type === 'radio') el.checked = false;
             else el.value = '';
