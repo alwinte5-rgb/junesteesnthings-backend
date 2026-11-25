@@ -88,14 +88,16 @@ test('the three groups are rendered in working order', () => {
   const e = board.indexOf("group('New enquiries'");
   const i = board.indexOf("group('Orders'");
   const a = board.indexOf("group('Accepted, waiting on deposit'");
-  const j = board.indexOf("group('Waiting on the customer'");
+  /* Waiting quotes are split by follow-up stage (owner, 2026-11-24). */
+  const j = board.indexOf("group('New — not followed up yet'");
   assert.ok(e > -1 && i > -1 && a > -1 && j > -1, 'all the live groups must be rendered');
   /* Owner, 2026-10-19: "I only want to see whats paid on the order side".
      Unpaid quotes sit on the left with enquiries; the right lane is Orders. */
   const left = board.slice(board.indexOf('const laneLeft ='), board.indexOf('const laneRight ='));
   const right = board.slice(board.indexOf('const laneRight ='), board.indexOf('const body ='));
-  assert.ok(e < a && a < j && left.includes("group('Accepted, waiting on deposit'") && left.includes("group('Waiting on the customer'"),
-    'left: New enquiries, then Accepted waiting on deposit, then Waiting on the customer');
+  assert.ok(e < a && a < j && left.includes("group('Accepted, waiting on deposit'") && left.includes("group('New — not followed up yet'")
+    && left.includes("group('Followed up — no answer yet'") && left.includes("group('Gone quiet'") && left.includes("group('Not sent yet'"),
+    'left: New enquiries, then Accepted waiting on deposit, then the waiting quotes by follow-up stage');
   assert.ok(right.includes("group('Orders'") && !right.includes("group('Accepted") && !right.includes("group('Waiting"),
     'right: paid work only');
   /* Expired quotes are shown only when asked for (?expired=1). */
@@ -123,7 +125,9 @@ test('the header counts the two live groups separately', () => {
   /* Whitespace-tolerant: the header wraps across lines, and a test that breaks
      on reformatting teaches people to stop trusting the suite. */
   // drafts counted apart: nobody waits on a quote they never got (Codex #129)
-  assert.match(board, /gQuotes\.filter\(\(q\) => q\.status !== 'draft'\)\.length\}\s*waiting on the customer/);
+  /* Held and drafts are not waiting on the customer: gLive leaves them out. */
+  assert.match(board, /gLive\.length\}\s*waiting on the customer/);
+  assert.match(board, /const gLive = gQuotes\.filter\(\(q\) => q\.status !== 'held' && q\.status !== 'draft'\)/);
   assert.match(board, /gOrders\.length\}\s*order/);
   assert.match(board, /\$\{leads\.length\} enquir/,
     'unanswered enquiries lead the count — they are the ones that cost money');

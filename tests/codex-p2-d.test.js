@@ -11,7 +11,8 @@ test('#129 drafts: cancelling keeps them private, no payment, no customer messag
   assert.match(after('async function applyQuoteCancel(', 3000), /status = CASE WHEN status = 'draft' THEN 'draft' ELSE 'cancelled' END/);
   assert.match(after("app.post('/admin/quote/:code/mark-paid'", 2500), /if \(q\.status === 'draft'\) return res\.redirect/);
   assert.match(after('async function moveJobToStage(', 1500), /if \(\['draft', 'held'\]\.includes\(String\(before\.status \|\| ''\)\)\) notify = false;/);
-  assert.match(src, /gQuotes\.filter\(\(q\) => q\.status !== 'draft'\)\.length\} waiting on the customer/);
+  assert.match(src, /const gLive = gQuotes\.filter\(\(q\) => q\.status !== 'held' && q\.status !== 'draft'\)/);
+  assert.match(src, /gLive\.length\} waiting on the customer/);
   assert.match(after('async function customerHistory(', 700), /AND status <> 'draft'/);
 });
 test('#129 the quote form submits once', () => {
