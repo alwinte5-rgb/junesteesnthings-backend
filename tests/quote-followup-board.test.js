@@ -93,6 +93,13 @@ test('a helper\'s held or draft quote keeps its lead on the board until the owne
   assert.strictEqual(LB.bucketOf({ lead_status: 'new', pending_quote: 'ABCDEF1234' }, () => true), 'answer');
   assert.strictEqual(LB.bucketOf({ lead_status: 'quoted', pending_quote: 'ABCDEF1234' }, no), 'quoted');
   assert.strictEqual(LB.bucketOf({ lead_status: 'dismissed', pending_quote: 'ABCDEF1234' }, no), 'dismissed', 'a person\'s dismissal stands');
+  /* Already answered by the owner before the quote was held (owner, 2026-11-25). */
+  const mine = { lead_status: 'contacted', pending_quote: 'ABCDEF1234', owner_answered: true };
+  assert.strictEqual(LB.bucketOf(mine, no), 'contacted', 'the owner already answered them');
+  assert.strictEqual(LB.bucketOf({ ...mine, last_word: { kind: 'email_in', created_at: new Date() } }, no), 'answer', 'they wrote back since');
+  assert.strictEqual(LB.bucketOf({ ...mine, owner_answered: false }, no), 'answer', 'only a helper contacted them');
+  assert.match(after('async function leadsWithStatus(', 2400), /NOT n\.auto AND n\.staff_id IS NULL\) AS owner_answered/);
+  assert.match(after('async function applyQuoteCancel(', 4200), /SET status = 'withdrawn'/, 'cancelling closes the approval request');
   /* Neither automatic let-go takes a lead whose quote waits. */
   const sweep = after('async function sendLeadFollowUps(', 6000);
   assert.ok((sweep.match(/\$\{LEAD_QUOTE_PENDING\}/g) || []).length >= 2, 'the follow-up sweep and its let-go skip it');

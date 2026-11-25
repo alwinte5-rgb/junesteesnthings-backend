@@ -22976,6 +22976,11 @@ async function applyQuoteCancel(code, reason, { ip = null, facts = null, by = 'Y
   await DELIVERY.cancelRef('quote:' + code, 'system', 'quote cancelled').catch(() => {});
   /* Every cancelled job comes to the owner to follow up (owner, 2026-10-06),
      whoever cancelled it: win it back, refund it, or let it go. */
+  /* A held quote's approval request is moot once it is cancelled: left open,
+     it sat on the Approvals page with nothing to approve. */
+  await pool.query(`UPDATE staff_approvals SET status = 'withdrawn', decided_at = NOW()
+                     WHERE kind = 'quote' AND subject_id = $1 AND status = 'pending'`, [code])
+    .catch((e) => console.error(`approval request for cancelled ${code} not closed:`, e.message));
   // A helper's request to cancel this job is answered by cancelling it.
   await pool.query(`UPDATE owner_followups SET done_at = NOW(), outcome = 'done'
                      WHERE quote_code = $1 AND kind = 'cancel_request' AND done_at IS NULL`, [code]).catch(() => {});
@@ -28961,6 +28966,9 @@ async function leadsWithStatus() {
               ORDER BY q.created_at LIMIT 1) AS matched_quote,
             (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING}
               ORDER BY q.created_at DESC LIMIT 1) AS pending_quote,
+            -- the owner personally answered (no staff_id), not a helper or the follow-ups
+            EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = ANY($1)
+                       AND NOT n.auto AND n.staff_id IS NULL) AS owner_answered,
             (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
               WHERE submission_id = s.id AND kind = ANY($1) AND NOT auto ORDER BY created_at DESC LIMIT 1) n) AS last_contact,
             -- open leads someone has answered: the card's follow-up line, and whether
