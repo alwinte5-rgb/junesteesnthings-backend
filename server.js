@@ -29800,9 +29800,11 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
        alert list (the sweep's reading, never waited on here). */
     isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
                                  + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-                                     WHERE a.status = 'submitted' AND q.cancelled_at IS NULL) AS n`)
+                                     WHERE a.status IN ('submitted', 'needs_info') AND q.cancelled_at IS NULL)
+                                 + (SELECT COUNT(*) FROM (${ORPHAN_HELD_SQL}) h) AS n`)
       .then(({ rows }) => {
-        out.approvals = Number(rows[0].n);
+        /* Library designs from the cached studio read: the badge never waits on the studio. */
+        out.approvals = Number(rows[0].n) + ((libraryWaitingCache && libraryWaitingCache.items) || []).length;
         if (ownerAlertsCache) Object.assign(out, OWNER_ALERTS.counts(ownerAlertsCache.rows.filter((r) => !r.ref.startsWith('note:'))));
       }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
@@ -30223,6 +30225,9 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   const apQuoteBy = Object.fromEntries(apQuotes.map((q) => [q.code, q]));
   const apLeadBy = Object.fromEntries(apLeads.map((l) => [String(l.id), l]));
   const apFailed = failed.includes('approval details');
+  /* Held quotes whose request is gone (removed or sent back): on the
+     Approvals page too, so the two lists match (owner, 2026-11-25). */
+  const heldOrphans = owner ? await many(ORPHAN_HELD_SQL, 'held quotes') : [];
 
   /* From your team: each request its own row, decided right here. */
   const teamRows = [
@@ -30244,6 +30249,10 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
           <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
         </form>`}</span></div>`),
+    ...heldOrphans.map((q) => `<a class="row-i" href="/admin/quote/${escEmail(q.code)}/edit">
+      <span class="ico ico-blue">${icon('check')}</span>
+      <span class="row-main"><b>${escEmail(q.created_by ? nameOf(roster, q.created_by) : 'A quote')}: quote ${escEmail(q.code)} is held</b>
+        <div class="row-sub">${escEmail(q.name || '')} &middot; the customer cannot see it &middot; open it to send</div></span></a>`),
     ...((mail && mail.unreadThreads) || []).map((t) => `<a class="row-i" href="/admin/mailbox/${Number(t.id)}">
       <span class="ico ico-amber">${icon('mail')}</span>
       <span class="row-main"><b>${escEmail(t.subject)}</b>
@@ -35533,6 +35542,52 @@ function watchRows(list) {
 
 const FOLLOWUP_OUTCOMES = { won_back: 'Won back', refunded: 'Refunded', let_go: 'Let go', done: 'Done' };
 
+/* EVERYTHING ELSE THE TEAM IS WAITING ON YOU FOR, on the one Approvals page
+   (owner, 2026-11-25: "I dont like that her approvals and elys approvals go
+   to seperate places"). Final art has its own box above (decided there); this
+   adds the rest, each linked to where it is answered:
+     held quotes with no request   a helper's quote whose request was removed
+                                   or sent back: still hidden from the customer
+     designer questions           art requests asking for information
+     library designs              designs submitted in the studio
+   Read live, each part on its own, so one failing does not hide the others. */
+const ORPHAN_HELD_SQL = `SELECT q.code, q.name, q.created_by, q.held_at, q.total FROM quotes q
+   WHERE q.status = 'held' AND q.cancelled_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM staff_approvals a WHERE a.kind = 'quote' AND a.subject_id = q.code
+                       AND a.status IN ('pending', 'processing'))
+   ORDER BY q.held_at NULLS LAST`;
+const ART_QUESTIONS_SQL = `SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+   WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL ORDER BY a.updated_at`;
+async function teamWaitingCard(roster) {
+  const failed = [];
+  const read = (name, p) => p.catch((e) => { console.error(`approvals (${name}):`, e.message); failed.push(name); return null; });
+  const [held, questions, library] = await Promise.all([
+    read('held quotes', pool.query(ORPHAN_HELD_SQL).then((r) => r.rows)),
+    read('designer questions', pool.query(ART_QUESTIONS_SQL).then((r) => r.rows)),
+    read('library designs', libraryWaiting()),
+  ]);
+  const rows = [
+    ...(held || []).map((q) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>${escEmail(q.created_by ? nameOf(roster, q.created_by) : 'A quote')}: quote ${escEmail(q.code)} is held</b>
+        <div class="row-sub">${escEmail(q.name || '')}${q.total != null ? ` &middot; ${money(q.total)}` : ''}${q.held_at ? ` &middot; since ${escEmail(whenShort(q.held_at))}` : ''}
+          &middot; the customer cannot see it. Saving it yourself sends it out of held.</div></span>
+        <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/quote/${escEmail(q.code)}/edit">Open it</a></span></div>`),
+    ...(questions || []).map((a) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>The designer has a question on ${escEmail(a.quote_code)}</b>
+        <div class="row-sub">${escEmail(a.name || '')} &middot; ${escEmail(whenShort(a.updated_at))}</div></span>
+        <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/production/${encodeURIComponent(a.quote_code)}#art">Answer it</a></span></div>`),
+    ...(library || []).map((r) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>Design to approve: ${escEmail(r.name || 'untitled')}</b>
+        <div class="row-sub">${escEmail(r.kind)}${r.submitted_by ? ` &middot; from ${escEmail(r.submitted_by)}` : ''}</div></span>
+        <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/design-library?item=${encodeURIComponent(`${r.kind}-${Number(r.id)}`)}">Review it</a></span></div>`),
+  ];
+  if (!rows.length && !failed.length) return '';
+  return `<div class="card" id="team-waiting"><b>Also waiting on you (${rows.length})</b>
+    <p class="muted" style="margin:2px 0 8px">Held quotes, designer questions and library designs: everything the team needs from you is on this page.</p>
+    ${failed.length ? `<div class="warn">Could not check: ${escEmail(failed.join(', '))}.</div>` : ''}
+    ${rows.join('')}</div>`;
+}
+
 async function followupsCard() {
   const { rows } = await pool.query(
     `SELECT * FROM owner_followups WHERE done_at IS NULL ORDER BY created_at LIMIT 100`).catch(() => ({ rows: [] }));
@@ -35693,6 +35748,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
       ${await (async () => { const { approve } = await artQueues(OWNER_ACTOR);
         return approve.length ? `<div class="card"><b>Final art to approve (${approve.length})</b>${artQueueRows(approve)}</div>` : ''; })()}
       ${await followupsCard()}
+      ${await teamWaitingCard(roster)}
       ${pending.length ? pending.map(card).join('') : `<div class="card">${emptyState('Nothing is waiting.')}</div>`}
       ${await (async () => { const w = await watchList();
         return `<div class="card" id="watch"><b>Watch list</b> <span class="muted">last ${WATCH_DAYS} days</span>
