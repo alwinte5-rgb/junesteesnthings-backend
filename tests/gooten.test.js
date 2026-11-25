@@ -130,3 +130,13 @@ test('sending spends the owner’s money: its own toggle, off in every preset', 
   }
   for (const name of Object.keys(STAFF.PRESETS)) assert.strictEqual(STAFF.presetPerms(name)['gooten.send'].level, 'off', name);
 });
+
+test('an error report never carries a key from an outgoing call’s query', () => {
+  const { scrubEvent } = require('../tools/lib/monitoring');
+  const out = scrubEvent({ breadcrumbs: [
+    { category: 'http', data: { url: 'https://api.print.io/x?partnerBillingKey=KEY', 'http.query': '?partnerBillingKey=KEY', 'http.method': 'GET', status_code: 200 } },
+    { category: 'console', message: 'hello' }, null] });
+  assert.ok(!JSON.stringify(out).includes('KEY'));
+  assert.deepStrictEqual(out.breadcrumbs[0].data, { url: 'https://api.print.io/x', 'http.method': 'GET', status_code: 200 });
+  assert.doesNotThrow(() => scrubEvent({}));
+});
