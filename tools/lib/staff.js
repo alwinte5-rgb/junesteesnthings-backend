@@ -68,6 +68,8 @@ const PERMISSIONS = {
   /* Its own toggle because it spends money: each label is charged to the
      owner's Shippo account. In no preset, like Finances: opened on purpose. */
   'shipping.labels':       { group: 'Production', label: 'Buy shipping labels (charged to your Shippo account)', levels: ['off', 'on'] },
+  /* The same: each order is charged to the card on the owner's Gooten account. */
+  'gooten.send':           { group: 'Production', label: 'Send orders to Gooten (charged to your Gooten account)', levels: ['off', 'on'] },
   'reviews.manage':        { group: 'Reviews',    label: 'Manage reviews', levels: ['off', 'on'] },
   'certificates.prescreen':{ group: 'Tax',        label: 'See and attach tax certificates', levels: ['off', 'on'] },
   'payments.record':       { group: 'Money',      label: 'Record cash and Zelle payments (you confirm each one)', levels: ['off', 'on'] },
@@ -312,6 +314,11 @@ const ROUTES = {
   'POST /admin/shipping/address': 'production.stage',
   'POST /admin/shipping/check': 'production.stage',
   'POST /admin/shipping/buy': 'shipping.labels',
+  'GET /admin/gooten': 'gooten.send',
+  'POST /admin/quote/:code/gooten/prepare': 'gooten.send',
+  'POST /admin/quote/:code/gooten/discard': 'gooten.send',
+  'POST /admin/quote/:code/gooten/send': 'gooten.send',
+  'POST /admin/quote/:code/gooten/check': 'gooten.send',
 
   /* Local delivery. Running the day is production work; what it costs and
      where it goes (zones, fees, windows, the courier's rates) is the owner's. */

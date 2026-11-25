@@ -2325,6 +2325,7 @@ async function initStaffTables() {
   /* Wholesale connector: partners, their production requests, the audit/event
      log and the webhook outbox (tools/lib/wholesale-routes.js). */
   await WHOLESALE.ensureTables(pool);
+  await require('./tools/lib/gooten-orders').ensureTables(pool);
   await repairSentAsDelivered().catch((e) => console.error('sent-as-delivered repair failed:', e.message));
   /* After the server is listening: it calls Twilio and Cloudinary. */
   setTimeout(() => repairTextPictures().catch((e) => console.error('text picture repair failed:', e.message)), 30 * 1000).unref();
@@ -12119,6 +12120,7 @@ const ADMIN_NAV = [
   { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
   { key: 'orders',     href: '/admin/orders',        label: 'Orders',     icon: 'box' },
   { key: 'shipping',   href: '/admin/shipping',      label: 'Shipping',   icon: 'truck',  badge: 'shipping' },
+  { key: 'gooten',     href: '/admin/gooten',        label: 'Gooten',     icon: 'box' },
   { key: 'delivery',   href: '/admin/delivery',      label: 'Delivery',   icon: 'clock' },
   { key: 'deliveryset', href: '/admin/delivery/settings', label: 'Delivery settings', icon: 'edit' },
   { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
@@ -12162,7 +12164,7 @@ const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
   { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'notifications', 'tasks', 'mailbox', 'chat'] },
   { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers', 'softleads'] },
-  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','orders','shipping','delivery','deliveryset'] },
+  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','orders','shipping','gooten','delivery','deliveryset'] },
   { key: 'designs', label: 'Designs & studio', icon: 'edit', items: ['artwork','design-library','design-requests','studio-controls','studio-products','studio-pricing','studio-fonts','studio-collections','studio-ai','studio-uploads'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
@@ -24100,6 +24102,19 @@ const wholesaleDeps = {
 };
 WHOLESALE.mount(app, wholesaleDeps);
 
+/* Send to Gooten (owner, 2026-11-25): tools/lib/gooten-orders.js. */
+const GOOTEN = require('./tools/lib/gooten-orders').registerGooten(app, {
+  pool, requireAdmin, adminPage, pageHeader, esc: escEmail, quoteCodeRe: QUOTE_CODE_RE,
+  SHIP, ART, PHOTOS: QPHOTOS, quoteTotals, balanceOf, inTextingHours, reportError,
+  /* Defined further down the file, so reached when a request needs them. */
+  back: (...a) => back(...a), money: (n) => money(n),
+  shop: { name: SHOP_NAME, street1: '3047 N Lincoln Ave', street2: '', city: 'Chicago', state: 'IL', zip: '60657',
+          phone: SHOP_PHONE, email: SHOP_EMAIL },
+  mayUse: (method, route) => STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, method, route),
+  staffId: attributedStaffId,
+  moveToShipped: (code) => moveJobToStage(code, JOB_STAGES.findIndex((x) => x.key === 'out'), { keepLater: true, awaitNotify: true }),
+});
+
 app.get('/admin/customers', requireAdmin, async (_req, res) => {
   try {
     const { people, studio } = await allCustomers();
@@ -26108,6 +26123,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
     const brandCard = await jobBrandFilesCard(q).catch((e) => { console.error('brand files card failed:', e.message); return ''; });
     const teamSizesCard = await jobTeamSizesCard(q, await catalogP, { canEdit: boards }).catch((e) => { console.error('team sizes card failed:', e.message); return ''; });
     const notesCard = await jobNotesCard(q.code);
+    const gootenCard = !boards ? '' : await GOOTEN.card(q, req.query).catch((e) => { console.error('gooten card failed:', e.message); return ''; });
     const creditCard = !boards ? '' : await jobCreditCard(q).catch((e) => { console.error('credit card failed:', e.message); return ''; });
     const historyCard = !boards ? '' : await jobHistoryCard(q).catch((e) => { console.error('history card failed:', e.message); return ''; });
     const upsellCard = !boards ? '' : await jobUpsellCard(q).catch((e) => { console.error('upsell card failed:', e.message); return ''; });
@@ -26229,6 +26245,7 @@ app.get('/admin/production/:code', requireAdmin, async (req, res) => {
       ${teamSizesCard}
       ${certificateCard}
       ${artCard}
+      ${gootenCard}
       ${teamNotesCard}
       ${mailCard}
       ${proofsCard}
@@ -30404,7 +30421,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   const alertGroups = OWNER_ALERTS.byGroup(alerts ? alerts.rows : []);
   const alertFailed = alerts ? alerts.failed : (owner ? ['team alerts'] : []);
   const alertRow = (r) => row({ tone: r.tone, icon: r.icon, title: escEmail(r.title), sub: escEmail(r.sub), href: escEmail(r.href) });
-  const NEW_CUSTOMER_REFS = /^(proof-ok|proof-chg|cnote):/;
+  const NEW_CUSTOMER_REFS = /^(proof-ok|proof-chg|cnote|gooten):/;
   const custExtra = alertGroups.customers.filter((r) => NEW_CUSTOMER_REFS.test(r.ref)).map(alertRow);
   const fromTeamExtra = alertGroups.approvals.map(alertRow);
   const SECTION_SOURCES = { hours: ['hours'], training: ['training'], team: ['agreements', 'tasks', 'job notes', 'team'] };
@@ -34820,6 +34837,7 @@ if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || p
     }
     await step('reorder nudges', sendReorderNudges);
     await step('partner code uses', recordQuotePromos);
+    await step('gooten', GOOTEN.sweep);
     await step('expire quotes', expireOldQuotes);
     await step('monthly costs', rollRecurringExpenses);
     await step('job costs', async () => {
@@ -43248,7 +43266,8 @@ async function readOwnerAlerts() {
     pool.query(`SELECT id, quote_code FROM stripe_disputes WHERE status = ANY($1::text[])`, [[...DISPUTE_OPEN]]),
   ]).then(([replies, proofOk, proofChanges, notes, changes, disputes]) => OWNER_ALERTS.customerAlerts({
     replies: replies.rows, proofOk: proofOk.rows, proofChanges: proofChanges.rows, notes: notes.rows,
-    changes: changes.rows, disputes: disputes.rows }));
+    changes: changes.rows, disputes: disputes.rows }))
+    .then(async (list) => [...list, ...await GOOTEN.alerts()]);
 
   /* No roster is no helpers to check, not "no problems": their sections
      say they could not be checked, and the bell clears nothing of theirs. */
