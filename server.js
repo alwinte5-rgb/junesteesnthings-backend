@@ -12939,7 +12939,7 @@ function productGroupOf(name) {
 
   const prodOpts = (sel, cutSel) => {
     const opt = (p) =>
-      `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}>` +
+      `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}${retiredSinalite(p) ? ' data-retired="1"' : ''}>` +
       `${escEmail(p.name)} — ${money(p.price)}</option>`;
 
     const bucket = new Map(PRODUCT_GROUPS.map(([label]) => [label, []]));
@@ -12949,9 +12949,8 @@ function productGroupOf(name) {
     /* A retired SinaLite item (the mug, owner 2026-11-25) is not offered,
        except on the line that already holds it, so that line still reads and
        re-prices as saved. */
-    const retired = (p) => p.supplier === 'sinalite' && !!(SINALITE.table().families[sizedKindOf(p)] || {}).retired;
     for (const p of catalog.products) {
-      if (retired(p) && String(p.id) !== String(sel)) continue;
+      if (retiredSinalite(p) && String(p.id) !== String(sel)) continue;
       bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
     }
 
@@ -14947,6 +14946,9 @@ ${quotePricingSource()}
         /* The copied item's Category filter is cleared above (its box reads
            "All categories"); show every section of its product list again. */
         tpl.querySelectorAll('select.p optgroup').forEach(function(g){ g.hidden = false; g.style.display = ''; g.disabled = false; });
+        /* A retired item kept on the line it was copied from is not offered
+           on a new one (the SinaLite mug, owner 2026-11-25). */
+        tpl.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
         var oh = tpl.querySelector('.opthelp');
         if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
@@ -15566,10 +15568,13 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
        2026-10-20) still saves unchanged, so fixing a typo never forces the
        customer's agreed quantity to move (code review). */
     const priorSizedQty = new Set();
+    /* Products this quote was saved with: a retired item stays only on them. */
+    const priorProducts = new Set();
     if (QUOTE_CODE_RE.test(String(req.params.code || '').toUpperCase())) {
       const { rows: [pq] } = await pool.query('SELECT items FROM quotes WHERE code = $1', [String(req.params.code).toUpperCase()]);
       for (const it of (pq && Array.isArray(pq.items) ? pq.items : [])) {
         if (it && it.sign && it.sign.kind) priorSizedQty.add(it.sign.kind + '|' + (Number(it.qty) || 0));
+        if (it && it.product_id != null) priorProducts.add(String(it.product_id));
       }
     }
     /* CONTRACT PRICING (tools/lib/contracts.js). One choice for the whole
@@ -15669,6 +15674,12 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
       const optional = isOptional(i);
       const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
+      /* Retired (the SinaLite mug): refused on a new line, kept where saved. */
+      if (retiredSinalite(prod) && !priorProducts.has(String(prod.id))) {
+        signErrors.push({ line: i + 1, what: desc || prod.name,
+          error: `${prod.name} is no longer sold. Pick the shop's own mug instead.` });
+        continue;
+      }
       /* PRINT LOCATIONS (the form since 2026-10-06): one row per place —
          front, back, left sleeve, right sleeve — each ticked or not, with its
          own method and ink count. Methods resolve against the CATALOGUE and a
@@ -17214,6 +17225,12 @@ function customerLinePricing(items, catalog) {
  *  or after a rename, "Wall Calendars" would otherwise fall through to the
  *  Signs365 wall-graphic pricing (Codex on #293). Null then, and the save
  *  refuses it. */
+/** A SinaLite product no longer offered (tools/sinalite-assemble.js
+ *  `retired`; the mug, owner 2026-11-25). Still priced for a line that holds it. */
+function retiredSinalite(prod) {
+  return !!prod && prod.supplier === 'sinalite' && !!(SINALITE.table().families[sizedKindOf(prod)] || {}).retired;
+}
+
 function sizedKindOf(prod) {
   if (!prod) return null;
   if (prod.supplier === 'sinalite') return SINALITE.kindOf(prod.name, { aliases: true });

@@ -457,5 +457,7 @@ test('the SinaLite mug is retired: off the quote form list, still priced for quo
   assert.strictEqual(SL.table().families.tumbler.retired, false, 'only the mug');
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const opts = src.slice(src.indexOf('const prodOpts = (sel, cutSel) =>'), src.indexOf('const garments = [...bucket.entries()]'));
-  assert.match(opts, /if \(retired\(p\) && String\(p\.id\) !== String\(sel\)\) continue;/, 'hidden unless it is the line\'s own product');
+  assert.match(opts, /if \(retiredSinalite\(p\) && String\(p\.id\) !== String\(sel\)\) continue;/, 'hidden unless it is the line\'s own product');
+  assert.match(src, /select\.p option\[data-retired\]'\)\.forEach\(function\(o\)\{ o\.remove\(\); \}\)/, 'a copied item drops it');
+  assert.match(src, /if \(retiredSinalite\(prod\) && !priorProducts\.has\(String\(prod\.id\)\)\) \{/, 'the save refuses it on a new line');
 });
