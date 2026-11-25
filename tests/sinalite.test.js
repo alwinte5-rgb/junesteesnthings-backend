@@ -462,3 +462,12 @@ test('the SinaLite mug is retired: off the quote form list, still priced for quo
   assert.ok(src.includes('priorProducts.has('), 'the save refuses it unless the quote held it');
   assert.ok(src.includes("quotePage('An item is no longer sold'"), 'said in its own words');
 });
+
+test('a retired SinaLite line: a reorder holding it goes to the shop, a prefill says so, an empty spare line never blocks a save', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  assert.ok(src.includes('const locked = PARTNERS.lockOpen(o.first_paid_at) && !retiredLine;'), 'held for the shop, never sent at the old price');
+  assert.ok(src.includes('is no longer sold: pick another</option>'), 'a prefilled line says why it is blank');
+  assert.ok(src.includes('retiredSinalite(prod) && qty > 0 &&'), 'an empty spare line is not refused');
+  assert.ok(src.includes('&& !pq.reorder_of) priorProducts.add('), 'a reorder copy does not keep it');
+  assert.strictEqual(require('../tools/sinalite-assemble.js').META.mug.online, false);
+});

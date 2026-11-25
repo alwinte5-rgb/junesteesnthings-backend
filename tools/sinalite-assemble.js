@@ -115,7 +115,7 @@ const META = {
      not in these prices — a two-sided job needs that added by hand. */
   mug: {
     name: 'Ceramic Mugs — 11oz, printed', label: 'Ceramic Mugs', group: 'Drinkware',
-    design: null, online: true, any_qty: true,
+    design: null, online: false, any_qty: true,
     /* Off the quote form's product list (owner, 2026-11-25): the shop prints
        its own mugs (tools/add-shop-mugs.js, $20.98 for one) and this one
        priced one mug at $62. The row and family stay, so a quote already
