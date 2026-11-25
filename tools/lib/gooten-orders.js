@@ -48,7 +48,8 @@ async function ensureTables(pool) {
       sending_at    TIMESTAMPTZ,
       sent_at       TIMESTAMPTZ,
       checked_at    TIMESTAMPTZ,
-      job_shipped_at TIMESTAMPTZ
+      job_shipped_at TIMESTAMPTZ,
+      notify_error  TEXT
     )`);
   await pool.query('CREATE INDEX IF NOT EXISTS gooten_orders_quote ON gooten_orders (quote_code, id)');
   /* One order being prepared or sent per job at a time. */
@@ -109,9 +110,10 @@ function registerGooten(app, d) {
     const form = (r, path, label, cls = '', ask = '') => `<form method="POST" action="/admin/quote/${c}/gooten/${path}" style="display:inline-block;margin:8px 6px 0 0"
         onsubmit="${ask ? `if(!confirm(${esc(JSON.stringify(ask))}))return false;` : ''}this.querySelector('button').disabled=true">
       <input type="hidden" name="id" value="${Number(r.id)}"><input type="hidden" name="total" value="${esc(String(r.est && r.est.total))}">
+      <input type="hidden" name="mode" value="${G.live(env) ? 'live' : 'test'}">
       <button type="submit"${cls ? ` class="${cls}"` : ''}>${label}</button></form>`;
     const lines = (r) => `<ul style="margin:6px 0;padding-left:18px">${r.items.map((it) => `<li>${Number(it.qty)} &times; ${esc(it.sku)} &middot; ${
-      it.images.map((u, n) => `<a href="${esc(u)}" target="_blank" rel="noopener">${n ? 'second artwork' : 'artwork'}</a>`).join(', ')}</li>`).join('')}</ul>
+      it.images.map((u, n) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc((it.names && it.names[n]) || (n ? 'second artwork' : 'artwork'))}</a>`).join(', ')}</li>`).join('')}</ul>
       <div class="muted" style="font-size:13px">${esc(r.ship_type)} to ${esc(SHIP.shipToLines(r.ship_to).join(', '))}</div>`;
     const tag = (r) => (r.test ? ' <span style="background:#fef3c7;color:#92400e;border-radius:6px;padding:1px 7px;font-size:12px">TEST</span>' : '');
     let body = '';
@@ -133,7 +135,7 @@ function registerGooten(app, d) {
         ${lines(open)}${form(open, 'check', 'Check with Gooten')}`;
     } else if (!why) {
       const art = await artFor(q);
-      const opts = (blank) => `<option value="">${blank}</option>${art.map((a, i) => `<option value="${i}">${esc(a.label)}</option>`).join('')}`;
+      const opts = (blank) => `<option value="">${blank}</option>${art.map((a) => `<option value="${esc(a.url)}">${esc(a.label)}</option>`).join('')}`;
       const row = `<div class="row" style="gap:8px;flex-wrap:wrap;margin:6px 0" data-gline>
         <input name="sku" maxlength="120" placeholder="Gooten SKU" aria-label="Gooten SKU" style="flex:2 1 220px">
         <input name="qty" type="number" min="1" max="${G.MAX_QTY}" inputmode="numeric" placeholder="Qty" aria-label="Quantity" style="flex:0 0 80px">
@@ -160,9 +162,10 @@ function registerGooten(app, d) {
       return `<div style="border-top:1px solid #eef1f6;padding:8px 0;margin-top:8px"><b>${esc(r.gooten_id || '')}</b>${tag(r)}
         <span class="muted">${r.charged != null ? `charged ${money(r.charged)}` : `estimate ${money(r.est.total)}`}${r.charged != null ? ' &middot; <a href="#costs">add it to the job’s costs</a>' : ''}</span>
         ${s.problem ? '<div class="warn">Gooten has a problem with this order. Open it in Gooten Admin.</div>' : ''}
+        ${r.notify_error ? `<div class="warn">${esc(r.notify_error)}</div>` : ''}
         ${s.partCancelled ? '<div class="warn">Gooten cancelled part of this order.</div>' : ''}
         ${s.items.length ? `<ul style="margin:6px 0;padding-left:18px">${s.items.map((it) => `<li>${esc(it.sku)}: ${esc(it.status || 'no status yet')}${
-          it.tracking ? ` &middot; ${it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.tracking)}</a>` : esc(it.tracking)}` : ''}</li>`).join('')}</ul>` : lines(r)}
+          (it.parcels || []).map((p) => ` &middot; ${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.number)}</a>` : esc(p.number)}`).join('')}</li>`).join('')}</ul>` : lines(r)}
         ${r.status === 'sent' && G.configured(env) ? form(r, 'check', 'Check status', 'btn-ghost') : ''}</div>`;
     }).join('');
     const said = query.gooten_ok ? `<div class="ok">${esc(String(query.gooten_ok).slice(0, 300))}</div>`
@@ -239,6 +242,9 @@ function registerGooten(app, d) {
     let claimed = false;
     try {
       const test = !G.live(env);
+      /* What the button said is what is sent: a page left open from test mode
+         promised "nothing is charged". */
+      if (String((req.body || {}).mode) !== (test ? 'test' : 'live')) return say(res, code, false, `Gooten is now in ${test ? 'test' : 'live'} mode. Nothing was sent: check the order and send again.`);
       const q = await quote(code);
       const why = refusal(q);
       if (why) return say(res, code, false, why);
@@ -330,11 +336,9 @@ function registerGooten(app, d) {
     const g = api();
     const o = await g.order(row.gooten_id);
     const s = G.standing(o);
-    let charged = row.charged;
-    const gid = Number(o && o.GootenId);
-    if (!row.test && charged == null && Number.isSafeInteger(gid) && gid > 0) {
-      charged = await g.billing(gid).then(G.billed).catch((e) => { console.error(`gooten billing for ${row.quote_code}:`, e.message); return null; });
-    }
+    /* A failed read here holds nothing up: the hourly check keeps asking,
+       closed or not, until it has the charge (sweep, readCharge). */
+    const charged = await readCharge(row, o).catch((e) => { console.error(`gooten billing for ${row.quote_code}:`, e.message); return null; });
     await pool.query('UPDATE gooten_orders SET standing = $2::jsonb, charged = COALESCE($3, charged), checked_at = NOW() WHERE id = $1',
       [row.id, JSON.stringify(s), charged]);
     if (s.cancelled) return void await close(row.id);
@@ -348,7 +352,7 @@ function registerGooten(app, d) {
     const { rowCount } = await pool.query(
       'UPDATE gooten_orders SET job_shipped_at = NOW() WHERE id = $1 AND job_shipped_at IS NULL', [row.id]);
     if (rowCount) {
-      try { await shipJob(row.quote_code, s.tracking); }
+      try { await shipJob(row, s.tracking); }
       catch (e) {
         await pool.query('UPDATE gooten_orders SET job_shipped_at = NULL WHERE id = $1', [row.id]).catch(() => {});
         throw e;
@@ -356,13 +360,35 @@ function registerGooten(app, d) {
     }
     await close(row.id);
   }
+  /** What Gooten charged, or null while it has no total yet. */
+  async function readCharge(row, o) {
+    if (row.test) return null;
+    if (row.charged != null) return row.charged;
+    const gid = Number(o && o.GootenId);
+    return Number.isSafeInteger(gid) && gid > 0 ? G.billed(await api().billing(gid)) : null;
+  }
+  async function catchUpCharge(row) {
+    const n = await readCharge(row, await api().order(row.gooten_id));
+    await pool.query('UPDATE gooten_orders SET charged = COALESCE($2, charged), checked_at = NOW() WHERE id = $1', [row.id, n]);
+  }
   const close = (id) => pool.query(`UPDATE gooten_orders SET status = 'closed' WHERE id = $1 AND status = 'sent'`, [id]);
-  async function shipJob(code, tracking) {
+  async function shipJob(row, tracking) {
+    const code = row.quote_code;
     const { rows: [q] } = await pool.query(
       `UPDATE quotes SET tracking = CASE WHEN COALESCE(tracking, '') = '' THEN NULLIF($2, '') ELSE tracking END
         WHERE code = $1 AND cancelled_at IS NULL AND shipped_at IS NULL AND delivered_at IS NULL RETURNING code`,
-      [code, tracking.join(', ').slice(0, 120)]);
-    if (q) await moveToShipped(code);   // emails and texts the customer, once each
+      [code, G.trackingLine(tracking)]);
+    if (!q) return;
+    const after = await moveToShipped(code);   // emails and texts the customer, once each
+    const told = after && after._notified;
+    /* The job is shipped either way; a message that did not go must not pass
+       for one that did. */
+    if (!after || told === 'failed' || told === 'no-email') {
+      const why = !after ? 'The job could not be marked shipped.' : told === 'failed' ? 'The job is marked shipped, but the customer’s email did not send. Tell them.'
+        : 'The job is marked shipped, but there is no email address for the customer. Check they were told.';
+      await pool.query('UPDATE gooten_orders SET notify_error = $2 WHERE id = $1', [row.id, why]);
+      reportError('gooten:customer-not-told', new Error(why), code).catch(() => {});
+    }
   }
 
   /** Hourly: sends left hanging, then every order Gooten is working on. One
@@ -372,10 +398,11 @@ function registerGooten(app, d) {
     await pool.query(`UPDATE gooten_orders SET status = 'unknown' WHERE status = 'sending' AND sending_at < NOW() - INTERVAL '10 minutes'`);
     const { rows } = await pool.query(
       `SELECT * FROM gooten_orders WHERE status = 'unknown' OR (status = 'sent' AND (NOT test OR sent_at > NOW() - INTERVAL '3 days'))
+           OR (status = 'closed' AND NOT test AND charged IS NULL AND sent_at > NOW() - INTERVAL '14 days')
         ORDER BY checked_at NULLS FIRST, id LIMIT 100`);
     const failed = [];
     for (const row of rows) {
-      try { if (row.status === 'unknown') await lookUp(row); else await refresh(row); }
+      try { if (row.status === 'unknown') await lookUp(row); else if (row.status === 'closed') await catchUpCharge(row); else await refresh(row); }
       catch (e) {
         failed.push(`${row.quote_code}: ${e.message}`);
         /* To the back of the line, so 100 broken ones cannot starve the rest. */
@@ -389,15 +416,20 @@ function registerGooten(app, d) {
   /** For the owner's list: orders that will not move until someone acts. */
   async function alerts() {
     const { rows } = await pool.query(
-      `SELECT o.id, o.quote_code, o.status, o.standing, q.name FROM gooten_orders o JOIN quotes q ON q.code = o.quote_code
+      `SELECT o.id, o.quote_code, o.status, o.standing, o.notify_error, q.name FROM gooten_orders o JOIN quotes q ON q.code = o.quote_code
         WHERE (o.status = 'unknown')
            OR (o.status = 'draft' AND o.created_at < NOW() - INTERVAL '1 day' AND q.cancelled_at IS NULL)
            OR (o.status = 'sent' AND NOT o.test AND (o.standing->>'problem' = 'true' OR o.standing->>'partCancelled' = 'true'))
-           OR (o.status = 'closed' AND NOT o.test AND o.standing->>'cancelled' = 'true' AND o.sent_at > NOW() - INTERVAL '14 days')
+           OR (o.status = 'closed' AND NOT o.test AND o.sent_at > NOW() - INTERVAL '14 days'
+               AND (o.standing->>'cancelled' = 'true' OR o.standing->>'partCancelled' = 'true' OR o.notify_error IS NOT NULL
+                 OR (o.charged IS NULL AND o.sent_at < NOW() - INTERVAL '3 days')))
         ORDER BY o.id DESC LIMIT 100`);
     const said = (r) => (r.status === 'unknown' ? ['red', 'Gooten may not have this order', 'check with Gooten before ordering again']
       : r.status === 'draft' ? ['amber', 'Gooten order prepared but not sent', 'send it, or start over']
-        : r.status === 'closed' ? ['red', 'Gooten cancelled this order', 'open it in Gooten Admin']
+        : r.notify_error ? ['red', 'Shipped by Gooten, customer not told', r.notify_error]
+          : r.standing && r.standing.cancelled ? ['red', 'Gooten cancelled this order', 'open it in Gooten Admin']
+            : r.standing && r.standing.partCancelled ? ['red', 'Gooten cancelled part of this order', 'the rest shipped: sort out the missing items']
+              : r.status === 'closed' ? ['amber', 'Gooten’s charge could not be read', 'look it up in Gooten Admin and add it to the costs']
           : ['red', 'Gooten has a problem with this order', 'open it in Gooten Admin']);
     return rows.map((r) => {
       const [tone, title, sub] = said(r);

@@ -56,8 +56,11 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /** Did this submit answer say no, yes or neither? */
 function submitOutcome(status, body) {
-  if (isObj(body) && body.HadError === true) return 'refused';
-  if (status >= 200 && status < 300 && isObj(body) && typeof body.Id === 'string' && /^[A-Za-z0-9-]{4,100}$/.test(body.Id)) return 'sent';
+  const ok = status >= 200 && status < 300;
+  /* A refusal only counts from an answer that is one: a 500 (or a conflict,
+     timeout or throttle) that says HadError may have made the order first. */
+  if (ok && isObj(body) && body.HadError === true) return 'refused';
+  if (ok && isObj(body) && typeof body.Id === 'string' && /^[A-Za-z0-9-]{4,100}$/.test(body.Id)) return 'sent';
   /* 4xx is Gooten refusing the request, except the ones that are about the
      connection rather than the order. */
   if (status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status)) return 'refused';
@@ -128,8 +131,9 @@ function client({ env = process.env, fetcher = fetch } = {}) {
 /* ── What staff typed ──────────────────────────────────────────────────── */
 
 /** The artwork a job has that Gooten can print, final art first. Lines name a
- *  file by its place in this list, so a form can never hand Gooten an address
- *  this shop did not store. */
+ *  file by its address, which must be on this list, so a form can never hand
+ *  Gooten one this shop did not store. (Not by place: the list moves when art is
+ *  approved or a photo deleted, and the wrong picture would be printed.) */
 function artworkChoices({ artFiles = [], photos = [], artOk, photoOk }) {
   const out = [];
   const add = (f, ok, label) => {
@@ -150,7 +154,7 @@ function parseLines(body, choices) {
   const skus = col('sku'), qtys = col('qty'), arts = col('art'), backs = col('art2');
   const rows = Math.max(skus.length, qtys.length, arts.length);
   if (rows > MAX_LINES) return { error: `No more than ${MAX_LINES} lines on one Gooten order.` };
-  const pick = (v) => (/^\d{1,3}$/.test(v) && choices[Number(v)] ? choices[Number(v)].url : null);
+  const pick = (v) => choices.find((c) => c.url === v) || null;
   const items = [];
   for (let i = 0; i < rows; i++) {
     const sku = skus[i] || '', qty = qtys[i] || '', art = arts[i] || '', back = backs[i] || '';
@@ -166,7 +170,7 @@ function parseLines(body, choices) {
       if (!b) return { error: `${at}choose the second artwork again.` };
       images.push(b);
     }
-    items.push({ sku, qty: Number(qty), images });
+    items.push({ sku, qty: Number(qty), images: images.map((c) => c.url), names: images.map((c) => c.label) });
   }
   return items.length ? { items } : { error: 'Add at least one item.' };
 }
@@ -187,7 +191,9 @@ const address = (a, { phone, email }) => ({
 function orderPayload(row, { shop, phone }) {
   const bill = address(shop, shop);
   return {
-    ShipToAddress: address(row.ship_to, { phone: String(phone || '').replace(/\D/g, '').length >= 10 ? phone : shop.phone, email: shop.email }),
+    /* The customer's phone only on a parcel going to the customer. */
+    ShipToAddress: address(row.ship_to, { email: shop.email,
+      phone: row.ship_dest === 'customer' && String(phone || '').replace(/\D/g, '').length >= 10 ? phone : shop.phone }),
     BillingAddress: bill,
     Items: row.items.map((it, i) => ({
       Quantity: it.qty, SKU: it.sku, ShipType: row.ship_type, SourceId: `${sourceId(row)}-${i + 1}`,
@@ -202,8 +208,11 @@ function orderPayload(row, { shop, phone }) {
 const sourceId = (row) => `JT-${row.quote_code}-${row.id}`;
 
 const amount = (m) => {
-  const n = Number(isObj(m) ? m.Price : m);
-  return m != null && Number.isFinite(n) && n >= 0 ? round2(n) : null;
+  const v = isObj(m) ? m.Price : m;
+  /* Number(null) and Number('') are 0, and no figure is not free. */
+  if (typeof v !== 'number' && !(typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()))) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? round2(n) : null;
 };
 
 /** Gooten's estimate → { items, shipping, total }, or null when it did not
@@ -227,22 +236,37 @@ const safeUrl = (u) => (/^https:\/\/[^\s"'<>]{4,400}$/.test(String(u || '')) ? S
 function standing(o) {
   const items = (o && Array.isArray(o.Items) ? o.Items : []).map((it) => {
     const ships = [...(Array.isArray(it.Shipments) ? it.Shipments : []), it].filter(Boolean);
-    const s = ships.find((x) => text(x.TrackingNumber, 80)) || {};
-    return { sku: text(it.Sku, 120), status: text(it.Status, 60), tracking: text(s.TrackingNumber, 80),
-             url: safeUrl(s.TrackingUrl), carrier: text(s.ShipCarrierName, 60) };
+    const parcels = new Map();   // every box, each number once
+    for (const x of ships) {
+      const n = text(x.TrackingNumber, 80);
+      if (n && !(parcels.has(n) && parcels.get(n).url)) parcels.set(n, { number: n, url: safeUrl(x.TrackingUrl), carrier: text(x.ShipCarrierName, 60) });
+    }
+    return { sku: text(it.Sku, 120), status: text(it.Status, 60), parcels: [...parcels.values()] };
   });
   const is = (it, re) => re.test(it.status.replace(/[\s_-]/g, ''));
   const gone = (it) => is(it, /^cancel/i);
   const left = items.filter((it) => !gone(it));
-  const done = (it) => !!it.tracking || is(it, /^(shipped|delivered)/i);
+  /* Its status alone: a number exists from the moment a label is printed. */
+  const done = (it) => is(it, /^(shipped|delivered)/i);
   return {
     items,
     cancelled: items.length > 0 && !left.length,
     partCancelled: left.length < items.length && left.length > 0,
-    problem: left.some((it) => !done(it) && is(it, /issue|hold|needs|error|fail/i)),
+    problem: left.some((it) => is(it, /issue|hold|needs|error|fail/i)),
     shipped: left.length > 0 && left.every(done),
-    tracking: [...new Set(left.map((it) => it.tracking).filter(Boolean))],
+    tracking: [...new Set(left.flatMap((it) => it.parcels.map((p) => p.number)))],
   };
+}
+
+/** Tracking numbers as one line of at most `max`, whole numbers only. */
+function trackingLine(numbers, max = 120) {
+  let out = '';
+  for (const n of numbers) {
+    const next = out ? `${out}, ${n}` : n;
+    if (next.length > max) break;
+    out = next;
+  }
+  return out;
 }
 
 /** The order with exactly this SourceId in a search answer, or null. */
@@ -279,5 +303,5 @@ function variantRows(v) {
 module.exports = {
   CATALOG_URL, SHIP_TYPES, MAX_LINES, MAX_QTY, PRINT_EXTS, GootenError, keys, configured, live, client, errorText,
   submitOutcome, isDuplicate, artworkChoices, parseLines, splitName, orderPayload, sourceId, estimate, billed,
-  standing, findBySource, catalogProducts, variantRows,
+  standing, trackingLine, findBySource, catalogProducts, variantRows,
 };

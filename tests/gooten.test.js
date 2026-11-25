@@ -13,7 +13,7 @@ test('a submit is made, refused or unclear, and unclear is never read as refused
   assert.deepStrictEqual(await submit(answer(200, { Id: '115557-68eb0c64-bf4f' })), { id: '115557-68eb0c64-bf4f' });
   await assert.rejects(submit(answer(400, { HadError: true, Errors: [{ PropertyName: 'Items', ErrorMessage: 'bad SKU' }] })),
     (e) => e.kind === 'refused' && /bad SKU/.test(e.message));
-  for (const f of [answer(500, { x: 1 }), answer(200, {}), answer(200, undefined), answer(429, {}), answer(408, {}), answer(502, undefined),
+  for (const f of [answer(500, { x: 1 }), answer(200, {}), answer(200, undefined), answer(429, {}), answer(408, {}), ...[500, 503, 408, 409, 425, 429].map((n) => answer(n, { HadError: true, Errors: [{ ErrorMessage: 'x' }] })), answer(502, undefined),
     async () => { throw Object.assign(new Error('https://api.print.io/?partnerBillingKey=sec'), { name: 'TimeoutError' }); },
     async () => { throw new Error('socket'); }]) {
     await assert.rejects(submit(f), (e) => e.kind === 'unknown' && !/sec/.test(e.message));
@@ -44,16 +44,18 @@ test('off without both keys, and live only when the owner says exactly 1', async
   await assert.rejects(G.client({ env: {}, fetcher: () => assert.fail('called') }).price([], {}, 'standard'), /not set up/);
 });
 
-const art = [{ url: 'https://res.cloudinary.com/c/image/upload/job_art/a.png' }, { url: 'https://res.cloudinary.com/c/image/upload/job_art/b.jpg' }];
+const art = [{ url: 'https://res.cloudinary.com/c/image/upload/job_art/a.png', label: 'A' }, { url: 'https://res.cloudinary.com/c/image/upload/job_art/b.jpg', label: 'B' }];
+const A = art[0].url, B = art[1].url;
 test('lines: a half-filled line is refused, never dropped; artwork is only ever one of the job’s own files', () => {
-  const ok = G.parseLines({ sku: ['Mug11oz-White', ''], qty: ['3', ''], art: ['0', ''], art2: ['1', ''] }, art);
-  assert.deepStrictEqual(ok.items, [{ sku: 'Mug11oz-White', qty: 3, images: [art[0].url, art[1].url] }]);
-  assert.deepStrictEqual(G.parseLines({ sku: 'Mug11oz-White', qty: '1', art: '1' }, art).items[0].images, [art[1].url], 'one line posts plain strings');
-  for (const bad of [{}, { sku: 'Mug', qty: '', art: '0' }, { sku: '', qty: '2', art: '0' }, { sku: 'Mug', qty: '2', art: '' },
-    { sku: 'Mug', qty: '0', art: '0' }, { sku: 'Mug', qty: '501', art: '0' }, { sku: 'Mug', qty: '1.5', art: '0' }, { sku: 'Mug', qty: '-1', art: '0' },
-    { sku: 'Mug', qty: '1', art: '2' }, { sku: 'Mug', qty: '1', art: 'https://evil.test/x.png' }, { sku: 'Mug', qty: '1', art: '__proto__' },
-    { sku: '<script>', qty: '1', art: '0' }, { sku: 'Mug', qty: '1', art: '0', art2: '9' },
-    { sku: Array(21).fill('Mug'), qty: Array(21).fill('1'), art: Array(21).fill('0') }]) {
+  const ok = G.parseLines({ sku: ['Mug11oz-White', ''], qty: ['3', ''], art: [A, ''], art2: [B, ''] }, art);
+  assert.deepStrictEqual(ok.items, [{ sku: 'Mug11oz-White', qty: 3, images: [A, B], names: ['A', 'B'] }]);
+  assert.deepStrictEqual(G.parseLines({ sku: 'Mug', qty: '1', art: A }, [{ url: 'x', label: 'new art on top' }, ...art]).items[0].images, [A], 'the picked file, however the list moved');
+  assert.deepStrictEqual(G.parseLines({ sku: 'Mug11oz-White', qty: '1', art: B }, art).items[0].images, [art[1].url], 'one line posts plain strings');
+  for (const bad of [{}, { sku: 'Mug', qty: '', art: A }, { sku: '', qty: '2', art: A }, { sku: 'Mug', qty: '2', art: '' },
+    { sku: 'Mug', qty: '0', art: A }, { sku: 'Mug', qty: '501', art: A }, { sku: 'Mug', qty: '1.5', art: A }, { sku: 'Mug', qty: '-1', art: A },
+    { sku: 'Mug', qty: '1', art: '0' }, { sku: 'Mug', qty: '1', art: 'https://evil.test/x.png' }, { sku: 'Mug', qty: '1', art: '__proto__' },
+    { sku: '<script>', qty: '1', art: A }, { sku: 'Mug', qty: '1', art: A, art2: '9' },
+    { sku: Array(21).fill('Mug'), qty: Array(21).fill('1'), art: Array(21).fill(A) }]) {
     assert.ok(G.parseLines(bad, art).error, JSON.stringify(bad));
   }
 });
@@ -64,7 +66,7 @@ test('artwork choices are the shop’s own PNG and JPG files, final art first', 
   assert.deepStrictEqual(got.map((g) => g.url), ['ok/b.PNG', 'ok/d.jpg']);
 });
 
-const row = { id: 7, quote_code: 'ABC234', ship_type: 'standard', items: [{ sku: 'Mug', qty: 2, images: [art[0].url] }],
+const row = { id: 7, quote_code: 'ABC234', ship_dest: 'customer', ship_type: 'standard', items: [{ sku: 'Mug', qty: 2, images: [art[0].url] }],
   ship_to: { name: 'Pat Q Doe', street1: '1 Main St', street2: '', city: 'Chicago', state: 'IL', zip: '60657' } };
 const shop = { name: 'June’s Tees', street1: '3047 N Lincoln Ave', city: 'Chicago', state: 'IL', zip: '60657', phone: '(773) 900-4592', email: 'shop@example.com' };
 test('the order carries one reference on every try, the uniqueness guard, and a test flag unless told live', () => {
@@ -77,13 +79,14 @@ test('the order carries one reference on every try, the uniqueness guard, and a 
   assert.deepStrictEqual([p.ShipToAddress.FirstName, p.ShipToAddress.LastName, p.ShipToAddress.Phone], ['Pat', 'Q Doe', '3125550100']);
   assert.strictEqual(p.ShipToAddress.Email, shop.email, 'Gooten never gets the customer’s email');
   assert.strictEqual(G.orderPayload(row, { shop, phone: '' }).ShipToAddress.Phone, '7739004592');
+  assert.strictEqual(G.orderPayload({ ...row, ship_dest: 'shop' }, { shop, phone: '3125550100' }).ShipToAddress.Phone, '7739004592', 'a parcel to the shop rings the shop');
   assert.deepStrictEqual(G.splitName('Cher'), { FirstName: 'Cher', LastName: 'Cher' });
 });
 
 test('a missing figure is never $0', () => {
   const p = (i, s) => ({ ItemsPrice: { ItemsTotalPrice: i }, ShippingPrice: { ShippingTotal: s } });
   assert.deepStrictEqual(G.estimate(p({ Price: 10.1 }, { Price: 5.2 })), { items: 10.1, shipping: 5.2, total: 15.3 });
-  for (const bad of [null, {}, p(null, { Price: 1 }), p({ Price: 5 }, null), p({ Price: 0 }, { Price: 1 }), p({}, { Price: 1 }), p({ Price: 'x' }, { Price: 1 })]) assert.strictEqual(G.estimate(bad), null);
+  for (const bad of [null, {}, p(null, { Price: 1 }), p({ Price: 5 }, null), p({ Price: 0 }, { Price: 1 }), p({}, { Price: 1 }), p({ Price: 'x' }, { Price: 1 }), p({ Price: 10 }, { Price: null }), p({ Price: 10 }, { Price: '' }), p({ Price: 10 }, {})]) assert.strictEqual(G.estimate(bad), null);
   assert.strictEqual(G.billed({ Result: { Total: { Price: 20 } } }), 20);
   assert.strictEqual(G.billed({ Result: {} }), null);
 });
@@ -91,8 +94,13 @@ test('a missing figure is never $0', () => {
 test('where an order stands: every item, not just one; a status Gooten never documented is shown, not guessed', () => {
   const s = (...Items) => G.standing({ Items });
   assert.ok(!s({ Sku: 'a', Status: 'Shipped', TrackingNumber: '1Z' }, { Sku: 'b', Status: 'InProduction' }).shipped);
-  const both = s({ Sku: 'a', Status: 'Shipped', Shipments: [{ TrackingNumber: '1Z', TrackingUrl: 'javascript:x' }] }, { Sku: 'b', Status: 'x', TrackingNumber: '1Z' });
-  assert.ok(both.shipped); assert.deepStrictEqual(both.tracking, ['1Z']); assert.strictEqual(both.items[0].url, '');
+  const both = s({ Sku: 'a', Status: 'Shipped', Shipments: [{ TrackingNumber: '1Z', TrackingUrl: 'javascript:x' }, { TrackingNumber: '2Z', TrackingUrl: 'https://t.test/2Z' }] }, { Sku: 'b', Status: 'Delivered', TrackingNumber: '1Z' });
+  assert.ok(both.shipped); assert.deepStrictEqual(both.tracking, ['1Z', '2Z']);
+  assert.deepStrictEqual(both.items[0].parcels.map((p) => p.url), ['', 'https://t.test/2Z']);
+  const label = s({ Status: 'Hold', TrackingNumber: '1Z' }, { Status: 'InProduction', Shipments: [{ TrackingNumber: 'A' }] });
+  assert.ok(!label.shipped && label.problem, 'a printed label is not a shipped parcel, and hides no problem');
+  assert.strictEqual(G.trackingLine(['a'.repeat(80), 'b'.repeat(80)]), 'a'.repeat(80), 'never half a number');
+  assert.strictEqual(G.trackingLine(['1Z', '2Z']), '1Z, 2Z');
   for (const st of ['ImageIssue', 'AddressIssue', 'Hold', 'HoldByCIImageIssue', 'NeedsPersonalization', 'Payment Issue']) assert.ok(s({ Status: st }).problem, st);
   for (const st of ['New', 'InProduction', 'Wibble', '']) { assert.ok(!s({ Status: st }).problem, st); assert.ok(!s({ Status: st }).shipped, st); }
   assert.ok(s({ Status: 'Cancelled' }).cancelled && !s({ Status: 'Cancelled' }).shipped);
