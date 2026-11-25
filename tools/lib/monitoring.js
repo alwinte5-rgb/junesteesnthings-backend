@@ -79,6 +79,15 @@ function scrub(event) {
     event.request = { method, url: path };
   }
   delete event.user;
+  /* Sentry records every outgoing call as a breadcrumb, query string and all,
+     and some services take their key in the query (Gooten's billing key,
+     2026-11-25). Kept without it, for the same reason as the url above. */
+  for (const b of Array.isArray(event.breadcrumbs) ? event.breadcrumbs : []) {
+    if (!b || !b.data || typeof b.data !== 'object') continue;
+    delete b.data['http.query'];
+    delete b.data['http.fragment'];
+    for (const k of ['url', 'to', 'from']) if (typeof b.data[k] === 'string') b.data[k] = b.data[k].split(/[?#]/)[0];
+  }
   return event;
 }
 
