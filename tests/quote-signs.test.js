@@ -71,13 +71,21 @@ test('brochures take any typed quantity from 250, priced as the SinaLite runs th
   const spec = { size: '8.5x11', mat: '2s' };
   assert.strictEqual(QS.priceSign('brochure', spec, 249, true).ok, false, 'still a 250 minimum');
   const lad = SLb.table().families.brochure.prices['2s']['8.5x11'][''];
-  for (const q of [250, 300, 1200, 3000]) {
+  for (const q of [250, 300, 1050, 1200, 3000]) {
     const r = QS.priceSign('brochure', spec, q, true);
     assert.ok(r.ok, q + ' brochures must price: ' + r.error);
     /* The run mix, never the lower any-quantity price (keeps x2 on what is bought). */
-    assert.strictEqual(r.piece, SLb.eachFor(lad, q, false));
+    assert.strictEqual(r.piece, SLb.eachFor(lad.filter(([n]) => n >= 250), q, false), 'runs from 250 up, as the quote page');
   }
   assert.ok(QS.priceSign('brochure', spec, 300, true).hint, 'a quantity between runs still recommends the better run');
+  /* Above the top run (10,000) it is still quoted by hand, as before. */
+  const over = QS.priceSign('brochure', spec, 12000, true);
+  assert.strictEqual(over.ok, false);
+  assert.match(over.error, /quote the extra runs by hand/);
+  /* The customer's quote page prices a typed quantity the same way. */
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /typed: !!fam\.typed_qty/);
+  assert.match(src, /if \(L\.runs\.typed && qty <= L\.runs\.ladder\[L\.runs\.ladder\.length - 1\]\[0\]\) return null;/);
   /* Every other set-run SinaLite item still refuses an in-between quantity. */
   assert.strictEqual(QS.priceSign('table_cover', { size: '6ft', mat: '3sided' }, 4, true).ok, false);
 });

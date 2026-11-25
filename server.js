@@ -17256,7 +17256,7 @@ function sinaliteRunsOf(it) {
   const from = Number(fam.sell_from) || 0;
   const sells = Array.isArray(lad) && !(Number(it.qty) < from) ? lad.filter(([q]) => q >= from) : lad;
   return Array.isArray(sells) && sells.length
-    ? { ladder: sells, any: !!fam.any_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
+    ? { ladder: sells, any: !!fam.any_qty, typed: !!fam.typed_qty, design: fam.design_in || 0, qty: Number(it.qty) || 0, saved: Number(it.unit_price) || null } : null;
 }
 
 app.get('/q/:code', async (req, res) => {
@@ -18250,7 +18250,10 @@ ${quotePricingSource()}
          2026-10-20), so the estimate names the next run up and prices it,
          as it does the minimum. The saved quantity keeps its saved price. */
       function slNext(L, qty){
+        /* typed (brochures, 2026-11-24): any quantity up to the top run is
+           priced as the runs that cover it, exactly as the save prices it. */
         if (!L.runs || L.runs.any || !(qty > 0) || qty === L.runs.qty || slUnder(L, qty)) return null;
+        if (L.runs.typed && qty <= L.runs.ladder[L.runs.ladder.length - 1][0]) return null;
         var lad = L.runs.ladder;
         for (var i = 0; i < lad.length; i++) if (lad[i][0] === qty) return null;
         for (var j = 0; j < lad.length; j++) if (lad[j][0] > qty) return lad[j];
