@@ -12947,10 +12947,11 @@ function productGroupOf(name) {
     /* Services by flag, not name: "Business Card Design" would land in Signs. */
     bucket.set(SERVICE_GROUP, []);
     /* A retired SinaLite item (the mug, owner 2026-11-25) is not offered,
-       except on the line that already holds it, so that line still reads and
-       re-prices as saved. */
+       except on a saved quote's line that already holds it, so that line
+       still reads and re-prices as saved. A new quote (a reorder, a lead's
+       prefill) never shows it: the save would refuse it. */
     for (const p of catalog.products) {
-      if (retiredSinalite(p) && String(p.id) !== String(sel)) continue;
+      if (retiredSinalite(p) && !(isEdit && String(p.id) === String(sel))) continue;
       bucket.get(p.service ? SERVICE_GROUP : productGroupOf(p.name)).push(p);
     }
 
@@ -14922,6 +14923,10 @@ ${quotePricingSource()}
       }
       function addLine(){
         var tpl = document.getElementById('lines').firstElementChild.cloneNode(true);
+        /* A retired item kept on the line it was copied from is not offered
+           on a new one (the SinaLite mug, owner 2026-11-25). Removed before the
+           values are cleared, so the copy starts on no product, not the first. */
+        tpl.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
         tpl.querySelectorAll('input,select').forEach(function(el){
           /* \\d, not \d — this whole script lives inside a template literal, so a
              single backslash is eaten before the browser ever sees it. It was,
@@ -14946,9 +14951,6 @@ ${quotePricingSource()}
         /* The copied item's Category filter is cleared above (its box reads
            "All categories"); show every section of its product list again. */
         tpl.querySelectorAll('select.p optgroup').forEach(function(g){ g.hidden = false; g.style.display = ''; g.disabled = false; });
-        /* A retired item kept on the line it was copied from is not offered
-           on a new one (the SinaLite mug, owner 2026-11-25). */
-        tpl.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
         var oh = tpl.querySelector('.opthelp');
         if (oh) oh.open = false;
         tpl.querySelector('.lt').textContent = '—';
@@ -15674,10 +15676,11 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
       const qty = parseInt(one(b['qty' + i]), 10) || 0;
       const optional = isOptional(i);
       const prod = catalog.products.find(p => String(p.id) === String(one(b['product' + i])));
-      /* Retired (the SinaLite mug): refused on a new line, kept where saved. */
+      /* Retired (the SinaLite mug): refused unless this quote was already
+         saved with it, so a saved quote re-saves as it was. */
       if (retiredSinalite(prod) && !priorProducts.has(String(prod.id))) {
         signErrors.push({ line: i + 1, what: desc || prod.name,
-          error: `${prod.name} is no longer sold. Pick the shop's own mug instead.` });
+          error: `${prod.name} is no longer sold. Pick the shop's own mug instead.`, retired: true });
         continue;
       }
       /* PRINT LOCATIONS (the form since 2026-10-06): one row per place —
@@ -16186,6 +16189,10 @@ app.post(['/admin/api/quotes', '/admin/api/quotes/:code'], requireAdmin, async (
         error: 'Sticker and label prices already include the $25 design. Remove this design line, or the customer pays for design twice.' });
     }
     if (signErrors.length) {
+      const onlyRetired = signErrors.every((e) => e.retired);
+      if (onlyRetired) return res.status(400).send(quotePage('An item is no longer sold', `
+        <div class="card"><div class="warn">Nothing was saved — ${signErrors.map((e) => `item ${e.line}: ${escEmail(e.error)}`).join(' ')}</div>
+          <p style="margin-top:12px"><a class="btn" href="${backToForm}">Go back</a></p></div>`));
       return res.status(400).send(quotePage('A sign size cannot be made', `
         <div class="card">
           <div class="warn">Nothing was saved — ${signErrors.length === 1 ? 'a sized item' : 'some sized items'} could not be priced.</div>
