@@ -149,7 +149,7 @@ test('a cancellation can be undone', () => {
      wherever a payment lands, and one paid while cancelled was never marked
      accepted (paid-after-cancel.test.js). Both are recorded facts. */
   assert.match(route,
-    /CASE WHEN accepted_at IS NOT NULL OR COALESCE\(paid_amount, 0\) > 0\s+THEN 'accepted' ELSE 'sent' END/,
+    /CASE WHEN accepted_at IS NOT NULL OR COALESCE\(paid_amount, 0\) > 0\s+THEN 'accepted' WHEN held_at IS NOT NULL THEN 'held' ELSE 'sent' END/,
     'restoring must not invent a status that was never recorded');
 });
 

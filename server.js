@@ -23109,6 +23109,12 @@ async function applyQuoteCancel(code, reason, { ip = null, facts = null, by = 'Y
   /* Its delivery seat is freed now, not when someone next opens the
      delivery board (Codex #143). */
   await DELIVERY.cancelRef('quote:' + code, 'system', 'quote cancelled').catch(() => {});
+  /* A held quote's approval request is moot once it is cancelled: left open,
+     it sat on the Approvals page with nothing to approve. One interrupted
+     mid-decision counts too, as Approvals shows it. */
+  await pool.query(`UPDATE staff_approvals SET status = 'withdrawn', decided_at = NOW()
+                     WHERE kind = 'quote' AND subject_id = $1 AND ${APPROVAL_OPEN_SQL}`, [code])
+    .catch((e) => console.error(`approval request for cancelled ${code} not closed:`, e.message));
   /* Every cancelled job comes to the owner to follow up (owner, 2026-10-06),
      whoever cancelled it: win it back, refund it, or let it go. */
   // A helper's request to cancel this job is answered by cancelling it.
@@ -23135,12 +23141,14 @@ app.post('/admin/quote/:code/uncancel', requireAdmin, async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE quotes SET cancelled_at = NULL, cancel_reason = NULL,
               status = CASE WHEN accepted_at IS NOT NULL OR COALESCE(paid_amount, 0) > 0
-                            THEN 'accepted' ELSE 'sent' END,
+                            THEN 'accepted' WHEN held_at IS NOT NULL THEN 'held' ELSE 'sent' END,
               accepted_at = CASE WHEN accepted_at IS NULL AND COALESCE(paid_amount, 0) > 0
                                  THEN NOW() ELSE accepted_at END
         WHERE code = $1 AND status <> 'held' RETURNING *`, [code]);
     /* Never out of 'held': that is the owner's Approve, not a Restore, or a
-       helper could release a quote their limits held back. */
+       helper could release a quote their limits held back. One cancelled while
+       held goes back to held, on Approvals: held_at is cleared only when the
+       owner (or a helper's own limits) releases it. */
     // And back out of lost, to the stage its own state says.
     if (rows.length) syncDealStage(rows[0]).catch(() => {});
   } catch (err) {
@@ -23395,7 +23403,7 @@ require('./tools/lib/design-library').registerDesignLibrary(app, {
   designChanges: { pool, designersOnRoster, isValidEmail, pinEmail, esc: escEmail, notifyNow },
   /* A design decided here leaves the owner's alert list at once, not on the
      next 5-minute library read. */
-  invalidate: () => { _shopCache.at = 0; libraryWaitingCache.at = 0; ownerAlertsCache = null; },
+  invalidate: () => { _shopCache.at = 0; libraryWaitingReset(); ownerAlertsCache = null; },
 });
 app.get('/shop-designs', (_req, res) => res.sendFile(require('path').join(__dirname, 'public', 'shop-designs.html')));
 
@@ -29096,6 +29104,10 @@ async function leadsWithStatus() {
               ORDER BY q.created_at LIMIT 1) AS matched_quote,
             (SELECT q.code FROM quotes q WHERE q.from_submission_id = s.id AND ${LEAD_QUOTE_PENDING}
               ORDER BY q.created_at DESC LIMIT 1) AS pending_quote,
+            -- the owner personally answered (no staff on the first answer or a
+            -- note), not a helper or the follow-ups
+            (s.first_response_at IS NOT NULL AND s.first_response_by IS NULL) OR EXISTS (SELECT 1 FROM lead_notes n WHERE n.submission_id = s.id AND n.kind = ANY($1)
+                       AND NOT n.auto AND n.staff_id IS NULL) AS owner_answered,
             (SELECT row_to_json(n) FROM (SELECT kind, created_at, staff_id FROM lead_notes
               WHERE submission_id = s.id AND kind = ANY($1) AND NOT auto ORDER BY created_at DESC LIMIT 1) n) AS last_contact,
             -- open leads someone has answered: the card's follow-up line, and whether
@@ -29301,6 +29313,11 @@ async function sendLeadFollowUps(now = Date.now()) {
  *  held for the owner's approval, were let go as "no reply" while the quote
  *  waited. Those come back to the board; nothing a person dismissed is touched. */
 async function restorePendingQuoteLeadsOnce() {
+  /* Requests for quotes cancelled before a cancel closed them. */
+  await pool.query(`UPDATE staff_approvals SET status = 'withdrawn', decided_at = NOW()
+     WHERE kind = 'quote' AND status = 'pending'
+       AND EXISTS (SELECT 1 FROM quotes q WHERE q.code = subject_id AND q.cancelled_at IS NOT NULL)`)
+    .catch((e) => console.error('cancelled quotes: requests not closed:', e.message));
   try {
     const { rowCount } = await pool.query(
       `WITH claim AS (INSERT INTO once_fixes (name) VALUES ('leads-restore-pending-quote') ON CONFLICT DO NOTHING RETURNING 1),
@@ -29927,19 +29944,14 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
     unansweredLeads().then((l) => { out.leads = l.length; }).catch(() => {}),
     pool.query(REVIEWS_WAITING_SQL).then(({ rows }) => { out.reviews = rows[0].n; }).catch(() => {}),
     pool.query(CERTS_WAITING_SQL).then(({ rows }) => { out.certificates = rows[0].n; }).catch(() => {}),
-    /* Approvals: staff requests, plus art, designer questions and library
-       designs from the owner's alert list (the sweep's reading, never waited
-       on here); the same list gives the Hours, Training and Team badges. */
-    /* Approvals counts what the Approvals page shows: staff requests and art
-       to approve, read live. Hours, Training and Team come from the owner's
-       alert list (the sweep's reading, never waited on here). */
-    isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
-                                 + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-                                     WHERE a.status = 'submitted' AND q.cancelled_at IS NULL) AS n`)
-      .then(({ rows }) => {
-        out.approvals = Number(rows[0].n);
-        if (ownerAlertsCache) Object.assign(out, OWNER_ALERTS.counts(ownerAlertsCache.rows.filter((r) => !r.ref.startsWith('note:'))));
-      }).catch(() => {}) : Promise.resolve(),
+    /* Approvals counts what the Approvals page shows: staff requests, art
+       submitted or asking a question, and helpers' held quotes with no
+       request, read live; library designs from the cached studio reading.
+       Hours, Training and Team come from the owner's alert list. */
+    isOwner() ? approvalsWaiting().then((n) => {
+      out.approvals = n;
+      if (ownerAlertsCache) Object.assign(out, OWNER_ALERTS.counts(ownerAlertsCache.rows.filter((r) => !r.ref.startsWith('note:'))));
+    }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
       out.late = jobs.filter((q) => { const s = quoteSchedule(q); return !!(s && s.risks.length); }).length;
     }).catch(() => {}),
@@ -30377,7 +30389,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 180px">
           <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
           <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
-          <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
+          ${a.kind === 'quote' ? '' : `<button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>`}
         </form>`}</span></div>`),
     ...((mail && mail.unreadThreads) || []).map((t) => `<a class="row-i" href="/admin/mailbox/${Number(t.id)}">
       <span class="ico ico-amber">${icon('mail')}</span>
@@ -30412,7 +30424,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
   ].join('') : '';
   const ownerExtraCount = owner ? alertGroups.hours.length + alertGroups.training.length
     + alertGroups.team.filter((r) => !r.ref.startsWith('note:')).length : 0;
-  const artFailed = alertFailed.filter((f) => ['art', 'design library', 'team alerts'].includes(f));
+  const artFailed = alertFailed.filter((f) => ['art', 'design library', 'held quotes', 'team alerts'].includes(f));
 
   /* Money in and out, this month and last, from the same reading as Finances. */
   const moneyCol = (m) => `<div style="flex:1 1 240px;min-width:0">
@@ -32601,7 +32613,7 @@ async function teamDigestHtml() {
   const monday = z.dow === 1;
   const ranges = [{ label: 'Yesterday', from: y, to: todayIso }];
   if (monday) ranges.push({ ...periodRange('last'), label: 'Last week' });
-  const { rows: [p] } = await pool.query(`SELECT COUNT(*)::int AS n FROM staff_approvals WHERE status = 'pending'`);
+  const p = { n: await approvalsWaiting() };
   let html = `<h3 style="color:#1848B8;margin:20px 0 6px">Team</h3>${p.n
     ? `<p style="margin:0 0 8px"><a href="${PUBLIC_BASE_URL}/admin/approvals" style="color:#b45309"><b>${p.n} waiting for your approval</b></a></p>` : ''}`;
   for (const r of ranges) {
@@ -35668,6 +35680,95 @@ function watchRows(list) {
 
 const FOLLOWUP_OUTCOMES = { won_back: 'Won back', refunded: 'Refunded', let_go: 'Let go', done: 'Done' };
 
+/* EVERYTHING ELSE THE TEAM IS WAITING ON YOU FOR, on the one Approvals page
+   (owner, 2026-11-25: "I dont like that her approvals and elys approvals go
+   to seperate places"). Final art has its own box above (decided there); this
+   adds the rest, each linked to where it is answered:
+     held quotes with no request   a helper's quote whose request was removed
+                                   or sent back: still hidden from the customer
+     designer questions           art requests asking for information
+     library designs              designs submitted in the studio
+   Read live, each part on its own, so one failing does not hide the others. */
+/* A held quote no request is open for: a helper's whose request was removed,
+   or a partner's reorder held for today's prices (created_by NULL, reorder_of
+   set; it never has a request). One sent back to the helper in the last 7
+   days is theirs to fix and left out; after that it comes back to the owner,
+   so nothing held sits out of sight for good. */
+const ORPHAN_HELD_SQL = `SELECT q.code, q.name, q.created_by, q.reorder_of, q.held_at, q.total,
+          -- when it last came back to the owner: its bell notice is new each time
+          COALESCE((SELECT MAX(a.decided_at) FROM staff_approvals a WHERE a.kind = 'quote' AND a.subject_id = q.code), q.held_at) AS since
+     FROM quotes q
+   WHERE q.status = 'held' AND q.cancelled_at IS NULL
+     -- a quote just saved: its request is being written
+     AND (q.created_by IS NULL OR q.held_at IS NULL OR q.held_at < NOW() - INTERVAL '5 minutes')
+     AND NOT EXISTS (SELECT 1 FROM staff_approvals a WHERE a.kind = 'quote' AND a.subject_id = q.code
+                       AND a.status IN ('pending', 'processing'))
+     AND NOT EXISTS (SELECT 1 FROM (SELECT a.status, a.decided_at FROM staff_approvals a
+                                     WHERE a.kind = 'quote' AND a.subject_id = q.code
+                                     ORDER BY a.created_at DESC, a.id DESC LIMIT 1) last
+                      WHERE last.status = 'rejected' AND last.decided_at > NOW() - INTERVAL '7 days')
+   ORDER BY q.held_at NULLS LAST`;
+const ART_QUESTIONS_SQL = `SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+   WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL ORDER BY a.updated_at`;
+/* A request still open: waiting, or interrupted mid-decision (a restart). */
+const APPROVAL_OPEN_SQL = `(status = 'pending' OR (status = 'processing' AND COALESCE(claimed_at, created_at) < NOW() - INTERVAL '10 minutes'))`;
+/** What the Approvals page shows as waiting, counted once for the menu badge,
+ *  the morning email and the Team page: requests, art, held quotes with no
+ *  request, follow-ups, and library designs from the cached studio reading. */
+async function approvalsWaiting() {
+  const { rows: [r] } = await pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE ${APPROVAL_OPEN_SQL})
+    + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
+        WHERE a.status IN ('submitted', 'needs_info') AND q.cancelled_at IS NULL) AS n`);
+  /* Counted apart: a failure in either leaves the rest of the count. */
+  const also = (sql) => pool.query(sql).then((x) => Number(x.rows[0].n)).catch((e) => { console.error('approvals count:', e.message); return 0; });
+  const [held, followups] = await Promise.all([also(`SELECT COUNT(*) AS n FROM (${ORPHAN_HELD_SQL}) h`),
+    also(`SELECT COUNT(*) AS n FROM owner_followups WHERE done_at IS NULL`)]);
+  return Number(r.n) + held + followups + (libraryWaitingCache.items || []).length;
+}
+async function teamWaitingCard(roster) {
+  const failed = [];
+  const read = (name, p) => p.catch((e) => { console.error(`approvals (${name}):`, e.message); failed.push(name); return null; });
+  const [held, questions, library] = await Promise.all([
+    read('held quotes', pool.query(ORPHAN_HELD_SQL).then((r) => r.rows)),
+    read('designer questions', pool.query(ART_QUESTIONS_SQL).then((r) => r.rows)),
+    /* The sweep's reading, refreshed behind the page when it is old. Waited on
+       for a moment only when there is none: just after a design was decided
+       here, or a deploy. */
+    read('library designs', (async () => {
+      const studioOff = !process.env.JT_INTERNAL_KEY;
+      if (!studioOff && Date.now() - libraryWaitingCache.at >= 5 * 60 * 1000) {
+        const reading = libraryWaiting().catch(() => {});
+        if (!libraryWaitingCache.at) await Promise.race([reading, new Promise((r) => { setTimeout(r, 2500); })]);
+      }
+      if (libraryWaitingCache.items) return libraryWaitingCache.items;
+      /* Off, or still being read: nothing to show, not a failure. */
+      if (studioOff || !libraryWaitingCache.error) return [];
+      throw new Error(libraryWaitingCache.error);
+    })()),
+  ]);
+  const rows = [
+    ...(held || []).map((q) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>${q.created_by ? `${escEmail(nameOf(roster, q.created_by))}: quote ${escEmail(q.code)} is held`
+          : q.reorder_of ? `Partner reorder ${escEmail(q.code)} waits for today's prices` : `Quote ${escEmail(q.code)} is held`}</b>
+        <div class="row-sub">${escEmail(q.name || '')}${q.total != null ? ` &middot; ${money(q.total)}` : ''}${q.held_at ? ` &middot; since ${escEmail(whenShort(q.held_at))}` : ''}
+          &middot; the customer cannot see it. Saving it yourself sends it out of held.</div></span>
+        <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/quote/${escEmail(q.code)}/edit">Open it</a></span></div>`),
+    ...(questions || []).map((a) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>The designer has a question on ${escEmail(a.quote_code)}</b>
+        <div class="row-sub">${escEmail(a.name || '')} &middot; ${escEmail(whenShort(a.updated_at))}</div></span>
+        <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/production/${encodeURIComponent(a.quote_code)}#art">Answer it</a></span></div>`),
+    ...(library || []).map((r) => `<div class="row-i"><span class="row-main" style="white-space:normal">
+        <b>Design to approve: ${escEmail(r.name || 'untitled')}</b>
+        <div class="row-sub">${escEmail(r.kind)}${r.submitted_by ? ` &middot; from ${escEmail(r.submitted_by)}` : ''}</div></span>
+        <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/design-library?item=${encodeURIComponent(`${r.kind}-${Number(r.id)}`)}">Review it</a></span></div>`),
+  ];
+  if (!rows.length && !failed.length) return '';
+  return `<div class="card" id="team-waiting"><b>Also waiting on you (${rows.length})</b>
+    <p class="muted" style="margin:2px 0 8px">Held quotes (helpers' and partner reorders), designer questions and library designs: with the requests below, everything waiting on you is on this page.</p>
+    ${failed.length ? `<div class="warn">Could not check: ${escEmail(failed.join(', '))}.</div>` : ''}
+    ${rows.join('')}</div>`;
+}
+
 async function followupsCard() {
   const { rows } = await pool.query(
     `SELECT * FROM owner_followups WHERE done_at IS NULL ORDER BY created_at LIMIT 100`).catch(() => ({ rows: [] }));
@@ -35804,6 +35905,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
     const { rows: leads } = leadIds.length
       ? await pool.query('SELECT id, name, email FROM submissions WHERE id = ANY($1)', [leadIds]) : { rows: [] };
     const leadBy = Object.fromEntries(leads.map((l) => [String(l.id), l]));
+    const teamCard = await teamWaitingCard(roster);
     const card = (a) => `<div class="card">
       <div class="row-i"><span class="row-main"><b>${escEmail(nameOf(roster, a.requested_by))}</b>
         <div class="row-sub">${escEmail(whenShort(a.created_at))}</div></span>
@@ -35820,7 +35922,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
         <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
-        <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
+        ${a.kind === 'quote' ? '' : `<button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>`}
       </form></div>`;
     res.send(adminPage('Approvals', `
       ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.')}
@@ -35828,7 +35930,8 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
       ${await (async () => { const { approve } = await artQueues(OWNER_ACTOR);
         return approve.length ? `<div class="card"><b>Final art to approve (${approve.length})</b>${artQueueRows(approve)}</div>` : ''; })()}
       ${await followupsCard()}
-      ${pending.length ? pending.map(card).join('') : `<div class="card">${emptyState('Nothing is waiting.')}</div>`}
+      ${teamCard}
+      ${pending.length ? pending.map(card).join('') : teamCard ? '' : `<div class="card">${emptyState('Nothing is waiting.')}</div>`}
       ${await (async () => { const w = await watchList();
         return `<div class="card" id="watch"><b>Watch list</b> <span class="muted">last ${WATCH_DAYS} days</span>
           <p class="muted" style="margin:4px 0 8px">Changes to quotes customers already had, payments to confirm, refused edits, held messages, dismissed leads and new sign-in places.</p>
@@ -35951,11 +36054,16 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
        approved and sent-back requests notify them or show on My Day). No
        note is kept, so it never shows to them as feedback. A held quote stays
        held: the customer still cannot see it. */
+    /* Not for a quote (owner, 2026-11-25): removing the request left the quote
+       held and out of sight, which is how helper quotes went missing. A quote
+       is approved, sent back, or opened and sent by the owner. */
+    if (decision === 'remove' && a.kind === 'quote') {
+      await unclaim();
+      return back(res, backTo, 'err', `A quote request cannot be removed: approve it, send it back, or open quote ${a.subject_id} and send it yourself.`);
+    }
     if (decision === 'remove') {
       await pool.query(`UPDATE staff_approvals SET status = 'removed', decided_at = NOW(), decision_note = NULL WHERE id = $1`, [id]);
-      return back(res, backTo, 'ok', a.kind === 'quote'
-        ? `Removed. Nothing was sent, and quote ${a.subject_id} stays hidden from the customer.`
-        : 'Removed. Nothing was sent.');
+      return back(res, backTo, 'ok', 'Removed. Nothing was sent.');
     }
     if (decision === 'reject') {
       await finish('rejected');
@@ -36125,11 +36233,11 @@ app.get('/admin/team', requireAdmin, async (req, res) => {
     const proofs = await Promise.all(roster.map((s) => leadProof(s.id, range.from, range.to)));
     const trainings = await Promise.all(roster.map((s) => trainingFor(s.id).catch(() => null)));
     const { rows: [counts] } = await pool.query(
-      `SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')::int AS approvals,
-              (SELECT COUNT(*) FROM submissions WHERE created_at >= $1 AND created_at < $2)::int AS leads_in,
+      `SELECT (SELECT COUNT(*) FROM submissions WHERE created_at >= $1 AND created_at < $2)::int AS leads_in,
               (SELECT COUNT(*) FROM submissions WHERE created_at >= $1 AND created_at < $2
                                                   AND first_response_at IS NOT NULL)::int AS leads_answered`,
       [range.from, range.to]);
+    counts.approvals = await approvalsWaiting();
     const thisWeek = TEAM.weekOf(new Date(), SHOP_TZ);
     const cards = roster.map((s, i) => {
       const x = scores[i];
@@ -42996,7 +43104,25 @@ let libraryWaitingCache = { at: 0, items: null, error: '' };
 /** Library designs submitted on the studio and waiting for the owner. The
  *  studio's webhook tells the bell too, but nothing on our side ever looked,
  *  so a missed webhook was a design waiting forever. Read every 5 minutes. */
-async function libraryWaiting({ studioOff = false } = {}) {
+/* One studio read at a time: page loads and the sweep share it. */
+let libraryWaitingRunning = null;
+/* Goes up when a design is decided here: a read begun before that is thrown
+   away, or it would put the decided design back on the list for 5 minutes. */
+let libraryWaitingGen = 0;
+function libraryWaitingReset() {
+  libraryWaitingGen++;
+  libraryWaitingRunning = null;
+  libraryWaitingCache = { at: 0, items: null, error: '' };
+}
+function libraryWaiting(opts = {}) {
+  if (opts.studioOff) return libraryWaitingRead(opts);
+  if (!libraryWaitingRunning) {
+    const run = libraryWaitingRead(opts).finally(() => { if (libraryWaitingRunning === run) libraryWaitingRunning = null; });
+    libraryWaitingRunning = run;
+  }
+  return libraryWaitingRunning;
+}
+async function libraryWaitingRead({ studioOff = false } = {}) {
   if (Date.now() - libraryWaitingCache.at < 5 * 60 * 1000) {
     if (libraryWaitingCache.items) return libraryWaitingCache.items;
     /* A studio that just failed is asked again in 5 minutes, not every
@@ -43004,7 +43130,8 @@ async function libraryWaiting({ studioOff = false } = {}) {
     if (libraryWaitingCache.error) throw Object.assign(new Error(libraryWaitingCache.error), { quiet: true });
   }
   if (studioOff) return [];
-  const fail = (msg) => { libraryWaitingCache = { at: Date.now(), items: null, error: msg }; throw new Error(msg); };
+  const gen = libraryWaitingGen;
+  const fail = (msg) => { if (gen === libraryWaitingGen) libraryWaitingCache = { at: Date.now(), items: null, error: msg }; throw new Error(msg); };
   let r, data;
   try {
     r = await studioFetch(`${STUDIO_BASE}/jt-library-admin.php`, { timeoutMs: 15000 });
@@ -43018,6 +43145,7 @@ async function libraryWaiting({ studioOff = false } = {}) {
   const items = data.items.filter((x) => x && x.status === 'submitted' && Number.isSafeInteger(x.id))
     .map((x) => ({ kind: String(x.kind || ''), id: x.id, name: String(x.name || ''),
       submitted_by: x.settings && x.settings.submitted_by ? String(x.settings.submitted_by).slice(0, 80) : '' }));
+  if (gen !== libraryWaitingGen) return libraryWaiting();   // a design was decided while this read ran
   libraryWaitingCache = { at: Date.now(), items, error: '' };
   return items;
 }
@@ -43093,8 +43221,7 @@ async function readOwnerAlerts() {
   const artP = Promise.all([
     pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
                  WHERE a.status = 'submitted' AND q.cancelled_at IS NULL`),
-    pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-                 WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL`),
+    pool.query(ART_QUESTIONS_SQL),
   ]).then(([s, q]) => OWNER_ALERTS.artAlerts({ submitted: s.rows, questions: q.rows }));
   /* No studio key (a local copy): the studio is off, so its notifications
      are neither made nor cleared, and the page does not call it a failure. */
@@ -43103,6 +43230,11 @@ async function readOwnerAlerts() {
   const studioOff = await fetchStudioOrders().then((f) => f.error === 'JT_INTERNAL_KEY not set').catch(() => false);
   const skipped = studioOff ? ['design library'] : [];
   const libraryP = libraryWaiting({ studioOff }).then((library) => OWNER_ALERTS.artAlerts({ library }));
+  /* Helpers' held quotes with no request open (owner, 2026-11-25): in the
+     approvals group, so the dashboard, the bell and the badge agree. */
+  /* The full roster: a helper made inactive since still has a name. */
+  const heldP = Promise.all([pool.query(ORPHAN_HELD_SQL), staffRoster().catch(() => roster)])
+    .then(([{ rows: held }, everyone]) => OWNER_ALERTS.heldAlerts(held, everyone));
 
   const customersP = Promise.all([
     pool.query(UNANSWERED_REPLIES_SQL),
@@ -43124,7 +43256,7 @@ async function readOwnerAlerts() {
   const parts = await Promise.all([
     part('hours', hoursP, null), part('training', trainingP, null), part('agreements', agreementsP, null),
     part('tasks', tasksP, null), part('job notes', notesP, null), part('art', artP, null),
-    part('design library', libraryP, null), part('customers', customersP, null)]);
+    part('design library', libraryP, null), part('held quotes', heldP, null), part('customers', customersP, null)]);
   for (const p of parts) if (p) rows.push(...p);
   return { rows, failed, skipped, at: Date.now() };
 }
@@ -43184,7 +43316,7 @@ async function ownerNotices(roster, leads) {
      hours, training, team and customers. A kind is cleared only when every
      source behind it was read, so a failed read never reads as "dealt with". */
   if (alerts) {
-    const ALERT_SOURCES = { approval: ['art'], art: ['art'], library: ['design library'], hours: ['hours'],
+    const ALERT_SOURCES = { approval: ['art'], held: ['held quotes'], art: ['art'], library: ['design library'], hours: ['hours'],
       training: ['training'], team: ['agreements', 'tasks', 'job notes'], customer: ['customers'] };
     const { rows: hooked } = await pool.query(
       `SELECT DISTINCT regexp_replace(ref, ':.*$', '') AS key FROM notifications

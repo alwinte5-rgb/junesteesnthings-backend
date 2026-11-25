@@ -30,6 +30,7 @@ const KINDS = {
   mail:     { label: 'Mailbox messages',             email: true,  chatEmail: true, who: 'any' },
   chat:     { label: 'Team chat messages',           email: true,  chatEmail: true, who: 'any' },
   approval: { label: 'Approvals waiting',            email: false, who: 'owner' },
+  held:     { label: 'Helper quotes held for you',    email: false, who: 'owner' },
   design:   { label: 'Design work and changes for you', email: false, who: 'staff' },
   decided:  { label: 'Your approvals decided',       email: false, who: 'staff' },
   lead:     { label: 'New leads',                    email: false, who: 'any' },

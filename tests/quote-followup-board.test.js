@@ -93,6 +93,19 @@ test('a helper\'s held or draft quote keeps its lead on the board until the owne
   assert.strictEqual(LB.bucketOf({ lead_status: 'new', pending_quote: 'ABCDEF1234' }, () => true), 'answer');
   assert.strictEqual(LB.bucketOf({ lead_status: 'quoted', pending_quote: 'ABCDEF1234' }, no), 'quoted');
   assert.strictEqual(LB.bucketOf({ lead_status: 'dismissed', pending_quote: 'ABCDEF1234' }, no), 'dismissed', 'a person\'s dismissal stands');
+  /* Already answered by the owner before the quote was held (owner, 2026-11-25). */
+  const mine = { lead_status: 'contacted', pending_quote: 'ABCDEF1234', owner_answered: true };
+  assert.strictEqual(LB.bucketOf(mine, no), 'contacted', 'the owner already answered them');
+  assert.strictEqual(LB.bucketOf({ ...mine, last_word: { kind: 'email_in', created_at: new Date() } }, no), 'answer', 'they wrote back since');
+  assert.strictEqual(LB.bucketOf({ ...mine, owner_answered: false }, no), 'answer', 'only a helper contacted them');
+  assert.match(after('async function leadsWithStatus(', 2400), /NOT n\.auto AND n\.staff_id IS NULL\) AS owner_answered/);
+  assert.match(after('async function leadsWithStatus(', 2600), /s\.first_response_by IS NULL\) OR EXISTS/, 'an answer with no note counts too');
+  assert.match(after('async function applyQuoteCancel(', 4400), /SET status = 'withdrawn'/, 'cancelling closes the approval request');
+  const waiting = after('async function approvalsWaiting(', 1200);
+  assert.ok(waiting.includes('ORPHAN_HELD_SQL') && waiting.includes('owner_followups'), 'one count');
+  assert.strictEqual((src.match(/await approvalsWaiting\(\)/g) || []).length, 2, 'morning email and Team page');
+  assert.match(src, /approvalsWaiting\(\)\.then/, 'the badge');
+  assert.match(after('async function libraryWaitingRead(', 2600), /gen !== libraryWaitingGen\) return libraryWaiting\(\)/, 'a read begun before a decision is thrown away');
   /* Neither automatic let-go takes a lead whose quote waits. */
   const sweep = after('async function sendLeadFollowUps(', 6000);
   assert.ok((sweep.match(/\$\{LEAD_QUOTE_PENDING\}/g) || []).length >= 2, 'the follow-up sweep and its let-go skip it');
@@ -116,4 +129,25 @@ test('shop-lead sales are the shop\'s; the owner\'s own credit choices and paid 
   assert.match(src, /FROM sms_messages WHERE quote_code = ANY\(\$1\) AND template <> 'call'/);
   assert.match(once, /commission_payouts/);
   assert.match(once, /a\.action = 'POST \/admin\/quote\/:code\/credit'/);
+});
+
+test('one Approvals page: held quotes with no request, designer questions and library designs join it, and the badge counts them (owner, 2026-11-25)', () => {
+  assert.match(src, /const ORPHAN_HELD_SQL = `SELECT q\.code/);
+  const orphan = after('const ORPHAN_HELD_SQL =', 1200);
+  assert.match(orphan, /q\.status = 'held' AND q\.cancelled_at IS NULL/);
+  assert.match(orphan, /a\.status IN \('pending', 'processing'\)/);
+  const page = after("app.get('/admin/approvals'", 6000);
+  assert.ok(page.includes("const teamCard = await teamWaitingCard(roster);"));
+  const card = after('async function teamWaitingCard(', 3500);
+  for (const what of ['held quotes', 'designer questions', 'library designs']) assert.ok(card.includes(`read('${what}'`), what);
+  assert.ok(src.includes('SELECT COUNT(*) AS n FROM (${ORPHAN_HELD_SQL}) h'), 'the badge counts held quotes, apart');
+  assert.ok(orphan.includes("last.status = 'rejected' AND last.decided_at > NOW() - INTERVAL '7 days'"), 'sent back: the helper\'s for a week, then back to the owner');
+  /* One list: the alert list carries them to the dashboard and the bell. */
+  assert.ok(src.includes("part('held quotes', heldP, null)"));
+  assert.ok(src.includes("held: ['held quotes']"), 'its own notice kind, cleared on its own read');
+  assert.ok(src.includes("decision === 'remove' && a.kind === 'quote'"), 'a quote request cannot be removed out of sight');
+  const OA = require('../tools/lib/owner-alerts');
+  const [row] = OA.heldAlerts([{ code: 'ABCDEF1234', name: 'Ann', created_by: 6 }], [{ id: 6, name: 'Myra' }]);
+  assert.deepStrictEqual([row.group, row.kind, row.ref, row.href], ['approvals', 'held', 'held:ABCDEF1234:0', '/admin/quote/ABCDEF1234/edit']);
+  assert.match(row.title, /^Myra's quote ABCDEF1234 is held$/);
 });

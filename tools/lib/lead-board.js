@@ -27,8 +27,13 @@ function theyReplied(l) {
 function bucketOf(l, isFound) {
   const st = (l && l.lead_status) || 'new';
   /* A quote for it is held for the owner or still a draft: the customer has
-     nothing yet, so the shop owes them (owner, 2026-11-24). */
-  if (l && l.pending_quote && st !== 'quoted' && st !== 'dismissed') return 'answer';
+     nothing yet, so the shop owes them (owner, 2026-11-24). Not when the owner
+     has already answered them and the next word is theirs: a quote written
+     after that does not make them unanswered (owner, 2026-11-25: "some of
+     these I already responded to. they became held after they were
+     contacted"). The quote itself still waits on Approvals and the quotes
+     board, and the lead is still never let go automatically. */
+  if (l && l.pending_quote && (st === 'new' || (st === 'contacted' && !l.owner_answered))) return 'answer';
   if (st === 'new') return isFound(l) ? 'reach_out' : 'answer';
   if (st === 'contacted') return theyReplied(l) ? 'answer' : 'contacted';
   return st;
