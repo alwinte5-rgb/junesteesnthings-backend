@@ -134,7 +134,7 @@ function priceSign(kind, spec, qty, takeFreight, opts = {}) {
        items (typed box on SinaLite) still take any number. */
     /* opts.grandfather: a line already saved at this quantity before the
        rule, re-saved unchanged, keeps its run-mix price (code review). */
-    if (fam.supplier === 'sinalite' && !fam.any_qty && !opts.grandfather && !offered.some(([rq]) => rq === q)) {
+    if (fam.supplier === 'sinalite' && !fam.any_qty && !fam.typed_qty && !opts.grandfather && !offered.some(([rq]) => rq === q)) {
       const n = (x) => x.toLocaleString('en-US');
       const below = offered.filter(([rq]) => rq < q).pop();
       const above = offered.find(([rq]) => rq > q);
@@ -228,7 +228,7 @@ function sizerOptions() {
         /* The quantities SinaLite sells, shown under the sizer so nobody has
            to guess a run (owner, 2026-10-15: "there are no quantities"). */
         return { stale: !!(t.stale || t.error), captured: t.captured ? String(t.captured).slice(0, 10) : null,
-          runs: fam.runs || [], any_qty: !!fam.any_qty }; })() : {}),
+          runs: fam.runs || [], any_qty: !!fam.any_qty, typed_qty: !!fam.typed_qty }; })() : {}),
       limits: fam.limits || null, sizes: fam.sizes || null,
       materials: fam.materials.map((m) => ({ key: m.key, label: m.label })),
       sheet_upgrades: fam.sheet_upgrades || {},

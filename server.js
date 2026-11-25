@@ -13936,9 +13936,10 @@ ${quotePricingSource()}
             /* SinaLite: the runs it sells, and that its shipping to the shop is
                already in the price (owner asked both, 2026-10-15). */
             (o.supplier === 'sinalite' && o.runs && o.runs.length ? '<div class="slruns" style="font-size:12px;color:#3f4a5f;margin:4px 0 0">' +
-              (o.any_qty ? 'Any quantity from ' + o.min.toLocaleString() + '. SinaLite prices: ' : 'SinaLite runs: ') +
+              (o.any_qty || o.typed_qty ? 'Any quantity from ' + o.min.toLocaleString() + '. SinaLite ' + (o.any_qty ? 'prices: ' : 'runs: ') : 'SinaLite runs: ') +
               o.runs.map(function(q){ return q.toLocaleString(); }).join(' · ') +
-              (o.any_qty ? ' (in between, never more than the next one up)' : ' (only these quantities can be quoted)') +
+              (o.any_qty ? ' (in between, never more than the next one up)'
+                : o.typed_qty ? ' (in between, priced as the runs that cover it)' : ' (only these quantities can be quoted)') +
               '. Shipping to the shop is included in the price.</div>' : '') +
             /* No SinaLite table, or one that cannot be read: said where the
                price is made, not only in the morning email. Prices are fixed,

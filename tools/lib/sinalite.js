@@ -202,6 +202,10 @@ function familyOf(key, p) {
        captured tiers pays the tier below's each (each falls as the run grows,
        so that is never under cost). false: set runs only (eachFor). */
     any_qty: !!p.any_qty,
+    /* true: any quantity from the minimum can be typed, though SinaLite sells
+       set runs; it is priced as the cheapest runs that cover it (brochures,
+       owner 2026-11-24). */
+    typed_qty: !!p.typed_qty,
     turnaround: p.turnaround || null, url: p.url || null,
     min: Number.isFinite(min) ? Math.max(min, sellFrom) : null,
     sell_from: sellFrom || null,

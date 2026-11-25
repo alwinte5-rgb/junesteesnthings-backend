@@ -64,3 +64,20 @@ test('the save route refuses a helper\'s price change before writing', () => {
   const refuse = src.indexOf('Only the owner can change prices', lock);
   assert.ok(refuse > -1 && refuse < insert, 'refused before the quote is written');
 });
+
+test('brochures take any typed quantity from 250, priced as the SinaLite runs that cover it (owner, 2026-11-24)', () => {
+  const QS = require('../tools/lib/quote-signs.js');
+  const SLb = require('../tools/lib/sinalite.js');
+  const spec = { size: '8.5x11', mat: '2s' };
+  assert.strictEqual(QS.priceSign('brochure', spec, 249, true).ok, false, 'still a 250 minimum');
+  const lad = SLb.table().families.brochure.prices['2s']['8.5x11'][''];
+  for (const q of [250, 300, 1200, 3000]) {
+    const r = QS.priceSign('brochure', spec, q, true);
+    assert.ok(r.ok, q + ' brochures must price: ' + r.error);
+    /* The run mix, never the lower any-quantity price (keeps x2 on what is bought). */
+    assert.strictEqual(r.piece, SLb.eachFor(lad, q, false));
+  }
+  assert.ok(QS.priceSign('brochure', spec, 300, true).hint, 'a quantity between runs still recommends the better run');
+  /* Every other set-run SinaLite item still refuses an in-between quantity. */
+  assert.strictEqual(QS.priceSign('table_cover', { size: '6ft', mat: '3sided' }, 4, true).ok, false);
+});
