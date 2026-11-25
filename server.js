@@ -12946,7 +12946,7 @@ function productGroupOf(name) {
   const prodOpts = (sel, cutSel) => {
     const opt = (p) =>
       `<option value="${escEmail(String(p.id))}"${String(p.id) === String(sel) ? ' selected' : ''}${retiredSinalite(p) ? ' data-retired="1"' : ''}>` +
-      `${escEmail(p.name)} — ${ALL_IN[String(p.id)] ? `${money(tierAt(ALL_IN[String(p.id)].positions, 1, '', 1))} for one, printing included` : money(p.price)}</option>`;
+      `${escEmail(p.name)} — ${ALL_IN[String(p.id)] ? `${money(allInEach(p, ALL_IN[String(p.id)]))} for one, printing included` : money(p.price)}</option>`;
 
     const bucket = new Map(PRODUCT_GROUPS.map(([label]) => [label, []]));
     bucket.set('Everything else', []);
@@ -17310,6 +17310,12 @@ function allInMethods(catalog) {
         Object.keys(m.positions || {}).length) out[String(p.id)] = m;
   }
   return out;
+}
+
+/** What one of an all-in item costs, from the engine that prices the line. */
+function allInEach(prod, method) {
+  return priceLine({ product: prod, qty: 1, addons: [], blankTiers: BLANK_TIERS,
+    prints: [{ loc: 'front', method, colours: '' }] }).unit;
 }
 
 /** A saved line as the edit form opens it: one holding a retired item becomes

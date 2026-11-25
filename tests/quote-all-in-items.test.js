@@ -49,6 +49,11 @@ test('one mug is the designer price, whichever way the line got there', () => {
   assert.strictEqual(unit(2), 23.98);
 });
 
+test('the product list prices it with the line\'s own engine, in server scope', () => {
+  assert.ok(src.includes('money(allInEach(p, ALL_IN'), 'the label');
+  assert.match(lift('allInEach'), /priceLine\(/, 'tierAt is not in server scope');
+});
+
 test('a line holding the SinaLite mug opens as the shop mug; a typed price stays', () => {
   const old = { product_id: 223, qty: 1, sign: { kind: 'mug', mat: '1side', size: '11oz' }, sign_priced: true, manual: true,
     unit_override: 62, details: '11oz · blue', details_note: 'blue', description: 'Ceramic Mugs — 11oz, printed for Pat' };
