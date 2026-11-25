@@ -29798,11 +29798,12 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
        Hours, Training and Team come from the owner's alert list. */
     isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
                                  + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-                                     WHERE a.status IN ('submitted', 'needs_info') AND q.cancelled_at IS NULL)
-                                 + (SELECT COUNT(*) FROM (${ORPHAN_HELD_SQL}) h) AS n`)
-      .then(({ rows }) => {
+                                     WHERE a.status IN ('submitted', 'needs_info') AND q.cancelled_at IS NULL) AS n`)
+      .then(async ({ rows }) => {
+        /* Held quotes counted apart: a failure there leaves the rest of the badge. */
+        const held = await pool.query(`SELECT COUNT(*) AS n FROM (${ORPHAN_HELD_SQL}) h`).then((r) => Number(r.rows[0].n)).catch(() => 0);
         /* Library designs from the cached studio read: the badge never waits on the studio. */
-        out.approvals = Number(rows[0].n) + ((libraryWaitingCache && libraryWaitingCache.items) || []).length;
+        out.approvals = Number(rows[0].n) + held + ((libraryWaitingCache && libraryWaitingCache.items) || []).length;
         if (ownerAlertsCache) Object.assign(out, OWNER_ALERTS.counts(ownerAlertsCache.rows.filter((r) => !r.ref.startsWith('note:'))));
       }).catch(() => {}) : Promise.resolve(),
     liveJobs().then((jobs) => {
@@ -35542,15 +35543,19 @@ const FOLLOWUP_OUTCOMES = { won_back: 'Won back', refunded: 'Refunded', let_go: 
      designer questions           art requests asking for information
      library designs              designs submitted in the studio
    Read live, each part on its own, so one failing does not hide the others. */
-/* A helper's held quote (created_by set: a partner's reorder is held with no
-   request of its own) with no request open, and not sent back to the helper
-   (their latest request 'rejected': the next move is theirs). */
-const ORPHAN_HELD_SQL = `SELECT q.code, q.name, q.created_by, q.held_at, q.total FROM quotes q
-   WHERE q.status = 'held' AND q.cancelled_at IS NULL AND q.created_by IS NOT NULL
+/* A held quote no request is open for: a helper's whose request was removed,
+   or a partner's reorder held for today's prices (created_by NULL, reorder_of
+   set; it never has a request). One sent back to the helper in the last 7
+   days is theirs to fix and left out; after that it comes back to the owner,
+   so nothing held sits out of sight for good. */
+const ORPHAN_HELD_SQL = `SELECT q.code, q.name, q.created_by, q.reorder_of, q.held_at, q.total FROM quotes q
+   WHERE q.status = 'held' AND q.cancelled_at IS NULL
      AND NOT EXISTS (SELECT 1 FROM staff_approvals a WHERE a.kind = 'quote' AND a.subject_id = q.code
                        AND a.status IN ('pending', 'processing'))
-     AND COALESCE((SELECT a.status FROM staff_approvals a WHERE a.kind = 'quote' AND a.subject_id = q.code
-                    ORDER BY a.created_at DESC, a.id DESC LIMIT 1), '') <> 'rejected'
+     AND NOT EXISTS (SELECT 1 FROM (SELECT a.status, a.decided_at FROM staff_approvals a
+                                     WHERE a.kind = 'quote' AND a.subject_id = q.code
+                                     ORDER BY a.created_at DESC, a.id DESC LIMIT 1) last
+                      WHERE last.status = 'rejected' AND last.decided_at > NOW() - INTERVAL '7 days')
    ORDER BY q.held_at NULLS LAST`;
 const ART_QUESTIONS_SQL = `SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
    WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL ORDER BY a.updated_at`;
@@ -35573,7 +35578,8 @@ async function teamWaitingCard(roster) {
   ]);
   const rows = [
     ...(held || []).map((q) => `<div class="row-i"><span class="row-main" style="white-space:normal">
-        <b>${escEmail(q.created_by ? nameOf(roster, q.created_by) : 'A quote')}: quote ${escEmail(q.code)} is held</b>
+        <b>${q.created_by ? `${escEmail(nameOf(roster, q.created_by))}: quote ${escEmail(q.code)} is held`
+          : `Partner reorder ${escEmail(q.code)} waits for today's prices`}</b>
         <div class="row-sub">${escEmail(q.name || '')}${q.total != null ? ` &middot; ${money(q.total)}` : ''}${q.held_at ? ` &middot; since ${escEmail(whenShort(q.held_at))}` : ''}
           &middot; the customer cannot see it. Saving it yourself sends it out of held.</div></span>
         <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/quote/${escEmail(q.code)}/edit">Open it</a></span></div>`),
@@ -35588,7 +35594,7 @@ async function teamWaitingCard(roster) {
   ];
   if (!rows.length && !failed.length) return '';
   return `<div class="card" id="team-waiting"><b>Also waiting on you (${rows.length})</b>
-    <p class="muted" style="margin:2px 0 8px">Held quotes, designer questions and library designs: everything the team needs from you is on this page.</p>
+    <p class="muted" style="margin:2px 0 8px">Held quotes (helpers' and partner reorders), designer questions and library designs: with the requests below, everything waiting on you is on this page.</p>
     ${failed.length ? `<div class="warn">Could not check: ${escEmail(failed.join(', '))}.</div>` : ''}
     ${rows.join('')}</div>`;
 }
@@ -35887,9 +35893,7 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
     }
     if (decision === 'remove') {
       await pool.query(`UPDATE staff_approvals SET status = 'removed', decided_at = NOW(), decision_note = NULL WHERE id = $1`, [id]);
-      return back(res, backTo, 'ok', a.kind === 'quote'
-        ? `Removed. Nothing was sent, and quote ${a.subject_id} stays hidden from the customer.`
-        : 'Removed. Nothing was sent.');
+      return back(res, backTo, 'ok', 'Removed. Nothing was sent.');
     }
     if (decision === 'reject') {
       await finish('rejected');
@@ -42930,7 +42934,14 @@ let libraryWaitingCache = { at: 0, items: null, error: '' };
 /** Library designs submitted on the studio and waiting for the owner. The
  *  studio's webhook tells the bell too, but nothing on our side ever looked,
  *  so a missed webhook was a design waiting forever. Read every 5 minutes. */
-async function libraryWaiting({ studioOff = false } = {}) {
+/* One studio read at a time: page loads and the sweep share it. */
+let libraryWaitingRunning = null;
+function libraryWaiting(opts = {}) {
+  if (opts.studioOff) return libraryWaitingRead(opts);
+  if (!libraryWaitingRunning) libraryWaitingRunning = libraryWaitingRead(opts).finally(() => { libraryWaitingRunning = null; });
+  return libraryWaitingRunning;
+}
+async function libraryWaitingRead({ studioOff = false } = {}) {
   if (Date.now() - libraryWaitingCache.at < 5 * 60 * 1000) {
     if (libraryWaitingCache.items) return libraryWaitingCache.items;
     /* A studio that just failed is asked again in 5 minutes, not every

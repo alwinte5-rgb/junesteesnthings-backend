@@ -206,8 +206,10 @@ function noteAlerts(notes, followups, roster) {
 function heldAlerts(held, roster) {
   const nameOf = (id) => { const r = (roster || []).find((x) => x.id === Number(id)); return r ? r.name : 'A helper'; };
   /* Its own notice kind: a failed held read never stops staff approvals clearing. */
-  return (held || []).map((q) => ({ group: 'approvals', kind: 'held', ref: `held:${q.code}`, tone: 'blue', icon: 'check',
-    title: `${nameOf(q.created_by)}'s quote ${q.code} is held`, sub: `${q.name ? q.name + ': ' : ''}the customer cannot see it; open it to send`,
+  /* Keyed by when it was held: a quote held again after being sent is a new notice. */
+  return (held || []).map((q) => ({ group: 'approvals', kind: 'held', ref: `held:${q.code}:${q.held_at ? ms(q.held_at) : 0}`, tone: 'blue', icon: 'check',
+    title: q.created_by ? `${nameOf(q.created_by)}'s quote ${q.code} is held` : `Partner reorder ${q.code} waits for today's prices`,
+    sub: `${q.name ? q.name + ': ' : ''}the customer cannot see it; open it to send`,
     href: `/admin/quote/${encodeURIComponent(q.code)}/edit` }));
 }
 
