@@ -208,7 +208,8 @@ function heldAlerts(held, roster) {
   /* Its own notice kind: a failed held read never stops staff approvals clearing. */
   /* Keyed by when it was held: a quote held again after being sent is a new notice. */
   return (held || []).map((q) => ({ group: 'approvals', kind: 'held', ref: `held:${q.code}:${q.held_at ? ms(q.held_at) : 0}`, tone: 'blue', icon: 'check',
-    title: q.created_by ? `${nameOf(q.created_by)}'s quote ${q.code} is held` : `Partner reorder ${q.code} waits for today's prices`,
+    title: q.created_by ? `${nameOf(q.created_by)}'s quote ${q.code} is held`
+      : q.reorder_of ? `Partner reorder ${q.code} waits for today's prices` : `Quote ${q.code} is held`,
     sub: `${q.name ? q.name + ': ' : ''}the customer cannot see it; open it to send`,
     href: `/admin/quote/${encodeURIComponent(q.code)}/edit` }));
 }

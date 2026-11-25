@@ -29796,7 +29796,8 @@ app.get('/admin/nav-counts', requireAdmin, async (req, res) => {
        submitted or asking a question, and helpers' held quotes with no
        request, read live; library designs from the cached studio reading.
        Hours, Training and Team come from the owner's alert list. */
-    isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending')
+    isOwner() ? pool.query(`SELECT (SELECT COUNT(*) FROM staff_approvals WHERE status = 'pending'
+                                   OR (status = 'processing' AND COALESCE(claimed_at, created_at) < NOW() - INTERVAL '10 minutes'))
                                  + (SELECT COUNT(*) FROM art_requests a JOIN quotes q ON q.code = a.quote_code
                                      WHERE a.status IN ('submitted', 'needs_info') AND q.cancelled_at IS NULL) AS n`)
       .then(async ({ rows }) => {
@@ -35579,7 +35580,7 @@ async function teamWaitingCard(roster) {
   const rows = [
     ...(held || []).map((q) => `<div class="row-i"><span class="row-main" style="white-space:normal">
         <b>${q.created_by ? `${escEmail(nameOf(roster, q.created_by))}: quote ${escEmail(q.code)} is held`
-          : `Partner reorder ${escEmail(q.code)} waits for today's prices`}</b>
+          : q.reorder_of ? `Partner reorder ${escEmail(q.code)} waits for today's prices` : `Quote ${escEmail(q.code)} is held`}</b>
         <div class="row-sub">${escEmail(q.name || '')}${q.total != null ? ` &middot; ${money(q.total)}` : ''}${q.held_at ? ` &middot; since ${escEmail(whenShort(q.held_at))}` : ''}
           &middot; the customer cannot see it. Saving it yourself sends it out of held.</div></span>
         <span class="row-end"><a class="btn btn-ghost" style="padding:6px 14px;font-size:13px" href="/admin/quote/${escEmail(q.code)}/edit">Open it</a></span></div>`),
