@@ -14164,6 +14164,7 @@ ${quotePricingSource()}
              was copied from this one (2026-09-30: Optional silently lost). */
           /* Cleared, the line is a new one: no retired item on offer. */
           only.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
+          only.querySelectorAll('.ploc[data-was]').forEach(function(r){ delete r.dataset.was; });
           only.querySelectorAll('input,select').forEach(function(el){
             if (el.type === 'checkbox' || el.type === 'radio') el.checked = false;
             else el.value = '';
@@ -14971,6 +14972,8 @@ ${quotePricingSource()}
            on a new one (the SinaLite mug, owner 2026-11-25). Removed before the
            values are cleared, so the copy starts on no product, not the first. */
         tpl.querySelectorAll('select.p option[data-retired]').forEach(function(o){ o.remove(); });
+        /* The printing an all-in item replaced belongs to the line it was copied from. */
+        tpl.querySelectorAll('.ploc[data-was]').forEach(function(r){ delete r.dataset.was; });
         tpl.querySelectorAll('input,select').forEach(function(el){
           /* \\d, not \d — this whole script lives inside a template literal, so a
              single backslash is eaten before the browser ever sees it. It was,

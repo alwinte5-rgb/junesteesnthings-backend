@@ -98,6 +98,10 @@ test('the form puts the mug\'s own decoration on, once, and gives back what it r
   assert.deepStrictEqual(state(L), [[true, '50'], [true, '7']], 'picked by mistake: the tee keeps its printing');
 });
 
+test('a new or cleared line does not inherit the printing another line\'s mug replaced', () => {
+  assert.strictEqual((src.match(/\.ploc\[data-was\]/g) || []).length, 2, 'addLine and the cleared only line');
+});
+
 test('on an agreed quote only newly added items follow the rule', () => {
   assert.deepStrictEqual(Object.keys(F.allInMethods(catalog, [{ product_id: 1 }])), ['2']);
   assert.deepStrictEqual(Object.keys(F.allInMethods(catalog, [])), ['1', '2']);
