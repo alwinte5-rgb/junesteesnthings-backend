@@ -141,8 +141,8 @@ test('an email reply lands on the lead: address first, sender must match, once p
   const keep = src.slice(src.indexOf('async function keepInboundEmail('), src.indexOf('const recentInbound = new Set();'));
   assert.ok(keep.indexOf('INBOUND.leadFrom(m.raw, INBOUND_DOMAIN)') < keep.indexOf("SELECT code FROM quotes WHERE lower(email) = $1"), 'the lead address beats an old job by sender');
   assert.match(keep, /if \(rows\.length && !autoReply\) \{\s+if \(m\.from && rows\[0\]\.email === m\.from\) leadRow = rows\[0\];\s+else otherSender = byAddr;/, 'only from the lead\'s own address; otherwise told, not misfiled');
-  assert.match(keep, /if \(!quote && !leadRow && !otherSender && !autoReply && m\.from\) \{\s+const \{ rows \} = await pool\.query\(\s+`SELECT code FROM quotes/, 'mail to a lead is never filed on a job; auto-replies never by sender; a dead lead address falls back');
-  assert.match(keep, /!quote && !leadRow && !otherSender && !autoReply && m\.from/);
+  assert.match(keep, /if \(!quote && !leadRow && !otherSender && !otherStudio && !autoReply && m\.from\) \{\s+const \{ rows \} = await pool\.query\(\s+`SELECT code FROM quotes/, 'mail to a lead is never filed on a job; auto-replies never by sender; a dead lead address falls back');
+  assert.match(keep, /!quote && !leadRow && !otherSender && !otherStudio && !autoReply && m\.from/);
   assert.match(keep, /const autoReply = INBOUND\.isAutoReply\(m\);/);
   assert.match(keep, /AND \(dismissed_at IS NULL OR dismiss_reason = ANY\(\$2\)\)/, 'a plain email reopens a let-go lead too');
   assert.match(keep, /VALUES \(\$1, 'email_in', \$2, \$3\)\s+ON CONFLICT \(inbound_id\) WHERE inbound_id IS NOT NULL DO NOTHING/);

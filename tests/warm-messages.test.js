@@ -95,7 +95,7 @@ function textLead({ jobs = [], open = [], known = [], letGo = [] } = {}) {
     return { rows: [] };
   } };
   /* LEADFU: a text back reopens a lead the follow-ups let go (#544). */
-  const ctx = vm.createContext({ pool, LEADFU: require('../tools/lib/lead-followups') });
+  const ctx = vm.createContext({ pool, studioJobFor: async () => '', LEADFU: require('../tools/lib/lead-followups') });
   /* textToLead reads the shared phone match (#499) from the file around it. */
   const samePhone = src.match(/^const SAME_PHONE_SQL = `[^`]*`;$/m);
   assert.ok(samePhone, 'SAME_PHONE_SQL not found');

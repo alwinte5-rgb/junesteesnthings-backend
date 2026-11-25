@@ -417,7 +417,7 @@ test('the new-order email opens with SHIP or PICKUP, and a pickup is told it is 
   const note = route("app.post('/api/order-notification'");
   assert.match(note, /\(delivery\.method === 'pickup' \? ' — PICKUP' : delivery\.method === 'local' \? ' — LOCAL DELIVERY' : ' — SHIP'\)/);
   const shipped = route("app.post('/api/order-shipped'");
-  assert.match(shipped, /if \(status === 'shipped' && pickup\) await sendEmail\(\{/);
+  assert.match(shipped, /if \(status === 'shipped' && pickup\) await sendClientEmail\(\{/);
   assert.match(shipped, /is ready for pickup 🎉/);
   assert.match(shipped, /pickup \? SMS\.studioOrderReady\(\{ orderId: b\.order_id \}\)/);
 });

@@ -195,7 +195,7 @@ test('a quote to someone on the team waits for the owner', () => {
 });
 
 test('a message asking to be paid outside the shop is held, whatever the helper\'s level', () => {
-  const r = route("app.post('/admin/quote/:code/message', requireAdmin");
+  const r = route('const messageRoute = async');
   assert.match(r, /FRAUD\.mentionsOutsidePayment\(/);
   assert.match(r, /\(actorLevel\('customers\.message'\) === 'approval' \|\| outside\)/);
 });
@@ -272,7 +272,11 @@ test('the designer\'s job page carries no money and no contact details', () => {
 });
 
 test('a designer writes only to the customers of their own jobs', () => {
-  for (const sig of ["app.post('/admin/quote/:code/message', requireAdmin", "app.post('/admin/quote/:code/proofs', requireAdmin"]) {
+  assert.match(route('const messageRoute = async'), /if \(!\(await mayMessageJob\(code\)\)\) return res\.redirect\(designHome\(\)\)/);
+  assert.match(fn('async function mayMessageJob('), /actorLevel\('quotes\.view'\) === 'on' \|\| !!\(await designJobFor\(code, currentActor\(\)\)\)/);
+  /* A studio order carries contact details and money: only who sees studio orders. */
+  assert.match(fn('async function mayMessageJob('), /if \(STUDIOJOBS\.idOf\(code\)\) return actorLevel\('orders\.view'\) === 'on'/);
+  for (const sig of ["app.post('/admin/quote/:code/proofs', requireAdmin"]) {
     assert.match(route(sig), /actorLevel\('quotes\.view'\) !== 'on' && !\(await designJobFor\(code, currentActor\(\)\)\)/, sig);
   }
   for (const sig of ["app.post('/admin/quote/:code/email', requireAdmin", "app.post('/admin/quote/:code/receipt', requireAdmin"]) {

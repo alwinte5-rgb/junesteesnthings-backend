@@ -83,6 +83,7 @@ const PROJECTS = require('./tools/lib/task-projects');
 const PLANNER = require('./tools/lib/project-planner');
 const FOLLOWUPS = require('./tools/lib/followups');
 const INBOUND = require('./tools/lib/inbound-email');
+const STUDIOJOBS = require('./tools/lib/studio-jobs');
 const RELAY = require('./tools/lib/text-relay');
 const TMEDIA = require('./tools/lib/text-media');
 
@@ -1279,6 +1280,23 @@ async function initDB() {
   /* "No reply needed" on a customer's message: replies before this are not
      counted as waiting on the dashboard (2026-10-06). */
   await pool.query(`ALTER TABLE quotes ADD COLUMN IF NOT EXISTS replies_handled_at TIMESTAMPTZ`).catch(() => {});
+  /* Studio orders (design.jtees.net) the shop talks to customers about here
+     (2026-11-23). The order stays the studio's; this is who placed it (copied
+     from the feed, so their text or email finds it without asking the studio),
+     when work started, and which replies need no answer. Its messages are in
+     client_emails and sms_messages under STUDIO-<order id>. */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS studio_jobs (
+      order_id           INTEGER PRIMARY KEY,
+      name               TEXT NOT NULL DEFAULT '',
+      email              TEXT NOT NULL DEFAULT '',
+      phone              TEXT NOT NULL DEFAULT '',   -- last ten digits
+      paid               BOOLEAN NOT NULL DEFAULT FALSE,
+      placed_at          TIMESTAMPTZ,
+      production_at      TIMESTAMPTZ,
+      contacted_at       TIMESTAMPTZ,                -- the shop last wrote to them from its page
+      replies_handled_at TIMESTAMPTZ
+    )`).catch((e) => console.error('studio_jobs:', e.message));
   /* Customer texts forwarded to the owner's phone, so a reply to one can go
      back to that customer (tools/lib/text-relay.js, 2026-10-06). */
   await pool.query(`
@@ -4275,6 +4293,7 @@ function saleTypePill(type, repName) {
 /** Where a job opens for whoever is signed in: the full job page, or the
  *  designer's page for someone who may not see prices or contact details. */
 function jobPath(code) {
+  if (STUDIOJOBS.idOf(code)) return STUDIOJOBS.adminPath(code);
   return actorLevel('quotes.view') === 'on' ? `/admin/production/${code}` : `/admin/design/${code}`;
 }
 
@@ -5165,6 +5184,56 @@ const TWILIO_INBOUND_URL = (process.env.TWILIO_WEBHOOK_URL || 'https://www.jtees
 /* A row whose phone is the caller's, by its last ten digits ($1). */
 const SAME_PHONE_SQL = `right(regexp_replace(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1`;
 
+/** The studio order (STUDIO-<id>) a customer's text or email is about, or ''
+ *  when it is not about one: no order of theirs in the last four months, or
+ *  they also have a quote and that is the newer, or the one the shop last wrote
+ *  to them about, or an open enquiry newer than the order. Only an order that was paid, or that the shop has written to
+ *  them about: someone who left a checkout and texts is still a new enquiry.
+ *  A failed lookup is reported and answers '', the way it was before. */
+async function studioJobFor({ phone = '', email = '' }) {
+  const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+  const addr = String(email || '').trim().toLowerCase();
+  if (digits.length !== 10 && !addr) return '';
+  const byPhone = digits.length === 10;
+  const key = byPhone ? digits : addr;
+  try {
+    const { rows: [s] } = await pool.query(
+      `SELECT order_id, COALESCE(placed_at, contacted_at) AS at, GREATEST(placed_at, contacted_at) AS active FROM studio_jobs
+        WHERE ${byPhone ? 'phone' : 'email'} = $1 AND (paid OR contacted_at > NOW() - INTERVAL '60 days')
+          AND GREATEST(placed_at, contacted_at) > NOW() - INTERVAL '120 days'
+        ORDER BY GREATEST(placed_at, contacted_at) DESC, order_id DESC LIMIT 1`, [key]);
+    if (!s) return '';
+    const code = STUDIOJOBS.keyOf(s.order_id);
+    const { rows: [q] } = await pool.query(
+      `SELECT code, created_at AS at FROM quotes
+        WHERE ${byPhone ? SAME_PHONE_SQL : 'lower(trim(email)) = $1'} ORDER BY created_at DESC LIMIT 1`, [key]);
+    /* The last thing the shop sent them about either, by email or text: they
+       answer by whichever is handy. */
+    const { rows: [m] } = await pool.query(
+      `SELECT quote_code, created_at FROM (
+         SELECT quote_code, created_at FROM client_emails WHERE quote_code = ANY($1::text[]) AND status = 'sent'
+         UNION ALL
+         SELECT quote_code, created_at FROM sms_messages WHERE quote_code = ANY($1::text[]) AND status IN ('sent', 'delivered')) o
+        WHERE created_at > NOW() - INTERVAL '30 days' ORDER BY created_at DESC LIMIT 1`, [[code, ...(q ? [q.code] : [])]]);
+    /* An open enquiry of theirs that is newer than anything about the order:
+       they are answering that. Left to the rules for leads. */
+    const { rows: [l] } = await pool.query(
+      `SELECT MAX(GREATEST(s.created_at, COALESCE((SELECT MAX(n.created_at) FROM lead_notes n
+                WHERE n.submission_id = s.id AND n.kind IN ('text', 'email', 'call')), s.created_at))) AS at
+         FROM submissions s
+        WHERE ${byPhone ? SAME_PHONE_SQL : 'lower(trim(email)) = $1'} AND (s.dismissed_at IS NULL OR s.dismiss_reason = $2)
+          AND NOT EXISTS (SELECT 1 FROM quotes q2 WHERE q2.from_submission_id = s.id)`, [key, LEADFU.LET_GO_REASON]);
+    const active = Math.max(new Date(s.active || s.at || 0).getTime(), m && m.quote_code === code ? new Date(m.created_at).getTime() : 0);
+    if (l && l.at && new Date(l.at).getTime() > active) return '';
+    const picked = STUDIOJOBS.pickJob({ studio: { code, at: s.at }, quote: q || null, lastOut: m ? m.quote_code : '' });
+    return STUDIOJOBS.idOf(picked) ? picked : '';
+  } catch (e) {
+    console.error('studio order lookup failed:', e.message);
+    reportError('studio-job-lookup', e).catch(() => {});
+    return '';
+  }
+}
+
 /* A text from a number with no job in the last four months is a new enquiry,
    kept as a lead (source 'text') so it can be quoted from Leads. A second
    text while that lead is still open is added to it as a note, not a second
@@ -5173,6 +5242,9 @@ async function textToLead(from, text, sid) {
   const digits = String(from).replace(/\D/g, '').slice(-10);
   if (digits.length !== 10) return {};
   const samePhone = SAME_PHONE_SQL;
+  /* Their studio order, when that is what this is about (studioJobFor). */
+  const studio = await studioJobFor({ phone: digits });
+  if (studio) return { quote: studio };
   const { rows: jobs } = await pool.query(
     `SELECT code FROM quotes WHERE ${samePhone} AND created_at > NOW() - INTERVAL '120 days'
       ORDER BY created_at DESC LIMIT 1`, [digits]);
@@ -5229,8 +5301,10 @@ async function textToLead(from, text, sid) {
  *  Into the job's customer artwork when it belongs to a job, so it is with
  *  her other files; else into the message folder. Returns [{url, name, type}];
  *  a file that cannot be fetched or kept is reported and left out. */
-async function saveTextMedia(list, quoteCode) {
+async function saveTextMedia(list, code) {
   const out = [];
+  // A studio order has no quote to hold files: its pictures stay on the message.
+  const quoteCode = STUDIOJOBS.idOf(code) ? null : code;
   if (!list.length) return out;
   const auth = 'Basic ' + Buffer.from(`${String(process.env.TWILIO_ACCOUNT_SID || '').trim()}:${String(process.env.TWILIO_AUTH_TOKEN || '').trim()}`).toString('base64');
   const day = new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ });
@@ -5334,6 +5408,11 @@ async function phoneOwner(phone) {
   const digits = String(phone || '').replace(/\D/g, '').slice(-10);
   if (digits.length !== 10) return {};
   try {
+    const studio = await studioJobFor({ phone: digits });
+    if (studio) {
+      const { rows: [s] } = await pool.query('SELECT name FROM studio_jobs WHERE order_id = $1', [STUDIOJOBS.idOf(studio)]);
+      return { quote_code: studio, name: (s && s.name) || '' };
+    }
     const { rows: [job] } = await pool.query(
       `SELECT code, name FROM quotes WHERE ${SAME_PHONE_SQL} ORDER BY created_at DESC LIMIT 1`, [digits]);
     if (job) return { quote_code: job.code, name: job.name || '' };
@@ -5394,6 +5473,14 @@ async function relayOwnerReply(text, sid, ownerMedia = []) {
   if (pick.badNumber) return sendOwnerSms('Not sent: that does not look like a full 10-digit number. Start with the number, e.g. 312 555 0199 then your message.');
   if (pick.ask) return sendOwnerSms(RELAY.askText(pick.ask));
   let to = pick.to;
+  if (pick.studio) {
+    /* A studio order named by its number, with no text of theirs forwarded
+       yet: to the buyer's own phone, or nobody. Never the last texter. */
+    const { rows: [s] } = await pool.query('SELECT name, phone FROM studio_jobs WHERE order_id = $1', [STUDIOJOBS.idOf(pick.studio)]);
+    const phone = s && normalizeUsPhone(s.phone);
+    if (!phone) return sendOwnerSms(`Not sent: ${s ? `there is no phone number on ${pick.studio}` : `there is no order ${pick.studio}`}.`);
+    to = { phone, quote_code: pick.studio, lead_id: null, name: s.name || '' };
+  }
   if (pick.byNumber) {
     /* A number the owner typed (owner, 2026-11-17: "I want to be able to
        contact who I want"). The same guards as CALL, for every typed number:
@@ -5481,17 +5568,19 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
      '\\D' is doubled: in a template string '\D' is just 'D'. */
   const sid = String(req.body.MessageSid || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
   let kept = null;
+  /* Their studio order instead, when that is what they are writing about. */
+  const studioCode = await studioJobFor({ phone: from });
   if (sid) {
     kept = await pool.query(
       `INSERT INTO sms_messages (phone, kind, ref, template, body, status, twilio_sid, quote_code)
        VALUES ($1, 'inbound', $2, 'reply', $3, 'received', $4,
-               (SELECT code FROM quotes
+               COALESCE(NULLIF($6::text, ''), (SELECT code FROM quotes
                  WHERE length(regexp_replace(COALESCE(phone,''), '\\D', '', 'g')) >= 10
                    AND right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = right($5, 10)
-                 ORDER BY created_at DESC LIMIT 1))
+                 ORDER BY created_at DESC LIMIT 1)))
        ON CONFLICT DO NOTHING
        RETURNING id, quote_code`,
-      [from, 'in:' + sid, text, sid, from.replace(/\D/g, '')])
+      [from, 'in:' + sid, text, sid, from.replace(/\D/g, ''), studioCode])
       .then((r) => r.rows[0] || null)
       .catch((e) => { console.error('inbound text not kept:', e.message); return null; });
   }
@@ -5524,9 +5613,11 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
          email below still goes. */
       const owner = String(process.env.TWILIO_TO_NUMBER || '').replace(/\D/g, '').slice(-10);
       if (owner && from.replace(/\D/g, '').slice(-10) !== owner) {
-        const who = lead.quote ? await pool.query('SELECT name FROM quotes WHERE code = $1', [lead.quote])
+        const who = lead.quote ? await (STUDIOJOBS.idOf(lead.quote)
+          ? pool.query('SELECT name FROM studio_jobs WHERE order_id = $1', [STUDIOJOBS.idOf(lead.quote)])
+          : pool.query('SELECT name FROM quotes WHERE code = $1', [lead.quote]))
           .then((r) => (r.rows[0] && r.rows[0].name) || '').catch(() => '') : '';
-        const link = lead.quote ? `${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(lead.quote)}#messages`
+        const link = lead.quote ? `${PUBLIC_BASE_URL}${STUDIOJOBS.adminPath(lead.quote)}#messages`
           : lead.lead ? `${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}` : '';
         const tag = lead.quote ? lead.quote : lead.reopened ? 'lead L' + Number(lead.lead) + ', let go automatically, back on Leads'
           : lead.lead ? 'new enquiry L' + Number(lead.lead) : 'new enquiry';
@@ -5548,8 +5639,8 @@ app.post('/webhooks/twilio/sms', async (req, res) => {
           <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px">${escEmail(said)}</blockquote>
           ${pictures.map((u) => `<p style="margin:10px 0"><img src="${escEmail(u)}" alt="" style="max-width:100%;height:auto;border-radius:8px"></p>`).join('')}
           ${media.filter((m) => !TMEDIA.smallUrl(m.url)).map((m) => `<p><a href="${escEmail(m.url)}">${escEmail(m.name)}</a></p>`).join('')}
-          ${media.length && lead.quote ? '<p>It is saved with their files on the job.</p>' : ''}
-          ${lead.quote ? `<p><a href="${PUBLIC_BASE_URL}/admin/production/${encodeURIComponent(lead.quote)}">Open their job</a></p>`
+          ${media.length && lead.quote && !STUDIOJOBS.idOf(lead.quote) ? '<p>It is saved with their files on the job.</p>' : ''}
+          ${lead.quote ? `<p><a href="${PUBLIC_BASE_URL}${STUDIOJOBS.adminPath(lead.quote)}">Open their job</a></p>`
             : lead.lead ? `<p><a href="${PUBLIC_BASE_URL}/admin/leads#lead-${Number(lead.lead)}">It is in Leads</a>, ready to quote.</p>` : ''}
           <p style="color:#6b7280">Call or text them back at this number. Replies to this email do not reach them.</p>`,
       });
@@ -5671,9 +5762,24 @@ async function keepInboundEmail(m) {
       else otherSender = byAddr;
     }
   }
+  /* A reply about a studio order goes to studio-<id>@ (2026-11-23). The number
+     is sequential, so it is filed only when the sender is who the shop wrote
+     to about it; anyone else reaches the shop's inbox, named as not matching. */
+  let otherStudio = 0;
+  const studioId = !quote ? INBOUND.studioFrom(m.raw, INBOUND_DOMAIN) : 0;
+  if (studioId && !autoReply) {
+    const key = STUDIOJOBS.keyOf(studioId);
+    const { rows } = await pool.query(
+      `SELECT 1 FROM client_emails WHERE quote_code = $1 AND lower(trim(to_email)) = $2 AND status = 'sent' LIMIT 1`, [key, m.from]);
+    if (m.from && rows.length) quote = key;
+    else otherStudio = studioId;
+  }
+  if (!quote && !leadRow && !otherSender && !otherStudio && !autoReply && m.from) {
+    quote = await studioJobFor({ email: m.from });
+  }
   /* Written to the shop's own address by an old email, or the code was
      mangled: their latest job from the last four months, by email address. */
-  if (!quote && !leadRow && !otherSender && !autoReply && m.from) {
+  if (!quote && !leadRow && !otherSender && !otherStudio && !autoReply && m.from) {
     const { rows } = await pool.query(
       `SELECT code FROM quotes WHERE lower(email) = $1 AND created_at > NOW() - INTERVAL '120 days'
         ORDER BY created_at DESC LIMIT 1`, [m.from]);
@@ -5682,7 +5788,7 @@ async function keepInboundEmail(m) {
   /* No job either: their newest open lead by address. */
   /* Open, or let go by the follow-ups (so a fresh email to the shop's own
      address brings it back too); never one the shop let go by hand. */
-  if (!quote && !leadRow && !otherSender && !autoReply && m.from) {
+  if (!quote && !leadRow && !otherSender && !otherStudio && !autoReply && m.from) {
     const { rows } = await pool.query(
       `SELECT id, dismissed_at, dismiss_reason FROM submissions WHERE lower(trim(email)) = $1
           AND (dismissed_at IS NULL OR dismiss_reason = ANY($2))
@@ -5741,7 +5847,7 @@ async function keepInboundEmail(m) {
   await sendEmail({
     to: NOTIFY_EMAIL, promo: false, replyTo: m.from || undefined,
     urgent: true,   // a customer wrote: never held for the daily summary (owner, 2026-10-19)
-    subject: `${quote ? `Reply on ${quote}` : lead ? 'Lead reply' : 'Email'} from ${m.fromName || m.from}: ${m.subject}`.slice(0, 200),
+    subject: `${STUDIOJOBS.idOf(quote) ? `Reply on studio order ${STUDIOJOBS.labelOf(quote)}` : quote ? `Reply on ${quote}` : lead ? 'Lead reply' : 'Email'} from ${m.fromName || m.from}: ${m.subject}`.slice(0, 200),
     html: `<p><b>${escEmail(who)}</b> ${quote ? 'replied about their order' : lead ? 'replied to the shop about their enquiry' : 'wrote to the shop'}:</p>
       <blockquote style="border-left:3px solid #1848B8;margin:0;padding:6px 12px;white-space:pre-wrap">${escEmail(m.text || '(no text)')}</blockquote>
       ${m.files.length ? `<p>&#128206; ${m.files.map((f) => escEmail(f.name)).join(', ')}${quote ? ' (on the job page)' : ''}</p>` : ''}
@@ -5751,6 +5857,7 @@ async function keepInboundEmail(m) {
           : closed ? 'It was let go, so it is under All on Leads; quote it from there if it is back on.'
           : 'It is kept there, and its automatic follow-ups wait for your answer.'}</p>`
         : otherSender ? `<p>It was sent to <a href="${PUBLIC_BASE_URL}/admin/leads?status=all#lead-${otherSender}">lead #${otherSender}</a>'s reply address from a different email, so it was not put on the lead. If it is them, log it there as &ldquo;Their email&rdquo;: that pauses the lead's automatic follow-ups.</p>`
+        : otherStudio ? `<p>It was sent to <a href="${PUBLIC_BASE_URL}${STUDIOJOBS.adminPath(STUDIOJOBS.keyOf(otherStudio))}">studio order #${otherStudio}</a>'s reply address from an email the shop has not written to about it, so it was not put on the order.</p>`
         : '<p style="color:#6b7280">No job matched this sender, so it is not on a job page.</p>'}
       <p style="color:#6b7280">Reply to this email to answer them directly.</p>`,
   });
@@ -12101,6 +12208,7 @@ const ADMIN_NAV = [
   { key: 'production', href: '/admin/production',    label: 'Production', icon: 'layers', badge: 'late' },
   { key: 'orders',     href: '/admin/orders',        label: 'Orders',     icon: 'box' },
   { key: 'shipping',   href: '/admin/shipping',      label: 'Shipping',   icon: 'truck',  badge: 'shipping' },
+  { key: 'cutsheets',  href: '/admin/cut-sheets',    label: 'Cut sheet maker', icon: 'edit', ownerOnly: true },
   { key: 'delivery',   href: '/admin/delivery',      label: 'Delivery',   icon: 'clock' },
   { key: 'deliveryset', href: '/admin/delivery/settings', label: 'Delivery settings', icon: 'edit' },
   { key: 'customers',  href: '/admin/customers',     label: 'Customers',  icon: 'users' },
@@ -12144,7 +12252,7 @@ const ADMIN_SECTIONS = [
   { key: 'mine',      label: 'My work',   icon: 'check',  items: ['myday', 'design', 'schedule', 'earnings', 'mystats', 'clock', 'myschedule'] },
   { key: 'today',     label: 'Today',     icon: 'grid',   items: ['dashboard', 'notifications', 'tasks', 'mailbox', 'chat'] },
   { key: 'sales',     label: 'Sales',     icon: 'inbox',  items: ['leads', 'quotes', 'customers', 'softleads'] },
-  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','orders','shipping','delivery','deliveryset'] },
+  { key: 'jobs',      label: 'Jobs',      icon: 'layers', items: ['production','orders','cutsheets','shipping','delivery','deliveryset'] },
   { key: 'designs', label: 'Designs & studio', icon: 'edit', items: ['artwork','design-library','design-requests','studio-controls','studio-products','studio-pricing','studio-fonts','studio-collections','studio-ai','studio-uploads'] },
   { key: 'marketing', label: 'Marketing', icon: 'star',   items: ['reviews', 'discounts', 'partners', 'calendar', 'campaign'] },
   { key: 'money',     label: 'Money',     icon: 'dollar', items: ['money', 'certificates', 'exports', 'pay'] },
@@ -24401,6 +24509,37 @@ app.post('/admin/quote/:code/stage', requireAdmin, async (req, res) => {
 const STUDIO_BASE = (process.env.JT_DESIGNER_URL || 'https://design.jtees.net').replace(/\/+$/, '');
 let _studioCache = { at: 0, orders: [], carts: [], abandoned: [], error: null };
 
+/** Keep who placed each order (studio_jobs), and put when the shop started it
+ *  on the feed's own rows, so the board's lanes know. Never throws: the board
+ *  must not fail over it. A failed read keeps the last known starts, so a
+ *  fault never sends started work back to To start. */
+async function keepStudioJobs(d) {
+  const orders = Array.isArray(d && d.orders) ? d.orders : [];
+  const known = new Map((_studioCache.orders || []).map((o) => [Number(o.id), o.production_at || null]));
+  for (const o of orders) o.production_at = known.get(Number(o.id)) || null;
+  const list = STUDIOJOBS.contacts(orders, Array.isArray(d && d.abandoned) ? d.abandoned : []);
+  if (!list.length) return;
+  try {
+    /* A row is only rewritten when something about it changed. */
+    await pool.query(
+      `INSERT INTO studio_jobs AS j (order_id, name, email, phone, paid, placed_at)
+       SELECT x.id, x.name, x.email, x.phone, x.paid, x.placed_at
+         FROM jsonb_to_recordset($1::jsonb) AS x(id int, name text, email text, phone text, paid boolean, placed_at timestamptz)
+       ON CONFLICT (order_id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, phone = EXCLUDED.phone,
+              paid = EXCLUDED.paid, placed_at = EXCLUDED.placed_at
+        WHERE (j.name, j.email, j.phone, j.paid, j.placed_at)
+              IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.email, EXCLUDED.phone, EXCLUDED.paid, EXCLUDED.placed_at)`,
+      [JSON.stringify(list)]);
+    const { rows } = await pool.query('SELECT order_id, production_at FROM studio_jobs WHERE order_id = ANY($1::int[])',
+      [orders.map((o) => Number(o.id)).filter((n) => STUDIOJOBS.keyOf(n))]);
+    const started = new Map(rows.map((r) => [Number(r.order_id), r.production_at]));
+    for (const o of orders) o.production_at = started.get(Number(o.id)) || null;
+  } catch (e) {
+    console.error('studio jobs not kept:', e.message);
+    reportError('studio-jobs', e).catch(() => {});
+  }
+}
+
 async function fetchStudioOrders() {
   if (Date.now() - _studioCache.at < 60000) return _studioCache;
   const key = process.env.JT_INTERNAL_KEY;
@@ -24409,6 +24548,7 @@ async function fetchStudioOrders() {
     const r = await studioFetch(`${STUDIO_BASE}/orders_feed.php`);
     if (!r.ok) throw new Error(`feed answered ${r.status}`);
     const d = await r.json();
+    await keepStudioJobs(d);
     return (_studioCache = { at: Date.now(),
       orders: Array.isArray(d.orders) ? d.orders : [],
       /* Older deploys of the feed do not send this. Defaulting to [] rather
@@ -24449,12 +24589,13 @@ function studioFullyRefunded(o) {
 
 /** The Production lane a studio order sits in (JOB_STAGES index), or null when
  *  it is not production work: unpaid, fully refunded, or delivered. The
- *  studio has one status, so a paid order waits in To start until it ships. */
+ *  studio has one status, so a paid order waits in To start until the shop
+ *  starts it here (studio_jobs.production_at) or it ships. */
 const STUDIO_SHIPPED_DAYS = 14;
 function studioLane(o, now = Date.now()) {
   const st = String(o.status || '').toLowerCase();
   if (!(Number(o.paid) > 0) || studioFullyRefunded(o) || st === 'complete' || st === 'cancel') return null;
-  if (st !== 'shipped') return 0;
+  if (st !== 'shipped') return o.production_at ? JOB_STAGES.findIndex((x) => x.key === 'production') : 0;
   /* Nothing on jtees.net could mark a studio order delivered before
      2026-11-05, so years of them sit at `shipped`. Only a recent one is
      still waiting to arrive; an older one is treated as delivered. */
@@ -24505,7 +24646,25 @@ const STUDIO_BOARD_ERRORS = {
   'hide-unreachable': 'is still on the board: the studio could not be reached to check it is unpaid. Try again in a minute.',
   'hide-failed': 'is still on the board: saving the removal failed. Try again.',
   failed: 'was not marked delivered: the studio said no. Open it in the studio to see why.',
+  'stage-gone': 'is not in the studio’s list right now, so it was not moved. Reload the page and try again.',
+  'stage-unreachable': 'was not moved: the studio could not be reached to check it. Try again in a minute.',
+  'stage-out': 'has already shipped or been delivered, so it was not moved.',
+  'stage-unpaid': 'has no payment on it, so it was not started.',
+  'stage-cancelled': 'is cancelled, so it was not started.',
+  'stage-refunded': 'was refunded in full, so it was not started.',
+  'stage-certificate': 'waits on its tax certificate, so it was not started. Check it on Certificates first.',
+  'stage-failed': 'was not moved: saving it failed. Try again.',
 };
+/** What a move of a studio order did, from its link: { ok, text } or null. */
+function studioMovedText(query) {
+  const to = { production: 'It is in production now.', start: 'It is back in To start.' };
+  if (!Object.hasOwn(to, String(query.studio_moved || ''))) return null;
+  const told = String(query.studio_told || '');
+  return { ok: told !== 'failed' && told !== 'text-only', text: to[String(query.studio_moved)] + (told === 'sent' ? ' The customer has been told.'
+    : told === 'text-only' ? ' The text went, but the email did not.'
+    : told === 'failed' ? ' The message to the customer did NOT go: write to them in Messages.' : '') };
+}
+
 function studioBoardNote(query) {
   const num = (v) => (/^\d{1,9}$/.test(String(v || '')) ? Number(v) : 0);
   const done = num(query.studio_done);
@@ -24514,7 +24673,9 @@ function studioBoardNote(query) {
   const err = Object.hasOwn(STUDIO_BOARD_ERRORS, String(query.studio_err || '')) ? STUDIO_BOARD_ERRORS[String(query.studio_err)] : '';
   /* Which one: a studio order, or a checkout left unpaid (studio_kind). */
   const what = query.studio_kind === 'checkout' ? 'Left checkout' : 'Studio order';
-  return (done ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">Studio order <b>#${done}</b> marked delivered.</div>` : '')
+  const moved = errId && !err ? studioMovedText(query) : null;
+  return (moved ? `<div class="card" style="margin-bottom:12px;background:${moved.ok ? '#e7f6ec;color:#166534' : '#fdecea;color:#b91c1c'}">Studio order <b>#${errId}</b>: ${moved.text}</div>` : '')
+    + (done ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">Studio order <b>#${done}</b> marked delivered.</div>` : '')
     + (removed ? `<div class="card" style="margin-bottom:12px;background:#e7f6ec;color:#166534">${what} <b>#${removed}</b> is off this board. Nothing changed in the studio.</div>` : '')
     + (err && errId ? `<div class="card" style="margin-bottom:12px;background:#fdecea;color:#b91c1c">${what} <b>#${errId}</b> ${err}</div>` : '');
 }
@@ -24522,19 +24683,31 @@ function studioBoardNote(query) {
 /** A paid studio order as a Production card. Its moves go through the
  *  studio (studioShip): shipping happens on the Shipping page, where the label
  *  and the customer's email are, and Delivered is the board's own button. */
-function studioCard(o, disputes) {
+function studioCard(o, disputes, sent = new Map()) {
   const lane = studioLane(o);
   const id = Number(o.id);
   const owed = round2(Math.max(0, Number(o.total || 0) - Number(o.paid || 0)));
   const refunded = round2(Number(o.refunded || 0));
+  const code = STUDIOJOBS.keyOf(id);
+  const isOut = lane === JOB_STAGES.findIndex((x) => x.key === 'out');
+  const ship = `<a class="kbtn kbtn-next" style="display:block;text-align:center;text-decoration:none${lane === 0 ? ';margin-top:6px' : ''}" href="/admin/shipping#studio-${id}">📦 Ship or ready for pickup &rarr;</a>`;
+  const actor = currentActor() || OWNER_ACTOR;
+  const mayStage = STAFF.mayUseRoute(actor, 'POST', '/admin/studio/:id/stage');
+  /* Only whoever may open the order is offered its page. */
+  const page = STAFF.mayUseRoute(actor, 'GET', '/admin/studio/:id') ? `/admin/studio/${id}` : '';
+  const block = lane === 0 ? STUDIOJOBS.startBlock(o) : '';
   const next = lane === 0
-    ? `<a class="kbtn kbtn-next" style="display:block;text-align:center;text-decoration:none" href="/admin/shipping#studio-${id}">📦 Ship or ready for pickup &rarr;</a>`
+    ? `${block || !mayStage ? '' : `<form method="POST" action="/admin/studio/${id}/stage" class="knext"${
+        askAttrs({ code }, milestoneAsk({ ...STUDIOJOBS.jobRow(id, o, null), production_at: null }, 1, sent.get(code) || new Set()))} onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
+        <input type="hidden" name="stage" value="production"><input type="hidden" name="notify" value="">
+        <button type="submit" class="kbtn kbtn-next" title="Work on it has begun">▶ Start production</button></form>`}${ship}`
+    : !isOut ? ship
     : `<form method="POST" action="/admin/studio/${id}/delivered" class="knext"
         onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;b.textContent='Marking…';return true;">
         <button type="submit" class="kbtn kbtn-next" title="In their hands">✓ Delivered</button></form>`;
   return `<article class="kcard" id="studio-card-${id}">
     <div class="kcard-top">
-      <a href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(id)}" target="_blank" rel="noopener"
+      <a href="${page || `${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(id)}`}"${page ? '' : ' target="_blank" rel="noopener"'}
          class="kcard-name">${escEmail(o.name || `Order #${id}`)}</a>
       <span class="chip" style="background:#eef1f8;color:#46505f;font-size:11px">Studio</span>
     </div>
@@ -24545,7 +24718,11 @@ function studioCard(o, disputes) {
       ${studioExemptChip(o)}
     </div>
     ${next}
-    <div class="kmove"><span></span>
+    <div class="kmove">${lane !== 0 && !isOut && mayStage ? `<form method="POST" action="/admin/studio/${id}/stage">
+        <input type="hidden" name="stage" value="start">
+        <button type="submit" class="kbtn kbtn-sm" title="Back to ${JOB_STAGES[0].label}">←</button></form>` : '<span></span>'}
+      ${page ? `<a class="kbtn kbtn-link" href="${page}">Open order</a>
+      <a class="kbtn kbtn-link" href="${page}#messages">Message them</a>` : ''}
       <a class="kbtn kbtn-link" href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(id)}"
          target="_blank" rel="noopener" title="Design previews, print files and the packing slip">Open in studio</a></div>
   </article>`;
@@ -24578,6 +24755,10 @@ function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly
      for someone the route lets in (ROUTES: leads.dismiss), so nobody is shown
      a button that answers "not allowed". */
   const canRemove = STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'POST', '/admin/studio/hide');
+  const canOpen = STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, 'GET', '/admin/studio/:id');
+  const openLinks = (id) => !canOpen || !STUDIOJOBS.keyOf(id) ? ''
+    : `<a style="font-size:12.5px" href="/admin/studio/${Number(id)}">Open order</a>
+        <a style="font-size:12.5px" href="/admin/studio/${Number(id)}#messages">Message them</a>`;
   const removeBtn = (kind, id) => !canRemove ? '' : `<form method="POST" action="/admin/studio/hide" style="display:inline;margin-left:8px"
       onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
       <input type="hidden" name="kind" value="${kind}"><input type="hidden" name="id" value="${Number(id)}">
@@ -24615,6 +24796,7 @@ function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly
           o.first_touch && typeof o.first_touch === 'object'
             ? `<span class="muted" style="font-size:12.5px">came from ${escEmail(firstTouchLabel(parseFirstTouch(
                 'jt_ft=' + encodeURIComponent(JSON.stringify(o.first_touch)))))}</span>` : ''}
+        ${openLinks(o.id)}
         <a class="muted" style="font-size:12.5px;margin-left:auto"
            href="${STUDIO_BASE}/admin.php?lumise-page=order&order_id=${encodeURIComponent(o.id)}"
            target="_blank" rel="noopener">Open in studio &rarr;</a>
@@ -24642,7 +24824,7 @@ function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly
           tel ? ` &middot; <a href="tel:${escEmail(tel)}">${escEmail(a.phone)}</a>` : ''}</span>
         <span style="margin-left:auto;white-space:nowrap">${money(a.total)}${removeBtn('checkout', a.id)}</span>
       </div>
-      <div class="muted" style="margin-top:4px;font-size:12.5px">${a.created ? `${escEmail(dayShort(a.created))} &middot; ` : ''}${items || 'no items listed'}</div>
+      <div class="muted" style="margin-top:4px;font-size:12.5px">${a.created ? `${escEmail(dayShort(a.created))} &middot; ` : ''}${items || 'no items listed'} ${openLinks(a.id)}</div>
     </div>`;
   }).join('') : '';
 
@@ -24651,7 +24833,7 @@ function studioOrdersSection(feed, { heading = true, disputes = null, unpaidOnly
 
   return `${heading ? `<h2 id="studio-unpaid" style="margin:22px 0 6px;font-size:19px">${unpaidOnly ? 'Studio: not paid yet, refunded, or left checkout' : 'Studio orders'}</h2>
     <div class="sub" style="margin-bottom:10px">Placed online at design.jtees.net${unpaidOnly
-      ? ' &middot; paid studio orders are cards in the lanes above' : ' &middot; read-only here'}</div>` : ''}
+      ? ' &middot; paid studio orders are cards in the lanes above' : ''}</div>` : ''}
     ${warn}${rows}${left}${empty}`;
 }
 
@@ -25332,7 +25514,8 @@ async function renderBoard(VIEW, req, res) {
       ? await textedMilestones(rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at && q.phone).map(q => q.code))
       : new Map();
     const boardSent = VIEW === 'work'
-      ? await sentMilestones(rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at).map(q => q.code))
+      ? await sentMilestones([...rows.filter(q => !q.delivered_at && q.accepted_at && !q.cancelled_at).map(q => q.code),
+                              ...studio.orders.filter((o) => studioLane(o) === 0).map((o) => STUDIOJOBS.keyOf(o.id))])
       : new Map();
     const needCount = (body.match(/Needs a text/g) || []).length;
     const changeCount = (body.match(/Change requested/g) || []).length;
@@ -25562,7 +25745,7 @@ async function renderBoard(VIEW, req, res) {
                   <a class="kbtn kbtn-link" href="/admin/production/${q.code}">Open job</a>
                 </div>
               </article>`;
-            }).join('')}${c.studio.map((o) => studioCard(o, disputes)).join('')}${
+            }).join('')}${c.studio.map((o) => studioCard(o, disputes, boardSent)).join('')}${
               c.jobs.length + c.studio.length ? '' : '<div class="kempty">—</div>'}
           </section>`).join('')}</div>
           ${live.length + studioLive === 0 ? '<div class="card"><p class="muted">Nothing in production. Delivered jobs drop off this board.</p></div>' : ''}`;
@@ -26238,6 +26421,8 @@ const MESSAGE_KINDS = {
   'deposit-reminder': 'Deposit reminder', 'balance-reminder': 'Balance reminder', reorder: 'Reorder nudge',
   'pickup-reminder': 'Pickup reminder', 'quote-followup': 'Follow-up', 'missed-call': 'Missed-call text', call: 'Phone call',
   tracking: 'Tracking number', 'milestone:production': 'In production', 'milestone:ready': 'Ready / shipped',
+  'studio-placed': 'Order confirmation', 'studio-balance': 'Balance due', 'studio-order-placed': 'Order confirmation',
+  'studio-ready': 'Ready', 'studio-shipped': 'Shipped',
   manual: 'From you', quote: 'Quote', 'review-ask': 'Review ask', 'review-followup': 'Review reminder',
   /* texts, by template */
   'payment-received': 'Payment receipt', 'in-production': 'In production', ready: 'Ready',
@@ -26248,8 +26433,8 @@ const MESSAGE_KINDS = {
 const MESSAGE_ERRORS = {
   empty: 'Write something first.',
   'too-long': 'That is too long to send. A text is at most 300 characters.',
-  'no-email': 'There is no email address on this quote.',
-  'no-phone': 'There is no phone number on this quote.',
+  'no-email': 'There is no email address on this order.',
+  'no-phone': 'There is no phone number on this order.',
   'texting-off': 'Texting is not switched on yet, so nothing was sent. Send it by email instead.',
   'no-consent': 'That number texted STOP, so nothing was sent. Only they can turn texts back on, by texting START to the shop number. Send it by email instead.',
   failed: 'It did not send, and the error has been reported. Try again, or reach them another way.',
@@ -26582,12 +26767,14 @@ app.post('/admin/api/message-file-signature', requireAdmin, (req, res) => {
    production one needs the boards, the design one only that job (designJobFor). */
 const messageFileAllowed = async (kind, code) => kind === 'design'
   ? !!(await designJobFor(code, currentActor()))
+  : kind === 'studio' ? actorLevel('orders.view') === 'on'
   : actorLevel('quotes.view') === 'on';
 const replyFile = (kind) => async (req, res) => {
-  const code = String(req.params.code || '').toUpperCase();
-  const id = /^\d{1,12}$/.test(String(req.params.id)) ? req.params.id : null;
+  const code = messageCode(req);
+  const mid = req.studioCode ? req.params.mid : req.params.id;
+  const id = /^\d{1,12}$/.test(String(mid)) ? mid : null;
   const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
-  if (!QUOTE_CODE_RE.test(code) || !id) return res.status(404).send('Not found.');
+  if (!code || !id) return res.status(404).send('Not found.');
   if (!(await messageFileAllowed(kind, code).catch(() => false))) return res.status(403).send('Not available.');
   try {
     const { rows: [e] } = await pool.query(
@@ -26613,14 +26800,16 @@ const replyFile = (kind) => async (req, res) => {
 };
 app.get('/admin/production/:code/reply-file/:id/:n', requireAdmin, replyFile('production'));
 app.get('/admin/design/:code/reply-file/:id/:n', requireAdmin, replyFile('design'));
+app.get('/admin/studio/:id/reply-file/:mid/:n', requireAdmin, studioParam, replyFile('studio'));
 
 /* A file an email carried, from the job page's message list. */
 const sentFile = (kind) => async (req, res) => {
-  const code = String(req.params.code || '').toUpperCase();
-  const id = /^\d{1,12}$/.test(String(req.params.id)) ? req.params.id : null;
+  const code = messageCode(req);
+  const mid = req.studioCode ? req.params.mid : req.params.id;
+  const id = /^\d{1,12}$/.test(String(mid)) ? mid : null;
   const n = /^\d{1,2}$/.test(String(req.params.n)) ? Number(req.params.n) : -1;
-  if (!QUOTE_CODE_RE.test(code) || !id) return res.status(404).send('Not found.');
-  if (kind === 'design' && !(await messageFileAllowed(kind, code).catch(() => false))) return res.status(403).send('Not available.');
+  if (!code || !id) return res.status(404).send('Not found.');
+  if (kind !== 'production' && !(await messageFileAllowed(kind, code).catch(() => false))) return res.status(403).send('Not available.');
   try {
     const { rows: [e] } = await pool.query('SELECT attachments, kind, status FROM client_emails WHERE id = $1 AND quote_code = $2', [id, code]);
     if (e && kind === 'design' && !designVisibleMessage(e)) return res.status(404).send('That file is not on this message.');
@@ -26646,6 +26835,7 @@ const sentFile = (kind) => async (req, res) => {
 };
 app.get('/admin/production/:code/sent-file/:id/:n', requireAdmin, sentFile('production'));
 app.get('/admin/design/:code/sent-file/:id/:n', requireAdmin, sentFile('design'));
+app.get('/admin/studio/:id/sent-file/:mid/:n', requireAdmin, studioParam, sentFile('studio'));
 
 app.post('/admin/api/art-signature', requireAdmin, (req, res) => {
   const apiSecret = process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET;
@@ -27668,6 +27858,14 @@ const WAITING_SHOWN = 10;
 
 async function jobMessagesCard(q, query, { design = false, readOnly = false } = {}) {
   const code = q.code;
+  /* A studio order (STUDIO-<id>): the same card, at its own addresses, with the
+     number its customer knows it by. It has no quote page, automatic reminders
+     or proofs, so the parts about those are left out. */
+  const studioId = STUDIOJOBS.idOf(code);
+  const label = STUDIOJOBS.labelOf(code);
+  const act = studioId ? `/admin/studio/${studioId}` : `/admin/quote/${code}`;
+  const api = studioId ? `/admin/api/studio/${studioId}` : `/admin/api/quote/${code}`;
+  const filesAt = studioId ? act : `/admin/${design ? 'design' : 'production'}/${code}`;
   /* A helper's message held for the owner. Until 2026-11-07 the page said
      "Saved for the owner to approve" once and then showed nothing, so a held
      message read as sent. It shows here until it is sent or sent back. The
@@ -27716,7 +27914,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
      emails, which is how it read before helpers existed. */
   const roster = history.some((m) => m.sent_by != null) || waiting.length ? await staffRoster().catch(() => []) : [];
   const phone = normalizeUsPhone(q.phone);
-  let textWhyNot = !phone ? 'no phone number on this quote'
+  let textWhyNot = !phone ? studioId ? 'no phone number on this order' : 'no phone number on this quote'
     : !smsConfigured() ? 'texting is not switched on yet' : '';
   /* Texts typed here go from the shop number to anyone who has not texted
      STOP (staffSent in sendCustomerSms; owner, 2026-11-06). Only they can
@@ -27727,7 +27925,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
      staffSent), so "coming up" promises a text only when one will go. */
   const remindersByText = !textWhyNot
     && (await smsConsentFor(phone).catch(() => ({ transactional: false }))).transactional;
-  const emailWhyNot = q.email ? '' : 'no email address on this quote';
+  const emailWhyNot = q.email ? '' : studioId ? 'no email address on this order' : 'no email address on this quote';
   const jobFiles = await jobFilesFor(q).catch(() => []);
   /* This job's proof links, for the page's text counter: they go as pictures,
      so the counter leaves them out exactly as the server does. */
@@ -27735,9 +27933,15 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
     .catch(() => ({ rows: [] }))).rows.map((r) => r.url).filter((u) => typeof u === 'string' && u);
   const first = String(q.name || '').trim().split(/\s+/)[0];
   const hi = `Hi${first ? ' ' + first : ''}`;
-  const due = balanceOf(q, quoteTotals(q).total);
+  const due = studioId ? STUDIOJOBS.dueOn(q) : balanceOf(q, quoteTotals(q).total);
   /* Warm, and short enough for a text (the box allows 300 characters). */
-  const quick = [
+  const quick = studioId ? [
+    ['Design question', `${hi}! A quick question about your order ${label} before we print it: `],
+    ['Running late', `${hi}, just a quick heads-up: order ${label} is running a day or two behind. We're on it and will keep you posted. Thank you so much for your patience!`],
+    ['Ready for pickup', `${hi}! Order ${label} is ready for pickup at ${PICKUP_ADDRESS} (${PICKUP_HOURS}). Call or text ${SHOP_PHONE} an hour before, ring the intercom for June's Tees, and come up to the 4th floor lobby.`],
+    ...(due > 0 ? [['Balance due', `${hi}, order ${label} has a balance of ${money(due)}. Reply here or call ${SHOP_PHONE} and we'll help you pay it. Thank you!`]] : []),
+    ...(q.left ? [['Left checkout', `${hi}! We saw you started order ${label} and it was not finished. Can we help with anything? Just reply here or call ${SHOP_PHONE}.`]] : []),
+  ] : [
     ['Proof ready', `${hi}! Your proof for order ${code} is ready. Take a look and reply "approved" to go ahead, or tell us what you'd like changed.`],
     ['Running late', `${hi}, just a quick heads-up: order ${code} is running a day or two behind. We're on it and will keep you posted. Thank you so much for your patience!`],
     ['Ready for pickup', `${hi}! Order ${code} is ready for pickup at ${PICKUP_ADDRESS} (${PICKUP_HOURS}). Call or text ${SHOP_PHONE} an hour before, ring the intercom for June's Tees, and come up to the 4th floor lobby.`],
@@ -27801,7 +28005,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
               : `<a href="${escEmail(a.url)}" target="_blank" rel="noopener">&#128206; ${escEmail(a.name)}</a>`;
           }).join('')}</div>`
         : Array.isArray(m.attachments) && m.attachments.length ? `<div class="row-sub" style="white-space:normal">&#128206; ${
-          m.attachments.map((a, n) => `<a href="/admin/${design ? 'design' : 'production'}/${escEmail(code)}/${inbound ? 'reply' : 'sent'}-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
+          m.attachments.map((a, n) => `<a href="${escEmail(filesAt)}/${inbound ? 'reply' : 'sent'}-file/${Number(m.id)}/${n}">${escEmail(a.name)}</a>`).join(' &middot; ')}</div>` : ''}${
         bad && m.error ? `<div class="row-sub" style="white-space:normal;color:#b91c1c">${escEmail(m.error)}</div>` : ''}</span>
       <span class="row-end msg-end">${pill(inbound ? 'reply' : m.status, tone(m.status))}
         <span class="muted msg-when">${m.channel === 'email' ? 'email' : 'text'} &middot; ${
@@ -27818,7 +28022,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
   /* The automatic reminders still to come (tools/lib/followups.js), with a
      Skip each. Not on the design page: they are about money. */
   let comingUp = '';
-  if (!design) {
+  if (!design && !studioId) {
     /* Their own figures: the sweeps read balanceOf(q) on the stored total,
        the opt-out list for the follow-up and balance emails, and only text
        where textWhyNot is blank. */
@@ -27893,7 +28097,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         ? `<p class="muted" style="font-size:12.5px;margin:0 0 10px">${escEmail(first || 'They')} texted STOP to the shop number, so texts stay off until they text START to ${escEmail(SHOP_PHONE)}.</p>`
         /* A text typed here needs no agreement on file, but the automatic
            reminders still do: the owner's word turns those on too. */
-        : !textWhyNot && !remindersByText && isOwner() ? `<details style="margin:0 0 12px"><summary style="font-size:13px">They agreed to texts: send the automatic reminders by text too</summary>
+        : !studioId && !textWhyNot && !remindersByText && isOwner() ? `<details style="margin:0 0 12px"><summary style="font-size:13px">They agreed to texts: send the automatic reminders by text too</summary>
         <form method="POST" action="/admin/quote/${code}/text-consent" style="margin-top:8px;padding:10px 12px;border:1px solid #e3e8f2;border-radius:10px;background:#fafcff">
           <p class="muted" style="font-size:12.5px;margin:0 0 8px">Texts you type here already go from the shop number. The automatic reminders (follow-up, deposit, balance, pickup)
             go by text only to someone who agreed. If they agreed somewhere this system cannot see, like your old phone number, save it here.
@@ -27908,7 +28112,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         </form></details>` : ''}
       ${waitingReply ? `<div class="warn" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <span>${escEmail(first || 'They')} wrote ${escEmail(when(waitingReply.created_at))} and has not had an answer yet.</span>
-        <form method="POST" action="/admin/quote/${code}/replies-handled" style="margin:0">
+        <form method="POST" action="${act}/replies-handled" style="margin:0">
           <button type="submit" class="btn btn-ghost" style="padding:5px 12px;font-size:13px">No reply needed</button></form></div>` : ''}
       <div data-claude style="margin:0 0 12px;padding:10px 12px;border:1px solid #d9ccf5;border-radius:10px;background:#faf8ff">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
@@ -27927,12 +28131,12 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
         </div>
         <div data-cout style="display:none;margin-top:10px;font-size:14px;line-height:1.45"></div>
       </div>
-      <form method="POST" action="/admin/quote/${code}/message" data-msgform data-proofurls="${escEmail(JSON.stringify(proofUrls))}" style="margin:0 0 12px">
+      <form method="POST" action="${act}/message" data-msgform data-proofurls="${escEmail(JSON.stringify(proofUrls))}" style="margin:0 0 12px">
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
           ${radio('email', 'Email', emailWhyNot, true)}
           ${radio('text', 'Text', textWhyNot, !!emailWhyNot || textFirst)}
         </div>
-        <input name="subject" maxlength="150" value="${prefill && !textFirst ? `Your proof${String(query.proof) === 'all' ? 's' : ''} for order ${escEmail(code)}` : `About your order ${escEmail(code)}`}" data-subject
+        <input name="subject" maxlength="150" value="${prefill && !textFirst ? `Your proof${String(query.proof) === 'all' ? 's' : ''} for order ${escEmail(code)}` : `About your order ${escEmail(label)}`}" data-subject
                style="margin-bottom:8px;padding:10px;font-size:14px">
         <textarea name="body" rows="6" maxlength="${MESSAGE_MAX}" placeholder="Write to ${escEmail(first || 'them')}…"
                   style="font-size:14px;padding:10px">${escEmail(prefill)}</textarea>
@@ -27960,9 +28164,10 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
       </form>
       <details style="margin:0 0 12px"><summary style="font-size:13px">Add a to-do for this job</summary>
         <form method="POST" action="/admin/tasks" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-          <input name="title" required maxlength="200" placeholder="e.g. Call ${escEmail(first || 'them')} about sizes" style="flex:1 1 220px">
+          <input name="title" required maxlength="200" placeholder="e.g. Call ${escEmail(first || 'them')} about sizes"${studioId ? ` value="Studio order ${escEmail(label)}: "` : ''} style="flex:1 1 220px">
           <input type="date" name="due_on" style="width:auto">
-          <input type="hidden" name="quote_code" value="${escEmail(code)}">
+          ${/* A task attaches to quotes only, so a studio order's names it in its title. */
+            studioId ? '' : `<input type="hidden" name="quote_code" value="${escEmail(code)}">`}
           <input type="hidden" name="back" value="${escEmail(jobPath(code))}#messages">
           <button type="submit" class="btn btn-ghost">Add</button>
         </form></details>
@@ -28063,7 +28268,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
             busy = true;
             var c = f.querySelector('input[name="channel"]:checked');
             btn.disabled = true; st.textContent = draft ? 'Claude is rewriting it…' : 'Claude is reading the job…';
-            return fetch('/admin/api/quote/${code}/suggest-reply', { method: 'POST', credentials: 'same-origin',
+            return fetch('${api}/suggest-reply', { method: 'POST', credentials: 'same-origin',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ channel: c ? c.value : 'email', attached: attachedNames(), note: note,
                                      pasted: cl.querySelector('[data-cpaste]').value, draft: draft }) })
@@ -28161,7 +28366,7 @@ async function jobMessagesCard(q, query, { design = false, readOnly = false } = 
           checking = true; sb.disabled = true;
           rv.style.display = ''; rv.style.background = '#faf8ff'; rv.style.border = '1px solid #d9ccf5';
           rv.textContent = 'Claude is checking your message for accuracy, tone and spelling…';
-          fetch('/admin/api/quote/${code}/review-message', { method: 'POST', credentials: 'same-origin',
+          fetch('${api}/review-message', { method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ channel: isText ? 'text' : 'email', subject: subj.value, draft: body.value, attached: isText ? [] : attachedNames() }) })
             .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if (!r.ok) throw new Error(d.error || 'Claude could not check it.'); return d; }); })
@@ -28241,6 +28446,63 @@ async function markProofsSent(code, text) {
     .catch((e) => console.error(`marking proofs sent on ${code} failed:`, e.message));
 }
 
+/** The job a message is about: the quote, or a studio order shaped like one
+ *  (STUDIOJOBS.jobRow). Undefined when there is no such job. */
+async function messageJob(code) {
+  const studioId = STUDIOJOBS.idOf(code);
+  if (studioId) return (await studioJob(studioId)) || undefined;
+  const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+  return rows[0];
+}
+
+/** One studio order for its page and messages, or null. From the feed; one not
+ *  in it yet is asked for once more, and one that has dropped off it (or a
+ *  studio that is down) still has who it belongs to. */
+async function studioJob(id) {
+  const find = (feed) => (feed.orders || []).find((o) => Number(o.id) === id)
+    || (() => { const a = (feed.abandoned || []).find((x) => Number(x.id) === id); return a ? { ...a, status: 'cancel', paid: 0, left: true } : null; })();
+  let feed = await fetchStudioOrders();
+  let o = find(feed);
+  const { rows: [kept] } = await pool.query('SELECT * FROM studio_jobs WHERE order_id = $1', [id]);
+  if (!o && !kept && !feed.error && Date.now() - _studioCache.at > 5000) {
+    _studioCache.at = 0;
+    feed = await fetchStudioOrders();
+    o = find(feed);
+  }
+  const job = STUDIOJOBS.jobRow(id, o, kept);
+  if (job) job.feedError = feed.error || null;
+  return job;
+}
+
+/** The shop wrote to them about this order, so their answer belongs on it. */
+async function studioContacted(id) {
+  await pool.query(`INSERT INTO studio_jobs (order_id, contacted_at) VALUES ($1, NOW())
+                    ON CONFLICT (order_id) DO UPDATE SET contacted_at = NOW()`, [id])
+    .catch((e) => { console.error(`studio order ${id} contact not kept:`, e.message); reportError('studio-jobs', e, `order ${id}`).catch(() => {}); });
+}
+
+/** The job a message route is about: a quote code from its address, or the
+ *  studio order its route set (studioParam). '' when it is neither. */
+function messageCode(req) {
+  if (req.studioCode) return req.studioCode;
+  const code = String(req.params.code || '').toUpperCase();
+  return QUOTE_CODE_RE.test(code) ? code : '';
+}
+
+/** A studio order's routes: /admin/studio/:id. */
+function studioParam(req, res, next) {
+  const code = STUDIOJOBS.keyOf(req.params.id);
+  if (!code) return /^\/admin\/api\//.test(req.path) ? res.status(404).json({ error: 'No such order.' }) : res.redirect('/admin/production');
+  req.studioCode = code;
+  return next();
+}
+
+/** Whether whoever is signed in may work with this job's messages. */
+async function mayMessageJob(code) {
+  if (STUDIOJOBS.idOf(code)) return actorLevel('orders.view') === 'on';
+  return actorLevel('quotes.view') === 'on' || !!(await designJobFor(code, currentActor()));
+}
+
 async function sendJobMessage({ code, channel, subject, text, attachments = '[]' }) {
   const key = crypto.createHash('sha256').update([code, channel, text, String(attachments)].join('|')).digest('hex');
   const now = Date.now();
@@ -28248,8 +28510,8 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
   if (recentJobMessages.has(key)) return 'duplicate';
 
   try {
-    const { rows } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
-    const q = rows[0];
+    const q = await messageJob(code);
+    const studioId = STUDIOJOBS.idOf(code);
     /* Every message links to the customer's quote page, which answers "not
        found" while the quote waits for approval. */
     if (q && q.status === 'held') return 'held';
@@ -28275,7 +28537,8 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
         attachments: files,
         html: customerEmailHtml('A note about your order',
           `<p>${escEmail(text).replace(/\n/g, '<br>')}</p>${pics.map((u) =>
-            `<p style="margin:12px 0"><img src="${escEmail(u)}" alt="" style="max-width:100%;height:auto;border-radius:8px;border:1px solid #e3e8f2"></p>`).join('')}${listed}`, code) });
+            `<p style="margin:12px 0"><img src="${escEmail(u)}" alt="" style="max-width:100%;height:auto;border-radius:8px;border:1px solid #e3e8f2"></p>`).join('')}${listed}`, studioId ? null : code) });
+      if (studioId) await studioContacted(studioId);
       console.log(`message to ${code} by email`);
       return 'sent';
     }
@@ -28300,8 +28563,9 @@ async function sendJobMessage({ code, channel, subject, text, attachments = '[]'
          link to the word before it. 300, the limit the page and route check:
          260 cut a 290-character text short after it had been accepted. */
       msg: { template: 'manual', body: `June's Tees: ${smsPlain(words.replace(/\s+/g, ' ').replace(/^\s*june['\u2019]?s\s+tees\s*(&\s*things\s*)?[:,-]\s*/i, ''), 300)}${
-        /https?:\/\/|jtees\.net/i.test(words) ? '' : ' ' + smsShort(quoteLink(code))} Reply STOP to opt out.` } });
-    if (status === 'sent') { console.log(`message to ${code} by text`); return 'sent'; }
+        /https?:\/\/|jtees\.net/i.test(words) ? '' : ' ' + (studioId ? 'jtees.net' : smsShort(quoteLink(code)))} Reply STOP to opt out.` } });
+    if (status === 'sent') {
+      if (studioId) await studioContacted(studioId); console.log(`message to ${code} by text`); return 'sent'; }
     recentJobMessages.delete(key);
     return { duplicate: 'duplicate', 'no-consent': 'no-consent', unconfigured: 'texting-off',
              'no-phone': 'no-phone' }[status] || 'failed';
@@ -28346,18 +28610,18 @@ app.post('/admin/quote/:code/text-consent', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
-  const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
+const messageRoute = async (req, res) => {
+  const code = messageCode(req);
+  if (!code) return res.redirect('/admin/production');
   const b = req.body || {};
   const channel = b.channel === 'text' ? 'text' : 'email';
   const text = String(b.body || '').replace(/\r\n?/g, '\n').trim();
-  const subject = String(b.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150) || `About your order ${code}`;
+  const subject = String(b.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150) || `About your order ${STUDIOJOBS.labelOf(code)}`;
   /* The files picked or uploaded, as JSON [{url, name}]; checked when sent. */
   const attachments = String(b.attachments || '[]').slice(0, 8000);
   const answer = (key, value) => res.redirect(`${jobPath(code)}?${key}=${encodeURIComponent(value)}#messages`);
   // A designer writes only to the customers of jobs that are with them.
-  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
+  if (!(await mayMessageJob(code))) return res.redirect(designHome());
   if (!text) return answer('msg_err', 'empty');
   let len = text.length;
   if (channel === 'text') {
@@ -28407,7 +28671,9 @@ app.post('/admin/quote/:code/message', requireAdmin, async (req, res) => {
   if (out === 'no-quote') return res.redirect('/admin/production');
   if (out === 'sent') await markProofsSent(code, text);
   return out === 'sent' ? answer('sent', channel) : answer('msg_err', out);
-});
+};
+app.post('/admin/quote/:code/message', requireAdmin, messageRoute);
+app.post('/admin/studio/:id/message', requireAdmin, studioParam, messageRoute);
 
 /* "Ask Claude" on the job page (2026-10-06): a checklist and a suggested reply
    for the message box. Nothing is sent from here; the suggestion goes into the
@@ -28430,11 +28696,12 @@ const UNANSWERED_REPLIES_SQL = `
            MAX(created_at) FILTER (WHERE status = 'received') AS last_in,
            MAX(created_at) FILTER (WHERE what = 'manual' AND status NOT IN ('failed', 'skipped', 'undelivered')) AS last_out
       FROM m GROUP BY quote_code)
-  SELECT q.code, q.name, t.last_in,
-         (SELECT body FROM m WHERE m.quote_code = q.code AND m.status = 'received' ORDER BY created_at DESC LIMIT 1) AS body
-    FROM t JOIN quotes q ON q.code = t.quote_code
-   WHERE t.last_in IS NOT NULL AND q.cancelled_at IS NULL
-     AND t.last_in > COALESCE(t.last_out, 'epoch') AND t.last_in > COALESCE(q.replies_handled_at, 'epoch')
+  SELECT t.quote_code AS code, COALESCE(q.name, NULLIF(s.name, ''), 'Studio order #' || s.order_id) AS name, t.last_in,
+         (SELECT body FROM m WHERE m.quote_code = t.quote_code AND m.status = 'received' ORDER BY created_at DESC LIMIT 1) AS body
+    FROM t LEFT JOIN quotes q ON q.code = t.quote_code
+           LEFT JOIN studio_jobs s ON 'STUDIO-' || s.order_id = t.quote_code
+   WHERE t.last_in IS NOT NULL AND (s.order_id IS NOT NULL OR (q.code IS NOT NULL AND q.cancelled_at IS NULL))
+     AND t.last_in > COALESCE(t.last_out, 'epoch') AND t.last_in > COALESCE(q.replies_handled_at, s.replies_handled_at, 'epoch')
    ORDER BY t.last_in LIMIT 20`;
 
 /* The reminder delays: the sweeps and the job page's Coming up list both
@@ -28476,14 +28743,19 @@ app.post('/admin/quote/:code/skip-reminder', requireAdmin, async (req, res) => {
 });
 
 /* "No reply needed" from the job page: the reply stops showing as waiting. */
-app.post('/admin/quote/:code/replies-handled', requireAdmin, async (req, res) => {
-  const code = String(req.params.code || '').toUpperCase();
-  if (!QUOTE_CODE_RE.test(code)) return res.redirect('/admin/production');
-  if (actorLevel('quotes.view') !== 'on' && !(await designJobFor(code, currentActor()))) return res.redirect(designHome());
-  await pool.query('UPDATE quotes SET replies_handled_at = NOW() WHERE code = $1', [code])
+const repliesHandled = async (req, res) => {
+  const code = messageCode(req);
+  if (!code) return res.redirect('/admin/production');
+  if (!(await mayMessageJob(code))) return res.redirect(designHome());
+  const studioId = STUDIOJOBS.idOf(code);
+  await (studioId ? pool.query(`INSERT INTO studio_jobs (order_id, replies_handled_at) VALUES ($1, NOW())
+                                ON CONFLICT (order_id) DO UPDATE SET replies_handled_at = NOW()`, [studioId])
+    : pool.query('UPDATE quotes SET replies_handled_at = NOW() WHERE code = $1', [code]))
     .catch((e) => console.error(`replies handled on ${code} failed:`, e.message));
   return res.redirect(`${jobPath(code)}#messages`);
-});
+};
+app.post('/admin/quote/:code/replies-handled', requireAdmin, repliesHandled);
+app.post('/admin/studio/:id/replies-handled', requireAdmin, studioParam, repliesHandled);
 
 const replyAsks = new Map();
 /* "Check before sending" (2026-10-06): the same job and conversation, and the
@@ -28493,11 +28765,11 @@ const replyAsks = new Map();
 function claudeRoute(kind) {
   return async (req, res) => {
     res.set('Cache-Control', 'no-store');
-    const code = String(req.params.code || '').toUpperCase();
-    if (!QUOTE_CODE_RE.test(code)) return res.status(404).json({ error: 'No such job.' });
+    const code = messageCode(req);
+    if (!code) return res.status(404).json({ error: 'No such job.' });
     if (actorLevel('customers.message') === 'off') return res.status(403).json({ error: 'You cannot message customers.' });
-    const fullView = actorLevel('quotes.view') === 'on';
-    if (!fullView && !(await designJobFor(code, currentActor()))) return res.status(403).json({ error: 'That job is not with you.' });
+    const fullView = STUDIOJOBS.idOf(code) ? actorLevel('orders.view') === 'on' : actorLevel('quotes.view') === 'on';
+    if (!(await mayMessageJob(code))) return res.status(403).json({ error: 'That job is not with you.' });
     const actor = currentActor() || OWNER_ACTOR;
     const who = actor.kind === 'staff' ? 's' + actor.id : 'owner';
     const now = Date.now();
@@ -28522,7 +28794,8 @@ function claudeRoute(kind) {
 /** What Claude is shown about a job: the job, its messages, the shop's
  *  checked playbook answers. Money only for someone who may see the quote. */
 async function claudeJobContext(code, ask, fullView) {
-  const { rows: [q] } = await pool.query('SELECT * FROM quotes WHERE code = $1', [code]);
+  const studioId = STUDIOJOBS.idOf(code);
+  const q = await messageJob(code);
   if (!q) return null;
   const { rows: msgs } = await pool.query(
     `SELECT * FROM (
@@ -28542,12 +28815,17 @@ async function claudeJobContext(code, ask, fullView) {
     `SELECT title, body FROM kb_articles WHERE kind = 'faq' AND published AND NOT needs_review AND ${kbMatch(1).where}
       ORDER BY ${kbMatch(1).rank} DESC LIMIT 4`, [topic, topic.toLowerCase().slice(0, 60)])
     .then((r) => r.rows).catch(() => [])) : [];
-  const t = quoteTotals(q);
-  const due = balanceOf(q, t.total);
-  const stage = q.cancelled_at ? 'cancelled' : q.accepted_at || q.paid_at ? JOB_STAGES[jobStageIndex(q)].label
+  const t = studioId ? { total: q.total } : quoteTotals(q);
+  const due = studioId ? STUDIOJOBS.dueOn(q) : balanceOf(q, t.total);
+  const stage = studioId ? (!q.studio ? 'not known right now (the studio’s list does not have it): check it before saying where it stands'
+      : q.refunded_full ? 'refunded in full, not being made'
+      : q.delivered_at ? 'delivered' : q.shipped_at ? 'ready or shipped' : q.left ? 'checkout not finished, nothing paid'
+      : !(Number(q.paid_amount) > 0) ? 'placed, not paid yet'
+      : q.production_at ? 'in production' : 'paid, not started yet')
+    : q.cancelled_at ? 'cancelled' : q.accepted_at || q.paid_at ? JOB_STAGES[jobStageIndex(q)].label
     : 'quote, not accepted yet';
   const job = {
-    code, name: q.name, status: q.status, stage, today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }),
+    code: studioId ? `online order ${STUDIOJOBS.labelOf(code)}` : code, name: q.name, status: !studioId ? q.status : q.refunded > 0 ? `${money(q.refunded)} refunded` : '', stage, today: new Date().toLocaleDateString('en-CA', { timeZone: SHOP_TZ }),
     needed_by: q.needed_by || q.target_date, deadline_flexible: q.deadline_flexible,
     proof: q.proof_ok_at ? 'approved' : q.proof_sent_at ? 'sent, waiting for their approval' : '',
     delivery: q.ship_method || '', tracking: q.shipped_at ? q.tracking || '' : '',
@@ -28569,12 +28847,14 @@ async function claudeJobContext(code, ask, fullView) {
                   return MSGFILES.previewUrl(f.url, ext).replace('w_600', 'w_1000'); })
     .filter(Boolean).slice(0, 8);
   job.pictures = pictures.length;
-  return { job, history, playbook, ask, money: fullView, pictures,
-           shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: quoteLink(code),
+  /* No figures for an order the studio's list does not have: they would all be zero. */
+  return { job, history, playbook, ask, money: fullView && (!studioId || !!q.studio), pictures,
+           shop: { phone: SHOP_PHONE, pickup: `free at ${PICKUP_ADDRESS} (${PICKUP_HOURS})`, link: studioId ? '' : quoteLink(code),
                    delivery: 'free pickup; local delivery in nearby Chicago ZIPs on a day and time they book from their order page, for a fee; shipping by carrier, quoted per order' } };
 }
 
 app.post('/admin/api/quote/:code/suggest-reply', requireAdmin, claudeRoute('suggest'));
+app.post('/admin/api/studio/:id/suggest-reply', requireAdmin, studioParam, claudeRoute('suggest'));
 
 /* Claude's reply to a lead: for a new one, an answer to what they actually
    asked (owner, 2026-10-22: the stock "a few more details" email answered
@@ -28735,6 +29015,7 @@ app.post('/admin/api/lead/:id/call-script', requireAdmin, async (req, res) => {
 });
 
 app.post('/admin/api/quote/:code/review-message', requireAdmin, claudeRoute('review'));
+app.post('/admin/api/studio/:id/review-message', requireAdmin, studioParam, claudeRoute('review'));
 
 app.get('/admin/quotes',     requireAdmin, (req, res) => renderBoard('money', req, res));
 app.get('/admin/production', requireAdmin, (req, res) => renderBoard('work',  req, res));
@@ -29919,7 +30200,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
     ...replies.map((r) => ({ tone: Date.now() - new Date(r.last_in) > 24 * 3600 * 1000 ? 'red' : 'amber', icon: 'mail',
       title: `${escEmail(r.name || r.code)} is waiting for a reply`,
       sub: `${r.body ? `&ldquo;${escEmail(String(r.body).replace(/\s+/g, ' ').slice(0, 90))}&rdquo;` : 'sent a picture'} &middot; ${escEmail(ageInWords(r.last_in))}`,
-      href: `/admin/production/${escEmail(r.code)}#messages` })),
+      href: `${escEmail(STUDIOJOBS.adminPath(r.code))}#messages` })),
     ...disputes.map((d) => ({ tone: 'red', icon: 'alert',
       title: `Chargeback: ${money(d.amount)} ${d.quote_code ? 'on quote ' + escEmail(d.quote_code)
         : d.order_ref ? 'on studio order #' + escEmail(d.order_ref) : ''}`,
@@ -31478,7 +31759,8 @@ app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-c
         delivery.link = await deliveryChangeLink(booked).catch(() => '');
       }
     }
-    await sendEmail({
+    await sendClientEmail({
+      quote: STUDIOJOBS.keyOf(b.order_id), kind: 'studio-placed',
       to: email,
       subject: `Thanks${name ? ', ' + name.split(' ')[0] : ''}! Order #${b.order_id} is in 🎉`,
       html: orderShell({
@@ -31497,7 +31779,7 @@ app.post('/api/order-confirmation', requireInternalKey, capPerRecipient('order-c
     });
     if (b.phone) {
       await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
-        msg: SMS.studioOrderPlaced({ orderId: b.order_id }) });
+        quote: STUDIOJOBS.keyOf(b.order_id) || null, msg: SMS.studioOrderPlaced({ orderId: b.order_id }) });
     }
     res.json({ ok: true });
   } catch (err) {
@@ -31547,6 +31829,7 @@ app.post('/api/order-notification', requireInternalKey, capPerRecipient('order-n
                refusing puts the tax back on it, to collect with Collect balance.`
             : 'Tax-exempt, on a certificate you have already approved.'}</p>` : '') +
           `<p style="margin:18px 0;"><a href="https://design.jtees.net/admin.php?lumise-page=order&order_id=${encodeURIComponent(b.order_id)}" style="background:#1848B8;color:#fff;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:100px;display:inline-block;">Open in admin →</a>${
+            STUDIOJOBS.keyOf(b.order_id) ? ` <a href="${PUBLIC_BASE_URL}/admin/studio/${STUDIOJOBS.idOf(STUDIOJOBS.keyOf(b.order_id))}" style="margin-left:8px;color:#1848B8;font-weight:700;text-decoration:none;">Order page and messages →</a>` : ''}${
             delivery ? ` <a href="${PUBLIC_BASE_URL}/admin/shipping#studio-${encodeURIComponent(b.order_id)}" style="margin-left:8px;color:#1848B8;font-weight:700;text-decoration:none;">Shipping →</a>` : ''}</p>`,
       }),
     });
@@ -31607,7 +31890,8 @@ app.post('/api/balance-link-email', requireInternalKey, capPerRecipient('balance
   if (v.error) return res.status(400).json({ error: v.error });
   const button = `<p><a href="${escEmail(v.link)}" style="display:inline-block;background:#1a2e5a;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;">Pay balance securely</a></p>`;
   try {
-    await sendEmail({
+    await sendClientEmail({
+      quote: STUDIOJOBS.keyOf(v.orderId), kind: 'studio-balance',
       to: v.email,
       replyTo: NOTIFY_EMAIL,
       subject: v.taxRefused
@@ -31666,7 +31950,8 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
        order "just left our shop" because it was marked complete is a message
        they will read as a mistake, and rightly. */
     if (status === 'shipped' && local) { /* told by the delivery board */ }
-    else if (status === 'shipped' && pickup) await sendEmail({
+    else if (status === 'shipped' && pickup) await sendClientEmail({
+      quote: STUDIOJOBS.keyOf(b.order_id), kind: 'milestone:ready',
       to: email,
       subject: `Your order #${b.order_id} is ready for pickup 🎉`,
       html: orderShell({
@@ -31676,7 +31961,8 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
         shipping: b.shipping, tax: b.tax, footer: `<div style="color:#374151;line-height:1.6;margin-top:14px">${pickupHowHtml()}</div>`,
       }),
     });
-    else if (status === 'shipped') await sendEmail({
+    else if (status === 'shipped') await sendClientEmail({
+      quote: STUDIOJOBS.keyOf(b.order_id), kind: 'milestone:ready',
       to: email,
       subject: `Your order #${b.order_id} is on the way 📦`,
       html: orderShell({
@@ -31695,6 +31981,7 @@ app.post('/api/order-shipped', requireInternalKey, capPerRecipient('order-shippe
     });
     if (status === 'shipped' && b.phone && !local) {
       await sendCustomerSms({ phone: b.phone, kind: 'transactional', ref: 'studio:' + smsPlain(b.order_id, 20),
+        quote: STUDIOJOBS.keyOf(b.order_id) || null,
         msg: pickup ? SMS.studioOrderReady({ orderId: b.order_id })
           : SMS.studioOrderShipped({ orderId: b.order_id, tracking }) });
     }
@@ -33073,6 +33360,170 @@ app.post('/admin/studio/hide', requireAdmin, async (req, res) => {
   }
   return res.redirect(`/admin/production?studio_removed=${id}&studio_kind=${kind}#studio-unpaid`);
 });
+
+/** Tell the customer their studio order is in production: an email once, and a
+ *  text once, recorded on the order like every other message. The same words
+ *  quote jobs get (notifyQuoteMilestone). Returns what happened, in a word. */
+async function notifyStudioStarted(job) {
+  const id = STUDIOJOBS.idOf(job.code);
+  const first = String(job.name || '').trim().split(/\s+/)[0];
+  const what = escEmail(job.items.map((i) => `${i.qty || 1} x ${i.description}`).join(', ').slice(0, 300)) || 'your design';
+  let texted = '';
+  if (job.phone) {
+    texted = await sendCustomerSms({ phone: job.phone, kind: 'transactional', ref: 'studio:' + id, quote: job.code, orderUpdate: true,
+      msg: SMS.inProduction({ code: STUDIOJOBS.labelOf(job.code), first }) });
+  }
+  if (!job.email) return texted === 'sent' || texted === 'duplicate' ? 'sent' : 'failed';
+  const { rows } = await pool.query(
+    `SELECT 1 FROM client_emails WHERE quote_code = $1 AND kind = 'milestone:production' AND status = 'sent' LIMIT 1`, [job.code]);
+  if (rows.length) return 'sent';
+  const inner = `<p>Hi${first ? ' ' + escEmail(first) : ''},</p><p>Good news: your order ${STUDIOJOBS.labelOf(job.code)} (${what}) is in production now.
+    We'll let you know the moment it's ready.</p>`;
+  try {
+    await sendClientEmail({ quote: job.code, kind: 'milestone:production', to: job.email,
+      subject: `Your order ${STUDIOJOBS.labelOf(job.code)} is in production`,
+      html: customerEmailHtml("We've started on your order", inner, null), preview: htmlToText(inner) });
+  } catch (e) {
+    // The text already went: said as that, so nobody writes to them again about it.
+    if (texted !== 'sent' && texted !== 'duplicate') throw e;
+    console.error(`studio order ${id} start email failed:`, e.message);
+    reportError('studio-start', e, `order ${id}`).catch(() => {});
+    return 'text-only';
+  }
+  return 'sent';
+}
+
+/* Start a studio order, or put it back to To start (2026-11-23). The studio has
+   no such step, so it is kept here; shipping and delivery stay the studio's.
+   The customer hears only when the shop said yes (STAGE_ASK_SCRIPT). */
+app.post('/admin/studio/:id/stage', requireAdmin, studioParam, async (req, res) => {
+  const id = STUDIOJOBS.idOf(req.studioCode);
+  const b = req.body || {};
+  const start = b.stage === 'production';
+  const page = b.back === 'job' && actorLevel('orders.view') === 'on';
+  const to = (q) => res.redirect(page ? `/admin/studio/${id}?${q}` : `/admin/production?${q}&studio_id=${id}#studio-card-${id}`);
+  if (!start && b.stage !== 'start') return res.redirect(page ? `/admin/studio/${id}` : '/admin/production');
+  try {
+    /* Read fresh, never the board's copy: an order refunded or cancelled a
+       moment ago must not be started, nor its customer told it was. */
+    _studioCache.at = 0;
+    const feed = await fetchStudioOrders();
+    if (feed.error) return to('studio_err=stage-unreachable');
+    const o = feed.orders.find((x) => Number(x.id) === id);
+    const block = STUDIOJOBS.startBlock(o);
+    /* Moving back is refused only once it has gone out. */
+    if (start ? block : ['gone', 'out'].includes(block)) return to(`studio_err=stage-${block}`);
+    /* Only the request that started it tells the customer: a second press
+       finds it started and sends nothing. */
+    const { rowCount: changed } = start
+      ? await pool.query(`INSERT INTO studio_jobs (order_id, production_at) VALUES ($1, NOW())
+          ON CONFLICT (order_id) DO UPDATE SET production_at = NOW() WHERE studio_jobs.production_at IS NULL`, [id])
+      : await pool.query('UPDATE studio_jobs SET production_at = NULL WHERE order_id = $1', [id]);
+    o.production_at = start ? (o.production_at || new Date().toISOString()) : null;
+    let told = '';
+    if (start && changed && String(b.notify) === '1') {
+      told = await notifyStudioStarted(STUDIOJOBS.jobRow(id, o, null)).catch((e) => {
+        console.error(`studio order ${id} start notice failed:`, e.message);
+        reportError('studio-start', e, `order ${id}`).catch(() => {});
+        return 'failed';
+      });
+    }
+    return to(`studio_moved=${start ? 'production' : 'start'}${told ? `&studio_told=${told}` : ''}`);
+  } catch (e) {
+    console.error(`studio order ${id} move failed:`, e.message);
+    reportError('studio-stage', e, `order ${id}`).catch(() => {});
+    return to('studio_err=stage-failed');
+  }
+});
+
+/** A studio order's own page: what it is, where it stands, its next step, and
+ *  the same Messages card a quote job has (owner, 2026-11-23: the studio side
+ *  had no way to write to its customers). Designs and print files are still
+ *  opened in the studio, which keeps them. */
+app.get('/admin/studio/:id', requireAdmin, studioParam, async (req, res) => {
+  const code = req.studioCode;
+  const id = STUDIOJOBS.idOf(code);
+  try {
+    const job = await studioJob(id);
+    if (!job) {
+      return res.status(404).send(adminPage('Studio order', `<h1>Studio order #${id}</h1><div class="card"><p>${
+        _studioCache.error ? 'The studio could not be reached just now, so this order could not be loaded. Try again in a minute.'
+          : 'There is no such order in the studio’s list.'} <a href="/admin/production">Back to the board</a></p></div>`, 'production'));
+    }
+    const o = job.studio;
+    const actor = currentActor() || OWNER_ACTOR;
+    const may = (route) => STAFF.mayUseRoute(actor, 'POST', route);
+    const disputes = await boardDisputes().catch(() => null);
+    const sent = (await sentMilestones([code])).get(code) || new Set();
+    const lane = o ? studioLane(o) : null;
+    const out = JOB_STAGES.findIndex((x) => x.key === 'out');
+    const mayStage = may('/admin/studio/:id/stage') && !!o;
+    const block = STUDIOJOBS.startBlock(o);
+    const started = !!job.production_at;
+    const stage = !o ? { label: 'Not in the studio’s list now', color: '#6b7280', bg: '#f3f4f6' }
+      : job.refunded_full ? { label: 'Refunded', color: '#b91c1c', bg: '#fef2f2' }
+      : o.left ? { label: 'Left checkout', color: '#8a5a00', bg: '#fff8ed' }
+      : lane === 0 ? { label: 'To start', color: '#1848B8', bg: '#eef2fd' } : studioStage(o.status, o.paid);
+    const refunded = round2(job.refunded);
+    const due = STUDIOJOBS.dueOn(job);
+    const ship = (o && o.ship_to) || {};
+    const how = { pickup: 'Pickup', local: 'Local delivery', ship: 'Ship' }[job.ship_method] || '';
+    const address = job.ship_method === 'pickup' ? '' : [ship.street1, ship.city, [ship.state, ship.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    /* Remove is not here: it is the board's, for unpaid orders only. */
+    const steps = !o || o.left ? '' : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      ${mayStage && !block && !started ? `<form method="POST" action="/admin/studio/${id}/stage" style="margin:0"${
+        askAttrs(job, milestoneAsk({ ...job, production_at: null }, 1, sent))}
+        onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
+        <input type="hidden" name="stage" value="production"><input type="hidden" name="back" value="job"><input type="hidden" name="notify" value="">
+        <button type="submit" class="btn">▶ Start production</button></form>` : ''}
+      ${mayStage && started && !['out', 'gone'].includes(block) ? `<form method="POST" action="/admin/studio/${id}/stage" style="margin:0">
+        <input type="hidden" name="stage" value="start"><input type="hidden" name="back" value="job">
+        <button type="submit" class="btn btn-ghost">&larr; Back to To start</button></form>` : ''}
+      ${lane !== null && lane !== out && STAFF.mayUseRoute(actor, 'GET', '/admin/shipping') ? `<a class="btn btn-ghost" href="/admin/shipping#studio-${id}">📦 Ship or ready for pickup</a>` : ''}
+      ${lane === out && may('/admin/studio/:id/delivered') ? `<form method="POST" action="/admin/studio/${id}/delivered" style="margin:0"
+        onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
+        <button type="submit" class="btn">✓ Delivered</button></form>` : ''}
+      ${isOwner() ? '<a class="btn btn-ghost" href="/admin/cut-sheets">Make a cut sheet</a>' : ''}
+    </div>${block === 'certificate' ? `<p class="muted" style="margin:10px 0 0">It ${escEmail(STUDIO_BOARD_ERRORS['stage-certificate'])}</p>` : ''}`;
+    const err = Object.hasOwn(STUDIO_BOARD_ERRORS, String(req.query.studio_err || '')) ? STUDIO_BOARD_ERRORS[String(req.query.studio_err)] : '';
+    const moved = studioMovedText(req.query);
+    const messages = await jobMessagesCard(job, req.query, { readOnly: actorLevel('customers.message') === 'off' });
+    return res.set('Cache-Control', 'no-store').send(adminPage(`Studio order #${id}`, `
+      <h1>${escEmail(job.name || `Order #${id}`)}</h1>
+      <div class="sub">Studio order #${id}${job.total ? ` · ${money(job.total)}` : ''} ·
+        <a href="/admin/production">back to the board</a>${
+        STAFF.mayUseRoute(actor, 'GET', '/admin/customer') && (job.email || job.phone) ? ` · <a href="/admin/customer?q=${encodeURIComponent(job.email || job.phone)}">customer</a>` : ''}</div>
+      ${err ? `<div class="warn">Studio order #${id} ${escEmail(err)}</div>` : ''}
+      ${moved ? `<div class="${moved.ok ? 'ok' : 'warn'}">${escEmail(moved.text)}</div>` : ''}
+      ${job.feedError && job.feedError !== 'JT_INTERNAL_KEY not set' ? `<div class="warn">The studio could not be reached just now, so the order below is the last known copy. Messages still work.</div>` : ''}
+      <div class="card">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span class="chip" style="background:#eef1f8;color:#46505f">Studio</span>
+          <span class="chip" style="background:${stage.bg};color:${stage.color}">${escEmail(stage.label)}</span>
+          ${job.refunded_full ? `<span class="chip" style="background:#fef2f2;color:#b91c1c">Refunded ${money(refunded)} &mdash; don&rsquo;t produce</span>`
+            : refunded > 0 ? `<span class="chip" style="background:#fff8ed;color:#8a5a00">${money(refunded)} refunded</span>` : ''}
+          ${disputes ? disputeChip(disputes.byOrder.get(String(id))) : ''}
+          ${o ? studioExemptChip(o) : ''}
+        </div>
+        <p style="margin:10px 0 0">${!o ? `Payment details are in the studio${job.paid ? ' (it was paid)' : ''}` : job.paid_amount > 0 ? `${money(job.paid_amount)} paid` : 'Nothing paid'}${
+          due > 0 ? ` · <b style="color:#b45309">${money(due)} due</b>` : ''}${how ? ` · ${escEmail(how)}` : ''}${
+          address ? ` · ${escEmail(address)}` : ''}${job.tracking ? ` · tracking ${escEmail(job.tracking)}` : ''}${
+          job.created_at ? ` · placed ${escEmail(dayShort(job.created_at))}` : ''}</p>
+        <p class="muted" style="margin:4px 0 0">${[job.email, job.phone].filter(Boolean).map(escEmail).join(' · ') || 'No email or phone on this order.'}</p>
+        ${job.items.length ? `<ul style="margin:10px 0 0;padding-left:20px">${job.items.map((i) => `<li>${i.qty || 1} &times; ${escEmail(i.description)}</li>`).join('')}</ul>` : ''}
+        ${steps}
+        <p style="margin:12px 0 0"><a href="${STUDIO_BASE}/admin.php?lumise-page=order&amp;order_id=${id}" target="_blank" rel="noopener">Designs and print files in the studio &rarr;</a></p>
+      </div>
+      ${messages}
+      ${STAGE_ASK_SCRIPT}`, 'production'));
+  } catch (e) {
+    console.error(`studio order page ${id} failed:`, e.message);
+    reportError('studio-page', e, `order ${id}`).catch(() => {});
+    return res.status(500).send(adminPage('Studio order', '<div class="card"><p>Could not load that order. Try again.</p></div>', 'production'));
+  }
+});
+
+require('./tools/lib/cut-sheets').registerCutSheets(app, { requireAdmin, isOwner, adminPage, pageHeader, studioFetch, studioBase: STUDIO_BASE, reportError });
 
 /* A studio order in their hands: the Production board's last move for it, so
    the shop never has to open the studio admin to finish one. The studio only
@@ -35211,8 +35662,8 @@ function approvalBody(a, q) {
       ${q ? ` for ${escEmail(q.name || q.email || q.phone || '')} &middot; ${money(q.total)}` : ' (no longer exists)'}</div>`;
   }
   if (a.kind === 'message') {
-    return `<div>${p.channel === 'text' ? 'Text' : 'Email'} about <a href="/admin/production/${escEmail(a.subject_id)}#messages">${
-      escEmail(a.subject_id)}</a>${p.channel === 'email' ? ` &middot; <b>${escEmail(p.subject || '')}</b>` : ''}</div>
+    return `<div>${p.channel === 'text' ? 'Text' : 'Email'} about <a href="${escEmail(STUDIOJOBS.adminPath(a.subject_id))}#messages">${
+      escEmail(STUDIOJOBS.idOf(a.subject_id) ? `studio order ${STUDIOJOBS.labelOf(a.subject_id)}` : a.subject_id)}</a>${p.channel === 'email' ? ` &middot; <b>${escEmail(p.subject || '')}</b>` : ''}</div>
       <div class="msg" style="white-space:pre-wrap;margin-top:6px">${escEmail(p.text || '')}</div>${proofPreview(p.text)}`;
   }
   if (a.kind === 'lead_email') {
@@ -35610,7 +36061,7 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
       /* Sent as the owner's decision, credited to the helper who wrote it. */
       const out = await actorStore.run({ ...OWNER_ACTOR, sentBy: a.requested_by }, () =>
         sendJobMessage({ code: a.subject_id, channel: p.channel === 'text' ? 'text' : 'email',
-                         subject: text(p.subject, 150) || `About your order ${a.subject_id}`, text: text(p.text, MESSAGE_MAX),
+                         subject: text(p.subject, 150) || `About your order ${STUDIOJOBS.labelOf(a.subject_id)}`, text: text(p.text, MESSAGE_MAX),
                          attachments: typeof p.attachments === 'string' ? p.attachments : '[]' }));
       if (out !== 'sent') { await unclaim(); return back(res, backTo, 'err', `Not sent: ${MESSAGE_ERRORS[out] || out}`); }
       await markProofsSent(a.subject_id, p.text);
@@ -35679,7 +36130,7 @@ app.get('/admin/activity', requireAdmin, async (req, res) => {
         <tr><td class="muted" style="white-space:nowrap">${escEmail(whenShort(r.created_at))}</td>
           <td>${escEmail(nameOf(roster, r.staff_id))}</td>
           <td>${escEmail(r.action)}${r.subject_id ? ` <b>${r.subject_type === 'quote'
-            ? `<a href="/admin/production/${escEmail(r.subject_id)}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
+            ? `<a href="${escEmail(STUDIOJOBS.adminPath(r.subject_id))}">${escEmail(r.subject_id)}</a>` : escEmail(r.subject_id)}</b>` : ''}</td>
           <td class="muted">${escEmail(describe(r))}</td></tr>`).join('')}</tbody></table>`
         : emptyState('Nothing in this period.')}</div>`, 'activity'));
   } catch (err) {
@@ -42526,7 +42977,8 @@ function approvalOutcome(a, helper, live = false) {
   const may = (route) => STAFF.mayUseRoute(helper, 'GET', route);
   const code = String(a.subject_id || '');
   const job = `/admin/production/${encodeURIComponent(code)}`;
-  const jobOr = (hash = '') => (may('/admin/production/:code') ? `${job}${hash}` : '/admin/my-day');
+  const studio = STUDIOJOBS.idOf(code);
+  const jobOr = (hash = '') => studio ? (may('/admin/studio/:id') ? `${STUDIOJOBS.adminPath(code)}${hash}` : '/admin/my-day') : (may('/admin/production/:code') ? `${job}${hash}` : '/admin/my-day');
   if (a.kind === 'lead_email') {
     /* status=all: a lead that has since moved on to quoted, won or lost is
        still on the page to land on. */
@@ -42879,7 +43331,7 @@ async function ownerNotices(roster, leads) {
     const studioSince = since - 86400000;
     const fresh = feed.orders.filter((o) => studioLane(o) === 0 && new Date(o.created).getTime() >= studioSince);
     for (const o of fresh) {
-      out.push({ recipient: 'owner', kind: 'studio_order', ref: String(Number(o.id)), link: `/admin/production#studio-card-${Number(o.id)}`,
+      out.push({ recipient: 'owner', kind: 'studio_order', ref: String(Number(o.id)), link: `/admin/studio/${Number(o.id)}`,
         title: `New studio order #${Number(o.id)} paid ${money(Number(o.paid))}${o.name ? ` (${o.name})` : ''}` });
     }
     await notifyClearResolved('owner', 'studio_order', feed.orders.filter((o) => studioLane(o) === 0).map((o) => String(Number(o.id))));

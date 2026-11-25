@@ -218,7 +218,7 @@ function artAlerts({ submitted = [], questions = [], library = [] }) {
 
 /** Customer news for the bell (the dashboard has its own fuller list). */
 function customerAlerts({ replies = [], proofOk = [], proofChanges = [], notes = [], changes = [], disputes = [] }) {
-  const job = (code) => `/admin/production/${encodeURIComponent(code)}`;
+  const job = (code) => require('./studio-jobs').adminPath(code);
   return [
     ...replies.map((r) => ({ group: 'customers', kind: 'customer', ref: `reply:${r.code}:${ms(r.last_in)}`, tone: 'amber', icon: 'mail',
       title: `${r.name || r.code} is waiting for a reply`, sub: r.body ? `"${clip(r.body)}"` : 'sent a picture', href: `${job(r.code)}#messages` })),

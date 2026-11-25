@@ -45,11 +45,11 @@ function grab(startText, endText) {
 function route(signature) {
   const at = src.indexOf(signature);
   assert.notStrictEqual(at, -1, `${signature} not found`);
-  return src.slice(at, src.indexOf('\n});', at));
+  return src.slice(at, src.indexOf(signature.startsWith('const ') ? '\n};' : '\n});', at));
 }
 /* The job-page route and the sender it shares with /admin/approvals. */
 function msgRoute() {
-  return route("app.post('/admin/quote/:code/message', requireAdmin") + '\n' + lift('sendJobMessage');
+  return route('const messageRoute = async') + '\n' + lift('sendJobMessage') + '\n' + lift('messageJob');
 }
 
 /* ── The record ─────────────────────────────────────────────────────────── */
@@ -177,7 +177,7 @@ function card({ stopped = false, history = [], smsOn = true, consent = true, q =
     /* The shared browser upload helper (2026-10-06), as server.js defines it. */
     CLOUDINARY_UPLOAD_MAX: 10 * 1024 * 1024, CLD_UPLOAD_FN: 'function jtCldUpload(){}',
     /* The reminders still to come (2026-10-15). */
-    FOLLOWUPS: require('../tools/lib/followups'), process: { env: {} },
+    FOLLOWUPS: require('../tools/lib/followups'), STUDIOJOBS: require('../tools/lib/studio-jobs'), process: { env: {} },
     currentActor: () => actor, WAITING_SHOWN: 10,
     staffRoster: async () => [{ id: 7, name: 'Eli Ramos' }],
     isUnsubscribed: async () => unsubscribed, marketingBlocked: async () => unsubscribed, actorLevel: (k) => (k === 'customers.message' ? messageLevel : 'on'),
@@ -289,7 +289,9 @@ test('the quick messages fill the box, and one for a balance only when one is ow
 
 test('sending is admin only, and answers on the job page from a fixed list', () => {
   const r = msgRoute();
-  assert.match(r, /QUOTE_CODE_RE\.test\(code\)/);
+  assert.match(r, /const code = messageCode\(req\);\s+if \(!code\) return/);
+  assert.match(lift('messageCode'), /QUOTE_CODE_RE\.test\(code\)/);
+  assert.match(src, /app\.post\('\/admin\/quote\/:code\/message', requireAdmin, messageRoute\);/);
   // The job page for whoever sent it: production, or a designer's own page.
   assert.match(r, /res\.redirect\(`\$\{jobPath\(code\)\}\?\$\{key\}=\$\{encodeURIComponent\(value\)\}#messages`\)/);
   const card = lift('jobMessagesCard');
@@ -299,14 +301,14 @@ test('sending is admin only, and answers on the job page from a fixed list', () 
 
 test('an empty or over-long message is refused before anything is sent', () => {
   const r = msgRoute();
-  assert.ok(r.indexOf("answer('msg_err', 'empty')") < r.indexOf('SELECT * FROM quotes'));
+  assert.ok(r.indexOf("answer('msg_err', 'empty')") < r.indexOf('await messageJob(code)'));
   assert.match(r, /len = await textLength\(code, text\)[\s\S]*if \(len > \(channel === 'text' \? 300 : MESSAGE_MAX\)\)/);
   assert.match(r, /\.replace\(\/\[\\r\\n\]\+\/g, ' '\)/, 'a subject is one line');
 });
 
 test('a double press is one message', () => {
   const r = msgRoute();
-  assert.ok(r.indexOf("recentJobMessages.has(key)") < r.indexOf('SELECT * FROM quotes'));
+  assert.ok(r.indexOf("recentJobMessages.has(key)") < r.indexOf('await messageJob(code)'));
   assert.match(r, /ref: 'manual:' \+ key\.slice\(0, 32\)/, 'and a text is keyed too, by the dedupe index');
   assert.match(r, /recentJobMessages\.delete\(key\)/, 'a send that did not happen can be tried again');
 });
@@ -319,7 +321,7 @@ function messageRoute(o = {}) {
   let handler;
   const sent = [];
   const sandbox = {
-    app: { post: (_path, _gate, fn) => { handler = fn; } }, requireAdmin: null,
+    STUDIOJOBS: require('../tools/lib/studio-jobs'), studioJob: async () => null, studioContacted: async () => {},
     QUOTE_CODE_RE: vm.runInThisContext(grab('const QUOTE_CODE_RE = ', ';').slice('const QUOTE_CODE_RE = '.length, -1)),
     crypto: require('node:crypto'), recentJobMessages: new Map(),
     pool: { query: async (sql) => (/FROM job_proofs/.test(sql) ? (opts.proofsFail ? Promise.reject(new Error('db down')) : { rows: opts.proofs || [] })
@@ -341,7 +343,8 @@ function messageRoute(o = {}) {
   };
   sandbox.MESSAGE_MAX = 10000;
   vm.createContext(sandbox);
-  vm.runInContext(lift('proofsForText') + '\n' + lift('textLength') + '\n' + lift('sendJobMessage') + '\n' + route("app.post('/admin/quote/:code/message', requireAdmin") + '\n});', sandbox);
+  vm.runInContext(lift('proofsForText') + '\n' + lift('textLength') + '\n' + lift('messageJob') + '\n' + lift('messageCode') + '\n' + lift('mayMessageJob') + '\n' + lift('sendJobMessage') + '\n' + route('const messageRoute = async') + '\n};\nthis.messageRoute = messageRoute;', sandbox);
+  handler = sandbox.messageRoute;
   const send = async (body) => {
     let location = null;
     await handler({ params: { code: 'AB12CD' }, body }, { redirect: (u) => { location = u; } });
@@ -385,7 +388,7 @@ test('a text keeps the shape every customer text has', () => {
   const r = msgRoute();
   // `words`: the message with this job's proof links taken out (they go as pictures).
   assert.match(r, /body: `June's Tees: \$\{smsPlain\(words\.replace\(\/\\s\+\/g, ' '\)\.replace\([^\n]*, ''\), 300\)\}\$\{/);
-  assert.match(r, /' ' \+ smsShort\(quoteLink\(code\)\)\} Reply STOP to opt out\.`/, 'their order page goes on every text, short and branded');
+  assert.match(r, /smsShort\(quoteLink\(code\)\)\)\} Reply STOP to opt out\.`/, 'their order page goes on every text, short and branded');
   assert.match(r, /kind: 'transactional'/);
   const { plain } = require('../tools/lib/sms-templates');
   const body = `June's Tees: ${plain('x'.repeat(400), 300)} https://www.jtees.net/q/ABCDEFGHIJ Reply STOP to opt out.`;
@@ -444,6 +447,7 @@ async function inboundText({ from = '+13125550199', body = 'Can I add 2 XL?', ow
     RELAY: require('../tools/lib/text-relay'), QUOTE_CODE_RE: /^(?:[A-Z0-9]{6}|[A-Z0-9]{10})$/,
     twilioSend: async (to, b) => { if (twilioFails) throw Object.assign(new Error('nope'), { twilioCode: twilioFails }); sent.push([to, b]); return { sid: 'SMx' }; },
     markLeadResponded: async () => {},
+    STUDIOJOBS: require('../tools/lib/studio-jobs'), studioJobFor: async () => '',
     textToLead: async () => (quote ? { quote } : { lead: 7 }),
     sendOwnerSms: async (b, pics = []) => { ownerTexts.push(b); ownerPics.push(pics); return true; },
     TMEDIA: require('../tools/lib/text-media'),
@@ -687,7 +691,7 @@ test('the consent route: owner only, needs the box and a note, order texts only,
 test('a text sent by hand needs no consent row, only no STOP; automatic ones still need consent', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /\|\| \(\(orderUpdate \|\| staffSent\) && kind === 'transactional' && !\(await saidStop\(to\)\)\);/);
-  const send = src.slice(src.indexOf('async function sendJobMessage('), src.indexOf("app.post('/admin/quote/:code/message'"));
+  const send = src.slice(src.indexOf('async function sendJobMessage('), src.indexOf('const messageRoute = async'));
   assert.match(send, /kind: 'transactional', quote: code, staffSent: true,/);
   /* The reminder sweeps pass no staffSent: they keep the consent rule. */
   for (const t of ['quoteFollowup', 'depositReminder', 'balanceReminder', 'pickupReminder']) {

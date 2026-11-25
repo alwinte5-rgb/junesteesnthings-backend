@@ -244,7 +244,7 @@ test('Remove takes a request off the list without sending it or telling the help
 });
 
 test('a helper in training writes a message; it is held, not sent', () => {
-  const r = route("app.post('/admin/quote/:code/message', requireAdmin");
+  const r = route('const messageRoute = async');
   assert.ok(r.indexOf("actorLevel('customers.message') === 'approval'") < r.indexOf('sendJobMessage('));
 });
 

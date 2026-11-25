@@ -19,8 +19,8 @@ const cut = (start, end) => { const i = src.indexOf(start); assert.ok(i >= 0, st
 const intInSrc = cut('const intIn = ', '\n');
 const code = cut('const MY_DAY_TO_SEND', 'let notifyRunning');
 // eslint-disable-next-line no-new-func
-const { approvalOutcome, myDaySecKey, MY_DAY_TO_SEND } = new Function('STAFF',
-  `${intInSrc}\n${code}; return { approvalOutcome, myDaySecKey, MY_DAY_TO_SEND };`)(STAFF);
+const { approvalOutcome, myDaySecKey, MY_DAY_TO_SEND } = new Function('STAFF', 'STUDIOJOBS',
+  `${intInSrc}\n${code}; return { approvalOutcome, myDaySecKey, MY_DAY_TO_SEND };`)(STAFF, require('../tools/lib/studio-jobs'));
 
 const helper = (perms) => ({ kind: 'staff', id: 7, perms });
 const seesJobs = helper({ 'quotes.view': 'on', 'leads.view': 'on' });
