@@ -65,6 +65,9 @@ test('a line holding the SinaLite mug opens as the shop mug; a typed price stays
   assert.strictEqual(it.details, 'blue');
   assert.strictEqual(it.description, 'White Ceramic Sublimation Mug — 11.8 oz for Pat');
   assert.strictEqual(F.withoutRetired({ ...old, sign_priced: false, unit_override: 26 }, catalog).unit_override, 26);
+  const gone = { ...catalog, methods: [SUB] };
+  assert.strictEqual(F.withoutRetired(old, gone), old, 'never a $0 shop mug');
+  assert.strictEqual(F.withoutRetired({ ...old, sign: null, details: 'logo left' }, catalog).details, 'logo left');
   const tee = { product_id: 4, qty: 5 };
   assert.strictEqual(F.withoutRetired(tee, catalog), tee, 'other lines untouched');
   assert.strictEqual(F.retiredReplacement(catalog.products[2], { products: [] }), null, 'no replacement: refused on save');
@@ -72,34 +75,42 @@ test('a line holding the SinaLite mug opens as the shop mug; a typed price stays
 
 /* allInSync runs in the browser: the same rows, as plain objects. */
 const sync = vm.runInThisContext(`(function (ALL_IN, ALL_IN_IDS) { ${lift('allInSync')} return allInSync; })`)({ 1: '90', 2: '91' }, ['90', '91']);
-function line(rows, saved = '') {
+function line(rows) {
   const els = rows.map(([on, m]) => { const pon = { checked: on }, pm = { value: m };
-    return { pon, pm, querySelector: (s) => (s === '.pon' ? pon : pm) }; });
-  return { els, dataset: { savedAddons: saved }, querySelector: () => null, querySelectorAll: () => els };
+    return { pon, pm, dataset: {}, querySelector: (s) => (s === '.pon' ? pon : pm) }; });
+  return { els, querySelector: () => null, querySelectorAll: () => els };
 }
 const state = (L) => L.els.map((r) => [r.pon.checked, r.pm.value]);
-test('the form puts the mug\'s own decoration on, and takes it off another product', () => {
+test('the form puts the mug\'s own decoration on, once, and gives back what it replaced', () => {
   let L = line([[true, ''], [false, '']]); sync(L, { id: 1 });
   assert.deepStrictEqual(state(L), [[true, '90'], [false, '']], 'picked, so priced at once');
   L = line([[true, '50'], [false, '']]); sync(L, { id: 1 });
   assert.deepStrictEqual(state(L)[0], [true, '90'], 'plain sublimation on a $0 mug is not the price');
   L = line([[false, ''], [true, '90']]); sync(L, { id: 1 });
   assert.deepStrictEqual(state(L), [[false, ''], [true, '90']], 'already on: left where it is');
-  L = line([[true, '90'], [false, '']]); sync(L, { id: 2 });
-  assert.deepStrictEqual(state(L)[0], [true, '91'], '11.8 oz changed to 15 oz');
+  L = line([[true, '90'], [true, '90']]); sync(L, { id: 2 });
+  assert.deepStrictEqual(state(L), [[true, '91'], [false, '']], '11.8 oz changed to 15 oz, charged once');
   L = line([[true, '90'], [false, '']]); sync(L, { id: 4 });
   assert.deepStrictEqual(state(L)[0], [true, ''], 'a tee never carries a mug price');
-  L = line([[true, '50'], [false, '']], 'own_blanks'); sync(L, { id: 1 });
-  assert.deepStrictEqual(state(L)[0], [true, '50'], 'the customer\'s own mugs: printing only');
+  L = line([[true, '50'], [true, '7']]); sync(L, { id: 1 }); sync(L, { id: 1 });
+  assert.deepStrictEqual(state(L), [[true, '90'], [false, '']], 'two print places are one price');
+  sync(L, { id: 2 }); sync(L, { id: 4 });
+  assert.deepStrictEqual(state(L), [[true, '50'], [true, '7']], 'picked by mistake: the tee keeps its printing');
+});
+
+test('on an agreed quote only newly added items follow the rule', () => {
+  assert.deepStrictEqual(Object.keys(F.allInMethods(catalog, [{ product_id: 1 }])), ['2']);
+  assert.deepStrictEqual(Object.keys(F.allInMethods(catalog, [])), ['1', '2']);
 });
 
 test('the save applies the same rules, and never to an agreed quote', () => {
   const i = src.indexOf("app.post(['/admin/api/quotes', '/admin/api/quotes/:code']");
   const route = src.slice(i, i + 40000);
-  assert.ok(route.includes('const allIn = agreedBefore ? {} : allInMethods(catalog);'));
-  assert.ok(route.includes('if (!agreedBefore && retiredSinalite(prod))'));
+  assert.ok(route.includes('allInMethods(catalog, agreedItems)'));
+  assert.ok(route.includes('if (retiredSinalite(prod) && !(agreedItems'));
+  assert.strictEqual((route.match(/&& !notItsOwn\(m\)\)/g) || []).length, 2, 'the hidden method field cannot bring it back');
   assert.ok(route.includes('method: ownAllIn'));
-  assert.ok(src.includes('const ALL_IN = agreed ? {} : allInMethods(catalog);'));
+  assert.ok(src.includes('allInMethods(catalog, agreed ? E.items : null)'));
 });
 
 test('the retired mug names its replacement, and a re-capture keeps it', () => {

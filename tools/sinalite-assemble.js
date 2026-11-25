@@ -118,8 +118,8 @@ const META = {
     design: null, online: false, any_qty: true,
     /* Off the quote form's product list (owner, 2026-11-25): the shop prints
        its own mugs (tools/add-shop-mugs.js, $20.98 for one) and this one
-       priced one mug at $62. The row and family stay, so a quote already
-       holding it shows and re-prices as before (server.js prodOpts). */
+       priced one mug at $62. The row and family stay for agreed quotes
+       that hold it (server.js withoutRetired). */
     retired: true,
     /* What a line holding it becomes: the shop's own mug, so it is priced as
        the designer prices it (owner, 2026-11-25). */
