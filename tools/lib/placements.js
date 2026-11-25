@@ -6,6 +6,8 @@
  *        Left chest · Right chest · Back       (no full front: zipper/placket)
  *   tees, long sleeves, tanks, pullover hoodies and crews
  *        Full front · Left chest · Back
+ *   pocket tees and long sleeves (owner, 2026-11-09)
+ *        Full front · Left chest · Right chest · Back   (all three on the front)
  *   kids                               Front · Left chest · Back (owner, 2026-11-02)
  *   infant bodysuits, totes            Front · Back
  *   caps                               Front only (decided 2026-09-12)
@@ -45,6 +47,12 @@ function placementSet(name) {
   if (cls === 'onesie') return 'onesie';
   if (['qzip', 'polo', 'woven', 'jacket', 'vest'].includes(cls)) return 'open';
   if (cls === 'hoodie' && ZIP_FRONT_RE.test(String(name || ''))) return 'open';
+  /* A pocket tee gets a right chest too, on the front beside the left chest
+     and the full front (owner, 2026-11-09: "pocket tees need a right chest
+     print area ... on the same side as the left chest and full front"). The
+     designer tells it from a zip by its left_chest side (core/cart.php
+     jt_front_open: right chest and NO left chest is a zip). */
+  if (['tee', 'longslv'].includes(cls) && /\bpocket\b/i.test(String(name || ''))) return 'pocket';
   if (['tee', 'longslv', 'tank', 'hoodie'].includes(cls)) return cls === 'tank' ? 'tank' : 'closed';
   return null;
 }
@@ -58,7 +66,7 @@ function placementSet(name) {
    first boxes, sized against 20", covered ~40% of a tee's length — owner,
    2026-10-18: "the full boxes are not long enough"), so these are the real
    body widths x 0.75. */
-const BODY_IN = { closed: 15, tank: 14.5, open: 15, kids: 12, onesie: 7.5 };
+const BODY_IN = { closed: 15, pocket: 15, tank: 14.5, open: 15, kids: 12, onesie: 7.5 };
 
 /* GENEROUS on purpose (owner, 2026-10-18): the boxes are where a customer can
    put a design, and the canvas is a mockup of the garment, not a print spec.
@@ -75,6 +83,15 @@ const SETS = {
     { key: 'front',      label: 'Full front',  side: 'front', w: 14, h: 17, x: 0,    top: 2.5 },
     { key: 'left_chest', label: 'Left chest',  side: 'front', ...CHEST,    x: 4.5,  cy: 6.5 },
     { key: 'back',       label: 'Back',        side: 'back',  w: 14, h: 18, x: 0,    top: 4 },
+  ],
+  /* A pocket tee: the tee's three, and a right chest mirrored across the
+     centre line (positive x is the wearer's left). Right chest comes before
+     Back: the side order is the order the placements are priced in. */
+  pocket: [
+    { key: 'front',       label: 'Full front',  side: 'front', w: 14, h: 17, x: 0,    top: 2.5 },
+    { key: 'left_chest',  label: 'Left chest',  side: 'front', ...CHEST,    x: 4.5,  cy: 6.5 },
+    { key: 'right_chest', label: 'Right chest', side: 'front', ...CHEST,    x: -4.5, cy: 6.5 },
+    { key: 'back',        label: 'Back',        side: 'back',  w: 14, h: 18, x: 0,    top: 4 },
   ],
   /* A tank's measured "shoulder" is the armpit — the straps are narrower than
      the body — so its boxes start near that line. */
