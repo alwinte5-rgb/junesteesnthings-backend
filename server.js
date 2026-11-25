@@ -30242,7 +30242,7 @@ app.get('/admin/dashboard', requireAdmin, async (req, res) => {
           <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 180px">
           <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
           <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
-          <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
+          ${a.kind === 'quote' ? '' : `<button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>`}
         </form>`}</span></div>`),
     ...((mail && mail.unreadThreads) || []).map((t) => `<a class="row-i" href="/admin/mailbox/${Number(t.id)}">
       <span class="ico ico-amber">${icon('mail')}</span>
@@ -35563,9 +35563,12 @@ async function teamWaitingCard(roster) {
     /* The studio is never waited on here, as for the badge: the sweep's
        reading, refreshed behind the page when it is old. */
     read('library designs', (() => {
-      if (Date.now() - libraryWaitingCache.at >= 5 * 60 * 1000) libraryWaiting().catch(() => {});
-      return libraryWaitingCache.items ? Promise.resolve(libraryWaitingCache.items)
-        : Promise.reject(new Error(libraryWaitingCache.error || 'not read yet'));
+      const studioOff = !process.env.JT_INTERNAL_KEY;
+      if (!studioOff && Date.now() - libraryWaitingCache.at >= 5 * 60 * 1000) libraryWaiting().catch(() => {});
+      if (libraryWaitingCache.items) return Promise.resolve(libraryWaitingCache.items);
+      /* Off, or not read yet (just after a deploy): nothing to show, not a failure. */
+      if (studioOff || !libraryWaitingCache.error) return Promise.resolve([]);
+      return Promise.reject(new Error(libraryWaitingCache.error));
     })()),
   ]);
   const rows = [
@@ -35726,6 +35729,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
     const { rows: leads } = leadIds.length
       ? await pool.query('SELECT id, name, email FROM submissions WHERE id = ANY($1)', [leadIds]) : { rows: [] };
     const leadBy = Object.fromEntries(leads.map((l) => [String(l.id), l]));
+    const teamCard = await teamWaitingCard(roster);
     const card = (a) => `<div class="card">
       <div class="row-i"><span class="row-main"><b>${escEmail(nameOf(roster, a.requested_by))}</b>
         <div class="row-sub">${escEmail(whenShort(a.created_at))}</div></span>
@@ -35742,7 +35746,7 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
         <input name="note" placeholder="Note back to them (optional)" maxlength="500" style="flex:1 1 220px">
         <button type="submit" name="decision" value="approve">${['message', 'lead_email'].includes(a.kind) ? 'Approve and send' : 'Approve'}</button>
         <button type="submit" name="decision" value="reject" class="btn-ghost">Send back</button>
-        <button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>
+        ${a.kind === 'quote' ? '' : `<button type="submit" name="decision" value="remove" class="btn-ghost" title="Take it off the list. Nothing is sent, and the helper is not told.">Remove</button>`}
       </form></div>`;
     res.send(adminPage('Approvals', `
       ${pageHeader('Waiting for you', 'What helpers have asked to send. Nothing here has reached a customer.')}
@@ -35750,8 +35754,8 @@ app.get('/admin/approvals', requireAdmin, async (req, res) => {
       ${await (async () => { const { approve } = await artQueues(OWNER_ACTOR);
         return approve.length ? `<div class="card"><b>Final art to approve (${approve.length})</b>${artQueueRows(approve)}</div>` : ''; })()}
       ${await followupsCard()}
-      ${await teamWaitingCard(roster)}
-      ${pending.length ? pending.map(card).join('') : `<div class="card">${emptyState('Nothing is waiting.')}</div>`}
+      ${teamCard}
+      ${pending.length ? pending.map(card).join('') : teamCard ? '' : `<div class="card">${emptyState('Nothing is waiting.')}</div>`}
       ${await (async () => { const w = await watchList();
         return `<div class="card" id="watch"><b>Watch list</b> <span class="muted">last ${WATCH_DAYS} days</span>
           <p class="muted" style="margin:4px 0 8px">Changes to quotes customers already had, payments to confirm, refused edits, held messages, dismissed leads and new sign-in places.</p>
@@ -35874,6 +35878,13 @@ app.post('/admin/approvals/:id', requireAdmin, async (req, res) => {
        approved and sent-back requests notify them or show on My Day). No
        note is kept, so it never shows to them as feedback. A held quote stays
        held: the customer still cannot see it. */
+    /* Not for a quote (owner, 2026-11-25): removing the request left the quote
+       held and out of sight, which is how helper quotes went missing. A quote
+       is approved, sent back, or opened and sent by the owner. */
+    if (decision === 'remove' && a.kind === 'quote') {
+      await unclaim();
+      return back(res, backTo, 'err', `A quote request cannot be removed: approve it, send it back, or open quote ${a.subject_id} and send it yourself.`);
+    }
     if (decision === 'remove') {
       await pool.query(`UPDATE staff_approvals SET status = 'removed', decided_at = NOW(), decision_note = NULL WHERE id = $1`, [id]);
       return back(res, backTo, 'ok', a.kind === 'quote'
@@ -43016,8 +43027,7 @@ async function readOwnerAlerts() {
   const artP = Promise.all([
     pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
                  WHERE a.status = 'submitted' AND q.cancelled_at IS NULL`),
-    pool.query(`SELECT a.quote_code, a.updated_at, q.name FROM art_requests a JOIN quotes q ON q.code = a.quote_code
-                 WHERE a.status = 'needs_info' AND q.cancelled_at IS NULL`),
+    pool.query(ART_QUESTIONS_SQL),
   ]).then(([s, q]) => OWNER_ALERTS.artAlerts({ submitted: s.rows, questions: q.rows }));
   /* No studio key (a local copy): the studio is off, so its notifications
      are neither made nor cleared, and the page does not call it a failure. */
@@ -43028,7 +43038,9 @@ async function readOwnerAlerts() {
   const libraryP = libraryWaiting({ studioOff }).then((library) => OWNER_ALERTS.artAlerts({ library }));
   /* Helpers' held quotes with no request open (owner, 2026-11-25): in the
      approvals group, so the dashboard, the bell and the badge agree. */
-  const heldP = pool.query(ORPHAN_HELD_SQL).then(({ rows: held }) => OWNER_ALERTS.heldAlerts(held, roster));
+  /* The full roster: a helper made inactive since still has a name. */
+  const heldP = Promise.all([pool.query(ORPHAN_HELD_SQL), staffRoster().catch(() => roster)])
+    .then(([{ rows: held }, everyone]) => OWNER_ALERTS.heldAlerts(held, everyone));
 
   const customersP = Promise.all([
     pool.query(UNANSWERED_REPLIES_SQL),
@@ -43110,7 +43122,7 @@ async function ownerNotices(roster, leads) {
      hours, training, team and customers. A kind is cleared only when every
      source behind it was read, so a failed read never reads as "dealt with". */
   if (alerts) {
-    const ALERT_SOURCES = { approval: ['art', 'held quotes'], art: ['art'], library: ['design library'], hours: ['hours'],
+    const ALERT_SOURCES = { approval: ['art'], held: ['held quotes'], art: ['art'], library: ['design library'], hours: ['hours'],
       training: ['training'], team: ['agreements', 'tasks', 'job notes'], customer: ['customers'] };
     const { rows: hooked } = await pool.query(
       `SELECT DISTINCT regexp_replace(ref, ':.*$', '') AS key FROM notifications
@@ -43142,7 +43154,7 @@ async function ownerNotices(roster, leads) {
        leaving art refs alone. */
     await pool.query(
       `UPDATE notifications SET read_at = NOW() WHERE recipient = 'owner' AND kind = 'approval' AND read_at IS NULL
-          AND ref NOT LIKE 'art:%' AND ref NOT LIKE 'held:%' AND NOT (ref = ANY($1::text[]))`, [appr.rows.map((a) => String(a.id))]);
+          AND ref NOT LIKE 'art:%' AND NOT (ref = ANY($1::text[]))`, [appr.rows.map((a) => String(a.id))]);
   }
   if (revs) {
     for (const r of revs.rows) {

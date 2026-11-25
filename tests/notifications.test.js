@@ -32,7 +32,7 @@ function fn(name) {
 test('kinds: known ones only; the owner and a helper each get their own set', () => {
   assert.strictEqual(NOTIFY.kindOf('lead'), 'lead');
   assert.strictEqual(NOTIFY.kindOf('not-a-kind'), null);
-  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'art', 'backlog', 'chat', 'customer', 'hours', 'late', 'lead', 'library', 'mail', 'payment', 'review', 'studio_checkout', 'studio_order', 'task', 'team', 'training']);
+  assert.deepStrictEqual(NOTIFY.kindsFor('owner').sort(), ['approval', 'art', 'backlog', 'chat', 'customer', 'held', 'hours', 'late', 'lead', 'library', 'mail', 'payment', 'review', 'studio_checkout', 'studio_order', 'task', 'team', 'training']);
   assert.deepStrictEqual(NOTIFY.kindsFor('staff:4').sort(), ['chat', 'decided', 'design', 'lead', 'mail', 'task']);
 });
 
@@ -239,7 +239,7 @@ test('a lead answered, an approval decided or a review moderated clears its noti
   const owner = fn('async function ownerNotices(');
   assert.match(owner, /notifyClearResolved\('owner', 'lead', leads\.map/);
   // Approvals clear with the rest of the owner's alert kinds (owner-alerts.js), staff requests included.
-  assert.match(owner, /approval: \['art', 'held quotes'\]/);
+  assert.match(owner, /approval: \['art'\]/);
   assert.match(owner, /if \(kind === 'approval'\) live\.push\(\.\.\.appr\.rows\.map/);
   assert.match(owner, /notifyClearResolved\('owner', kind, live\)/);
   assert.match(owner, /notifyClearResolved\('owner', 'review'/);
