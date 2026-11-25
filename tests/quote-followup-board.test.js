@@ -99,7 +99,13 @@ test('a helper\'s held or draft quote keeps its lead on the board until the owne
   assert.strictEqual(LB.bucketOf({ ...mine, last_word: { kind: 'email_in', created_at: new Date() } }, no), 'answer', 'they wrote back since');
   assert.strictEqual(LB.bucketOf({ ...mine, owner_answered: false }, no), 'answer', 'only a helper contacted them');
   assert.match(after('async function leadsWithStatus(', 2400), /NOT n\.auto AND n\.staff_id IS NULL\) AS owner_answered/);
-  assert.match(after('async function applyQuoteCancel(', 4200), /SET status = 'withdrawn'/, 'cancelling closes the approval request');
+  assert.match(after('async function leadsWithStatus(', 2600), /s\.first_response_by IS NULL\) OR EXISTS/, 'an answer with no note counts too');
+  assert.match(after('async function applyQuoteCancel(', 4400), /SET status = 'withdrawn'/, 'cancelling closes the approval request');
+  const waiting = after('async function approvalsWaiting(', 1200);
+  assert.ok(waiting.includes('ORPHAN_HELD_SQL') && waiting.includes('owner_followups'), 'one count');
+  assert.strictEqual((src.match(/await approvalsWaiting\(\)/g) || []).length, 2, 'morning email and Team page');
+  assert.match(src, /approvalsWaiting\(\)\.then/, 'the badge');
+  assert.match(after('async function libraryWaitingRead(', 2600), /gen !== libraryWaitingGen\) return libraryWaiting\(\)/, 'a read begun before a decision is thrown away');
   /* Neither automatic let-go takes a lead whose quote waits. */
   const sweep = after('async function sendLeadFollowUps(', 6000);
   assert.ok((sweep.match(/\$\{LEAD_QUOTE_PENDING\}/g) || []).length >= 2, 'the follow-up sweep and its let-go skip it');

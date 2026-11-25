@@ -364,7 +364,7 @@ test('restoring a quote that was paid while cancelled puts the job back on', () 
   /* That payment did not accept the quote, so Restore has to count the money
      as accepting it, or the paid job comes back as merely "sent". */
   assert.match(uncancelRoute,
-    /status = CASE WHEN accepted_at IS NOT NULL OR COALESCE\(paid_amount, 0\) > 0\s+THEN 'accepted' ELSE 'sent' END/);
+    /status = CASE WHEN accepted_at IS NOT NULL OR COALESCE\(paid_amount, 0\) > 0\s+THEN 'accepted' WHEN held_at IS NOT NULL THEN 'held' ELSE 'sent' END/);
   assert.match(uncancelRoute,
     /accepted_at = CASE WHEN accepted_at IS NULL AND COALESCE\(paid_amount, 0\) > 0\s+THEN NOW\(\) ELSE accepted_at END/);
 });
