@@ -123,6 +123,36 @@ function mysql(url, sql, { rows = false } = {}) {
     Object.fromEntries(l.split('\t').map((v, i) => [head[i], v])));
 }
 
+/** mysql() for a running web server: the same client and arguments, but
+ *  spawned without blocking the event loop, and killed after `timeoutMs`.
+ *  Resolves rows (rows:true) or null; rejects with the exit status only. */
+function mysqlAsync(url, sql, { rows = false, timeoutMs = 30000 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!MYSQL) return reject(new Error('no mysql client on this machine'));
+    const u = new URL(url);
+    const args = ['-B', '-h', u.hostname, '-P', u.port || '3306', '-u', decodeURIComponent(u.username), '--protocol=TCP',
+      '--default-character-set=utf8mb4', u.pathname.replace(/^\//, '') || 'railway'];
+    const child = require('child_process').spawn(MYSQL, args, {
+      env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }), stdio: ['pipe', 'pipe', 'ignore'] });
+    let out = '', done = false;
+    child.stdout.setEncoding('utf8');   // a character split across chunks must not become two U+FFFD
+    const finish = (err, val) => { if (done) return; done = true; clearTimeout(timer); err ? reject(err) : resolve(val); };
+    const timer = setTimeout(() => { child.kill('SIGKILL'); finish(new Error('mysql timed out')); }, timeoutMs);
+    child.stdout.on('data', (b) => { out += b; if (out.length > 64 * 1024 * 1024) { child.kill('SIGKILL'); finish(new Error('mysql answer too large')); } });
+    child.on('error', (e) => finish(new Error('mysql could not start: ' + (e.code || 'error'))));
+    child.on('close', (code) => {
+      if (code !== 0) return finish(new Error('mysql failed: exit ' + code));
+      if (!rows) return finish(null, null);
+      const lines = out.replace(/\n$/, '').split('\n');
+      if (lines.length < 2) return finish(null, []);
+      const head = lines[0].split('\t');
+      finish(null, lines.slice(1).map((l) => Object.fromEntries(l.split('\t').map((v, i) => [head[i], v]))));
+    });
+    child.stdin.on('error', () => { /* the exit status reports it */ });
+    child.stdin.end(sql);
+  });
+}
+
 /* Lumise stores `calculate`, `stages`, `attributes` and `printings` as
    base64(urlencode(json)) — what its own lib->enjson() produces. `printings` is
    the exception: it is urlencode(json) with no base64 layer. */
@@ -159,4 +189,4 @@ function decodePrintings(prt) {
 const sq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 
 module.exports = {
-  mysqlUrlFrom, MYSQL, resolveMysql, urlFromStdinJson, mysql, enjson, dejson, encodePrintings, decodePrintings, sq };
+  mysqlUrlFrom, MYSQL, resolveMysql, urlFromStdinJson, mysql, mysqlAsync, enjson, dejson, encodePrintings, decodePrintings, sq };
