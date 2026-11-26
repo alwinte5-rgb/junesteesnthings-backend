@@ -179,3 +179,10 @@ test('templateOptions keeps boxes and https pictures, drops the rest', () => {
   assert.strictEqual(G.imageUrl('http://x.com/a.png'), '');
   assert.strictEqual(G.imageUrl('https://x.com/a".png'), '');
 });
+
+test('variant cost falls back to PriceInfo, and the export names fields without values', () => {
+  const v = { ProductVariants: [{ Sku: 'A-1', PriceInfo: { Price: 12.5 }, Options: [] }, { Sku: 'A-2', PartnerPriceInfo: { Price: 3 }, PriceInfo: { Price: 9 } }] };
+  assert.deepStrictEqual(G.variantRows(v).map((r) => r.cost), [12.5, 3]);
+  assert.deepStrictEqual(G.variantFields(v), ['Sku', 'PriceInfo', 'Options']);
+  assert.deepStrictEqual(G.variantFields(null), []);
+});

@@ -294,10 +294,21 @@ function catalogProducts(cat) {
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/* Gooten's docs name the variant price PriceInfo; PartnerPriceInfo was read
+   first and came back empty on all 5,377 live SKUs (2026-11-26). */
+const firstAmount = (...ms) => { for (const m of ms) { const a = amount(m); if (a != null) return a; } return null; };
+
+/** The field NAMES a variant answer carries (never values), so a missing
+ *  figure can be traced to the field Gooten really uses. */
+function variantFields(v) {
+  const x = v && Array.isArray(v.ProductVariants) ? v.ProductVariants.find(isObj) : null;
+  return x ? Object.keys(x).slice(0, 40).map((k) => text(k, 40)) : [];
+}
+
 /** A product's SKUs: { sku, options, cost }. */
 function variantRows(v) {
   return (v && Array.isArray(v.ProductVariants) ? v.ProductVariants : []).filter((x) => x && x.Sku).map((x) => ({
-    sku: text(x.Sku, 120), cost: amount(x.PartnerPriceInfo), images: Number(x.MaxImages) || null,
+    sku: text(x.Sku, 120), cost: firstAmount(x.PartnerPriceInfo, x.PriceInfo, x.Price), images: Number(x.MaxImages) || null,
     options: (Array.isArray(x.Options) ? x.Options : []).map((o) => [text(o.Name, 40), text(o.Value, 60)].filter(Boolean).join(': ')).join(', '),
   }));
 }
@@ -335,13 +346,13 @@ function templateOptions(t) {
 }
 
 /** Every SKU of a product as plain rows (the JSON export). */
-function variantExport(product, rows) {
+function variantExport(product, rows, fields = []) {
   return { product: product ? { id: product.id, name: product.name, groups: product.groups, shipFrom: product.ship } : null,
-    count: rows.length, variants: rows };
+    count: rows.length, fields, variants: rows };
 }
 
 module.exports = {
-  templateOptions, imageUrl, variantExport, SKU_RE,
+  templateOptions, imageUrl, variantExport, variantFields, SKU_RE,
   CATALOG_URL, SHIP_TYPES, MAX_LINES, MAX_QTY, PRINT_EXTS, GootenError, keys, configured, live, client, errorText,
   submitOutcome, isDuplicate, artworkChoices, parseLines, splitName, orderPayload, sourceId, estimate, billed,
   standing, trackingLine, findBySource, catalogProducts, variantRows,

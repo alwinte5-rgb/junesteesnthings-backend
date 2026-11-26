@@ -479,7 +479,8 @@ function registerGooten(app, d) {
       if (pid && req.query.format === 'json') {
         if (!G.configured(env)) return res.status(503).json({ error: 'Gooten is not set up.' });
         const p = list.find((x) => x.id === pid) || null;
-        return res.json(G.variantExport(p, G.variantRows(await api().variants(pid))));
+        const raw = await api().variants(pid);
+        return res.json(G.variantExport(p, G.variantRows(raw), G.variantFields(raw)));
       }
       if (pid) {
         const p = list.find((x) => x.id === pid);
