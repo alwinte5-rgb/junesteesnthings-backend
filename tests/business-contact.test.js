@@ -85,22 +85,95 @@ function fakeBrevo({ refuseList = null, refuseAll = null } = {}) {
 test('a business contact write carries the business list', async () => {
   const { client, sent } = fakeBrevo();
   await client.post('/contacts', { email: 'owner@acme.co', listIds: [2], updateEnabled: true });
-  assert.deepStrictEqual(sent[0].body.listIds, [2, 11]);
+  assert.deepStrictEqual(sent[0].body.listIds, [2, 12, 11]);
 });
 
-test('a personal contact write is sent untouched', async () => {
+test('a personal contact joins the all-contacts list but not the business list', async () => {
   const { client, sent } = fakeBrevo();
   await client.post('/contacts', { email: 'ann@gmail.com', listIds: [2] });
-  assert.deepStrictEqual(sent[0].body.listIds, [2]);
+  assert.deepStrictEqual(sent[0].body.listIds, [2, 12]);
+});
+
+test('a chat contact (chat list only) also joins the all-contacts list', async () => {
+  const { client, sent } = fakeBrevo();
+  await client.post('/contacts', { email: 'ann@gmail.com', listIds: [7], updateEnabled: true });
+  assert.deepStrictEqual(sent[0].body.listIds, [7, 12]);
+});
+
+test('a phone-only contact with no lists joins the all-contacts list', async () => {
+  const { client, sent } = fakeBrevo();
+  await client.post('/contacts', { SMS: '+17735550100', attributes: {}, listIds: [] });
+  assert.deepStrictEqual(sent[0].body.listIds, [12]);
+});
+
+test('a contact already on the all-contacts list is not given it twice', () => {
+  const body = { email: 'ann@gmail.com', listIds: [2, 12] };
+  assert.strictEqual(B.withEveryoneList(body, {}), body);
+});
+
+test('BREVO_ALL_LIST_ID picks the list, "off" stops it, a typo is said out loud', () => {
+  assert.strictEqual(B.everyoneListId({}), 12);
+  assert.strictEqual(B.everyoneListId({ BREVO_ALL_LIST_ID: '20' }), 20);
+  assert.strictEqual(B.everyoneListId({ BREVO_ALL_LIST_ID: 'off' }), null);
+  assert.deepStrictEqual(B.withJoinLists({ email: 'a@gmail.com', listIds: [2] }, { BREVO_ALL_LIST_ID: 'off' }).listIds, [2]);
+  const warn = console.warn; let said = '';
+  console.warn = (m) => { said += m; };
+  try {
+    delete B.everyoneListId.warned;
+    assert.strictEqual(B.everyoneListId({ BREVO_ALL_LIST_ID: '#12' }), null);
+  } finally { console.warn = warn; }
+  assert.match(said, /not a list id/);
+});
+
+test('if Brevo refuses the all-contacts list, the contact is still saved without it', async () => {
+  const { client, sent } = fakeBrevo({ refuseList: 12 });
+  const r = await client.post('/contacts', { email: 'ann@gmail.com', listIds: [2] });
+  assert.strictEqual(r.status, 201);
+  assert.strictEqual(sent.length, 2);
+  assert.deepStrictEqual(sent[1].body.listIds, [2]);
 });
 
 test('if Brevo refuses the list, the contact is still saved without it', async () => {
   const { client, sent } = fakeBrevo({ refuseList: 11 });
   const r = await client.post('/contacts', { email: 'owner@acme.co', listIds: [2], attributes: { FIRSTNAME: 'A' } });
   assert.strictEqual(r.status, 201);
+  assert.strictEqual(sent.length, 3);
+  assert.deepStrictEqual(sent[1].body.listIds, [2, 11], 'first try keeps the business list, drops all-contacts');
+  assert.deepStrictEqual(sent[2].body.listIds, [2, 12], 'a missing business list does not cost the all-contacts list');
+  assert.strictEqual(sent[2].body.attributes.FIRSTNAME, 'A');
+});
+
+test('a missing all-contacts list does not cost a business contact the business list', async () => {
+  const { client, sent } = fakeBrevo({ refuseList: 12 });
+  const r = await client.post('/contacts', { email: 'owner@acme.co', listIds: [2] });
+  assert.strictEqual(r.status, 201);
   assert.strictEqual(sent.length, 2);
-  assert.deepStrictEqual(sent[1].body.listIds, [2]);
-  assert.strictEqual(sent[1].body.attributes.FIRSTNAME, 'A');
+  assert.deepStrictEqual(sent[1].body.listIds, [2, 11]);
+});
+
+test('when both added lists are refused, the contact is saved with neither, and it stops there', async () => {
+  const sent = [];
+  const adapter = async (config) => {
+    const body = JSON.parse(config.data);
+    sent.push(body);
+    if ((body.listIds || []).some((id) => id === 11 || id === 12)) {
+      const response = { status: 404, statusText: 'x', headers: {}, config, data: { code: 'x', message: 'List ID does not exist' } };
+      throw new axios.AxiosError('Request failed with status code 404', 'ERR_BAD_REQUEST', config, null, response);
+    }
+    return { status: 201, statusText: 'Created', headers: {}, config, data: { id: 1 } };
+  };
+  const client = joinBusinessList(axios.create({ baseURL: 'https://api.brevo.test/v3', adapter }));
+  const r = await client.post('/contacts', { email: 'owner@acme.co', listIds: [2] });
+  assert.strictEqual(r.status, 201);
+  assert.strictEqual(sent.length, 4);
+  assert.deepStrictEqual(sent[3].listIds, [2]);
+});
+
+test('our own, test and typo domains never join the campaign list', () => {
+  for (const email of ['staff@jtees.net', 'a@example.com', 'ann@gmail.con', 'x@test.com']) {
+    const body = { email, listIds: [2] };
+    assert.strictEqual(B.withEveryoneList(body, {}), body, email);
+  }
 });
 
 test('a dead key or outage is not retried here (no duplicate calls)', async () => {
