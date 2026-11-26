@@ -19,7 +19,9 @@ test('sides: the blank under the art, colour overlays on, the mask left off, the
   const [s] = GD.sidesOf(G.templateOptions(MUG));
   assert.strictEqual(s.W, 3660); assert.strictEqual(s.H, 1200);
   assert.strictEqual(s.bg, CDN + 'Backgrounds/Accent-Mug_Background.png');
-  assert.deepStrictEqual(s.overlays, [CDN + 'Overlays/New/Accent-Mugs_Overlay_Black.png']);
+  assert.deepStrictEqual(s.overlays, [{ url: CDN + 'Overlays/New/Accent-Mugs_Overlay_Black.png', box: { x1: 0, y1: 0, x2: 3660, y2: 1200 } }]);
+  const clip = JSON.parse(JSON.stringify(MUG)); clip.Options[0].Spaces[0].Layers[2].OverlayImageUrl = CDN + 'Overlays/Accent_Clip.png';
+  assert.strictEqual(GD.sidesOf(G.templateOptions(clip))[0].overlays.length, 1, 'a clip mask is left off too');
   assert.deepStrictEqual(s.print, { x1: 548, y1: 102, x2: 3086, y2: 1047 });
   assert.deepStrictEqual(GD.sidesOf([]), []);
   const noPrint = JSON.parse(JSON.stringify(MUG)); noPrint.Options[0].Spaces[0].Layers[1].IncludeInPrint = false;
@@ -47,6 +49,7 @@ test('pickSkus: one per size, white preferred, colour ignored, labels name only 
   const { total, picked } = GD.pickSkus(rows);
   assert.strictEqual(total, 2);
   assert.deepStrictEqual(picked.map((g) => [g.sku, g.label]), [['M11-White', '11 oz'], ['M15-Black', '15 oz']]);
+  assert.deepStrictEqual(picked[0].skus, ['M11-White', 'M11-Black'], 'the other colour is the fallback');
   assert.strictEqual(GD.pickSkus(rows, 1).picked.length, 1);
   assert.deepStrictEqual(GD.pickSkus([{ sku: 'A', options: 'Color: Red' }]).picked.map((g) => g.label), ['Standard']);
 });
@@ -73,27 +76,41 @@ test('upsert SQL: by Gooten id, hidden, never another supplier, quoted', () => {
   assert.match(sql, /990, 0, 'a', NOW\(\), NOW\(\), 'gooten', 42, 0/, 'active=0');
   assert.ok(sql.includes("Kid\\'s Mug (Gooten blank)") && sql.includes("it\\'s"));
   assert.throws(() => GD.upsertSql('1; DROP', cols, { thumb: '', description: '', author: '' }));
+  const kept = GD.upsertSql(42, cols, { thumb: 't', description: 'd', author: 'a', keepName: true });
+  assert.doesNotMatch(kept.split('\n').find((l) => l.startsWith('UPDATE')), /name=/, 'a catalog outage keeps the name');
+  assert.strictEqual(Array.from(GD.productColumns({ name: 'x'.repeat(199) + '😀', choices: [{ label: 'x', stages: {} }] }).name).length, 200);
 });
 
-test('store: only Gooten hosts are fetched; overlays flattened on upload; the write is read back', async () => {
+test('store: only Gooten hosts are fetched; overlays placed in their boxes; the write is read back', async () => {
   const calls = [];
-  const cloudinary = { uploader: { upload: async (src, o) => { calls.push([src, o]); return { public_id: o.public_id, secure_url: `https://res.cloudinary.com/c/image/upload/v1/${o.public_id}.png` }; } } };
-  const db = []; let row = null;
-  const mysql = (url, sql, o) => { db.push(sql); if (/^SELECT author/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, name/.test(sql)) return row ? [row] : []; return null; };
+  const cloudinary = { uploader: { upload: async (src, o) => { calls.push([src, o]); return { public_id: o.public_id, width: 2745, secure_url: `https://res.cloudinary.com/c/image/upload/v1/${o.public_id}.png` }; } } };
+  const db = []; let rows = [];
+  const mysql = async (url, sql, o) => { db.push(sql); if (/^SELECT author/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, MD5/.test(sql)) return rows; return null; };
   const store = GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true });
   assert.strictEqual(store.ready(), true);
   assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: '', cloudReady: true }).ready(), false);
-  const out = await store.picture('gooten-blanks/7-abc', CDN + 'bg.png', [CDN + 'ov.png']);
+  const side = { W: 3660, H: 1200, bg: CDN + 'bg.png', overlays: [{ url: CDN + 'ov.png', box: { x1: 100, y1: 40, x2: 1930, y2: 640 } }] };
+  const out = await store.picture('gooten-blanks/7-abc', side);
   assert.strictEqual(out, 'https://res.cloudinary.com/c/image/upload/c_limit,w_1600/v1/gooten-blanks/7-abc.png');
-  assert.deepStrictEqual(calls[1][1].transformation, [{ overlay: 'gooten-blanks:7-abc-o1' }, { flags: 'layer_apply' }]);
-  assert.strictEqual(calls[1][1].overwrite, false);
-  await assert.rejects(store.picture('gooten-blanks/7-x', 'https://evil.example.com/a.png', []), /Gooten host/);
-  await assert.rejects(store.picture('gooten-blanks/7-x', 'https://gooten.com.evil.net/a.png', []), /Gooten host/);
-  await assert.rejects(store.picture('gooten-blanks/7-x', 'https://anyone.azureedge.net/a.png', []), /Gooten host/);
+  /* 2745px file on a 3660 canvas: k = 0.75. */
+  assert.deepStrictEqual(calls[2][1].transformation, [
+    { overlay: 'gooten-blanks:7-abc-o1', width: 1373, height: 450, crop: 'scale' },
+    { flags: 'layer_apply', gravity: 'north_west', x: 75, y: 30 }]);
+  assert.ok(calls.every(([, o]) => o.overwrite === false));
+  const side2 = (u) => ({ W: 10, H: 10, bg: u, overlays: [] });
+  await assert.rejects(store.picture('gooten-blanks/7-x', side2('https://evil.example.com/a.png')), /Gooten host/);
+  await assert.rejects(store.picture('gooten-blanks/7-x', side2('https://gooten.com.evil.net/a.png')), /Gooten host/);
+  await assert.rejects(store.picture('gooten-blanks/7-x', { ...side, overlays: [{ url: 'https://evil.example.com/o.png', box: side.overlays[0].box }] }), /Gooten host/);
+  await assert.rejects(store.picture('gooten-blanks/7-x', side2('https://anyone.azureedge.net/a.png')), /Gooten host/);
   const cols = GD.productColumns({ name: 'Mugs', choices: [{ label: 'x', stages: { front: {} } }] });
-  assert.throws(() => store.save(7, cols, { thumb: 't', description: 'd' }), /could not be confirmed/);
-  row = { id: '501', name: cols.name };
-  assert.strictEqual(store.save(7, cols, { thumb: 't', description: 'd' }), 501);
+  const h = require('crypto').createHash('md5').update(cols.stages).digest('hex');
+  await assert.rejects(store.save(7, cols, { thumb: 't', description: 'd' }), (e) => /could not be confirmed/.test(e.message) && e.maybeWritten === true);
+  rows = [{ id: '501', h }, { id: '502', h }];
+  await assert.rejects(store.save(7, cols, { thumb: 't', description: 'd' }), /more than one/);
+  rows = [{ id: '501', h }];
+  assert.strictEqual(await store.save(7, cols, { thumb: 't', description: 'd' }), 501);
+  const w = db.find((x) => x.startsWith('START TRANSACTION;'));
+  assert.ok(w && /FOR UPDATE;/.test(w) && /COMMIT;$/.test(w), 'one locked transaction');
 });
 
 test('picture ids are stable per picture set and per product', () => {
@@ -115,7 +132,7 @@ test('Add to designer route: reads the templates, copies pictures, writes, links
   const saved = [];
   let ready = true;
   const designer = { ready: () => ready, picture: async (id) => `https://res.cloudinary.com/c/image/upload/c_limit,w_1600/${id}.png`,
-    save: (pid, cols) => { saved.push([pid, cols]); return 777; } };
+    save: async (pid, cols, meta) => { saved.push([pid, cols, meta]); return 777; } };
   O.registerGooten(app, { pool: {}, requireAdmin: () => {}, adminPage: (t, b) => b, pageHeader: () => '', esc: (s) => String(s), money: String,
     quoteCodeRe: /^[A-Z0-9]+$/, SHIP: {}, ART: {}, PHOTOS: {}, shop: {}, mayUse: () => true,
     env: { GOOTEN_RECIPE_ID: 'r', GOOTEN_PARTNER_BILLING_KEY: 'k' }, fetcher, designer });
@@ -124,13 +141,18 @@ test('Add to designer route: reads the templates, copies pictures, writes, links
   assert.strictEqual(r.status, 200);
   assert.match(r.html, /editor\.php\?product_base=777/);
   assert.strictEqual(saved.length, 1); assert.strictEqual(saved[0][0], 186); assert.strictEqual(saved[0][1].name, 'Accent Mugs (Gooten blank)');
-  assert.strictEqual(dejson(saved[0][1].stages).front.image, `https://res.cloudinary.com/c/image/upload/c_limit,w_1600/${GD.pictureId(186, CDN + 'Backgrounds/Accent-Mug_Background.png', [CDN + 'Overlays/New/Accent-Mugs_Overlay_Black.png'])}.png`);
+  assert.strictEqual(saved[0][2].keepName, false);
+  const [sd] = GD.sidesOf(G.templateOptions(MUG));
+  assert.strictEqual(dejson(saved[0][1].stages).front.image, `https://res.cloudinary.com/c/image/upload/c_limit,w_1600/${GD.pictureId(186, sd.bg, sd.overlays)}.png`);
   assert.strictEqual((await run({ product: 'x' })).status, 400);
   ready = false;
   r = await run({ product: '186' });
   assert.strictEqual(r.status, 503); assert.strictEqual(saved.length, 1, 'nothing written when the designer is unreachable');
   ready = true;
-  designer.save = () => { throw new Error('boom'); };
+  designer.save = async () => { throw new Error('boom'); };
   r = await run({ product: '186' });
   assert.strictEqual(r.status, 502); assert.match(r.html, /not written/);
+  designer.save = async () => { const e = new Error('boom'); e.maybeWritten = true; throw e; };
+  r = await run({ product: '186' });
+  assert.match(r.html, /may have been written/);
 });

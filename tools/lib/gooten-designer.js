@@ -29,8 +29,10 @@ const { enjson, sq } = require('./db');
 
 const SUPPLIER = 'gooten';
 const MAX_TEMPLATES = 12;
+const FALLBACKS = 2;
 const PRODUCT_WIDTH = 500;
 /* Option names that only change colour or how it is printed, not the canvas. */
+const MASK = /\/masks?\/|mask|clip/i;
 const COSMETIC = /colou?r|decoration technique|underbase|accent/i;
 
 /** "Name: Value, Name: Value" (gooten.js variantRows) -> [[name, value]]. */
@@ -38,9 +40,10 @@ function optionPairs(options) {
   return String(options || '').split(', ').map((p) => { const i = p.indexOf(': '); return i > 0 ? [p.slice(0, i), p.slice(i + 2)] : null; }).filter(Boolean);
 }
 
-/** One SKU per canvas-changing option set: [{ key, label, sku }], label made of
- *  only the options that differ between groups, sorted by name. Plain white wins
- *  as the colour shown, when there is one. */
+/** One group per canvas-changing option set: [{ key, label, skus }], label made
+ *  of only the options that differ between groups. `skus` is that group's SKUs
+ *  to try in turn (plain white first, then up to FALLBACKS more): one colour
+ *  whose template cannot be read must not lose the whole size. */
 function pickSkus(rows, max = MAX_TEMPLATES) {
   const groups = new Map();
   for (const r of rows || []) {
@@ -49,9 +52,9 @@ function pickSkus(rows, max = MAX_TEMPLATES) {
     const key = JSON.stringify(shape);
     /* Plain white shows the blank best; "White With Black Accents" is not it. */
     const white = optionPairs(r.options).some(([n, v]) => /colou?r/i.test(n) && /^\s*white\s*$/i.test(v));
-    const g = groups.get(key);
-    if (!g) groups.set(key, { key, shape, sku: r.sku, white });
-    else if (white && !g.white) Object.assign(g, { sku: r.sku, white });
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { key, shape, white: [], other: [] }));
+    (white ? g.white : g.other).push(r.sku);
   }
   const list = [...groups.values()];
   const names = new Set(list.flatMap((g) => g.shape.map(([n]) => n)));
@@ -59,13 +62,13 @@ function pickSkus(rows, max = MAX_TEMPLATES) {
   return {
     total: list.length,
     picked: list.slice(0, max).map((g) => ({
-      key: g.key, sku: g.sku,
+      key: g.key, skus: [...g.white, ...g.other].slice(0, 1 + FALLBACKS), sku: [...g.white, ...g.other][0],
       label: (varies.length ? g.shape.filter(([n]) => varies.includes(n)) : g.shape).map(([n, v]) => (varies.length === 1 ? v : `${n}: ${v}`)).join(', ').slice(0, 80) || 'Standard',
     })),
   };
 }
 
-/** The template's sides that can be designed: [{ name, W, H, bg, overlays, print }],
+/** The template's sides that can be designed: [{ name, W, H, bg, overlays: [{ url, box }], print }],
  *  from gooten.js templateOptions(). A side with no blank picture or no print
  *  box is left out, never guessed. */
 function sidesOf(options) {
@@ -78,8 +81,13 @@ function sidesOf(options) {
     const print = byZ.find((l) => /image/i.test(l.type) && l.print && l.box);
     if (!canvas || !canvas.bg || !print) return null;
     const W = canvas.box.x2 - canvas.box.x1, H = canvas.box.y2 - canvas.box.y1;
-    const overlays = byZ.filter((l) => l !== canvas && l.overlay && !/mask/i.test(l.overlay) && (l.z ?? 0) > (print.z ?? 0)).map((l) => l.overlay);
-    const p = { x1: print.box.x1 - canvas.box.x1, y1: print.box.y1 - canvas.box.y1, x2: print.box.x2 - canvas.box.x1, y2: print.box.y2 - canvas.box.y1 };
+    const rel = (b) => ({ x1: b.x1 - canvas.box.x1, y1: b.y1 - canvas.box.y1, x2: b.x2 - canvas.box.x1, y2: b.y2 - canvas.box.y1 });
+    /* Each overlay keeps its own box: it is placed there, scaled, never centred
+       at whatever size its file happens to be. A mask (Gooten keeps them in a
+       Masks folder; "mask"/"clip" in the name) would grey the print area. */
+    const overlays = byZ.filter((l) => l !== canvas && l.overlay && l.box && !MASK.test(l.overlay) && (l.z ?? 0) > (print.z ?? 0))
+      .map((l) => ({ url: l.overlay, box: rel(l.box) }));
+    const p = rel(print.box);
     return { name: sp.name || sp.id || 'Front', W, H, bg: canvas.bg, overlays, print: p };
   }).filter(Boolean);
 }
@@ -100,7 +108,8 @@ function stageOf(side, image) {
   };
 }
 
-/** Stage keys: front, back, then side2, side3... (designs are saved by key). */
+/** Stage keys by position: front, back, then side3, side4... (designs are
+ *  saved by key; Lumise takes any key, e.g. #14's random ids). */
 function stagesOf(sides, images) {
   const st = {};
   sides.forEach((s, i) => { st[i === 0 ? 'front' : i === 1 ? 'back' : `side${i + 1}`] = stageOf(s, images[i]); });
@@ -124,28 +133,36 @@ function productColumns({ name, choices }) {
     });
     variations = enjson({ default: { GTPL: 't1' }, attrs: ['GTPL'], variations: vs });
   }
-  return { name: `${name} (Gooten blank)`.slice(0, 200), stages: enjson(choices[0].stages), attributes: enjson(attributes), variations };
+  /* Cut by characters, not UTF-16 units: half an emoji is not storable. */
+  return { name: Array.from(`${name} (Gooten blank)`).slice(0, 200).join(''), stages: enjson(choices[0].stages), attributes: enjson(attributes), variations };
 }
 
-/** Insert or update by Gooten product id. Never touches any other supplier's row. */
-function upsertSql(gootenId, cols, { thumb, description, author }) {
+/** Insert or update by Gooten product id, in ONE transaction that first locks
+ *  that product's rows (and, under InnoDB's default isolation, the gap where a
+ *  new one would go), so two adds at once make one row. Never touches any
+ *  other supplier's row. `keepName`: an update leaves the name alone (the
+ *  catalog that names it could not be read). */
+function upsertSql(gootenId, cols, { thumb, description, author, keepName = false }) {
   const id = Number(gootenId);
   if (!Number.isSafeInteger(id) || id < 1) throw new Error('bad Gooten product id');
-  const set = `name=${sq(cols.name)}, description=${sq(description)}, stages=${sq(cols.stages)}, attributes=${sq(cols.attributes)}, ` +
+  const set = `${keepName ? '' : `name=${sq(cols.name)}, `}description=${sq(description)}, stages=${sq(cols.stages)}, attributes=${sq(cols.attributes)}, ` +
     `variations=${sq(cols.variations)}, thumbnail_url=${sq(thumb)}, updated=NOW()`;
   return [
+    'START TRANSACTION;',
+    `SELECT id FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${id} FOR UPDATE;`,
     `UPDATE lumise_products SET ${set} WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${id};`,
     'INSERT INTO lumise_products (name, price, product, thumbnail, thumbnail_url, template, description, stages, variations, attributes, printings, ' +
       '`order`, active, author, created, updated, supplier, supplier_style_id, supplier_cost) ' +
       `SELECT ${sq(cols.name)}, 0, 0, '', ${sq(thumb)}, '', ${sq(description)}, ${sq(cols.stages)}, ${sq(cols.variations)}, ${sq(cols.attributes)}, '', ` +
       `990, 0, ${sq(author)}, NOW(), NOW(), ${sq(SUPPLIER)}, ${id}, 0 FROM DUAL ` +
       `WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${id}) AS t);`,
+    'COMMIT;',
   ].join('\n');
 }
 
 /** A stable Cloudinary name for one flattened picture: the same Gooten
  *  pictures always give the same name, so a re-run reuses the upload. */
-function pictureId(gootenId, bg, overlays) {
+function pictureId(gootenId, bg, overlays = []) {
   return `gooten-blanks/${Number(gootenId)}-${crypto.createHash('sha256').update(JSON.stringify([bg, overlays])).digest('hex').slice(0, 20)}`;
 }
 
@@ -163,30 +180,47 @@ function gootenPicture(u) {
  *  `url` from db.js. Both injected, so tests use fakes. */
 function designerStore({ cloudinary, mysql, url, cloudReady }) {
   const ready = () => !!(url && cloudReady && mysql && cloudinary);
-  /** The flattened picture's address (shown at most 1600px wide). */
-  async function picture(publicId, bg, overlays = []) {
-    for (const u of [bg, ...overlays]) if (!gootenPicture(u)) throw new Error('a template picture is not on a Gooten host');
-    const layers = [];
-    for (let i = 0; i < overlays.length; i++) {
-      const o = await cloudinary.uploader.upload(overlays[i], { public_id: `${publicId}-o${i + 1}`, overwrite: false, resource_type: 'image' });
-      layers.push({ overlay: String(o.public_id).replace(/\//g, ':') }, { flags: 'layer_apply' });
+  /** The flattened picture's address (shown at most 1600px wide). `side` is a
+   *  sidesOf() side: the blank, its canvas size W x H, and overlays with boxes
+   *  on that canvas. The blank is uploaded plain first, to learn its real pixel
+   *  size; each overlay is then scaled into its box at that size. */
+  async function picture(publicId, side) {
+    const { bg, overlays = [], W } = side;
+    for (const u of [bg, ...overlays.map((o) => o.url)]) if (!gootenPicture(u)) throw new Error('a template picture is not on a Gooten host');
+    let r = await cloudinary.uploader.upload(bg, { public_id: `${publicId}-bg`, overwrite: false, resource_type: 'image' });
+    if (overlays.length) {
+      const k = Number(r && r.width) / W;
+      if (!(k > 0)) throw new Error('Cloudinary gave no picture size');
+      const layers = [];
+      for (let i = 0; i < overlays.length; i++) {
+        const o = await cloudinary.uploader.upload(overlays[i].url, { public_id: `${publicId}-o${i + 1}`, overwrite: false, resource_type: 'image' });
+        const b = overlays[i].box;
+        layers.push({ overlay: String(o.public_id).replace(/\//g, ':'), width: Math.round((b.x2 - b.x1) * k), height: Math.round((b.y2 - b.y1) * k), crop: 'scale' },
+          { flags: 'layer_apply', gravity: 'north_west', x: Math.round(b.x1 * k), y: Math.round(b.y1 * k) });
+      }
+      r = await cloudinary.uploader.upload(bg, { public_id: publicId, overwrite: false, resource_type: 'image', transformation: layers });
     }
-    const r = await cloudinary.uploader.upload(bg, { public_id: publicId, overwrite: false, resource_type: 'image',
-      ...(layers.length ? { transformation: layers } : {}) });
     const out = String(r && r.secure_url || '');
     if (!/^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\//.test(out)) throw new Error('Cloudinary gave no picture address');
     return out.replace('/image/upload/', '/image/upload/c_limit,w_1600/');
   }
-  /** Writes the product, then reads its id back: the write is proven, not assumed. */
-  function save(gootenId, cols, { thumb, description }) {
-    const a = mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true })[0];
+  /** Writes the product, then reads it back: the write is proven by the
+   *  stored print areas' fingerprint (stages is base64, so it reads back
+   *  exactly; a name can come back escaped). `mysql` is db.js mysqlAsync: it
+   *  never blocks the web server. An error after the write began carries
+   *  `maybeWritten`, so the page never says "not written" when it may be. */
+  async function save(gootenId, cols, { thumb, description, keepName = false }) {
+    const [a] = await mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true });
     if (!a) throw new Error('no designer product to take the author from');
-    mysql(url, upsertSql(gootenId, cols, { thumb, description, author: a.author }));
-    const got = mysql(url, `SELECT id, name FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${Number(gootenId)};`, { rows: true });
-    if (got.length !== 1 || got[0].name !== cols.name) throw new Error('the designer product could not be confirmed');
-    return Number(got[0].id);
+    try {
+      await mysql(url, upsertSql(gootenId, cols, { thumb, description, author: a.author, keepName }));
+      const got = await mysql(url, `SELECT id, MD5(stages) AS h FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${Number(gootenId)} ORDER BY id;`, { rows: true });
+      const want = crypto.createHash('md5').update(cols.stages).digest('hex');
+      if (got.length !== 1 || got[0].h !== want) throw new Error(got.length > 1 ? 'more than one designer product has this Gooten id' : 'the designer product could not be confirmed');
+      return Number(got[0].id);
+    } catch (e) { e.maybeWritten = true; throw e; }
   }
   return { ready, picture, save };
 }
 
-module.exports = { gootenPicture, designerStore, SUPPLIER, MAX_TEMPLATES, PRODUCT_WIDTH, optionPairs, pickSkus, sidesOf, sideKey, stageOf, stagesOf, productColumns, upsertSql, pictureId };
+module.exports = { gootenPicture, designerStore, SUPPLIER, MAX_TEMPLATES, FALLBACKS, MASK, PRODUCT_WIDTH, optionPairs, pickSkus, sidesOf, sideKey, stageOf, stagesOf, productColumns, upsertSql, pictureId };

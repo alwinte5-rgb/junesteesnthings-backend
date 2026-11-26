@@ -528,8 +528,9 @@ function registerGooten(app, d) {
     if (adding.has(pid)) return page(`${backLink}<div class="warn">This product is already being added. Give it a minute, then open the product again.</div>`, 409);
     adding.add(pid);
     try {
-      const list = await products().catch(() => []);
-      const p = list.find((x) => x.id === pid);
+      /* The catalog only names it; when it cannot be read, an existing row keeps its name. */
+      const list = await products().catch(() => null);
+      const p = list && list.find((x) => x.id === pid);
       const { total, picked } = GD.pickSkus(G.variantRows(await api().variants(pid)));
       if (!picked.length) return page(`${backLink}<div class="warn">Gooten lists no SKUs for this product.</div>`, 404);
       /* One template per picked SKU, a few at a time; a SKU whose template
@@ -537,8 +538,15 @@ function registerGooten(app, d) {
       const results = [];
       for (let i = 0; i < picked.length; i += 3) {
         results.push(...await Promise.all(picked.slice(i, i + 3).map(async (g) => {
-          try { return { g, sides: GD.sidesOf(G.templateOptions(await api().templates(g.sku)) || []) }; }
-          catch (e) { return { g, error: e instanceof G.GootenError ? e.message : 'could not be read' }; }
+          /* The size's other colours are tried before it is given up. */
+          let last = 'no blank picture or print area';
+          for (const sku of g.skus) {
+            try {
+              const sides = GD.sidesOf(G.templateOptions(await api().templates(sku)) || []);
+              if (sides.length) return { g: { ...g, sku }, sides };
+            } catch (e) { last = e instanceof G.GootenError ? e.message : 'could not be read'; }
+          }
+          return { g, error: last };
         })));
       }
       const usable = new Map();
@@ -554,7 +562,7 @@ function registerGooten(app, d) {
       const pics = new Map();
       const picture = async (side) => {
         const id = GD.pictureId(pid, side.bg, side.overlays);
-        if (!pics.has(id)) pics.set(id, designer.picture(id, side.bg, side.overlays));
+        if (!pics.has(id)) pics.set(id, designer.picture(id, side));
         return pics.get(id);
       };
       const choices = [];
@@ -565,18 +573,21 @@ function registerGooten(app, d) {
       }
       const name = p ? p.name : `Gooten product ${pid}`;
       const cols = GD.productColumns({ name, choices });
+      const keepName = !p;
       const thumb = choices[0].stages.front.image;
       const description = `Gooten print-on-demand blank (Gooten product ${pid}), here to view and design on. Not sold online: ask the shop for a quote.`;
-      const id = designer.save(pid, cols, { thumb, description });
+      const id = await designer.save(pid, cols, { thumb, description, keepName });
       const editor = `https://design.jtees.net/editor.php?product_base=${id}`;
-      return page(`${backLink}<div class="card"><h2 class="card-title">${esc(cols.name)} is in the designer</h2>
+      return page(`${backLink}<div class="card"><h2 class="card-title">${esc(keepName ? `Gooten product ${pid}` : cols.name)} is in the designer</h2>
         <p>Designer product #${id}, hidden from the shop and the quote form. ${choices.length} template${choices.length === 1 ? '' : 's'}${choices.length > 1 ? ' (pick one under “Template”)' : ''}; colors are not separate choices.</p>
         <p><a href="${esc(editor)}" target="_blank" rel="noopener noreferrer">Open it in the designer</a></p>
         ${total > picked.length ? `<p class="muted">Gooten has ${total} sizes/shapes for this product; the first ${picked.length} were read.</p>` : ''}
         ${skipped.length ? `<p class="muted">Left out:</p><ul>${skipped.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`);
     } catch (e) {
       console.error('gooten designer add:', e.message);
-      return page(`${backLink}<div class="warn">${e instanceof G.GootenError ? esc(e.message) : 'The blank could not be added.'} The designer product was not written. Try again in a minute.</div>`, 502);
+      return page(`${backLink}<div class="warn">${e instanceof G.GootenError ? esc(e.message) : 'The blank could not be added.'} ${e && e.maybeWritten
+        ? 'The designer product may have been written before this went wrong: press Add again to finish it, then open it to check.'
+        : 'The designer product was not written. Try again in a minute.'}</div>`, 502);
     } finally { adding.delete(pid); }
   });
 
