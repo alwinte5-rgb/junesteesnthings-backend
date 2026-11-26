@@ -133,15 +133,23 @@ function mysqlAsync(url, sql, { rows = false, timeoutMs = 30000 } = {}) {
     const args = ['-B', '-h', u.hostname, '-P', u.port || '3306', '-u', decodeURIComponent(u.username), '--protocol=TCP',
       '--default-character-set=utf8mb4', u.pathname.replace(/^\//, '') || 'railway'];
     const child = require('child_process').spawn(MYSQL, args, {
-      env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }), stdio: ['pipe', 'pipe', 'ignore'] });
-    let out = '', done = false;
+      env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }), stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '', err = '', done = false;
+    /* MySQL's own "ERROR nnnn (xxxxx) at line n: ..." line is what makes a
+       failure fixable; it names a column or a statement, never the password
+       (that travels in MYSQL_PWD). Kept short, for the server log. */
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (b) => { if (err.length < 4000) err += b; });
     child.stdout.setEncoding('utf8');   // a character split across chunks must not become two U+FFFD
     const finish = (err, val) => { if (done) return; done = true; clearTimeout(timer); err ? reject(err) : resolve(val); };
     const timer = setTimeout(() => { child.kill('SIGKILL'); finish(new Error('mysql timed out')); }, timeoutMs);
     child.stdout.on('data', (b) => { out += b; if (out.length > 64 * 1024 * 1024) { child.kill('SIGKILL'); finish(new Error('mysql answer too large')); } });
     child.on('error', (e) => finish(new Error('mysql could not start: ' + (e.code || 'error'))));
     child.on('close', (code) => {
-      if (code !== 0) return finish(new Error('mysql failed: exit ' + code));
+      if (code !== 0) {
+        const line = (err.split('\n').find((l) => /^ERROR \d+/.test(l)) || '').slice(0, 300);
+        return finish(new Error('mysql failed: exit ' + code + (line ? ': ' + line : '')));
+      }
       if (!rows) return finish(null, null);
       const lines = out.replace(/\n$/, '').split('\n');
       if (lines.length < 2) return finish(null, []);
