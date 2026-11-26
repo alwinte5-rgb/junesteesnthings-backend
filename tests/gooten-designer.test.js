@@ -110,7 +110,19 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   rows = [{ id: '501', h }];
   assert.strictEqual(await store.save(7, cols, { thumb: 't', description: 'd' }), 501);
   const w = db.find((x) => x.startsWith('START TRANSACTION;'));
-  assert.ok(w && /FOR UPDATE;/.test(w) && /COMMIT;$/.test(w), 'one locked transaction');
+  assert.ok(w === undefined, 'the lock comes first');
+  const w2 = db.find((x) => x.startsWith('DO IF(GET_LOCK('));
+  assert.ok(w2 && /START TRANSACTION;/.test(w2) && /COMMIT;\nDO RELEASE_LOCK\('jt-gooten-blank-7'\);$/.test(w2), 'one transaction under a named lock');
+  assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true, client: false }).ready(), false, 'no mysql client: refused before uploads');
+  const nul = GD.designerStore({ cloudinary, mysql: async (u, sql) => (/^SELECT author/.test(sql) ? [{ author: 'NULL' }] : null), url: 'mysql://x', cloudReady: true });
+  await assert.rejects(nul.save(7, cols, { thumb: 't', description: 'd' }), /author/);
+});
+
+test('masks are told by their own folder or file, and option values may hold commas', () => {
+  assert.strictEqual(GD.isMask(CDN + 'Masks/Accent_Mugs-Mask.png'), true);
+  assert.strictEqual(GD.isMask(CDN + 'Overlays/Accent_Clip.png'), true);
+  assert.strictEqual(GD.isMask('https://az412349.cdn.gooten.com/product-facemasks/Overlays/Black.png'), false);
+  assert.deepStrictEqual(GD.optionPairs('Color: Black, White, Size: 11 oz'), [['Color', 'Black, White'], ['Size', '11 oz']]);
 });
 
 test('picture ids are stable per picture set and per product', () => {
@@ -127,7 +139,9 @@ test('Add to designer route: reads the templates, copies pictures, writes, links
     u = String(u);
     if (u.includes('catalog.json')) return { status: 200, ok: true, json: async () => ({ 'product-catalog': [{ name: 'Mugs', items: [{ type: 'product', product_id: 186, name: 'Accent Mugs' }] }] }) };
     if (u.includes('producttemplates')) return { status: 200, ok: true, json: async () => MUG };
-    return { status: 200, ok: true, json: async () => ({ ProductVariants: [{ Sku: 'Mug11oz-White-BlackAccent', Options: [{ Name: 'Size', Value: '11 oz' }, { Name: 'Color', Value: 'White With Black Accents' }] }] }) };
+    return { status: 200, ok: true, json: async () => ({ ProductVariants: [
+      { Sku: 'Mug11oz-White-BlackAccent', Options: [{ Name: 'Size', Value: '11 oz' }, { Name: 'Color', Value: 'White With Black Accents' }] },
+      { Sku: 'Mug15oz-White-BlackAccent', Options: [{ Name: 'Size', Value: '15 oz' }, { Name: 'Color', Value: 'White With Black Accents' }] }] }) };
   };
   const saved = [];
   let ready = true;
@@ -142,6 +156,8 @@ test('Add to designer route: reads the templates, copies pictures, writes, links
   assert.match(r.html, /editor\.php\?product_base=777/);
   assert.strictEqual(saved.length, 1); assert.strictEqual(saved[0][0], 186); assert.strictEqual(saved[0][1].name, 'Accent Mugs (Gooten blank)');
   assert.strictEqual(saved[0][2].keepName, false);
+  assert.strictEqual(saved[0][1].variations, '', 'the same canvas twice is one choice');
+  assert.match(r.html, /1 template/);
   const [sd] = GD.sidesOf(G.templateOptions(MUG));
   assert.strictEqual(dejson(saved[0][1].stages).front.image, `https://res.cloudinary.com/c/image/upload/c_limit,w_1600/${GD.pictureId(186, sd.bg, sd.overlays)}.png`);
   assert.strictEqual((await run({ product: 'x' })).status, 400);

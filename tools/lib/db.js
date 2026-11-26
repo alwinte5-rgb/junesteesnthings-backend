@@ -135,6 +135,7 @@ function mysqlAsync(url, sql, { rows = false, timeoutMs = 30000 } = {}) {
     const child = require('child_process').spawn(MYSQL, args, {
       env: Object.assign({}, process.env, { MYSQL_PWD: decodeURIComponent(u.password) }), stdio: ['pipe', 'pipe', 'ignore'] });
     let out = '', done = false;
+    child.stdout.setEncoding('utf8');   // a character split across chunks must not become two U+FFFD
     const finish = (err, val) => { if (done) return; done = true; clearTimeout(timer); err ? reject(err) : resolve(val); };
     const timer = setTimeout(() => { child.kill('SIGKILL'); finish(new Error('mysql timed out')); }, timeoutMs);
     child.stdout.on('data', (b) => { out += b; if (out.length > 64 * 1024 * 1024) { child.kill('SIGKILL'); finish(new Error('mysql answer too large')); } });

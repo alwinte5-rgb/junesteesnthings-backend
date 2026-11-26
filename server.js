@@ -24119,7 +24119,7 @@ const GOOTEN = require('./tools/lib/gooten-orders').registerGooten(app, {
   designer: (() => {
     const DB = require('./tools/lib/db');
     return require('./tools/lib/gooten-designer').designerStore({
-      cloudinary, mysql: DB.mysqlAsync, url: DB.mysqlUrlFrom(process.env),
+      cloudinary, mysql: DB.mysqlAsync, url: DB.mysqlUrlFrom(process.env), client: !!DB.MYSQL,
       cloudReady: !!((process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME) && process.env.CLOUDINARY_API_KEY
         && (process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET)),
     });

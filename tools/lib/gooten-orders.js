@@ -554,7 +554,9 @@ function registerGooten(app, d) {
       for (const r of results) {
         if (r.error || !r.sides.length) { skipped.push(`${r.g.label} (${r.g.sku}): ${r.error || 'no blank picture or print area'}`); continue; }
         const k = GD.sideKey(r.sides);
-        if (!usable.has(k)) usable.set(k, r);
+        /* Sizes that share a canvas share a choice, named for all of them. */
+        if (!usable.has(k)) usable.set(k, { ...r, g: { ...r.g } });
+        else usable.get(k).g.label = `${usable.get(k).g.label} / ${r.g.label}`.slice(0, 80);
       }
       if (!usable.size) return page(`${backLink}<div class="warn">None of this product’s templates had a blank picture and a print area, so nothing was added.</div><ul>${skipped.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`, 422);
       /* The pictures: each side's blank with its colour overlays flattened on,
@@ -565,11 +567,11 @@ function registerGooten(app, d) {
         if (!pics.has(id)) pics.set(id, designer.picture(id, side));
         return pics.get(id);
       };
-      const choices = [];
-      for (const r of usable.values()) {
-        const images = [];
-        for (const side of r.sides) images.push(await picture(side));
-        choices.push({ label: r.g.label, stages: GD.stagesOf(r.sides, images) });
+      /* A few choices at a time, each side's pictures together. */
+      const all = [...usable.values()], choices = [];
+      for (let i = 0; i < all.length; i += 3) {
+        choices.push(...await Promise.all(all.slice(i, i + 3).map(async (r) =>
+          ({ label: r.g.label, stages: GD.stagesOf(r.sides, await Promise.all(r.sides.map(picture))) }))));
       }
       const name = p ? p.name : `Gooten product ${pid}`;
       const cols = GD.productColumns({ name, choices });

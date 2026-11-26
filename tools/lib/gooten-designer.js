@@ -32,12 +32,16 @@ const MAX_TEMPLATES = 12;
 const FALLBACKS = 2;
 const PRODUCT_WIDTH = 500;
 /* Option names that only change colour or how it is printed, not the canvas. */
-const MASK = /\/masks?\/|mask|clip/i;
+/* A mask is told by its own folder or file name, never the product's folder
+   (product-facemasks/ would make every overlay a "mask"). */
+const isMask = (u) => { try { const parts = new URL(u).pathname.split('/'); const file = parts.pop() || '';
+  return parts.some((d) => /^masks?$/i.test(d)) || /mask|clip/i.test(file); } catch { return true; } };
 const COSMETIC = /colou?r|decoration technique|underbase|accent/i;
 
 /** "Name: Value, Name: Value" (gooten.js variantRows) -> [[name, value]]. */
 function optionPairs(options) {
-  return String(options || '').split(', ').map((p) => { const i = p.indexOf(': '); return i > 0 ? [p.slice(0, i), p.slice(i + 2)] : null; }).filter(Boolean);
+  /* Split only where the next "Name: " starts: a value may hold a comma. */
+  return String(options || '').split(/, (?=[^,:]{1,40}: )/).map((p) => { const i = p.indexOf(': '); return i > 0 ? [p.slice(0, i), p.slice(i + 2)] : null; }).filter(Boolean);
 }
 
 /** One group per canvas-changing option set: [{ key, label, skus }], label made
@@ -85,7 +89,7 @@ function sidesOf(options) {
     /* Each overlay keeps its own box: it is placed there, scaled, never centred
        at whatever size its file happens to be. A mask (Gooten keeps them in a
        Masks folder; "mask"/"clip" in the name) would grey the print area. */
-    const overlays = byZ.filter((l) => l !== canvas && l.overlay && l.box && !MASK.test(l.overlay) && (l.z ?? 0) > (print.z ?? 0))
+    const overlays = byZ.filter((l) => l !== canvas && l.overlay && l.box && !isMask(l.overlay) && (l.z ?? 0) > (print.z ?? 0))
       .map((l) => ({ url: l.overlay, box: rel(l.box) }));
     const p = rel(print.box);
     return { name: sp.name || sp.id || 'Front', W, H, bg: canvas.bg, overlays, print: p };
@@ -137,9 +141,8 @@ function productColumns({ name, choices }) {
   return { name: Array.from(`${name} (Gooten blank)`).slice(0, 200).join(''), stages: enjson(choices[0].stages), attributes: enjson(attributes), variations };
 }
 
-/** Insert or update by Gooten product id, in ONE transaction that first locks
- *  that product's rows (and, under InnoDB's default isolation, the gap where a
- *  new one would go), so two adds at once make one row. Never touches any
+/** Insert or update by Gooten product id, in one transaction under a named
+ *  lock for that product, so two adds at once make one row. Never touches any
  *  other supplier's row. `keepName`: an update leaves the name alone (the
  *  catalog that names it could not be read). */
 function upsertSql(gootenId, cols, { thumb, description, author, keepName = false }) {
@@ -148,8 +151,12 @@ function upsertSql(gootenId, cols, { thumb, description, author, keepName = fals
   const set = `${keepName ? '' : `name=${sq(cols.name)}, `}description=${sq(description)}, stages=${sq(cols.stages)}, attributes=${sq(cols.attributes)}, ` +
     `variations=${sq(cols.variations)}, thumbnail_url=${sq(thumb)}, updated=NOW()`;
   return [
+    /* A named lock per Gooten product serializes two adds across processes
+       (gap locks from SELECT ... FOR UPDATE on a missing row deadlock instead).
+       If it cannot be had in 20s, the subquery error aborts the batch before
+       anything is written. */
+    `DO IF(GET_LOCK('jt-gooten-blank-${id}', 20) = 1, 0, (SELECT 1 UNION ALL SELECT 2));`,
     'START TRANSACTION;',
-    `SELECT id FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${id} FOR UPDATE;`,
     `UPDATE lumise_products SET ${set} WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${id};`,
     'INSERT INTO lumise_products (name, price, product, thumbnail, thumbnail_url, template, description, stages, variations, attributes, printings, ' +
       '`order`, active, author, created, updated, supplier, supplier_style_id, supplier_cost) ' +
@@ -157,6 +164,7 @@ function upsertSql(gootenId, cols, { thumb, description, author, keepName = fals
       `990, 0, ${sq(author)}, NOW(), NOW(), ${sq(SUPPLIER)}, ${id}, 0 FROM DUAL ` +
       `WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${id}) AS t);`,
     'COMMIT;',
+    `DO RELEASE_LOCK('jt-gooten-blank-${id}');`,
   ].join('\n');
 }
 
@@ -178,8 +186,10 @@ function gootenPicture(u) {
 /** Where the blanks go: Cloudinary for pictures, the designer's MySQL for the
  *  product. `cloudinary` is the configured v2 SDK, `mysql(url, sql, opts)` and
  *  `url` from db.js. Both injected, so tests use fakes. */
-function designerStore({ cloudinary, mysql, url, cloudReady }) {
-  const ready = () => !!(url && cloudReady && mysql && cloudinary);
+function designerStore({ cloudinary, mysql, url, cloudReady, client = true }) {
+  /* `client`: the mysql binary exists (db.js MYSQL). Without it every add would
+     upload its pictures and then fail; it is refused before any upload. */
+  const ready = () => !!(url && cloudReady && mysql && cloudinary && client);
   /** The flattened picture's address (shown at most 1600px wide). `side` is a
    *  sidesOf() side: the blank, its canvas size W x H, and overlays with boxes
    *  on that canvas. The blank is uploaded plain first, to learn its real pixel
@@ -191,9 +201,10 @@ function designerStore({ cloudinary, mysql, url, cloudReady }) {
     if (overlays.length) {
       const k = Number(r && r.width) / W;
       if (!(k > 0)) throw new Error('Cloudinary gave no picture size');
+      const ups = await Promise.all(overlays.map((ov, i) => cloudinary.uploader.upload(ov.url, { public_id: `${publicId}-o${i + 1}`, overwrite: false, resource_type: 'image' })));
       const layers = [];
       for (let i = 0; i < overlays.length; i++) {
-        const o = await cloudinary.uploader.upload(overlays[i].url, { public_id: `${publicId}-o${i + 1}`, overwrite: false, resource_type: 'image' });
+        const o = ups[i];
         const b = overlays[i].box;
         layers.push({ overlay: String(o.public_id).replace(/\//g, ':'), width: Math.round((b.x2 - b.x1) * k), height: Math.round((b.y2 - b.y1) * k), crop: 'scale' },
           { flags: 'layer_apply', gravity: 'north_west', x: Math.round(b.x1 * k), y: Math.round(b.y1 * k) });
@@ -210,8 +221,9 @@ function designerStore({ cloudinary, mysql, url, cloudReady }) {
    *  never blocks the web server. An error after the write began carries
    *  `maybeWritten`, so the page never says "not written" when it may be. */
   async function save(gootenId, cols, { thumb, description, keepName = false }) {
-    const [a] = await mysql(url, 'SELECT author FROM lumise_products WHERE active=1 LIMIT 1;', { rows: true });
-    if (!a) throw new Error('no designer product to take the author from');
+    /* mysql -B prints SQL NULL as the text NULL. */
+    const [a] = await mysql(url, "SELECT author FROM lumise_products WHERE active=1 AND author IS NOT NULL AND author<>'' ORDER BY id LIMIT 1;", { rows: true });
+    if (!a || !a.author || a.author === 'NULL') throw new Error('no designer product to take the author from');
     try {
       await mysql(url, upsertSql(gootenId, cols, { thumb, description, author: a.author, keepName }));
       const got = await mysql(url, `SELECT id, MD5(stages) AS h FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${Number(gootenId)} ORDER BY id;`, { rows: true });
@@ -223,4 +235,4 @@ function designerStore({ cloudinary, mysql, url, cloudReady }) {
   return { ready, picture, save };
 }
 
-module.exports = { gootenPicture, designerStore, SUPPLIER, MAX_TEMPLATES, FALLBACKS, MASK, PRODUCT_WIDTH, optionPairs, pickSkus, sidesOf, sideKey, stageOf, stagesOf, productColumns, upsertSql, pictureId };
+module.exports = { gootenPicture, designerStore, SUPPLIER, MAX_TEMPLATES, FALLBACKS, isMask, PRODUCT_WIDTH, optionPairs, pickSkus, sidesOf, sideKey, stageOf, stagesOf, productColumns, upsertSql, pictureId };
