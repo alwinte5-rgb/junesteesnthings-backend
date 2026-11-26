@@ -85,7 +85,7 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   const calls = [];
   const cloudinary = { uploader: { upload: async (src, o) => { calls.push([src, o]); return { public_id: o.public_id, width: 2745, secure_url: `https://res.cloudinary.com/c/image/upload/v1/${o.public_id}.png` }; } } };
   const db = []; let rows = [];
-  const mysql = async (url, sql, o) => { db.push(sql); if (/^SELECT author/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, MD5/.test(sql)) return rows; return null; };
+  const mysql = async (url, sql, o) => { db.push(sql); if (/^SELECT IFNULL\(author/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, MD5/.test(sql)) return rows; return null; };
   const store = GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true });
   assert.strictEqual(store.ready(), true);
   assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: '', cloudReady: true }).ready(), false);
@@ -114,8 +114,15 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   const w2 = db.find((x) => x.startsWith('DO IF(GET_LOCK('));
   assert.ok(w2 && /START TRANSACTION;/.test(w2) && /COMMIT;\nDO RELEASE_LOCK\('jt-gooten-blank-7'\);$/.test(w2), 'one transaction under a named lock');
   assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true, client: false }).ready(), false, 'no mysql client: refused before uploads');
-  const nul = GD.designerStore({ cloudinary, mysql: async (u, sql) => (/^SELECT author/.test(sql) ? [{ author: 'NULL' }] : null), url: 'mysql://x', cloudReady: true });
-  await assert.rejects(nul.save(7, cols, { thumb: 't', description: 'd' }), /author/);
+  /* This shop's products carry an EMPTY author (the designer's vendor id):
+     that is a real value and must be accepted, NULL is read as '' too. */
+  const authorSql = db.filter((x) => /^SELECT IFNULL\(author/.test(x));
+  assert.ok(authorSql.length && !/author<>''/.test(authorSql[0]), 'an empty author is not ruled out');
+  const empty = GD.designerStore({ cloudinary, url: 'mysql://x', cloudReady: true,
+    mysql: async (u, sql) => (/^SELECT IFNULL\(author/.test(sql) ? [{ author: '' }] : /^SELECT id, MD5/.test(sql) ? rows : null) });
+  assert.strictEqual(await empty.save(7, cols, { thumb: 't', description: 'd' }), 501);
+  const none = GD.designerStore({ cloudinary, url: 'mysql://x', cloudReady: true, mysql: async () => [] });
+  await assert.rejects(none.save(7, cols, { thumb: 't', description: 'd' }), /author/);
 });
 
 test('masks are told by their own folder or file, and option values may hold commas', () => {
@@ -167,7 +174,7 @@ test('Add to designer route: reads the templates, copies pictures, writes, links
   ready = true;
   designer.save = async () => { throw new Error('boom'); };
   r = await run({ product: '186' });
-  assert.strictEqual(r.status, 502); assert.match(r.html, /not written/);
+  assert.strictEqual(r.status, 500); assert.match(r.html, /not written/);
   designer.save = async () => { const e = new Error('boom'); e.maybeWritten = true; throw e; };
   r = await run({ product: '186' });
   assert.match(r.html, /may have been written/);

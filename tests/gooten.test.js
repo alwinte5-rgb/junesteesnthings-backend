@@ -210,7 +210,7 @@ test('Gooten page: JSON callers always get JSON, and a bad SKU says so', async (
   let r = await run({ product: '7', format: 'json' });
   assert.strictEqual(r.json.count, 1); assert.strictEqual(r.json.product, null); assert.strictEqual(r.json.variants[0].cost, 4);
   r = await run({ sku: 'A-1', format: 'json' });
-  assert.strictEqual(r.status, 502); assert.ok(r.json.error);
+  assert.strictEqual(r.status, 500); assert.ok(r.json.error);
   r = await run({ sku: 'x#', format: 'json' });
   assert.strictEqual(r.status, 400);
   r = await run({ sku: 'x#' });

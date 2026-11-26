@@ -221,9 +221,12 @@ function designerStore({ cloudinary, mysql, url, cloudReady, client = true }) {
    *  never blocks the web server. An error after the write began carries
    *  `maybeWritten`, so the page never says "not written" when it may be. */
   async function save(gootenId, cols, { thumb, description, keepName = false }) {
-    /* mysql -B prints SQL NULL as the text NULL. */
-    const [a] = await mysql(url, "SELECT author FROM lumise_products WHERE active=1 AND author IS NOT NULL AND author<>'' ORDER BY id LIMIT 1;", { rows: true });
-    if (!a || !a.author || a.author === 'NULL') throw new Error('no designer product to take the author from');
+    /* The designer's own vendor id, as its live products carry it. On this
+       shop that is the EMPTY string (lib.php loads by author = vendor_id, and
+       the staged S&S rows are written with ''), so '' is a real value; only
+       SQL NULL is not, and IFNULL keeps mysql -B from printing it as "NULL". */
+    const [a] = await mysql(url, "SELECT IFNULL(author, '') AS author FROM lumise_products WHERE active=1 ORDER BY id LIMIT 1;", { rows: true });
+    if (!a || typeof a.author !== 'string') throw new Error('no designer product to take the author from');
     try {
       await mysql(url, upsertSql(gootenId, cols, { thumb, description, author: a.author, keepName }));
       const got = await mysql(url, `SELECT id, MD5(stages) AS h FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${Number(gootenId)} ORDER BY id;`, { rows: true });
