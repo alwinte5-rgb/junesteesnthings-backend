@@ -85,7 +85,7 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   const calls = [];
   const cloudinary = { uploader: { upload: async (src, o) => { calls.push([src, o]); return { public_id: o.public_id, width: 2745, secure_url: `https://res.cloudinary.com/c/image/upload/v1/${o.public_id}.png` }; } } };
   const db = []; let rows = [];
-  const mysql = async (url, sql, o) => { db.push(sql); if (/^SELECT author, COUNT/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, MD5/.test(sql)) return rows; return null; };
+  const mysql = async (url, sql, o) => { db.push(sql); if (/^SELECT author, COUNT/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, stages/.test(sql)) return rows; return null; };
   const store = GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true });
   assert.strictEqual(store.ready(), true);
   assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: '', cloudReady: true }).ready(), false);
@@ -103,11 +103,11 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   await assert.rejects(store.picture('gooten-blanks/7-x', { ...side, overlays: [{ url: 'https://evil.example.com/o.png', box: side.overlays[0].box }] }), /Gooten host/);
   await assert.rejects(store.picture('gooten-blanks/7-x', side2('https://anyone.azureedge.net/a.png')), /Gooten host/);
   const cols = GD.productColumns({ name: 'Mugs', choices: [{ label: 'x', stages: { front: {} } }] });
-  const h = require('crypto').createHash('md5').update(cols.stages).digest('hex');
+  const h = cols.stages;
   await assert.rejects(store.save(7, cols, { thumb: 't', description: 'd' }), (e) => /could not be confirmed/.test(e.message) && e.maybeWritten === true);
-  rows = [{ id: '501', h }, { id: '502', h }];
+  rows = [{ id: '501', stages: h }, { id: '502', stages: h }];
   await assert.rejects(store.save(7, cols, { thumb: 't', description: 'd' }), /more than one/);
-  rows = [{ id: '501', h }];
+  rows = [{ id: '501', stages: h }];
   assert.strictEqual(await store.save(7, cols, { thumb: 't', description: 'd' }), 501);
   const w = db.find((x) => x.startsWith('START TRANSACTION;'));
   assert.ok(w === undefined, 'the lock comes first');
@@ -119,7 +119,7 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   const authorSql = db.filter((x) => /^SELECT author, COUNT/.test(x));
   assert.ok(authorSql.length && !/author<>''/.test(authorSql[0]) && /author IS NOT NULL GROUP BY author ORDER BY n DESC/.test(authorSql[0]), 'the most common non-NULL author, empty allowed');
   const empty = GD.designerStore({ cloudinary, url: 'mysql://x', cloudReady: true,
-    mysql: async (u, sql) => (/^SELECT author, COUNT/.test(sql) ? [{ author: '' }] : /^SELECT id, MD5/.test(sql) ? rows : null) });
+    mysql: async (u, sql) => (/^SELECT author, COUNT/.test(sql) ? [{ author: '' }] : /^SELECT id, stages/.test(sql) ? rows : null) });
   assert.strictEqual(await empty.save(7, cols, { thumb: 't', description: 'd' }), 501);
   const none = GD.designerStore({ cloudinary, url: 'mysql://x', cloudReady: true, mysql: async () => [] });
   await assert.rejects(none.save(7, cols, { thumb: 't', description: 'd' }), /author/);
