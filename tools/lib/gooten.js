@@ -315,24 +315,28 @@ function variantRows(v) {
 
 /* ── Templates (the blank product and where art goes) ─────────────────── */
 
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+/* null, '' and booleans are no figure: Number() would make them 0 or 1. */
+const num = (v) => ((typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(Number(v)) ? Number(v) : null);
 /** Only a plain https picture address is kept: these are drawn on admin pages
  *  and copied into the designer. */
 function imageUrl(v) {
   const s = String(v == null ? '' : v).trim();
-  return /^https:\/\/[A-Za-z0-9.-]+\/[^\s"'<>\\]{1,600}$/.test(s) ? s : '';
+  if (!s || s.length > 800 || /[\s"'<>\\]/.test(s)) return '';
+  try { const u = new URL(s); return u.protocol === 'https:' && u.hostname ? u.href : ''; } catch { return ''; }
 }
 function box(o, pre = '') {
   const b = { x1: num(o[`${pre}X1`]), y1: num(o[`${pre}Y1`]), x2: num(o[`${pre}X2`]), y2: num(o[`${pre}Y2`]) };
   return [b.x1, b.y1, b.x2, b.y2].every((n) => n !== null) && b.x2 > b.x1 && b.y2 > b.y1 ? b : null;
 }
 
-/** Gooten's template answer, read defensively: [{ name, isDefault, preview,
+/** Gooten's template answer, read defensively (null when unreadable): [{ name, isDefault, preview,
  *  spaces: [{ id, name, final, layers: [{ id, type, print, box, z, bg, overlay }] }] }].
  *  A layer of type "Image" is where artwork goes; "Design" layers carry the
  *  blank's pictures (bg under the art, overlay over it). */
 function templateOptions(t) {
-  const opts = t && Array.isArray(t.Options) ? t.Options : [];
+  /* An answer without an Options list is unreadable, not "no template". */
+  if (!t || !Array.isArray(t.Options)) return null;
+  const opts = t.Options;
   return opts.filter(isObj).slice(0, 20).map((o) => ({
     name: text(o.Name, 60), isDefault: o.IsDefault === true, preview: imageUrl(o.ImageUrl),
     spaces: (Array.isArray(o.Spaces) ? o.Spaces : []).filter(isObj).slice(0, 20).map((sp) => ({

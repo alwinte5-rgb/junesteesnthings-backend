@@ -175,7 +175,13 @@ test('templateOptions keeps boxes and https pictures, drops the rest', () => {
   assert.deepStrictEqual(sp.layers[1].box, { x1: 50, y1: 60, x2: 550, y2: 700 });
   assert.strictEqual(sp.layers[1].print, true);
   assert.strictEqual(sp.layers[2].box, null);
-  assert.deepStrictEqual(G.templateOptions(null), []);
+  assert.strictEqual(G.templateOptions(null), null);
+  assert.strictEqual(G.templateOptions([]), null);
+  assert.deepStrictEqual(G.templateOptions({ Options: [] }), []);
+  const [o2] = G.templateOptions({ Options: [{ Spaces: [{ Layers: [{ X1: null, Y1: '', X2: 600, Y2: 750, ZIndex: true }] }] }] });
+  assert.strictEqual(o2.spaces[0].layers[0].box, null);
+  assert.strictEqual(o2.spaces[0].layers[0].z, null);
+  assert.strictEqual(G.imageUrl('https://cdn.x.com:8443/a.png?v=1'), 'https://cdn.x.com:8443/a.png?v=1');
   assert.strictEqual(G.imageUrl('http://x.com/a.png'), '');
   assert.strictEqual(G.imageUrl('https://x.com/a".png'), '');
 });
@@ -185,4 +191,30 @@ test('variant cost falls back to PriceInfo, and the export names fields without 
   assert.deepStrictEqual(G.variantRows(v).map((r) => r.cost), [12.5, 3]);
   assert.deepStrictEqual(G.variantFields(v), ['Sku', 'PriceInfo', 'Options']);
   assert.deepStrictEqual(G.variantFields(null), []);
+});
+
+test('Gooten page: JSON callers always get JSON, and a bad SKU says so', async () => {
+  const routes = {};
+  const app = { get: (p, ...h) => { routes['GET ' + p] = h[h.length - 1]; }, post: () => {} };
+  const fetcher = async (u) => {
+    if (String(u).includes('catalog.json')) return { status: 500, ok: false, json: async () => ({}) };
+    if (String(u).includes('producttemplates')) return { status: 200, ok: true, json: async () => ({ Data: {} }) };
+    return { status: 200, ok: true, json: async () => ({ ProductVariants: [{ Sku: 'A-1', PriceInfo: { Price: 4 } }] }) };
+  };
+  O.registerGooten(app, { pool: {}, requireAdmin: () => {}, adminPage: (t, b) => b, pageHeader: () => '', esc: (s) => String(s), money: String,
+    quoteCodeRe: /^[A-Z0-9]+$/, SHIP: {}, ART: {}, PHOTOS: {}, shop: {}, mayUse: () => true, env: ENV, fetcher });
+  const run = async (query) => {
+    const out = {}; const res = { set() {}, status(c) { out.status = c; return res; }, json(j) { out.json = j; return res; }, send(b) { out.html = b; return res; } };
+    await routes['GET /admin/gooten']({ query }, res); return out;
+  };
+  let r = await run({ product: '7', format: 'json' });
+  assert.strictEqual(r.json.count, 1); assert.strictEqual(r.json.product, null); assert.strictEqual(r.json.variants[0].cost, 4);
+  r = await run({ sku: 'A-1', format: 'json' });
+  assert.strictEqual(r.status, 502); assert.ok(r.json.error);
+  r = await run({ sku: 'x#', format: 'json' });
+  assert.strictEqual(r.status, 400);
+  r = await run({ sku: 'x#' });
+  assert.strictEqual(r.status, 400); assert.match(r.html, /not a Gooten SKU/);
+  r = await run({ sku: 'A-1', format: 'json' }); // still unreadable, still JSON
+  assert.ok(r.json);
 });
