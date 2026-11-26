@@ -154,7 +154,7 @@ function pictureId(gootenId, bg, overlays) {
 function gootenPicture(u) {
   try {
     const x = new URL(u);
-    return x.protocol === 'https:' && (/(^|\.)gooten\.com$/i.test(x.hostname) || /^gtnadminassets\.blob\.core\.windows\.net$/i.test(x.hostname) || /(^|\.)azureedge\.net$/i.test(x.hostname));
+    return x.protocol === 'https:' && (/(^|\.)gooten\.com$/i.test(x.hostname) || /^gtnadminassets\.blob\.core\.windows\.net$/i.test(x.hostname));
   } catch { return false; }
 }
 

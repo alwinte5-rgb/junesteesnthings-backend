@@ -89,6 +89,7 @@ test('store: only Gooten hosts are fetched; overlays flattened on upload; the wr
   assert.strictEqual(calls[1][1].overwrite, false);
   await assert.rejects(store.picture('gooten-blanks/7-x', 'https://evil.example.com/a.png', []), /Gooten host/);
   await assert.rejects(store.picture('gooten-blanks/7-x', 'https://gooten.com.evil.net/a.png', []), /Gooten host/);
+  await assert.rejects(store.picture('gooten-blanks/7-x', 'https://anyone.azureedge.net/a.png', []), /Gooten host/);
   const cols = GD.productColumns({ name: 'Mugs', choices: [{ label: 'x', stages: { front: {} } }] });
   assert.throws(() => store.save(7, cols, { thumb: 't', description: 'd' }), /could not be confirmed/);
   row = { id: '501', name: cols.name };
