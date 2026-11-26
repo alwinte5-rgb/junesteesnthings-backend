@@ -23,6 +23,13 @@ const PERSONAL = new Set(`gmail.com googlemail.com yahoo.com ymail.com rocketmai
  jtees.net jtees.bet junesteesnthings.com
  gmail.con gmaill.com gamil.com gmai.com yahooo.com hotmial.com aolmailcandy.com`.split(/\s+/).filter(Boolean));
 
+/* Addresses that must never get a campaign: our own domains (staff tests),
+   test domains, and the typo domains seen in the contact list (they bounce and
+   hurt the sender's standing). Also in PERSONAL, so never "business" either. */
+const NOT_CUSTOMER = new Set(`example.com example.org example.net example.invalid test.com
+ jtees.net jtees.bet junesteesnthings.com
+ gmail.con gmaill.com gamil.com gmai.com yahooo.com hotmial.com aolmailcandy.com`.split(/\s+/).filter(Boolean));
+
 /** The email's domain, lower-cased, or '' if it has none. */
 function emailDomain(email) {
   const m = /^[^\s@]+@([^\s@]+\.[^\s@]+)$/.exec(String(email || '').trim().toLowerCase());
@@ -66,4 +73,43 @@ function withBusinessList(body, env = process.env) {
   return { ...body, listIds: [...lists, id] };
 }
 
-module.exports = { emailDomain, isBusinessEmail, businessListId, withBusinessList, PERSONAL };
+/** The Brevo list EVERY contact joins (owner, 2026-11-26: "fix the pipeline
+ *  so my emails go to all contacts"). Chat contacts only went to the chat list
+ *  and nothing else gathered everyone in one place, so a campaign to list 2
+ *  missed people. Campaigns go to this list; it is added on the same client
+ *  rule as the business list, so no way in can skip it.
+ *  BREVO_ALL_LIST_ID: a list id, or "off". Unset means the list made for this
+ *  on 2026-11-26 (12, "All contacts"). */
+function everyoneListId(env = process.env) {
+  const raw = String(env.BREVO_ALL_LIST_ID ?? '').trim();
+  if (raw.toLowerCase() === 'off') return null;
+  if (raw === '') return 12;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n > 0) return n;
+  if (!everyoneListId.warned) {
+    everyoneListId.warned = true;
+    console.warn(`BREVO_ALL_LIST_ID "${raw.slice(0, 20)}" is not a list id or "off"; contacts are not being added to the all-contacts list`);
+  }
+  return null;
+}
+
+/** A contact write's body with the all-contacts list added. Returns the same
+ *  object when nothing changes. */
+function withEveryoneList(body, env = process.env) {
+  if (!body || typeof body !== 'object') return body;
+  if (body.email && NOT_CUSTOMER.has(emailDomain(body.email))) return body;
+  const id = everyoneListId(env);
+  if (!id) return body;
+  const lists = Array.isArray(body.listIds) ? body.listIds : [];
+  if (lists.includes(id)) return body;
+  return { ...body, listIds: [...lists, id] };
+}
+
+/** Every list a new or returning contact joins on the way in: everyone's,
+ *  then the business list when the email is a business one. */
+function withJoinLists(body, env = process.env) {
+  return withBusinessList(withEveryoneList(body, env), env);
+}
+
+module.exports = { emailDomain, isBusinessEmail, businessListId, withBusinessList,
+  everyoneListId, withEveryoneList, withJoinLists, PERSONAL, NOT_CUSTOMER };

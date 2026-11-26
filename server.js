@@ -3522,15 +3522,23 @@ const brevo = joinBusinessList(keepFirstSource(keepContactsWhenPhoneFails(explai
   headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
 }), 'Brevo'))));
 
-/** New business contacts join the Brevo "Business" list (owner, 2026-11-14:
- *  "add new businesses"), on the client every contact write passes through, so
- *  no way in — quote form, checkout, chat, a quote the shop builds — can miss
- *  it. A business is an email on a custom domain (tools/lib/business-contact.js;
- *  BREVO_BUSINESS_LIST_ID picks the list, "off" stops it). The list is only
- *  ever added to the write, never removed, so a contact already on it stays.
- *  The list must never cost a contact: if Brevo refuses a write the list was
- *  added to, the same write (phone and source already settled by the other
- *  interceptors) is sent once more with only that list taken back out.
+/** The join lists, added on the client every contact write passes through, so
+ *  no way in — quote form, checkout, chat, a quote the shop builds, the quote
+ *  attribute sync — can miss them:
+ *  - "All contacts" (owner, 2026-11-26: "fix the pipeline so my emails go to
+ *    all contacts"; BREVO_ALL_LIST_ID, default 12): every contact except our
+ *    own, test and typo domains. Campaigns go to this list.
+ *  - "Business" (owner, 2026-11-14: "add new businesses"; BREVO_BUSINESS_LIST_ID,
+ *    default 11): emails on a custom domain.
+ *  Lists are only ever added to the write, never removed. So every write puts
+ *  the person back on them, just as list 2 always has: the way to keep someone
+ *  off the campaign list is to unsubscribe them (emailBlacklisted, below), not
+ *  to take them off the list by hand in Brevo.
+ *  The lists must never cost a contact: if Brevo refuses a write over a list,
+ *  the same write (phone and source already settled by the other interceptors)
+ *  is retried without one added list, then without the other, then without
+ *  both, so one missing list never takes the other with it.
+ *  jtNoBusinessList skips this whole rule (both lists).
  *  tests/business-contact.test.js. */
 function joinBusinessList(instance) {
   instance.interceptors.request.use((cfg) => {
@@ -3539,21 +3547,27 @@ function joinBusinessList(instance) {
     /* An unsubscribe (pushOptoutToBrevo) is not someone getting in touch: it
        must never put a person on, or create them in, a marketing list. */
     if (body && 'emailBlacklisted' in body) return cfg;
-    const next = BUSINESS.withBusinessList(body);
+    const next = BUSINESS.withJoinLists(body);
     if (!body || next === body) return cfg;
-    return { ...cfg, data: next, jtBusinessListId: next.listIds[next.listIds.length - 1] };
+    const had = Array.isArray(body.listIds) ? body.listIds : [];
+    const added = next.listIds.filter((id) => !had.includes(id));
+    /* What to take back out, in order, if Brevo refuses a list: each one
+       alone first, then all of them. */
+    const drops = added.length > 1 ? [...added.map((id) => [id]), added] : [added];
+    return { ...cfg, data: next, jtFullListIds: next.listIds, jtListDrops: drops };
   });
   instance.interceptors.response.use(null, (err) => {
     const cfg = err && err.config;
     const body = contactWriteBody(cfg);
     const status = err && err.response ? err.response.status : 0;   // only a refusal of the write itself; a dead key or outage is not retried
     const said = String((err && err.response && err.response.data && err.response.data.message) || '');
-    if (!cfg || !cfg.jtBusinessListId || cfg.jtNoBusinessList || !body || (status !== 400 && status !== 404)
+    if (!cfg || !cfg.jtListDrops || !cfg.jtListDrops.length || !body || (status !== 400 && status !== 404)
         || !/\blist/i.test(said)) return Promise.reject(err);   // a refusal about anything else is not ours to retry
-    console.warn('brevo: contact write refused with the business list added; sending it without —',
+    const [drop, ...rest] = cfg.jtListDrops;
+    console.warn(`brevo: contact write refused with list(s) added; sending it without list ${drop.join(', ')} —`,
       err.response && err.response.data && err.response.data.message || err.message);
-    const listIds = (Array.isArray(body.listIds) ? body.listIds : []).filter((id) => id !== cfg.jtBusinessListId);
-    return instance.request({ ...cfg, data: { ...body, listIds }, jtNoBusinessList: true });
+    const listIds = cfg.jtFullListIds.filter((id) => !drop.includes(id));
+    return instance.request({ ...cfg, data: { ...body, listIds }, jtNoBusinessList: true, jtListDrops: rest });
   });
   return instance;
 }
@@ -3726,8 +3740,28 @@ async function brevoCatchUp() {
   return synced ? `${synced} synced` : '';
 }
 
+/** Says out loud, once at startup, when the all-contacts list id points at a
+ *  list that is missing or is not the "All contacts" list: Brevo accepts a
+ *  write to ANY list that exists, so a wrong id would file every contact on
+ *  the wrong list with no error at all. */
+async function checkAllContactsList() {
+  const id = BUSINESS.everyoneListId();
+  if (!id || !process.env.BREVO_API_KEY) return;
+  try {
+    const { data } = await brevo.get(`/contacts/lists/${id}`, { timeout: 8000 });
+    const name = String((data && data.name) || '');
+    if (!/all contacts/i.test(name)) {
+      console.warn(`BREVO_ALL_LIST_ID: list ${id} is named "${name.slice(0, 60)}", not "All contacts"; every new contact is being added to it`);
+    }
+  } catch (e) {
+    const code = e.response && e.response.status;
+    console.warn(`BREVO_ALL_LIST_ID: could not confirm list ${id}${code === 404 ? ' (it does not exist)' : ''}: ${e.message}`);
+  }
+}
+
 // Upsert a tawk.to chat/ticket contact. Chat leads go to their own list when
-// BREVO_TAWK_LIST_ID is set, otherwise they fall back to the main list.
+// BREVO_TAWK_LIST_ID is set, otherwise they fall back to the main list. Like
+// every contact, they also join the all-contacts list (joinBusinessList).
 async function syncTawkContactToBrevo({ name, email }, { late = false } = {}) {
   if (isSpamName(name)) {
     console.warn('syncTawkContactToBrevo: skipping spam contact:', name);
@@ -48458,6 +48492,7 @@ initDB()
     /* After listening, so it never holds up a deploy. */
     anchorUndatedPaidJobs().catch((e) => console.error('working dates from deposits:', e.message));
     archiveSettledHelpers().catch((e) => console.error('archiving settled helpers:', e.message));
+    checkAllContactsList().catch((e) => console.error('checking the all-contacts list:', e.message));
   }))
   .catch(err => {
     console.error('DB init failed, exiting:', err.message);
