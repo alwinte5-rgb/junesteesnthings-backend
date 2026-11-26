@@ -16,6 +16,7 @@
  * Every order is a TEST until the owner sets GOOTEN_LIVE=1. */
 
 const G = require('./gooten');
+const GD = require('./gooten-designer');
 
 /* draft    prepared and priced, not sent
  * sending  claimed by a click; still here after 10 minutes is 'unknown'
@@ -73,7 +74,7 @@ const sameAddress = (a, b) => ['name', 'street1', 'street2', 'city', 'state', 'z
 
 function registerGooten(app, d) {
   const { pool, requireAdmin, adminPage, pageHeader, back, esc, money, quoteCodeRe, SHIP, ART, PHOTOS, shop,
-          mayUse, staffId, quoteTotals, balanceOf, moveToShipped, inTextingHours, reportError, env = process.env, fetcher } = d;
+          mayUse, staffId, quoteTotals, balanceOf, moveToShipped, inTextingHours, reportError, env = process.env, fetcher, designer } = d;
   const api = () => G.client({ env, ...(fetcher ? { fetcher } : {}) });
   const jobPath = (code) => `/admin/production/${code}#gooten`;
   const codeOf = (req) => { const c = String(req.params.code || '').toUpperCase(); return quoteCodeRe.test(c) ? c : null; };
@@ -497,6 +498,7 @@ function registerGooten(app, d) {
         const all = G.variantRows(await api().variants(pid)).filter((v) => hit(`${v.sku} ${v.options}`));
         return res.send(adminPage('Gooten', `${head}<p><a href="/admin/gooten">All products</a></p>${search}
           <div class="card"><h2 class="card-title">${esc(p ? p.name : `Product ${pid}`)}</h2>
+          ${mayUse('POST', '/admin/gooten/designer') ? `<form method="post" action="/admin/gooten/designer" class="row" style="gap:8px;margin-bottom:8px" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Adding… (up to a minute)'"><input type="hidden" name="product" value="${pid}"><button type="submit">Add blank to the designer</button><span class="muted">Hidden from the shop; opens by its link to view and design on. Re-adding refreshes it.</span></form>` : ''}
           <p class="muted">${all.length} option${all.length === 1 ? '' : 's'}${all.length > 200 ? ', first 200 shown: search to narrow it' : ''} (<a href="/admin/gooten?product=${pid}&amp;format=json">all as data</a>). Cost is Gooten’s price to the shop, before shipping (from ${esc(p ? p.ship : '—')}).</p>
           <div style="overflow-x:auto"><table style="width:100%"><thead><tr><th align="left">SKU</th><th align="left">Options</th><th align="left">Cost</th><th align="left">Artwork sides</th><th align="left">Template</th></tr></thead><tbody>${
             all.slice(0, 200).map((v) => `<tr><td style="padding:6px"><code>${esc(v.sku)}</code></td><td style="padding:6px">${esc(v.options)}</td><td style="padding:6px">${v.cost != null ? money(v.cost) : 'not given'}</td><td style="padding:6px">${v.images || ''}</td><td style="padding:6px">${G.SKU_RE.test(v.sku) ? `<a href="/admin/gooten?sku=${encodeURIComponent(v.sku)}">View</a>` : ''}</td></tr>`).join('')}</tbody></table></div></div>`, 'gooten'));
@@ -510,6 +512,72 @@ function registerGooten(app, d) {
       if (asJson) return res.status(502).json({ error: e instanceof G.GootenError ? e.message : 'Gooten could not be loaded.' });
       return res.status(502).send(adminPage('Gooten', `${head}<div class="warn">${e instanceof G.GootenError ? esc(e.message) : 'Gooten’s catalog could not be loaded.'} Try again in a minute.</div>`, 'gooten'));
     }
+  });
+
+  /* ── Gooten blanks in the designer (gooten-designer.js) ───────────── */
+
+  const adding = new Set();
+  app.post('/admin/gooten/designer', requireAdmin, async (req, res) => {
+    const head = pageHeader('Gooten', 'Print-on-demand products, with what they cost the shop before your price.');
+    const page = (html, status = 200) => res.status(status).send(adminPage('Gooten', `${head}${html}`, 'gooten'));
+    const pid = /^\d{1,9}$/.test(String((req.body || {}).product || '')) ? Number(req.body.product) : null;
+    const backLink = pid ? `<p><a href="/admin/gooten?product=${pid}">Back to the product</a></p>` : '<p><a href="/admin/gooten">All products</a></p>';
+    if (!pid) return page(`${backLink}<div class="warn">Choose a Gooten product first.</div>`, 400);
+    if (!G.configured(env)) return page(`${backLink}<div class="warn">Gooten is not set up on the server.</div>`, 503);
+    if (!designer || !designer.ready()) return page(`${backLink}<div class="warn">The designer’s database or picture storage is not reachable from here, so nothing was added.</div>`, 503);
+    if (adding.has(pid)) return page(`${backLink}<div class="warn">This product is already being added. Give it a minute, then open the product again.</div>`, 409);
+    adding.add(pid);
+    try {
+      const list = await products().catch(() => []);
+      const p = list.find((x) => x.id === pid);
+      const { total, picked } = GD.pickSkus(G.variantRows(await api().variants(pid)));
+      if (!picked.length) return page(`${backLink}<div class="warn">Gooten lists no SKUs for this product.</div>`, 404);
+      /* One template per picked SKU, a few at a time; a SKU whose template
+         cannot be read is named, never quietly left out. */
+      const results = [];
+      for (let i = 0; i < picked.length; i += 3) {
+        results.push(...await Promise.all(picked.slice(i, i + 3).map(async (g) => {
+          try { return { g, sides: GD.sidesOf(G.templateOptions(await api().templates(g.sku)) || []) }; }
+          catch (e) { return { g, error: e instanceof G.GootenError ? e.message : 'could not be read' }; }
+        })));
+      }
+      const usable = new Map();
+      const skipped = [];
+      for (const r of results) {
+        if (r.error || !r.sides.length) { skipped.push(`${r.g.label} (${r.g.sku}): ${r.error || 'no blank picture or print area'}`); continue; }
+        const k = GD.sideKey(r.sides);
+        if (!usable.has(k)) usable.set(k, r);
+      }
+      if (!usable.size) return page(`${backLink}<div class="warn">None of this product’s templates had a blank picture and a print area, so nothing was added.</div><ul>${skipped.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`, 422);
+      /* The pictures: each side's blank with its colour overlays flattened on,
+         copied to Cloudinary once (a stable name, so re-adding reuses it). */
+      const pics = new Map();
+      const picture = async (side) => {
+        const id = GD.pictureId(pid, side.bg, side.overlays);
+        if (!pics.has(id)) pics.set(id, designer.picture(id, side.bg, side.overlays));
+        return pics.get(id);
+      };
+      const choices = [];
+      for (const r of usable.values()) {
+        const images = [];
+        for (const side of r.sides) images.push(await picture(side));
+        choices.push({ label: r.g.label, stages: GD.stagesOf(r.sides, images) });
+      }
+      const name = p ? p.name : `Gooten product ${pid}`;
+      const cols = GD.productColumns({ name, choices });
+      const thumb = choices[0].stages.front.image;
+      const description = `Gooten print-on-demand blank (Gooten product ${pid}), here to view and design on. Not sold online: ask the shop for a quote.`;
+      const id = designer.save(pid, cols, { thumb, description });
+      const editor = `https://design.jtees.net/editor.php?product_base=${id}`;
+      return page(`${backLink}<div class="card"><h2 class="card-title">${esc(cols.name)} is in the designer</h2>
+        <p>Designer product #${id}, hidden from the shop and the quote form. ${choices.length} template${choices.length === 1 ? '' : 's'}${choices.length > 1 ? ' (pick one under “Template”)' : ''}; colors are not separate choices.</p>
+        <p><a href="${esc(editor)}" target="_blank" rel="noopener noreferrer">Open it in the designer</a></p>
+        ${total > picked.length ? `<p class="muted">Gooten has ${total} sizes/shapes for this product; the first ${picked.length} were read.</p>` : ''}
+        ${skipped.length ? `<p class="muted">Left out:</p><ul>${skipped.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`);
+    } catch (e) {
+      console.error('gooten designer add:', e.message);
+      return page(`${backLink}<div class="warn">${e instanceof G.GootenError ? esc(e.message) : 'The blank could not be added.'} The designer product was not written. Try again in a minute.</div>`, 502);
+    } finally { adding.delete(pid); }
   });
 
   return { card, sweep, alerts };

@@ -24113,6 +24113,17 @@ const GOOTEN = require('./tools/lib/gooten-orders').registerGooten(app, {
   mayUse: (method, route) => STAFF.mayUseRoute(currentActor() || OWNER_ACTOR, method, route),
   staffId: attributedStaffId,
   moveToShipped: (code) => moveJobToStage(code, JOB_STAGES.findIndex((x) => x.key === 'out'), { keepLater: true, awaitNotify: true }),
+  /* Gooten blanks into the designer (tools/lib/gooten-designer.js): pictures to
+     Cloudinary, the product straight into the designer's MySQL, as the stock
+     check (supplier-stock.js) already does. */
+  designer: (() => {
+    const DB = require('./tools/lib/db');
+    return require('./tools/lib/gooten-designer').designerStore({
+      cloudinary, mysql: DB.mysql, url: DB.mysqlUrlFrom(process.env),
+      cloudReady: !!((process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME) && process.env.CLOUDINARY_API_KEY
+        && (process.env.CLOUDINARY_API_SECRET || process.env.CLUDINARY_API_SECRET)),
+    });
+  })(),
 });
 
 app.get('/admin/customers', requireAdmin, async (_req, res) => {

@@ -315,6 +315,7 @@ const ROUTES = {
   'POST /admin/shipping/check': 'production.stage',
   'POST /admin/shipping/buy': 'shipping.labels',
   'GET /admin/gooten': 'gooten.send',
+  'POST /admin/gooten/designer': 'owner',
   'POST /admin/quote/:code/gooten/prepare': 'gooten.send',
   'POST /admin/quote/:code/gooten/discard': 'gooten.send',
   'POST /admin/quote/:code/gooten/send': 'gooten.send',
