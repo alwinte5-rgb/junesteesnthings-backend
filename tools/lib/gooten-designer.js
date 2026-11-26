@@ -153,9 +153,10 @@ function upsertSql(gootenId, cols, { thumb, description, author, keepName = fals
   return [
     /* A named lock per Gooten product serializes two adds across processes
        (gap locks from SELECT ... FOR UPDATE on a missing row deadlock instead).
-       If it cannot be had in 20s, the subquery error aborts the batch before
-       anything is written. */
-    `DO IF(GET_LOCK('jt-gooten-blank-${id}', 20) = 1, 0, (SELECT 1 UNION ALL SELECT 2));`,
+       If it cannot be had in 20s, JSON_EXTRACT of 'no lock' errors and the
+       batch stops before anything is written. (It depends on GET_LOCK's
+       answer, so MySQL cannot work it out ahead of time.) */
+    `DO JSON_EXTRACT(IF(GET_LOCK('jt-gooten-blank-${id}', 20) = 1, '1', 'no lock'), '$');`,
     'START TRANSACTION;',
     `UPDATE lumise_products SET ${set} WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${id};`,
     'INSERT INTO lumise_products (name, price, product, thumbnail, thumbnail_url, template, description, stages, variations, attributes, printings, ' +

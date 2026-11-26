@@ -111,7 +111,7 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   assert.strictEqual(await store.save(7, cols, { thumb: 't', description: 'd' }), 501);
   const w = db.find((x) => x.startsWith('START TRANSACTION;'));
   assert.ok(w === undefined, 'the lock comes first');
-  const w2 = db.find((x) => x.startsWith('DO IF(GET_LOCK('));
+  const w2 = db.find((x) => x.startsWith("DO JSON_EXTRACT(IF(GET_LOCK('jt-gooten-blank-7', 20) = 1, '1', 'no lock'), '$');"));
   assert.ok(w2 && /START TRANSACTION;/.test(w2) && /COMMIT;\nDO RELEASE_LOCK\('jt-gooten-blank-7'\);$/.test(w2), 'one transaction under a named lock');
   assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true, client: false }).ready(), false, 'no mysql client: refused before uploads');
   /* This shop's products carry an EMPTY author (the designer's vendor id):
@@ -178,4 +178,10 @@ test('Add to designer route: reads the templates, copies pictures, writes, links
   designer.save = async () => { const e = new Error('boom'); e.maybeWritten = true; throw e; };
   r = await run({ product: '186' });
   assert.match(r.html, /may have been written/);
+});
+
+test('mysqlAsync: a refusal carries the MySQL error line (needs a local client; skipped without one)', { skip: !require('../tools/lib/db').MYSQL }, async () => {
+  const db = require('../tools/lib/db');
+  await assert.rejects(db.mysqlAsync('mysql://u:secret@127.0.0.1:1/x', 'SELECT 1;', { timeoutMs: 8000 }),
+    (e) => /^mysql failed: exit \d+: ERROR \d+/.test(e.message) && !e.message.includes('secret'));
 });
