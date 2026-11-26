@@ -473,8 +473,8 @@ function registerGooten(app, d) {
       if (sku) {
         if (!G.configured(env)) return asJson ? res.status(503).json({ error: notSetUp }) : res.send(adminPage('Gooten', `${head}<div class="warn">${notSetUp}</div>`, 'gooten'));
         const opts = G.templateOptions(await api().templates(sku));
-        if (asJson) return opts ? res.json({ sku, options: opts }) : res.status(502).json({ error: 'Gooten’s template answer could not be read.' });
-        if (!opts) return res.status(502).send(adminPage('Gooten', `${head}<p><a href="/admin/gooten">All products</a></p><div class="warn">Gooten answered, but its template for <code>${esc(sku)}</code> could not be read.</div>`, 'gooten'));
+        if (asJson) return opts ? res.json({ sku, options: opts }) : res.status(500).json({ error: 'Gooten’s template answer could not be read.' });
+        if (!opts) return res.status(500).send(adminPage('Gooten', `${head}<p><a href="/admin/gooten">All products</a></p><div class="warn">Gooten answered, but its template for <code>${esc(sku)}</code> could not be read.</div>`, 'gooten'));
         const boxText = (b) => (b ? `${b.x1}, ${b.y1} → ${b.x2}, ${b.y2} (${b.x2 - b.x1} × ${b.y2 - b.y1})` : '—');
         const img = (u, label) => (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer"><img src="${esc(u)}" alt="${esc(label)}" loading="lazy" style="max-width:220px;max-height:220px;border:1px solid #ddd;background:#f6f6f6"></a>` : '');
         const body = opts.length ? opts.map((o) => `<div class="card"><h2 class="card-title">${esc(o.name || 'Template')}${o.isDefault ? ' <span class="muted">(default)</span>' : ''}</h2>
@@ -509,8 +509,8 @@ function registerGooten(app, d) {
           shown.map((p) => `<tr><td style="padding:6px"><a href="/admin/gooten?product=${p.id}">${esc(p.name)}</a>${p.out ? ' <span class="muted">(out of stock)</span>' : ''}</td><td style="padding:6px">${esc(p.groups.join(', '))}</td><td style="padding:6px">${esc(p.cost)}</td><td style="padding:6px">${esc(p.ship)}</td></tr>`).join('')}</tbody></table></div></div>`, 'gooten'));
     } catch (e) {
       console.error('gooten page:', e.message);
-      if (asJson) return res.status(502).json({ error: e instanceof G.GootenError ? e.message : 'Gooten could not be loaded.' });
-      return res.status(502).send(adminPage('Gooten', `${head}<div class="warn">${e instanceof G.GootenError ? esc(e.message) : 'Gooten’s catalog could not be loaded.'} Try again in a minute.</div>`, 'gooten'));
+      if (asJson) return res.status(500).json({ error: e instanceof G.GootenError ? e.message : 'Gooten could not be loaded.' });
+      return res.status(500).send(adminPage('Gooten', `${head}<div class="warn">${e instanceof G.GootenError ? esc(e.message) : 'Gooten’s catalog could not be loaded.'} Try again in a minute.</div>`, 'gooten'));
     }
   });
 
@@ -585,11 +585,13 @@ function registerGooten(app, d) {
         <p><a href="${esc(editor)}" target="_blank" rel="noopener noreferrer">Open it in the designer</a></p>
         ${total > picked.length ? `<p class="muted">Gooten has ${total} sizes/shapes for this product; the first ${picked.length} were read.</p>` : ''}
         ${skipped.length ? `<p class="muted">Left out:</p><ul>${skipped.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`);
+      /* Failures below answer 500, never 502: Cloudflare puts its own "Bad
+         gateway" page in place of an origin 502, and this page's words are lost. */
     } catch (e) {
       console.error('gooten designer add:', e.message);
       return page(`${backLink}<div class="warn">${e instanceof G.GootenError ? esc(e.message) : 'The blank could not be added.'} ${e && e.maybeWritten
         ? 'The designer product may have been written before this went wrong: press Add again to finish it, then open it to check.'
-        : 'The designer product was not written. Try again in a minute.'}</div>`, 502);
+        : 'The designer product was not written. Try again in a minute.'}</div>`, 500);
     } finally { adding.delete(pid); }
   });
 
