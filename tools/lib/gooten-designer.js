@@ -224,8 +224,10 @@ function designerStore({ cloudinary, mysql, url, cloudReady, client = true }) {
     /* The designer's own vendor id, as its live products carry it. On this
        shop that is the EMPTY string (lib.php loads by author = vendor_id, and
        the staged S&S rows are written with ''), so '' is a real value; only
-       SQL NULL is not, and IFNULL keeps mysql -B from printing it as "NULL". */
-    const [a] = await mysql(url, "SELECT IFNULL(author, '') AS author FROM lumise_products WHERE active=1 ORDER BY id LIMIT 1;", { rows: true });
+       SQL NULL is not. */
+    /* The author MOST live products share (one odd row cannot decide it);
+       NULL authors are not a value and are never counted. */
+    const [a] = await mysql(url, 'SELECT author, COUNT(*) AS n FROM lumise_products WHERE active=1 AND author IS NOT NULL GROUP BY author ORDER BY n DESC LIMIT 1;', { rows: true });
     if (!a || typeof a.author !== 'string') throw new Error('no designer product to take the author from');
     try {
       await mysql(url, upsertSql(gootenId, cols, { thumb, description, author: a.author, keepName }));

@@ -85,7 +85,7 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   const calls = [];
   const cloudinary = { uploader: { upload: async (src, o) => { calls.push([src, o]); return { public_id: o.public_id, width: 2745, secure_url: `https://res.cloudinary.com/c/image/upload/v1/${o.public_id}.png` }; } } };
   const db = []; let rows = [];
-  const mysql = async (url, sql, o) => { db.push(sql); if (/^SELECT IFNULL\(author/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, MD5/.test(sql)) return rows; return null; };
+  const mysql = async (url, sql, o) => { db.push(sql); if (/^SELECT author, COUNT/.test(sql)) return [{ author: 'a' }]; if (/^SELECT id, MD5/.test(sql)) return rows; return null; };
   const store = GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true });
   assert.strictEqual(store.ready(), true);
   assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: '', cloudReady: true }).ready(), false);
@@ -116,10 +116,10 @@ test('store: only Gooten hosts are fetched; overlays placed in their boxes; the 
   assert.strictEqual(GD.designerStore({ cloudinary, mysql, url: 'mysql://x', cloudReady: true, client: false }).ready(), false, 'no mysql client: refused before uploads');
   /* This shop's products carry an EMPTY author (the designer's vendor id):
      that is a real value and must be accepted, NULL is read as '' too. */
-  const authorSql = db.filter((x) => /^SELECT IFNULL\(author/.test(x));
-  assert.ok(authorSql.length && !/author<>''/.test(authorSql[0]), 'an empty author is not ruled out');
+  const authorSql = db.filter((x) => /^SELECT author, COUNT/.test(x));
+  assert.ok(authorSql.length && !/author<>''/.test(authorSql[0]) && /author IS NOT NULL GROUP BY author ORDER BY n DESC/.test(authorSql[0]), 'the most common non-NULL author, empty allowed');
   const empty = GD.designerStore({ cloudinary, url: 'mysql://x', cloudReady: true,
-    mysql: async (u, sql) => (/^SELECT IFNULL\(author/.test(sql) ? [{ author: '' }] : /^SELECT id, MD5/.test(sql) ? rows : null) });
+    mysql: async (u, sql) => (/^SELECT author, COUNT/.test(sql) ? [{ author: '' }] : /^SELECT id, MD5/.test(sql) ? rows : null) });
   assert.strictEqual(await empty.save(7, cols, { thumb: 't', description: 'd' }), 501);
   const none = GD.designerStore({ cloudinary, url: 'mysql://x', cloudReady: true, mysql: async () => [] });
   await assert.rejects(none.save(7, cols, { thumb: 't', description: 'd' }), /author/);
