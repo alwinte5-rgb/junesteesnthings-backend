@@ -460,17 +460,36 @@ function registerGooten(app, d) {
     const words = find.toLowerCase().split(/\s+/).filter(Boolean);
     const hit = (s) => words.every((w) => s.toLowerCase().includes(w));
     res.set('Cache-Control', 'no-store');
+    const sku = G.SKU_RE.test(String(req.query.sku || '')) ? String(req.query.sku) : null;
     try {
+      if (sku) {
+        if (!G.configured(env)) return res.send(adminPage('Gooten', `${head}<div class="warn">Gooten is not set up: the server needs GOOTEN_RECIPE_ID and GOOTEN_PARTNER_BILLING_KEY.</div>`, 'gooten'));
+        const opts = G.templateOptions(await api().templates(sku));
+        if (req.query.format === 'json') return res.json({ sku, options: opts });
+        const boxText = (b) => (b ? `${b.x1}, ${b.y1} → ${b.x2}, ${b.y2} (${b.x2 - b.x1} × ${b.y2 - b.y1})` : '—');
+        const img = (u, label) => (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer"><img src="${esc(u)}" alt="${esc(label)}" loading="lazy" style="max-width:220px;max-height:220px;border:1px solid #ddd;background:#f6f6f6"></a>` : '');
+        const body = opts.length ? opts.map((o) => `<div class="card"><h2 class="card-title">${esc(o.name || 'Template')}${o.isDefault ? ' <span class="muted">(default)</span>' : ''}</h2>
+          ${img(o.preview, 'Preview')}${o.spaces.map((sp) => `<h3>${esc(sp.name || sp.id)}</h3><p class="muted">Final size: ${esc(boxText(sp.final))}</p>
+          <div style="overflow-x:auto"><table style="width:100%"><thead><tr><th align="left">Layer</th><th align="left">Type</th><th align="left">Box</th><th align="left">In print</th><th align="left">Blank under art</th><th align="left">Over art</th></tr></thead><tbody>${
+            sp.layers.map((l) => `<tr><td style="padding:6px"><code>${esc(l.id)}</code></td><td style="padding:6px">${esc(l.type)}</td><td style="padding:6px">${esc(boxText(l.box))}</td><td style="padding:6px">${l.print ? 'yes' : 'no'}</td><td style="padding:6px">${img(l.bg, 'Blank')}</td><td style="padding:6px">${img(l.overlay, 'Overlay')}</td></tr>`).join('')}</tbody></table></div>`).join('')}</div>`).join('')
+          : '<div class="card"><p class="muted">Gooten sent no template for this SKU.</p></div>';
+        return res.send(adminPage('Gooten', `${head}<p><a href="/admin/gooten">All products</a></p><h2>Template for <code>${esc(sku)}</code></h2>${body}`, 'gooten'));
+      }
       const list = await products();
+      if (pid && req.query.format === 'json') {
+        if (!G.configured(env)) return res.status(503).json({ error: 'Gooten is not set up.' });
+        const p = list.find((x) => x.id === pid) || null;
+        return res.json(G.variantExport(p, G.variantRows(await api().variants(pid))));
+      }
       if (pid) {
         const p = list.find((x) => x.id === pid);
         if (!G.configured(env)) return res.send(adminPage('Gooten', `${head}<div class="warn">Gooten is not set up: the server needs GOOTEN_RECIPE_ID and GOOTEN_PARTNER_BILLING_KEY.</div>`, 'gooten'));
         const all = G.variantRows(await api().variants(pid)).filter((v) => hit(`${v.sku} ${v.options}`));
         return res.send(adminPage('Gooten', `${head}<p><a href="/admin/gooten">All products</a></p>${search}
           <div class="card"><h2 class="card-title">${esc(p ? p.name : `Product ${pid}`)}</h2>
-          <p class="muted">${all.length} option${all.length === 1 ? '' : 's'}${all.length > 200 ? ', first 200 shown: search to narrow it' : ''}. Cost is Gooten’s price to the shop, before shipping (from ${esc(p ? p.ship : '—')}).</p>
-          <div style="overflow-x:auto"><table style="width:100%"><thead><tr><th align="left">SKU</th><th align="left">Options</th><th align="left">Cost</th><th align="left">Artwork sides</th></tr></thead><tbody>${
-            all.slice(0, 200).map((v) => `<tr><td style="padding:6px"><code>${esc(v.sku)}</code></td><td style="padding:6px">${esc(v.options)}</td><td style="padding:6px">${v.cost != null ? money(v.cost) : 'not given'}</td><td style="padding:6px">${v.images || ''}</td></tr>`).join('')}</tbody></table></div></div>`, 'gooten'));
+          <p class="muted">${all.length} option${all.length === 1 ? '' : 's'}${all.length > 200 ? ', first 200 shown: search to narrow it' : ''} (<a href="/admin/gooten?product=${pid}&amp;format=json">all as data</a>). Cost is Gooten’s price to the shop, before shipping (from ${esc(p ? p.ship : '—')}).</p>
+          <div style="overflow-x:auto"><table style="width:100%"><thead><tr><th align="left">SKU</th><th align="left">Options</th><th align="left">Cost</th><th align="left">Artwork sides</th><th align="left">Template</th></tr></thead><tbody>${
+            all.slice(0, 200).map((v) => `<tr><td style="padding:6px"><code>${esc(v.sku)}</code></td><td style="padding:6px">${esc(v.options)}</td><td style="padding:6px">${v.cost != null ? money(v.cost) : 'not given'}</td><td style="padding:6px">${v.images || ''}</td><td style="padding:6px"><a href="/admin/gooten?sku=${encodeURIComponent(v.sku)}">View</a></td></tr>`).join('')}</tbody></table></div></div>`, 'gooten'));
       }
       const shown = list.filter((p) => hit(`${p.name} ${p.groups.join(' ')}`));
       return res.send(adminPage('Gooten', `${head}${search}<div class="card"><p class="muted">${shown.length} products. Open one for its SKUs and exact costs.</p>
