@@ -112,6 +112,8 @@ function client({ env = process.env, fetcher = fetch } = {}) {
       /* Their price page capitalizes the speed; their order page does not. */
       Items: items.map((i) => ({ Quantity: i.qty, SKU: i.sku, ShipType: shipType[0].toUpperCase() + shipType.slice(1) })),
       Payment: { CurrencyCode: 'USD', PartnerBillingKey: billing } } }),
+    /** The blank and its print areas for one SKU (Gooten's "product templates"). */
+    templates: (sku) => read('GET', `${V5}producttemplates/`, { query: { sku: String(sku) } }),
     order: (id) => read('GET', `${V5}orders/`, { query: { id: String(id) } }),
     billing: (gootenId) => read('GET', `${V5}orderbilling`, { key: true, query: { orderid: String(gootenId) } }),
     search: (sourceId, startDate) => read('GET', `${V5}ordersearch`, { key: true, query: { genericValues: sourceId, startDate, pageSize: '50', page: '1' } }),
@@ -292,15 +294,69 @@ function catalogProducts(cat) {
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/* Gooten's docs name the variant price PriceInfo; PartnerPriceInfo was read
+   first and came back empty on all 5,377 live SKUs (2026-11-26). */
+const firstAmount = (...ms) => { for (const m of ms) { const a = amount(m); if (a != null) return a; } return null; };
+
+/** The field NAMES a variant answer carries (never values), so a missing
+ *  figure can be traced to the field Gooten really uses. */
+function variantFields(v) {
+  const x = v && Array.isArray(v.ProductVariants) ? v.ProductVariants.find(isObj) : null;
+  return x ? Object.keys(x).slice(0, 40).map((k) => text(k, 40)) : [];
+}
+
 /** A product's SKUs: { sku, options, cost }. */
 function variantRows(v) {
   return (v && Array.isArray(v.ProductVariants) ? v.ProductVariants : []).filter((x) => x && x.Sku).map((x) => ({
-    sku: text(x.Sku, 120), cost: amount(x.PartnerPriceInfo), images: Number(x.MaxImages) || null,
+    sku: text(x.Sku, 120), cost: firstAmount(x.PartnerPriceInfo, x.PriceInfo, x.Price), images: Number(x.MaxImages) || null,
     options: (Array.isArray(x.Options) ? x.Options : []).map((o) => [text(o.Name, 40), text(o.Value, 60)].filter(Boolean).join(': ')).join(', '),
   }));
 }
 
+/* ── Templates (the blank product and where art goes) ─────────────────── */
+
+/* null, '' and booleans are no figure: Number() would make them 0 or 1. */
+const num = (v) => ((typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(Number(v)) ? Number(v) : null);
+/** Only a plain https picture address is kept: these are drawn on admin pages
+ *  and copied into the designer. */
+function imageUrl(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s || s.length > 800 || /[\s"'<>\\]/.test(s)) return '';
+  try { const u = new URL(s); return u.protocol === 'https:' && u.hostname ? u.href : ''; } catch { return ''; }
+}
+function box(o, pre = '') {
+  const b = { x1: num(o[`${pre}X1`]), y1: num(o[`${pre}Y1`]), x2: num(o[`${pre}X2`]), y2: num(o[`${pre}Y2`]) };
+  return [b.x1, b.y1, b.x2, b.y2].every((n) => n !== null) && b.x2 > b.x1 && b.y2 > b.y1 ? b : null;
+}
+
+/** Gooten's template answer, read defensively (null when unreadable): [{ name, isDefault, preview,
+ *  spaces: [{ id, name, final, layers: [{ id, type, print, box, z, bg, overlay }] }] }].
+ *  A layer of type "Image" is where artwork goes; "Design" layers carry the
+ *  blank's pictures (bg under the art, overlay over it). */
+function templateOptions(t) {
+  /* An answer without an Options list is unreadable, not "no template". */
+  if (!t || !Array.isArray(t.Options)) return null;
+  const opts = t.Options;
+  return opts.filter(isObj).slice(0, 20).map((o) => ({
+    name: text(o.Name, 60), isDefault: o.IsDefault === true, preview: imageUrl(o.ImageUrl),
+    spaces: (Array.isArray(o.Spaces) ? o.Spaces : []).filter(isObj).slice(0, 20).map((sp) => ({
+      id: text(sp.Id, 40), name: text(sp.Description || sp.Name || sp.Id, 60), final: box(sp, 'Final'),
+      layers: (Array.isArray(sp.Layers) ? sp.Layers : []).filter(isObj).slice(0, 40).map((l) => ({
+        id: text(l.Id, 60), type: text(l.Type, 20), print: l.IncludeInPrint === true, box: box(l), z: num(l.ZIndex),
+        bg: imageUrl(l.BackgroundImageUrl), overlay: imageUrl(l.OverlayImageUrl),
+      })),
+    })),
+  }));
+}
+
+/** Every SKU of a product as plain rows (the JSON export). */
+function variantExport(product, rows, fields = []) {
+  return { product: product ? { id: product.id, name: product.name, groups: product.groups, shipFrom: product.ship } : null,
+    count: rows.length, fields, variants: rows };
+}
+
 module.exports = {
+  templateOptions, imageUrl, variantExport, variantFields, SKU_RE,
   CATALOG_URL, SHIP_TYPES, MAX_LINES, MAX_QTY, PRINT_EXTS, GootenError, keys, configured, live, client, errorText,
   submitOutcome, isDuplicate, artworkChoices, parseLines, splitName, orderPayload, sourceId, estimate, billed,
   standing, trackingLine, findBySource, catalogProducts, variantRows,
