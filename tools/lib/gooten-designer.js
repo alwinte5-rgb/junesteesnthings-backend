@@ -217,8 +217,8 @@ function designerStore({ cloudinary, mysql, url, cloudReady, client = true }) {
     return out.replace('/image/upload/', '/image/upload/c_limit,w_1600/');
   }
   /** Writes the product, then reads it back: the write is proven by the
-   *  stored print areas' fingerprint (stages is base64, so it reads back
-   *  exactly; a name can come back escaped). `mysql` is db.js mysqlAsync: it
+   *  stored print areas (stages is base64, so it reads back exactly; a name
+   *  can come back escaped). `mysql` is db.js mysqlAsync: it
    *  never blocks the web server. An error after the write began carries
    *  `maybeWritten`, so the page never says "not written" when it may be. */
   async function save(gootenId, cols, { thumb, description, keepName = false }) {
@@ -232,9 +232,11 @@ function designerStore({ cloudinary, mysql, url, cloudReady, client = true }) {
     if (!a || typeof a.author !== 'string') throw new Error('no designer product to take the author from');
     try {
       await mysql(url, upsertSql(gootenId, cols, { thumb, description, author: a.author, keepName }));
-      const got = await mysql(url, `SELECT id, MD5(stages) AS h FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${Number(gootenId)} ORDER BY id;`, { rows: true });
-      const want = crypto.createHash('md5').update(cols.stages).digest('hex');
-      if (got.length !== 1 || got[0].h !== want) throw new Error(got.length > 1 ? 'more than one designer product has this Gooten id' : 'the designer product could not be confirmed');
+      /* The stored stages themselves, compared here: production's MySQL has
+         no MD5() ("FUNCTION railway.MD5 does not exist", 2026-11-26), and
+         stages is base64, so it reads back byte for byte. */
+      const got = await mysql(url, `SELECT id, stages FROM lumise_products WHERE supplier=${sq(SUPPLIER)} AND supplier_style_id=${Number(gootenId)} ORDER BY id;`, { rows: true });
+      if (got.length !== 1 || got[0].stages !== cols.stages) throw new Error(got.length > 1 ? 'more than one designer product has this Gooten id' : 'the designer product could not be confirmed');
       return Number(got[0].id);
     } catch (e) { e.maybeWritten = true; throw e; }
   }
