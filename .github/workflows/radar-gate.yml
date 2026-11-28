@@ -7,8 +7,9 @@ name: radar-gate
 
 on:
   pull_request:
-    # labeled/unlabeled: the `radar:trusted` label changes the verdict, so
-    # adding or removing it re-runs the gate.
+    # labeled/unlabeled: the `radar:trusted` label changes the verdict, so a
+    # label change re-runs the gate. ANY label, never skipped: a gate job
+    # skipped for an unrelated label reports as passed after a failed gate.
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
@@ -17,11 +18,14 @@ permissions:
 
 jobs:
   gate:
-    # A label change re-runs the gate only when it is OUR label.
-    if: >-
-      (github.event.action != 'labeled' && github.event.action != 'unlabeled')
-      || github.event.label.name == 'radar:trusted'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Cancel this job when a newer push to the same pull request replaces it
+    # (saves Actions minutes). Only those runs share a group: opened, labeled,
+    # main, schedule and manual runs each get their own and are never cancelled.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.action == 'synchronize' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,7 +51,7 @@ jobs:
           cat gate.txt
 
       - name: Publish the findings
-        if: always()
+        if: ${{ !cancelled() }}   # a cancelled run posts no partial verdict
         run: |
           {
             echo '## radar gate'
@@ -58,7 +62,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the pull request
-        if: always()
+        if: ${{ !cancelled() }}   # a cancelled run posts no partial verdict
         continue-on-error: true   # forks get a read-only token; the summary above still lands
         env:
           GH_TOKEN: ${{ github.token }}
