@@ -10,11 +10,12 @@ on:
 permissions:
   contents: read
 
-# Cancel a pull request's run when a newer push replaces it (saves Actions
-# minutes). Runs on main, schedules and manual runs are never cancelled.
+# Cancel a pull request's run when a newer push to it replaces it (saves
+# Actions minutes). Only those runs share a group: every other run (opened,
+# labeled, main, schedule, manual) gets its own and is never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.action == 'synchronize' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   test:

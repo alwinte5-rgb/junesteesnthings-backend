@@ -24,11 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Cancel this job when a newer push to the same pull request replaces it
-    # (saves Actions minutes). On the job, not the workflow: a label event
-    # whose job is skipped must not cancel the real run.
+    # (saves Actions minutes). Only those runs share a group: opened, labeled,
+    # main, schedule and manual runs each get their own and are never cancelled.
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.action == 'synchronize' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,7 +54,7 @@ jobs:
           cat gate.txt
 
       - name: Publish the findings
-        if: always()
+        if: ${{ !cancelled() }}   # a cancelled run posts no partial verdict
         run: |
           {
             echo '## radar gate'
@@ -65,7 +65,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the pull request
-        if: always()
+        if: ${{ !cancelled() }}   # a cancelled run posts no partial verdict
         continue-on-error: true   # forks get a read-only token; the summary above still lands
         env:
           GH_TOKEN: ${{ github.token }}
