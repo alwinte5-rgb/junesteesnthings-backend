@@ -3051,16 +3051,15 @@ async function brevoCanSend(apiKey) {
   }
 }
 
-/* The text sign-up offer on every customer email for the rest of 2026
-   (owner, 2026-10-05; "we'll start fresh in the new year"). Never to the
-   shop, the owner or staff, never to someone already signed up, and never
-   allowed to stop an email going out. Callers that must stay plain (sign-in
-   codes, the code email itself, delivery partners) pass promo: false. */
-const TEXTS_INVITE_UNTIL = new Date('2027-01-01T06:00:00Z');   // midnight in Chicago
-async function withTextsInvite(to, html, now = new Date()) {
+/* The text sign-up offer at the bottom of every customer email, with no end
+   date (owner, 2026-11-27, replacing the Jan 1 2027 stop set 2026-10-05).
+   Never to the shop, the owner or staff, never to someone already signed up,
+   and never allowed to stop an email going out. Callers that must stay plain
+   (sign-in codes, the code email itself, delivery partners) pass promo: false. */
+async function withTextsInvite(to, html) {
   try {
     const email = String(to || '').trim().toLowerCase();
-    if (now >= TEXTS_INVITE_UNTIL || !email || !html) return html;
+    if (!email || !html) return html;
     const shop = [NOTIFY_EMAIL, SHOP_EMAIL, ...String(process.env.OWNER_EMAILS || '').split(',')]
       .map((e) => String(e || '').trim().toLowerCase()).filter(Boolean);
     if (shop.includes(email) || email.endsWith('@jtees.net')) return html;

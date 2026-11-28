@@ -201,7 +201,7 @@ function helloEmail({ first, email }) {
   };
 }
 
-/** The small sign-up box added to every customer email until the new year
+/** The small sign-up box added to the bottom of every customer email
  *  (withTextsInvite in server.js). */
 function inviteBlock(email) {
   const link = `${SITE}${SIGNUP_PATH}?src=receipt&e=${encodeURIComponent(email)}`;

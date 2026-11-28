@@ -174,7 +174,7 @@ test('no promises the shop cannot keep: no delivery; turnaround is the owner\'s 
 /* withTextsInvite, lifted out and run against a fake pool. */
 function invite(rows = []) {
   const vm = require('node:vm');
-  const at = src.indexOf('const TEXTS_INVITE_UNTIL');
+  const at = src.indexOf('async function withTextsInvite');
   const end = src.indexOf('// ─── Brevo email (preferred');
   const ctx = vm.createContext({ pool: { query: async () => ({ rows }) }, REINTRO: R, NOTIFY_EMAIL: 'shop@example.com',
     SHOP_EMAIL: 'june@example.com', process: { env: { OWNER_EMAILS: 'owner@example.com' } }, console: { error() {} } });
@@ -182,21 +182,21 @@ function invite(rows = []) {
   return ctx.f;
 }
 
-test('every customer email carries the sign-up box until the new year', async () => {
+test('every customer email carries the sign-up box, with no end date', async () => {
   const f = invite();
-  const out = await f('Cat@Example.com', '<p>Your receipt</p>', new Date('2026-12-31T23:00:00-06:00'));
+  const out = await f('Cat@Example.com', '<p>Your receipt</p>');
   assert.match(out, /^<p>Your receipt<\/p>/, 'after the email, never instead of it');
   assert.match(out, /texts\?src=receipt&amp;e=cat%40example\.com/);
   assert.match(out, /Get \$15 off your next order of \$50\+/);
-  assert.strictEqual(await f('cat@example.com', '<p>x</p>', new Date('2027-01-01T00:00:00-06:00')), '<p>x</p>', 'fresh start in the new year');
+  assert.ok(!src.includes('TEXTS_INVITE_UNTIL'), 'no stop date (owner, 2026-11-27)');
 });
 
 test('never to the shop, the owner, staff, or anyone already signed up', async () => {
   const f = invite();
   for (const to of ['shop@example.com', 'june@example.com', 'owner@example.com', 'ana@jtees.net']) {
-    assert.strictEqual(await f(to, '<p>x</p>', new Date('2026-10-06T12:00:00Z')), '<p>x</p>', to);
+    assert.strictEqual(await f(to, '<p>x</p>'), '<p>x</p>', to);
   }
-  assert.strictEqual(await invite([{ 1: 1 }])('cat@example.com', '<p>x</p>', new Date('2026-10-06T12:00:00Z')), '<p>x</p>',
+  assert.strictEqual(await invite([{ 1: 1 }])('cat@example.com', '<p>x</p>'), '<p>x</p>',
     'signed up (or on the staff list)');
 });
 
