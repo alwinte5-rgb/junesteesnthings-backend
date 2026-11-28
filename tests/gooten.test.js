@@ -218,3 +218,85 @@ test('Gooten page: JSON callers always get JSON, and a bad SKU says so', async (
   r = await run({ sku: 'A-1', format: 'json' }); // still unreadable, still JSON
   assert.ok(r.json);
 });
+
+test('job card: products picked by name, sizes by menu, and a SKU box when the catalog is down', async () => {
+  const catalog = { 'product-catalog': [{ name: 'All', items: [
+    { name: 'Drinkware', items: [{ type: 'product', product_id: 7, name: 'Accent Mugs <11oz>' }] },
+    { name: 'Apparel', items: [{ type: 'product', product_id: 9, name: 'Tee', out_of_stock: true }] }] }] };
+  let catalogReads = 0;
+  const make = (catalogOk) => {
+    const app = { get() {}, post() {} };
+    const fetcher = async (u) => (String(u).includes('catalog.json')
+      ? (catalogReads++, { status: catalogOk ? 200 : 500, ok: catalogOk, json: async () => catalog }) : { status: 500, ok: false, json: async () => ({}) });
+    const pool = { query: async (sql) => (/art_requests/.test(sql)
+      ? { rows: [{ status: 'approved', files: [{ url: 'https://res.cloudinary.com/x/a.png', name: 'front' }] }] } : { rows: [] }) };
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return O.registerGooten(app, { pool, requireAdmin: () => {}, adminPage: (t, b) => b, pageHeader: () => '', esc, money: String,
+      quoteCodeRe: /^[A-Z0-9]+$/, SHIP: { quoteShips: () => false }, ART: { artUrlOk: () => true }, PHOTOS: { cloudName: () => 'x', photoUrlOk: () => true },
+      shop: {}, mayUse: () => true, env: ENV, fetcher });
+  };
+  const q = { code: 'AB12', status: 'sent', accepted_at: new Date(), paid_amount: 10 };
+  let html = await make(true).card(q);
+  assert.match(html, /<optgroup label="Drinkware"><option value="7">Accent Mugs &lt;11oz&gt;<\/option>/);
+  assert.match(html, /<option value="9" disabled>Tee \(out of stock\)/);
+  assert.match(html, /<select name="sku" data-gsku/);
+  assert.doesNotMatch(html, /<input name="sku"/);
+  assert.match(html, /function gootenSizes/);
+  assert.doesNotMatch(html, /data-gsku[^>]*disabled/, 'a disabled size menu is not posted and shifts later lines');
+  const down = make(false);
+  catalogReads = 0;
+  html = await down.card(q);
+  await down.card(q);
+  assert.strictEqual(catalogReads, 1, 'an outage is remembered: each job page must not wait on a fresh read');
+  assert.match(html, /<input name="sku"/);
+  assert.doesNotMatch(html, /function gootenSizes/);
+  assert.match(html, /could not be loaded, so type the SKU/);
+});
+
+test('size menu script: fills only usable SKUs, ignores a stale answer, and says why it failed', async () => {
+  const vm = require('node:vm');
+  const catalog = { 'product-catalog': [{ name: 'Drinkware', items: [{ type: 'product', product_id: 7, name: 'Mug' }] }] };
+  const app = { get() {}, post() {} };
+  const pool = { query: async (sql) => (/art_requests/.test(sql) ? { rows: [{ status: 'approved', files: [{ url: 'https://res.cloudinary.com/x/a.png' }] }] } : { rows: [] }) };
+  const html = await O.registerGooten(app, { pool, requireAdmin: () => {}, adminPage: (t, b) => b, pageHeader: () => '', esc: String, money: String,
+    quoteCodeRe: /^[A-Z0-9]+$/, SHIP: { quoteShips: () => false }, ART: { artUrlOk: () => true }, PHOTOS: { cloudName: () => 'x', photoUrlOk: () => true },
+    shop: {}, mayUse: () => true, env: ENV, fetcher: async () => ({ status: 200, ok: true, json: async () => catalog }) })
+    .card({ code: 'AB12', status: 'sent', accepted_at: new Date(), paid_amount: 10 });
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+
+  const menu = () => { const s = { options: [{ text: '', value: '' }], selectedIndex: 0, add(o) { this.options.push(o); } };
+    Object.defineProperty(s, 'length', { get() { return this.options.length; }, set(n) { this.options.length = n; } }); return s; };
+  const sku = menu(), line = { querySelector: () => sku };
+  const prod = { value: '7', selectedIndex: 1, closest: () => line };
+  const answers = [];
+  const reply = (status, body, type = 'application/json') => ({ status, ok: status < 300, headers: { get: () => type }, json: async () => body });
+  global.document = { createElement: () => ({}), querySelectorAll: () => [prod] };
+  global.fetch = (u) => new Promise((resolve) => answers.push({ u, resolve }));
+  const tick = () => new Promise((r) => setImmediate(r));
+  try {
+    vm.runInThisContext(script);                        // a restored product loads its sizes once on load
+    assert.strictEqual(answers.length, 1);
+    assert.match(answers[0].u, /product=7&format=json$/);
+    answers[0].resolve(reply(200, { variants: [{ sku: 'MUG-11', options: 'Size: 11oz', cost: 4.5 }, { sku: 'bad#sku', options: 'x' }, { sku: 'MUG-15', options: '' }] }));
+    await tick(); await tick();
+    assert.deepStrictEqual(sku.options.slice(1).map((o) => [o.value, o.text]), [['MUG-11', 'Size: 11oz — $4.50'], ['MUG-15', 'MUG-15']]);
+
+    prod.value = '8'; global.gootenSizes(prod);         // A then B: A's late answer must not fill B's line
+    prod.value = '9'; global.gootenSizes(prod);
+    answers[1].resolve(reply(200, { variants: [{ sku: 'EIGHT-1', options: 'eight' }] }));
+    await tick(); await tick();
+    assert.ok(!sku.options.some((o) => o.value === 'EIGHT-1'), 'a stale answer filled the menu');
+    answers[2].resolve(reply(500, {}));
+    await tick(); await tick();
+    assert.match(sku.options[0].text, /could not load/);
+    assert.strictEqual(prod.selectedIndex, 0, 'the product resets so choosing it again retries');
+
+    prod.value = '10'; prod.selectedIndex = 1; global.gootenSizes(prod);
+    answers[3].resolve(reply(200, '<html>sign in</html>', 'text/html'));
+    await tick(); await tick();
+    assert.match(sku.options[0].text, /sign-in may have expired/);
+  } finally {
+    delete global.document; delete global.fetch;
+    global.gootenSizes = global.gootenSizeCache = global.gootenSkuOk = undefined;  // script-level vars cannot be deleted
+  }
+});
