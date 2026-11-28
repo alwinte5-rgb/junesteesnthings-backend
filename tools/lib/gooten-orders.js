@@ -25,6 +25,50 @@ const GD = require('./gooten-designer');
  * closed   shipped, cancelled, or a test that is finished with */
 const OPEN = ['draft', 'sending', 'unknown'];
 
+/* Fills a line's size/color menu from the Gooten page's own JSON answer
+ * (/admin/gooten?product=ID&format=json). Options are built as text, never
+ * HTML. A failed load resets the product menu so choosing it again retries.
+ * Only SKUs the server accepts (G.SKU_RE) are offered. A product the browser
+ * restored on reload gets its sizes once on load: a restore fires no change. */
+const SIZE_SCRIPT = `<script>
+var gootenSizeCache = {}, gootenSkuOk = new RegExp(${JSON.stringify(G.SKU_RE.source)});
+function gootenSizes(p) {
+  var s = p.closest('[data-gline]').querySelector('[data-gsku]'), id = p.value;
+  s.length = 1; s.selectedIndex = 0;
+  s.options[0].text = id ? 'Loading sizes…' : 'Size / color…';
+  if (!id) return;
+  var fill = function (j) {
+    if (p.value !== id) return;
+    s.length = 1;
+    var v = (j && Array.isArray(j.variants) ? j.variants : []).filter(function (x) { return x && typeof x.sku === 'string' && gootenSkuOk.test(x.sku); });
+    if (!v.length) { s.options[0].text = 'Gooten lists no sizes for this product'; return; }
+    s.options[0].text = 'Size / color…';
+    v.forEach(function (x) {
+      var o = document.createElement('option');
+      o.value = x.sku;
+      o.text = (x.options || x.sku) + (typeof x.cost === 'number' ? ' — $' + x.cost.toFixed(2) : '');
+      o.title = x.sku;
+      s.add(o);
+    });
+  };
+  if (gootenSizeCache[id]) return fill(gootenSizeCache[id]);
+  fetch('/admin/gooten?product=' + encodeURIComponent(id) + '&format=json', { credentials: 'same-origin' })
+    .then(function (r) {
+      var json = /json/i.test(r.headers.get('content-type') || '');
+      if (r.status === 401 || r.status === 403 || (r.ok && !json)) return Promise.reject('signin');
+      return r.ok ? r.json() : Promise.reject(r.status);
+    })
+    .then(function (j) { if (j && Array.isArray(j.variants)) gootenSizeCache[id] = j; fill(j); })
+    .catch(function (e) {
+      if (p.value !== id) return;
+      s.length = 1;
+      s.options[0].text = e === 'signin' ? 'Your sign-in may have expired: reload the page' : 'Sizes could not load: choose the product again';
+      p.selectedIndex = 0;
+    });
+}
+document.querySelectorAll('[data-gprod]').forEach(function (p) { if (p.value) gootenSizes(p); });
+</script>`;
+
 async function ensureTables(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS gooten_orders (
@@ -137,8 +181,26 @@ function registerGooten(app, d) {
     } else if (!why) {
       const art = await artFor(q);
       const opts = (blank) => `<option value="">${blank}</option>${art.map((a) => `<option value="${esc(a.url)}">${esc(a.label)}</option>`).join('')}`;
+      /* Owner, 2026-11-28: pick the product by name, then its size/color,
+         instead of typing a SKU. The catalog is cached for 6 hours; a slow or
+         failed read falls back to the SKU box so the card always shows. The
+         size menu is never disabled: a disabled field is not posted, which
+         would shift every later line's SKU onto the wrong quantity. */
+      const list = art.length ? await productsWithin(4000) : null;
+      const kinds = new Map();
+      for (const p of list || []) {
+        const k = p.groups[0] || 'Other';
+        if (!kinds.has(k)) kinds.set(k, []);
+        kinds.get(k).push(p);
+      }
+      const productMenu = [...kinds.keys()].sort((a, b) => a.localeCompare(b)).map((k) => `<optgroup label="${esc(k)}">${kinds.get(k).map((p) =>
+        `<option value="${Number(p.id)}"${p.out ? ' disabled' : ''}>${esc(p.name)}${p.out ? ' (out of stock)' : ''}</option>`).join('')}</optgroup>`).join('');
+      const skuPick = kinds.size
+        ? `<select data-gprod autocomplete="off" aria-label="Gooten product" style="flex:2 1 220px" onchange="gootenSizes(this)"><option value="">Product…</option>${productMenu}</select>
+        <select name="sku" data-gsku autocomplete="off" aria-label="Size and color" style="flex:2 1 220px"><option value="">Size / color…</option></select>`
+        : '<input name="sku" maxlength="120" placeholder="Gooten SKU" aria-label="Gooten SKU" style="flex:2 1 220px">';
       const row = `<div class="row" style="gap:8px;flex-wrap:wrap;margin:6px 0" data-gline>
-        <input name="sku" maxlength="120" placeholder="Gooten SKU" aria-label="Gooten SKU" style="flex:2 1 220px">
+        ${skuPick}
         <input name="qty" type="number" min="1" max="${G.MAX_QTY}" inputmode="numeric" placeholder="Qty" aria-label="Quantity" style="flex:0 0 80px">
         <select name="art" aria-label="Artwork" style="flex:1 1 180px">${opts('Artwork…')}</select>
         <select name="art2" aria-label="Second artwork" style="flex:1 1 180px">${opts('No second side')}</select></div>`;
@@ -147,16 +209,18 @@ function registerGooten(app, d) {
         ? '<div class="muted">No print-ready artwork on this job yet. Gooten needs a PNG or JPG: approve the final art, or ask the customer for a file.</div>'
         : `<details><summary style="cursor:pointer;color:#1848B8">Prepare a Gooten order</summary>
         <form method="POST" action="/admin/quote/${c}/gooten/prepare" onsubmit="this.querySelector('button[type=submit]').disabled=true">
-          <div class="muted" style="font-size:13px;margin-top:8px">Find SKUs and costs on the <a href="/admin/gooten" target="_blank">Gooten page</a>. Nothing is ordered at this step.</div>
+          <div class="muted" style="font-size:13px;margin-top:8px">${kinds.size
+            ? 'Pick the product, then its size and color: the cost shown is Gooten’s price to the shop. Pictures and print areas are on the <a href="/admin/gooten" target="_blank">Gooten page</a>.'
+            : 'Gooten’s product list could not be loaded, so type the SKU from the <a href="/admin/gooten" target="_blank">Gooten page</a>.'} Nothing is ordered at this step.</div>
           <div data-glines>${row}</div>
-          <button type="button" class="kbtn" onclick="var w=this.form.querySelector('[data-glines]'),f=w.firstElementChild;if(w.children.length>=${G.MAX_LINES})return;var n=f.cloneNode(true);n.querySelectorAll('input').forEach(function(i){i.value=''});n.querySelectorAll('select').forEach(function(s){s.selectedIndex=0});w.appendChild(n)">Add a line</button>
+          <button type="button" class="kbtn" onclick="var w=this.form.querySelector('[data-glines]'),f=w.firstElementChild;if(w.children.length>=${G.MAX_LINES})return;var n=f.cloneNode(true);n.querySelectorAll('input').forEach(function(i){i.value=''});n.querySelectorAll('select').forEach(function(s){s.selectedIndex=0});n.querySelectorAll('[data-gsku]').forEach(function(s){s.length=1;s.options[0].text='Size / color…'});w.appendChild(n)">Add a line</button>
           <div class="row" style="gap:8px;flex-wrap:wrap;margin:10px 0">
             <select name="dest" aria-label="Where it goes">${ships ? '<option value="customer">Ship to the customer</option>' : ''}<option value="shop">Ship to the shop</option></select>
             <select name="ship_type" aria-label="Shipping speed">${G.SHIP_TYPES.map((t) => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select></div>
           ${ships ? `<label style="display:block;font-weight:400;text-transform:none;margin:0 0 10px"><input type="checkbox" name="whole_job" value="1" style="width:auto;display:inline-block">
             Gooten makes everything on this job: when it ships to the customer, mark the job shipped and tell them</label>` : ''}
           <button type="submit">Check price and stock</button>
-        </form></details>`;
+        </form></details>${kinds.size ? SIZE_SCRIPT : ''}`;
     }
     const history = past.map((r) => {
       const s = r.standing || { items: [] };
@@ -441,16 +505,28 @@ function registerGooten(app, d) {
 
   /* ── The Gooten page: what they sell, and the SKUs ─────────────────── */
 
-  let cat = { at: 0, list: [] };
+  /* One read at a time, shared by every caller, and a failure is remembered
+     for a minute: job pages wait on this, and during an outage each render
+     must not start (and wait on) a fresh 20-second read. */
+  let cat = { at: 0, list: [] }, catFailedAt = 0, catReading = null;
   async function products() {
     if (cat.list.length && Date.now() - cat.at < 6 * 3600000) return cat.list;
-    const r = await (fetcher || fetch)(G.CATALOG_URL, { signal: AbortSignal.timeout(20000) });
-    if (!r.ok) throw new Error(`catalog ${r.status}`);
-    const list = G.catalogProducts(await r.json());
-    if (!list.length) throw new Error('catalog is empty');
-    cat = { at: Date.now(), list };
-    return list;
+    if (catReading) return catReading;
+    if (Date.now() - catFailedAt < 60000) throw new Error('catalog failed under a minute ago');
+    catReading = (async () => {
+      const r = await (fetcher || fetch)(G.CATALOG_URL, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`catalog ${r.status}`);
+      const list = G.catalogProducts(await r.json());
+      if (!list.length) throw new Error('catalog is empty');
+      cat = { at: Date.now(), list };
+      return list;
+    })().catch((e) => { catFailedAt = Date.now(); throw e; }).finally(() => { catReading = null; });
+    return catReading;
   }
+  /** The catalog, or null when it is not there within `ms`: for callers that
+   *  only need names and must not hang a page on Gooten. */
+  const productsWithin = (ms) => Promise.race([products(),
+    new Promise((r) => { const t = setTimeout(r, ms, null); if (t.unref) t.unref(); })]).catch(() => null);
 
   app.get('/admin/gooten', requireAdmin, async (req, res) => {
     const find = String(req.query.q || '').slice(0, 80).trim();
@@ -487,7 +563,7 @@ function registerGooten(app, d) {
       if (pid && asJson) {
         if (!G.configured(env)) return res.status(503).json({ error: notSetUp });
         /* The catalog only names the product; its outage must not stop the export. */
-        const p = await products().then((l) => l.find((x) => x.id === pid) || null, () => null);
+        const p = ((await productsWithin(3000)) || []).find((x) => x.id === pid) || null;
         const raw = await api().variants(pid);
         return res.json(G.variantExport(p, G.variantRows(raw), G.variantFields(raw)));
       }

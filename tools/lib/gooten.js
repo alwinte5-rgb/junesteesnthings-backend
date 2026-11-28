@@ -162,7 +162,7 @@ function parseLines(body, choices) {
     const sku = skus[i] || '', qty = qtys[i] || '', art = arts[i] || '', back = backs[i] || '';
     if (!sku && !qty && !art && !back) continue;
     const at = `Line ${i + 1}: `;
-    if (!SKU_RE.test(sku)) return { error: `${at}type the Gooten SKU exactly as the Gooten page shows it.` };
+    if (!SKU_RE.test(sku)) return { error: `${at}choose the product and its size and color (or type the SKU exactly as the Gooten page shows it).` };
     if (!/^\d{1,4}$/.test(qty) || Number(qty) < 1 || Number(qty) > MAX_QTY) return { error: `${at}the quantity must be 1 to ${MAX_QTY}.` };
     const front = pick(art);
     if (!front) return { error: `${at}choose the artwork.` };
