@@ -22,6 +22,13 @@ jobs:
       (github.event.action != 'labeled' && github.event.action != 'unlabeled')
       || github.event.label.name == 'radar:trusted'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Cancel this job when a newer push to the same pull request replaces it
+    # (saves Actions minutes). On the job, not the workflow: a label event
+    # whose job is skipped must not cancel the real run.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
         with:
